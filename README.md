@@ -9,10 +9,18 @@ AP helpers, and the installer that deploys those pieces over SSH.
 It does not contain rooting tools, device compromise notes, private keys, live
 MQTT credentials, firmware dumps, or personal backups.
 
+> **Docker / Unraid package:** this snapshot includes a one-time installer
+> container, persistent web proxy, Compose example, and Unraid XML template.
+> See [UNRAID.md](UNRAID.md) for the deployment procedure and safety notes.
+
 ## Current Status
 
 - Web UI runs on `http://<hub-ip>:8080/`.
 - HTTP authentication is intentionally disabled for LAN-only use.
+- Activities can be created, duplicated, reordered, edited, launched, and
+  submitted to the paired remote's native Harmony sync queue from the web UI.
+  Device/input roles and press, long-press, and double-press button maps are
+  edited together.
 - IR devices can be configured from database lookup or manual learning.
 - Database import supports IRDB, Flipper-IRDB, and RemoteCentral-style Pronto
   sources.
@@ -39,7 +47,9 @@ MQTT credentials, firmware dumps, or personal backups.
     scripts/               Init, recovery, Dropbear wrappers, cloud suppression
     mqtt/                  MQTT bridge Lua plugin
     source/                C sources for the native helper binaries
+    web/                   Readable activity editor CSS/JavaScript sources
   tools/
+    embed_activity_ui.sh   Embeds web assets into the single web UI binary
     ir_database_smoke_test.mjs
   build/
     build_harmony_tools_kali.sh

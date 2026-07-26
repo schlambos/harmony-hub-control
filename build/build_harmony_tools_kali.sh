@@ -10,6 +10,8 @@ BUILD="$SCRIPT_DIR/tmp"
 OUT="$SCRIPT_DIR/output"
 
 mkdir -p "$TOOLS" "$BUILD" "$OUT"
+sh "$REPO_ROOT/tools/embed_activity_ui.sh"
+sh "$REPO_ROOT/tools/activity_json_semantic_smoke.sh"
 
 TOOLCHAIN_NAME=mips32--uclibc--stable-2017.05-toolchains-1-1
 TOOLCHAIN_TARBALL="$TOOLS/$TOOLCHAIN_NAME.tar.bz2"

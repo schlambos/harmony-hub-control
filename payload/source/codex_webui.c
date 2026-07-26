@@ -19,6 +19,7 @@
 #include <time.h>
 #include <unistd.h>
 
+#include "activity_ui_assets.h"
 #include "remote_skin_jpg.h"
 
 #define MQTT_CONFIG "/data/codexmqtt/config.json"
@@ -30,6 +31,11 @@
 #define DEVICE_LIST "/data/resources/DeviceList.json"
 #define FUNCTION_LIST "/data/resources/FunctionList.json"
 #define PROTOCOL_LIST "/data/resources/ProtocolList.json"
+#define ACTIVITY_LIST "/data/resources/ActivityList.json"
+#define MAP_LIST "/data/resources/MapList.json"
+#define AUTOMATION_CONFIG "/data/resources/AutomationConfig.json"
+#define CONTEXT_CONFIG "/data/resources/Context.json"
+#define RESOURCE_INDEX "/data/resources/index.json"
 #define RESOURCE_RELOAD_FLAG "/data/codex/reload_resources"
 #define RESOURCE_BACKUP_DIR "/data/codex/resource-backups"
 #define IR_EVENT_LOG "/data/codex/ir-events.log"
@@ -39,10 +45,13 @@
 #define BT_TARGET_FILE "/data/codex/bthid_target"
 #define BT_DEVICE_STORE "/data/codex/bt-devices.json"
 #define CODEX_BIN_DIR "/data/codex/bin"
+#ifndef CODEX_HBUS_BIN
+#define CODEX_HBUS_BIN CODEX_BIN_DIR "/codex_hbus"
+#endif
 #define UPDATE_STAGE_DIR "/tmp/codex_update"
 #define UPDATE_BACKUP_DIR "/data/codex/update-backups"
 #define IR_EVENT_MAX_BYTES 65536
-#define MAX_REQUEST_BODY (512 * 1024)
+#define MAX_REQUEST_BODY (1024 * 1024)
 #define MAX_REQUEST_BYTES (MAX_REQUEST_BODY + 8192)
 #define MAX_RESOURCE_FILE (2 * 1024 * 1024)
 #define MAX_IR_DEVICES 32
@@ -497,6 +506,48 @@ static void prune_update_backups(int keep) {
     }
 }
 
+static int is_resource_backup_name(const char *name) {
+    size_t i;
+    if (!name || strlen(name) != 15 || name[8] != '_') return 0;
+    for (i = 0; i < 15; i++) {
+        if (i == 8) continue;
+        if (!isdigit((unsigned char)name[i])) return 0;
+    }
+    return 1;
+}
+
+static void prune_resource_backups(int keep) {
+    struct resource_backup_entry { char name[32]; } entries[64], tmp;
+    DIR *d = opendir(RESOURCE_BACKUP_DIR);
+    struct dirent *de;
+    int count = 0, i, j;
+    if (!d) return;
+    while ((de = readdir(d)) != NULL) {
+        if (!is_resource_backup_name(de->d_name)) continue;
+        if (count >= (int)(sizeof(entries) / sizeof(entries[0]))) break;
+        snprintf(entries[count].name, sizeof(entries[count].name),
+            "%s", de->d_name);
+        count++;
+    }
+    closedir(d);
+    for (i = 0; i < count; i++) {
+        for (j = i + 1; j < count; j++) {
+            if (strcmp(entries[j].name, entries[i].name) > 0) {
+                tmp = entries[i];
+                entries[i] = entries[j];
+                entries[j] = tmp;
+            }
+        }
+    }
+    if (keep < 0) keep = 0;
+    for (i = keep; i < count; i++) {
+        char path[512];
+        snprintf(path, sizeof(path), "%s/%s",
+            RESOURCE_BACKUP_DIR, entries[i].name);
+        remove_tree_simple(path);
+    }
+}
+
 static char *json_escape_alloc(const char *s) {
     size_t need = 3;
     const char *p;
@@ -566,17 +617,37 @@ static void shell_escape_single(const char *s, char *out, size_t outlen) {
 }
 
 static int run_cmd(const char *cmd, char *out, size_t outlen) {
-    FILE *p = popen(cmd, "r");
-    size_t n = 0;
+    struct sigaction old_chld, default_chld;
+    int restore_chld = 0;
+    FILE *p;
+    char discard[2048];
+    size_t n = 0, got;
+    int status;
+    memset(&default_chld, 0, sizeof(default_chld));
+    default_chld.sa_handler = SIG_DFL;
+    sigemptyset(&default_chld.sa_mask);
+    if (sigaction(SIGCHLD, NULL, &old_chld) == 0 &&
+        sigaction(SIGCHLD, &default_chld, NULL) == 0) {
+        restore_chld = 1;
+    }
+    p = popen(cmd, "r");
     if (!p) {
+        if (restore_chld) sigaction(SIGCHLD, &old_chld, NULL);
         if (outlen) out[0] = 0;
         return -1;
     }
-    if (outlen) {
-        n = fread(out, 1, outlen - 1, p);
-        out[n] = 0;
+    while ((got = fread(discard, 1, sizeof(discard), p)) > 0) {
+        if (outlen && n + 1 < outlen) {
+            size_t keep = got;
+            if (keep > outlen - n - 1) keep = outlen - n - 1;
+            memcpy(out + n, discard, keep);
+            n += keep;
+        }
     }
-    return pclose(p);
+    if (outlen) out[n] = 0;
+    status = pclose(p);
+    if (restore_chld) sigaction(SIGCHLD, &old_chld, NULL);
+    return status;
 }
 
 static void html(FILE *f, const char *s) {
@@ -1220,7 +1291,7 @@ static void trigger_mqtt_discover(void) {
     if (!load_hub_id(hub_id, sizeof(hub_id))) return;
     shell_escape_single(hub_id, escaped, sizeof(escaped));
     snprintf(cmd, sizeof(cmd),
-        "/data/codex/bin/codex_hbus '%s' harmony.automation?discover '{\"gatewayType\":\"codexmqtt\"}' >/dev/null 2>&1 &",
+        CODEX_HBUS_BIN " '%s' harmony.automation?discover '{\"gatewayType\":\"codexmqtt\"}' >/dev/null 2>&1 &",
         escaped);
     system(cmd);
 }
@@ -1670,12 +1741,26 @@ static void request_resource_reload(void) {
     trigger_mqtt_discover();
 }
 
+static void request_resource_reload_names(const char *names) {
+    FILE *f = fopen(RESOURCE_RELOAD_FLAG, "w");
+    if (f) {
+        fputs(names && names[0] ? names : "all\n", f);
+        fclose(f);
+    }
+    sync();
+    trigger_mqtt_discover();
+}
+
 static void backup_resources(void) {
-    char cmd[512];
+    char cmd[768];
+    mkdir(RESOURCE_BACKUP_DIR, 0755);
+    prune_resource_backups(4);
     snprintf(cmd, sizeof(cmd),
         "mkdir -p " RESOURCE_BACKUP_DIR "; d=" RESOURCE_BACKUP_DIR "/$(date +%%Y%%m%%d_%%H%%M%%S); "
-        "mkdir -p \"$d\"; cp " DEVICE_LIST " " FUNCTION_LIST " " PROTOCOL_LIST " \"$d\" 2>/dev/null");
+        "mkdir -p \"$d\"; cp " DEVICE_LIST " " FUNCTION_LIST " " PROTOCOL_LIST " "
+        ACTIVITY_LIST " " MAP_LIST " " AUTOMATION_CONFIG " \"$d\" 2>/dev/null");
     system(cmd);
+    prune_resource_backups(5);
 }
 
 static void backup_settings(void) {
@@ -1708,10 +1793,13 @@ static void send_bundle_download(int fd) {
     send_all(fd, hdr, strlen(hdr));
     f = fdopen(dup(fd), "w");
     if (!f) return;
-    fputs("{\"format\":\"harmony-owner-bundle-v1\",\"files\":{", f);
+    fputs("{\"format\":\"harmony-owner-bundle-v2\",\"files\":{", f);
     bundle_value(f, "DeviceList.json", DEVICE_LIST, 0);
     bundle_value(f, "FunctionList.json", FUNCTION_LIST, 1);
     bundle_value(f, "ProtocolList.json", PROTOCOL_LIST, 1);
+    bundle_value(f, "ActivityList.json", ACTIVITY_LIST, 1);
+    bundle_value(f, "MapList.json", MAP_LIST, 1);
+    bundle_value(f, "AutomationConfig.json", AUTOMATION_CONFIG, 1);
     bundle_value(f, "mqtt-config.json", MQTT_CONFIG, 1);
     bundle_value(f, "wpa_supplicant.conf", WPA_CONFIG, 1);
     bundle_value(f, "bt-devices.json", BT_DEVICE_STORE, 1);
@@ -1721,6 +1809,1250 @@ static void send_bundle_download(int fd) {
     json_write_string(f, load_cloud_blocker() ? "1\n" : "0\n");
     fputs("}}\n", f);
     fclose(f);
+}
+
+static unsigned int resource_hash(const char *data, size_t len) {
+    unsigned int hash = 2166136261u;
+    size_t i;
+    for (i = 0; i < len; i++) {
+        hash ^= (unsigned char)data[i];
+        hash *= 16777619u;
+    }
+    return hash;
+}
+
+static void activity_revision(
+    const char *activities,
+    size_t activities_len,
+    const char *maps,
+    size_t maps_len,
+    char *out,
+    size_t outlen
+) {
+    snprintf(out, outlen, "%08x-%08x",
+        resource_hash(activities, activities_len),
+        resource_hash(maps, maps_len));
+}
+
+static int json_object_value_copy(
+    const char *json,
+    const char *key,
+    char **out,
+    size_t *outlen
+) {
+    const char *field, *colon, *start, *end;
+    char *copy;
+    if (out) *out = NULL;
+    if (outlen) *outlen = 0;
+    if (!json || !key || !out) return -1;
+    field = find_key_range(json, NULL, key);
+    if (!field) return -1;
+    colon = strchr(field + strlen(key) + 2, ':');
+    if (!colon) return -1;
+    start = colon + 1;
+    while (*start && isspace((unsigned char)*start)) start++;
+    if (*start != '{') return -1;
+    end = find_matching_json(start, '{', '}');
+    if (!end) return -1;
+    copy = (char *)malloc((size_t)(end - start) + 2);
+    if (!copy) return -1;
+    memcpy(copy, start, (size_t)(end - start) + 1);
+    copy[(size_t)(end - start) + 1] = 0;
+    *out = copy;
+    if (outlen) *outlen = (size_t)(end - start) + 1;
+    return 0;
+}
+
+static int validate_resource_json(
+    const char *raw,
+    size_t len,
+    const char *array_key,
+    char *msg,
+    size_t msglen
+) {
+    const char *start = raw, *end, *field, *colon, *array, *array_end, *trail;
+    if (!raw || !len || len > MAX_RESOURCE_FILE) {
+        snprintf(msg, msglen, "%s is empty or too large.", array_key);
+        return -1;
+    }
+    while (*start && isspace((unsigned char)*start)) start++;
+    if (*start != '{') {
+        snprintf(msg, msglen, "%s resource must be a JSON object.", array_key);
+        return -1;
+    }
+    end = find_matching_json(start, '{', '}');
+    if (!end) {
+        snprintf(msg, msglen, "%s resource contains unbalanced JSON.", array_key);
+        return -1;
+    }
+    for (trail = end + 1; *trail; trail++) {
+        if (!isspace((unsigned char)*trail)) {
+            snprintf(msg, msglen, "%s resource has trailing data.", array_key);
+            return -1;
+        }
+    }
+    field = find_key_range(start, end, array_key);
+    colon = field ? strchr(field + strlen(array_key) + 2, ':') : NULL;
+    if (!colon || colon >= end) {
+        snprintf(msg, msglen, "%s resource is missing its %s array.", array_key, array_key);
+        return -1;
+    }
+    array = colon + 1;
+    while (array < end && isspace((unsigned char)*array)) array++;
+    if (array >= end || *array != '[') {
+        snprintf(msg, msglen, "%s must be an array.", array_key);
+        return -1;
+    }
+    array_end = find_matching_json(array, '[', ']');
+    if (!array_end || array_end > end) {
+        snprintf(msg, msglen, "%s array contains unbalanced JSON.", array_key);
+        return -1;
+    }
+    return 0;
+}
+
+static int json_text_matches(
+    const char *actual,
+    size_t actual_len,
+    const char *expected,
+    size_t expected_len
+) {
+    size_t actual_pos = 0, expected_pos = 0;
+    int in_string = 0, escaped = 0, matches = 1;
+    if (!actual || !expected) return 0;
+    while (actual_pos < actual_len || expected_pos < expected_len) {
+        if (!in_string) {
+            while (actual_pos < actual_len &&
+                    isspace((unsigned char)actual[actual_pos])) {
+                actual_pos++;
+            }
+            while (expected_pos < expected_len &&
+                    isspace((unsigned char)expected[expected_pos])) {
+                expected_pos++;
+            }
+        }
+        if (actual_pos >= actual_len || expected_pos >= expected_len) {
+            matches = actual_pos >= actual_len && expected_pos >= expected_len;
+            break;
+        }
+        if (actual[actual_pos] != expected[expected_pos]) {
+            matches = 0;
+            break;
+        }
+        if (in_string) {
+            if (escaped) {
+                escaped = 0;
+            } else if (actual[actual_pos] == '\\') {
+                escaped = 1;
+            } else if (actual[actual_pos] == '"') {
+                in_string = 0;
+            }
+        } else if (actual[actual_pos] == '"') {
+            in_string = 1;
+        }
+        actual_pos++;
+        expected_pos++;
+    }
+    return matches;
+}
+
+#define SEMANTIC_JSON_MAX_NODES 131072
+#define SEMANTIC_JSON_MAX_DEPTH 128
+
+enum semantic_json_type {
+    SEMANTIC_JSON_NULL,
+    SEMANTIC_JSON_FALSE,
+    SEMANTIC_JSON_TRUE,
+    SEMANTIC_JSON_NUMBER,
+    SEMANTIC_JSON_STRING,
+    SEMANTIC_JSON_ARRAY,
+    SEMANTIC_JSON_OBJECT
+};
+
+struct semantic_json_node {
+    int type;
+    size_t start;
+    size_t end;
+    int first_child;
+    int next_sibling;
+};
+
+struct semantic_json_doc {
+    const char *text;
+    size_t len;
+    struct semantic_json_node *nodes;
+    int node_count;
+    int node_capacity;
+};
+
+static void semantic_json_skip_space(
+    const struct semantic_json_doc *doc,
+    size_t *pos
+) {
+    while (*pos < doc->len &&
+            isspace((unsigned char)doc->text[*pos])) {
+        (*pos)++;
+    }
+}
+
+static int semantic_json_add_node(
+    struct semantic_json_doc *doc,
+    int type,
+    size_t start,
+    size_t end
+) {
+    struct semantic_json_node *grown;
+    int capacity;
+    int index;
+    if (doc->node_count >= SEMANTIC_JSON_MAX_NODES) return -1;
+    if (doc->node_count == doc->node_capacity) {
+        capacity = doc->node_capacity ? doc->node_capacity * 2 : 1024;
+        if (capacity > SEMANTIC_JSON_MAX_NODES) {
+            capacity = SEMANTIC_JSON_MAX_NODES;
+        }
+        grown = (struct semantic_json_node *)realloc(
+            doc->nodes, (size_t)capacity * sizeof(*grown));
+        if (!grown) return -1;
+        doc->nodes = grown;
+        doc->node_capacity = capacity;
+    }
+    index = doc->node_count++;
+    doc->nodes[index].type = type;
+    doc->nodes[index].start = start;
+    doc->nodes[index].end = end;
+    doc->nodes[index].first_child = -1;
+    doc->nodes[index].next_sibling = -1;
+    return index;
+}
+
+static int semantic_json_hex(char c) {
+    if (c >= '0' && c <= '9') return c - '0';
+    if (c >= 'a' && c <= 'f') return c - 'a' + 10;
+    if (c >= 'A' && c <= 'F') return c - 'A' + 10;
+    return -1;
+}
+
+static int semantic_json_parse_string(
+    struct semantic_json_doc *doc,
+    size_t *pos
+) {
+    size_t content_start, i;
+    int index, j;
+    char escaped;
+    if (*pos >= doc->len || doc->text[*pos] != '"') return -1;
+    content_start = ++(*pos);
+    while (*pos < doc->len) {
+        unsigned char c = (unsigned char)doc->text[*pos];
+        if (c == '"') {
+            index = semantic_json_add_node(
+                doc, SEMANTIC_JSON_STRING, content_start, *pos);
+            (*pos)++;
+            return index;
+        }
+        if (c < 0x20) return -1;
+        if (c != '\\') {
+            (*pos)++;
+            continue;
+        }
+        (*pos)++;
+        if (*pos >= doc->len) return -1;
+        escaped = doc->text[*pos];
+        if (escaped == 'u') {
+            if (doc->len - *pos < 5) return -1;
+            for (j = 1; j <= 4; j++) {
+                if (semantic_json_hex(doc->text[*pos + (size_t)j]) < 0) {
+                    return -1;
+                }
+            }
+            *pos += 5;
+            continue;
+        }
+        i = (size_t)(unsigned char)escaped;
+        if (!strchr("\"\\/bfnrt", (int)i)) return -1;
+        (*pos)++;
+    }
+    return -1;
+}
+
+static int semantic_json_parse_value(
+    struct semantic_json_doc *doc,
+    size_t *pos,
+    int depth
+);
+
+static int semantic_json_parse_array(
+    struct semantic_json_doc *doc,
+    size_t *pos,
+    int depth
+) {
+    int array_index, child, previous = -1;
+    if (depth > SEMANTIC_JSON_MAX_DEPTH ||
+        *pos >= doc->len || doc->text[*pos] != '[') {
+        return -1;
+    }
+    array_index = semantic_json_add_node(
+        doc, SEMANTIC_JSON_ARRAY, *pos, *pos);
+    if (array_index < 0) return -1;
+    (*pos)++;
+    semantic_json_skip_space(doc, pos);
+    if (*pos < doc->len && doc->text[*pos] == ']') {
+        doc->nodes[array_index].end = ++(*pos);
+        return array_index;
+    }
+    while (*pos < doc->len) {
+        child = semantic_json_parse_value(doc, pos, depth + 1);
+        if (child < 0) return -1;
+        if (previous < 0) {
+            doc->nodes[array_index].first_child = child;
+        } else {
+            doc->nodes[previous].next_sibling = child;
+        }
+        previous = child;
+        semantic_json_skip_space(doc, pos);
+        if (*pos < doc->len && doc->text[*pos] == ']') {
+            doc->nodes[array_index].end = ++(*pos);
+            return array_index;
+        }
+        if (*pos >= doc->len || doc->text[*pos] != ',') return -1;
+        (*pos)++;
+        semantic_json_skip_space(doc, pos);
+    }
+    return -1;
+}
+
+static int semantic_json_parse_object(
+    struct semantic_json_doc *doc,
+    size_t *pos,
+    int depth
+) {
+    int object_index, key, value, previous_value = -1;
+    if (depth > SEMANTIC_JSON_MAX_DEPTH ||
+        *pos >= doc->len || doc->text[*pos] != '{') {
+        return -1;
+    }
+    object_index = semantic_json_add_node(
+        doc, SEMANTIC_JSON_OBJECT, *pos, *pos);
+    if (object_index < 0) return -1;
+    (*pos)++;
+    semantic_json_skip_space(doc, pos);
+    if (*pos < doc->len && doc->text[*pos] == '}') {
+        doc->nodes[object_index].end = ++(*pos);
+        return object_index;
+    }
+    while (*pos < doc->len) {
+        key = semantic_json_parse_string(doc, pos);
+        if (key < 0) return -1;
+        semantic_json_skip_space(doc, pos);
+        if (*pos >= doc->len || doc->text[*pos] != ':') return -1;
+        (*pos)++;
+        semantic_json_skip_space(doc, pos);
+        value = semantic_json_parse_value(doc, pos, depth + 1);
+        if (value < 0) return -1;
+        if (previous_value < 0) {
+            doc->nodes[object_index].first_child = key;
+        } else {
+            doc->nodes[previous_value].next_sibling = key;
+        }
+        doc->nodes[key].next_sibling = value;
+        previous_value = value;
+        semantic_json_skip_space(doc, pos);
+        if (*pos < doc->len && doc->text[*pos] == '}') {
+            doc->nodes[object_index].end = ++(*pos);
+            return object_index;
+        }
+        if (*pos >= doc->len || doc->text[*pos] != ',') return -1;
+        (*pos)++;
+        semantic_json_skip_space(doc, pos);
+    }
+    return -1;
+}
+
+static int semantic_json_parse_number(
+    struct semantic_json_doc *doc,
+    size_t *pos
+) {
+    size_t start = *pos;
+    if (*pos < doc->len && doc->text[*pos] == '-') (*pos)++;
+    if (*pos >= doc->len) return -1;
+    if (doc->text[*pos] == '0') {
+        (*pos)++;
+    } else {
+        if (doc->text[*pos] < '1' || doc->text[*pos] > '9') return -1;
+        while (*pos < doc->len &&
+                doc->text[*pos] >= '0' && doc->text[*pos] <= '9') {
+            (*pos)++;
+        }
+    }
+    if (*pos < doc->len && doc->text[*pos] == '.') {
+        (*pos)++;
+        if (*pos >= doc->len ||
+            doc->text[*pos] < '0' || doc->text[*pos] > '9') {
+            return -1;
+        }
+        while (*pos < doc->len &&
+                doc->text[*pos] >= '0' && doc->text[*pos] <= '9') {
+            (*pos)++;
+        }
+    }
+    if (*pos < doc->len &&
+            (doc->text[*pos] == 'e' || doc->text[*pos] == 'E')) {
+        (*pos)++;
+        if (*pos < doc->len &&
+                (doc->text[*pos] == '+' || doc->text[*pos] == '-')) {
+            (*pos)++;
+        }
+        if (*pos >= doc->len ||
+            doc->text[*pos] < '0' || doc->text[*pos] > '9') {
+            return -1;
+        }
+        while (*pos < doc->len &&
+                doc->text[*pos] >= '0' && doc->text[*pos] <= '9') {
+            (*pos)++;
+        }
+    }
+    return semantic_json_add_node(
+        doc, SEMANTIC_JSON_NUMBER, start, *pos);
+}
+
+static int semantic_json_parse_value(
+    struct semantic_json_doc *doc,
+    size_t *pos,
+    int depth
+) {
+    size_t start;
+    if (depth > SEMANTIC_JSON_MAX_DEPTH) return -1;
+    semantic_json_skip_space(doc, pos);
+    if (*pos >= doc->len) return -1;
+    if (doc->text[*pos] == '"') {
+        return semantic_json_parse_string(doc, pos);
+    }
+    if (doc->text[*pos] == '[') {
+        return semantic_json_parse_array(doc, pos, depth);
+    }
+    if (doc->text[*pos] == '{') {
+        return semantic_json_parse_object(doc, pos, depth);
+    }
+    start = *pos;
+    if (doc->len - *pos >= 4 &&
+            memcmp(doc->text + *pos, "null", 4) == 0) {
+        *pos += 4;
+        return semantic_json_add_node(
+            doc, SEMANTIC_JSON_NULL, start, *pos);
+    }
+    if (doc->len - *pos >= 5 &&
+            memcmp(doc->text + *pos, "false", 5) == 0) {
+        *pos += 5;
+        return semantic_json_add_node(
+            doc, SEMANTIC_JSON_FALSE, start, *pos);
+    }
+    if (doc->len - *pos >= 4 &&
+            memcmp(doc->text + *pos, "true", 4) == 0) {
+        *pos += 4;
+        return semantic_json_add_node(
+            doc, SEMANTIC_JSON_TRUE, start, *pos);
+    }
+    return semantic_json_parse_number(doc, pos);
+}
+
+static int semantic_json_parse(
+    struct semantic_json_doc *doc,
+    const char *text,
+    size_t len
+) {
+    size_t pos = 0;
+    int root;
+    memset(doc, 0, sizeof(*doc));
+    doc->text = text;
+    doc->len = len;
+    root = semantic_json_parse_value(doc, &pos, 0);
+    semantic_json_skip_space(doc, &pos);
+    if (root < 0 || pos != len) {
+        free(doc->nodes);
+        doc->nodes = NULL;
+        doc->node_count = 0;
+        doc->node_capacity = 0;
+        return -1;
+    }
+    return root;
+}
+
+static int semantic_json_string_codepoint(
+    const struct semantic_json_doc *doc,
+    const struct semantic_json_node *node,
+    size_t *pos,
+    unsigned long *codepoint
+) {
+    unsigned char c;
+    unsigned long value;
+    int digits, hex;
+    if (*pos >= node->end) return 0;
+    c = (unsigned char)doc->text[(*pos)++];
+    if (c == '\\') {
+        if (*pos >= node->end) return -1;
+        c = (unsigned char)doc->text[(*pos)++];
+        switch (c) {
+            case '"': *codepoint = '"'; return 1;
+            case '\\': *codepoint = '\\'; return 1;
+            case '/': *codepoint = '/'; return 1;
+            case 'b': *codepoint = '\b'; return 1;
+            case 'f': *codepoint = '\f'; return 1;
+            case 'n': *codepoint = '\n'; return 1;
+            case 'r': *codepoint = '\r'; return 1;
+            case 't': *codepoint = '\t'; return 1;
+            case 'u':
+                if (node->end - *pos < 4) return -1;
+                value = 0;
+                for (digits = 0; digits < 4; digits++) {
+                    hex = semantic_json_hex(doc->text[(*pos)++]);
+                    if (hex < 0) return -1;
+                    value = (value << 4) | (unsigned long)hex;
+                }
+                if (value >= 0xd800 && value <= 0xdbff &&
+                        node->end - *pos >= 6 &&
+                        doc->text[*pos] == '\\' &&
+                        doc->text[*pos + 1] == 'u') {
+                    size_t low_pos = *pos + 2;
+                    unsigned long low = 0;
+                    for (digits = 0; digits < 4; digits++) {
+                        hex = semantic_json_hex(
+                            doc->text[low_pos + (size_t)digits]);
+                        if (hex < 0) break;
+                        low = (low << 4) | (unsigned long)hex;
+                    }
+                    if (digits == 4 && low >= 0xdc00 && low <= 0xdfff) {
+                        *pos += 6;
+                        value = 0x10000 +
+                            ((value - 0xd800) << 10) + (low - 0xdc00);
+                    }
+                }
+                *codepoint = value;
+                return 1;
+            default:
+                return -1;
+        }
+    }
+    if (c < 0x80) {
+        *codepoint = c;
+        return 1;
+    }
+    if ((c & 0xe0) == 0xc0) {
+        digits = 1;
+        value = c & 0x1f;
+    } else if ((c & 0xf0) == 0xe0) {
+        digits = 2;
+        value = c & 0x0f;
+    } else if ((c & 0xf8) == 0xf0) {
+        digits = 3;
+        value = c & 0x07;
+    } else {
+        return -1;
+    }
+    while (digits--) {
+        if (*pos >= node->end) return -1;
+        c = (unsigned char)doc->text[(*pos)++];
+        if ((c & 0xc0) != 0x80) return -1;
+        value = (value << 6) | (unsigned long)(c & 0x3f);
+    }
+    *codepoint = value;
+    return 1;
+}
+
+static int semantic_json_strings_equal(
+    const struct semantic_json_doc *left,
+    int left_index,
+    const struct semantic_json_doc *right,
+    int right_index
+) {
+    const struct semantic_json_node *left_node = &left->nodes[left_index];
+    const struct semantic_json_node *right_node = &right->nodes[right_index];
+    size_t left_pos = left_node->start, right_pos = right_node->start;
+    unsigned long left_codepoint, right_codepoint;
+    int left_rc, right_rc;
+    do {
+        left_rc = semantic_json_string_codepoint(
+            left, left_node, &left_pos, &left_codepoint);
+        right_rc = semantic_json_string_codepoint(
+            right, right_node, &right_pos, &right_codepoint);
+        if (left_rc != right_rc) return 0;
+        if (left_rc < 0) return 0;
+        if (left_rc > 0 && left_codepoint != right_codepoint) return 0;
+    } while (left_rc > 0);
+    return 1;
+}
+
+static int semantic_json_numbers_equal(
+    const struct semantic_json_doc *left,
+    const struct semantic_json_node *left_node,
+    const struct semantic_json_doc *right,
+    const struct semantic_json_node *right_node
+) {
+    char left_number[128], right_number[128];
+    char *left_end, *right_end;
+    size_t left_len = left_node->end - left_node->start;
+    size_t right_len = right_node->end - right_node->start;
+    double left_value, right_value;
+    if (left_len >= sizeof(left_number) ||
+        right_len >= sizeof(right_number)) {
+        return left_len == right_len &&
+            memcmp(left->text + left_node->start,
+                right->text + right_node->start, left_len) == 0;
+    }
+    memcpy(left_number, left->text + left_node->start, left_len);
+    left_number[left_len] = 0;
+    memcpy(right_number, right->text + right_node->start, right_len);
+    right_number[right_len] = 0;
+    errno = 0;
+    left_value = strtod(left_number, &left_end);
+    if (errno != 0 || left_end != left_number + left_len) return 0;
+    errno = 0;
+    right_value = strtod(right_number, &right_end);
+    if (errno != 0 || right_end != right_number + right_len) return 0;
+    return left_value == right_value;
+}
+
+static int semantic_json_nodes_equal(
+    const struct semantic_json_doc *left,
+    int left_index,
+    const struct semantic_json_doc *right,
+    int right_index,
+    int depth
+) {
+    const struct semantic_json_node *left_node = &left->nodes[left_index];
+    const struct semantic_json_node *right_node = &right->nodes[right_index];
+    int left_child, right_child, right_key, left_pairs, right_pairs;
+    int found;
+    if (depth > SEMANTIC_JSON_MAX_DEPTH ||
+        left_node->type != right_node->type) {
+        return 0;
+    }
+    switch (left_node->type) {
+        case SEMANTIC_JSON_NULL:
+        case SEMANTIC_JSON_FALSE:
+        case SEMANTIC_JSON_TRUE:
+            return 1;
+        case SEMANTIC_JSON_NUMBER:
+            return semantic_json_numbers_equal(
+                left, left_node, right, right_node);
+        case SEMANTIC_JSON_STRING:
+            return semantic_json_strings_equal(
+                left, left_index, right, right_index);
+        case SEMANTIC_JSON_ARRAY:
+            left_child = left_node->first_child;
+            right_child = right_node->first_child;
+            while (left_child >= 0 && right_child >= 0) {
+                if (!semantic_json_nodes_equal(
+                        left, left_child, right, right_child, depth + 1)) {
+                    return 0;
+                }
+                left_child = left->nodes[left_child].next_sibling;
+                right_child = right->nodes[right_child].next_sibling;
+            }
+            return left_child < 0 && right_child < 0;
+        case SEMANTIC_JSON_OBJECT:
+            left_pairs = 0;
+            left_child = left_node->first_child;
+            while (left_child >= 0) {
+                left_pairs++;
+                left_child = left->nodes[
+                    left->nodes[left_child].next_sibling].next_sibling;
+            }
+            right_pairs = 0;
+            right_child = right_node->first_child;
+            while (right_child >= 0) {
+                right_pairs++;
+                right_child = right->nodes[
+                    right->nodes[right_child].next_sibling].next_sibling;
+            }
+            if (left_pairs != right_pairs) return 0;
+            left_child = left_node->first_child;
+            while (left_child >= 0) {
+                int left_value = left->nodes[left_child].next_sibling;
+                found = 0;
+                right_key = right_node->first_child;
+                while (right_key >= 0) {
+                    int right_value = right->nodes[right_key].next_sibling;
+                    if (semantic_json_strings_equal(
+                            left, left_child, right, right_key) &&
+                        semantic_json_nodes_equal(
+                            left, left_value, right, right_value, depth + 1)) {
+                        found = 1;
+                        break;
+                    }
+                    right_key = right->nodes[right_value].next_sibling;
+                }
+                if (!found) return 0;
+                left_child = left->nodes[left_value].next_sibling;
+            }
+            return 1;
+        default:
+            return 0;
+    }
+}
+
+static int json_semantically_matches(
+    const char *actual,
+    size_t actual_len,
+    const char *expected,
+    size_t expected_len
+) {
+    struct semantic_json_doc actual_doc, expected_doc;
+    int actual_root, expected_root, matches = 0;
+    if (json_text_matches(actual, actual_len, expected, expected_len)) {
+        return 1;
+    }
+    actual_root = semantic_json_parse(
+        &actual_doc, actual, actual_len);
+    if (actual_root < 0) return 0;
+    expected_root = semantic_json_parse(
+        &expected_doc, expected, expected_len);
+    if (expected_root >= 0) {
+        matches = semantic_json_nodes_equal(
+            &actual_doc, actual_root, &expected_doc, expected_root, 0);
+        free(expected_doc.nodes);
+    }
+    free(actual_doc.nodes);
+    return matches;
+}
+
+static int written_resource_matches(const char *path, const char *expected, size_t expected_len) {
+    char *actual;
+    size_t actual_len = 0;
+    int matches;
+    actual = read_file_alloc(path, MAX_RESOURCE_FILE, &actual_len);
+    if (!actual) return 0;
+    matches = json_semantically_matches(
+        actual, actual_len, expected, expected_len);
+    free(actual);
+    return matches;
+}
+
+static int harmony_hbus_call(
+    const char *command,
+    const char *params,
+    char *reply,
+    size_t reply_len
+) {
+    char hub_id[64], esc_id[128], esc_command[160], esc_params[1536], cmd[2048];
+    char params_path[] = "/tmp/codex_hbus_params_XXXXXX";
+    char params_ref[128];
+    const char *params_arg;
+    size_t params_len, written = 0;
+    int params_fd = -1, rc;
+    if (reply_len) reply[0] = 0;
+    if (!load_hub_id(hub_id, sizeof(hub_id))) {
+        snprintf(reply, reply_len, "Hub ID is missing.");
+        return -1;
+    }
+    params_arg = params && params[0] ? params : "{}";
+    params_len = strlen(params_arg);
+    if (params_len > 700 || strchr(params_arg, '\'') != NULL) {
+        params_fd = mkstemp(params_path);
+        if (params_fd < 0) {
+            snprintf(reply, reply_len, "Unable to create the HBus parameter file.");
+            return -1;
+        }
+        fchmod(params_fd, 0600);
+        while (written < params_len) {
+            ssize_t n = write(params_fd, params_arg + written, params_len - written);
+            if (n < 0 && errno == EINTR) continue;
+            if (n <= 0) {
+                close(params_fd);
+                unlink(params_path);
+                snprintf(reply, reply_len, "Unable to write the HBus parameter file.");
+                return -1;
+            }
+            written += (size_t)n;
+        }
+        close(params_fd);
+        params_fd = -1;
+        snprintf(params_ref, sizeof(params_ref), "@%s", params_path);
+        params_arg = params_ref;
+    } else {
+        params_path[0] = 0;
+    }
+    shell_escape_single(hub_id, esc_id, sizeof(esc_id));
+    shell_escape_single(command, esc_command, sizeof(esc_command));
+    shell_escape_single(params_arg, esc_params, sizeof(esc_params));
+    snprintf(cmd, sizeof(cmd),
+        CODEX_HBUS_BIN " '%s' '%s' '%s' 2>&1",
+        esc_id, esc_command, esc_params);
+    rc = run_cmd(cmd, reply, reply_len);
+    if (params_path[0]) unlink(params_path);
+    return rc;
+}
+
+static long json_long_flexible_range(
+    const char *start,
+    const char *end,
+    const char *key,
+    long def
+) {
+    const char *p = find_key_range(start, end, key);
+    char *value_end;
+    long value;
+    if (!p) return def;
+    p = strchr(p + strlen(key) + 2, ':');
+    if (!p || (end && p >= end)) return def;
+    p++;
+    while (*p && (!end || p < end) && isspace((unsigned char)*p)) p++;
+    if (*p == '"') p++;
+    errno = 0;
+    value = strtol(p, &value_end, 10);
+    if (errno != 0 || value_end == p) return def;
+    return value;
+}
+
+static long hbus_reply_data_code(const char *reply) {
+    const char *field, *colon, *object, *object_end;
+    if (!reply) return -1;
+    field = find_key_range(reply, NULL, "data");
+    if (!field) return -1;
+    colon = strchr(field + 6, ':');
+    if (!colon) return -1;
+    object = colon + 1;
+    while (*object && isspace((unsigned char)*object)) object++;
+    if (*object != '{') return -1;
+    object_end = find_matching_json(object, '{', '}');
+    if (!object_end) return -1;
+    return json_long_flexible_range(object, object_end, "code", -1);
+}
+
+static int load_resource_put_metadata(
+    const char *resource_name,
+    char *uri,
+    size_t uri_len,
+    char *hetag,
+    size_t hetag_len,
+    int *mode,
+    char *msg,
+    size_t msg_len
+) {
+    char *context = NULL, *index = NULL;
+    char index_entry[512];
+    size_t context_len = 0, index_len = 0;
+    long account_id, context_mode;
+    int rc = -1;
+    context = read_file_alloc(CONTEXT_CONFIG, MAX_RESOURCE_FILE, &context_len);
+    index = read_file_alloc(RESOURCE_INDEX, MAX_RESOURCE_FILE, &index_len);
+    if (!context || !index) {
+        snprintf(msg, msg_len, "Harmony Context or resource index is unavailable.");
+        goto out;
+    }
+    account_id = json_long_range(context, NULL, "AccountId-", -1);
+    context_mode = json_long_range(context, NULL, "Mode", -1);
+    if (account_id <= 0 || context_mode < 0) {
+        snprintf(msg, msg_len, "Harmony account or connection mode is missing from Context.");
+        goto out;
+    }
+    if (!json_string(index, resource_name, index_entry, sizeof(index_entry)) ||
+        !json_string(index_entry, "hetag", hetag, hetag_len) || !hetag[0]) {
+        snprintf(msg, msg_len, "Harmony revision metadata for %s is unavailable.", resource_name);
+        goto out;
+    }
+    snprintf(uri, uri_len, "harmony://Account/%ld/%s", account_id, resource_name);
+    *mode = (int)context_mode;
+    rc = 0;
+out:
+    free(context);
+    free(index);
+    (void)context_len;
+    (void)index_len;
+    return rc;
+}
+
+static int harmony_resource_put(
+    const char *resource_name,
+    const char *path,
+    const char *resource,
+    size_t resource_len,
+    char *msg,
+    size_t msg_len
+) {
+#ifdef CODEX_WEBUI_ACTIVITY_PUT_TEST
+    if (write_file_atomic(path, resource, resource_len) != 0) {
+        snprintf(msg, msg_len, "test write failed for %s", resource_name);
+        return -1;
+    }
+    return 0;
+#else
+    char uri[192], hetag[64], reply[8192];
+    char validation_msg[256];
+    char *quoted_uri = NULL, *quoted_hetag = NULL;
+    char *before = NULL, *actual = NULL;
+    char *params = NULL;
+    size_t params_len, before_len = 0, actual_len = 0;
+    unsigned int before_hash, actual_hash;
+    const char *array_key;
+    long top_code, data_code;
+    int mode, rc = -1;
+    if (load_resource_put_metadata(resource_name, uri, sizeof(uri),
+            hetag, sizeof(hetag), &mode, msg, msg_len) != 0) {
+        return -1;
+    }
+    before = read_file_alloc(path, MAX_RESOURCE_FILE, &before_len);
+    if (!before) {
+        snprintf(msg, msg_len, "current %s data could not be read.", resource_name);
+        goto out;
+    }
+    before_hash = resource_hash(before, before_len);
+    free(before);
+    before = NULL;
+    quoted_uri = json_escape_alloc(uri);
+    quoted_hetag = json_escape_alloc(hetag);
+    if (!quoted_uri || !quoted_hetag) {
+        snprintf(msg, msg_len, "not enough memory to prepare %s", resource_name);
+        goto out;
+    }
+    params_len = strlen(quoted_uri) + strlen(quoted_hetag) +
+        resource_len + 128;
+    params = (char *)malloc(params_len);
+    if (!params) {
+        snprintf(msg, msg_len, "not enough memory to prepare %s", resource_name);
+        goto out;
+    }
+    if (mode == 3) {
+        snprintf(params, params_len,
+            "{\"uri\":%s,\"hetag\":%s,\"resource\":%s}",
+            quoted_uri, quoted_hetag, resource);
+    } else {
+        snprintf(params, params_len,
+            "{\"requests\":[{\"uri\":%s,\"hetag\":%s,\"resource\":%s}]}",
+            quoted_uri, quoted_hetag, resource);
+    }
+    if (harmony_hbus_call("proxy.resource?put", params, reply, sizeof(reply)) != 0) {
+        snprintf(msg, msg_len, "Harmony did not accept the %s update.", resource_name);
+        goto out;
+    }
+    top_code = json_long_flexible_range(reply, NULL, "code", -1);
+    data_code = hbus_reply_data_code(reply);
+    if (data_code == 412) {
+        snprintf(msg, msg_len, "%s changed on the Hub before it could be saved.", resource_name);
+        rc = -2;
+        goto out;
+    }
+    if ((top_code != 200 && top_code != 204) ||
+        (data_code >= 0 && data_code != 200 && data_code != 204)) {
+        snprintf(msg, msg_len, "Harmony rejected %s (status %ld/%ld).",
+            resource_name, top_code, data_code);
+        goto out;
+    }
+    actual = read_file_alloc(path, MAX_RESOURCE_FILE, &actual_len);
+    array_key = strcmp(resource_name, "ActivityList") == 0 ?
+        "Activities" : "ButtonMaps";
+    if (!actual || validate_resource_json(actual, actual_len,
+            array_key, validation_msg, sizeof(validation_msg)) != 0) {
+        snprintf(msg, msg_len, "Harmony left invalid %s data after saving.", resource_name);
+        goto out;
+    }
+    actual_hash = resource_hash(actual, actual_len);
+    if (actual_len == before_len && actual_hash == before_hash) {
+        snprintf(msg, msg_len, "Harmony accepted %s but the stored resource did not change.",
+            resource_name);
+        goto out;
+    }
+    rc = 0;
+out:
+    free(before);
+    free(actual);
+    free(quoted_uri);
+    free(quoted_hetag);
+    free(params);
+    return rc;
+#endif
+}
+
+static int safe_activity_id(const char *value) {
+    char *end;
+    long id;
+    if (!value || !value[0]) return 0;
+    errno = 0;
+    id = strtol(value, &end, 10);
+    if (errno != 0 || *end != 0) return 0;
+    return id >= -1;
+}
+
+static void render_activity_config_json(int fd) {
+    char *activities, *maps, *devices;
+    size_t activities_len = 0, maps_len = 0, devices_len = 0;
+    char revision[32];
+    FILE *f;
+    activities = read_file_alloc(ACTIVITY_LIST, MAX_RESOURCE_FILE, &activities_len);
+    maps = read_file_alloc(MAP_LIST, MAX_RESOURCE_FILE, &maps_len);
+    devices = read_file_alloc(DEVICE_LIST, MAX_RESOURCE_FILE, &devices_len);
+    if (!activities || !maps || !devices) {
+        free(activities); free(maps); free(devices);
+        f = send_json_start(fd, "503 Service Unavailable");
+        if (!f) return;
+        fputs("{\"ok\":false,\"error\":\"ActivityList, MapList, or DeviceList is unavailable\"}\n", f);
+        fclose(f);
+        return;
+    }
+    activity_revision(activities, activities_len, maps, maps_len, revision, sizeof(revision));
+    f = send_json_start(fd, "200 OK");
+    if (!f) {
+        free(activities); free(maps); free(devices);
+        return;
+    }
+    fputs("{\"ok\":true,\"revision\":", f);
+    json_write_string(f, revision);
+    fputs(",\"activityList\":", f);
+    fwrite(activities, 1, activities_len, f);
+    fputs(",\"mapList\":", f);
+    fwrite(maps, 1, maps_len, f);
+    fputs(",\"deviceList\":", f);
+    fwrite(devices, 1, devices_len, f);
+    fputs("}\n", f);
+    fclose(f);
+    free(activities); free(maps); free(devices);
+}
+
+static void render_activity_state_json(int fd) {
+    char reply[8192];
+    int rc = harmony_hbus_call("harmony.engine?getCurrentActivity", "{}", reply, sizeof(reply));
+    FILE *f = send_json_start(fd, rc == 0 ? "200 OK" : "502 Bad Gateway");
+    if (!f) return;
+    fprintf(f, "{\"ok\":%s,\"reply\":", rc == 0 ? "true" : "false");
+    json_write_string(f, reply);
+    fputs("}\n", f);
+    fclose(f);
+}
+
+static void render_activity_run_json(int fd, const struct request *req) {
+    char activity_id[64], params[192], reply[8192];
+    int rc;
+    FILE *f;
+    form_value(req->body, "activityId", activity_id, sizeof(activity_id));
+    if (!safe_activity_id(activity_id)) {
+        f = send_json_start(fd, "400 Bad Request");
+        if (!f) return;
+        fputs("{\"ok\":false,\"error\":\"activityId must be -1 or a non-negative integer\"}\n", f);
+        fclose(f);
+        return;
+    }
+    snprintf(params, sizeof(params),
+        "{\"activityId\":\"%s\",\"timestamp\":%ld000}",
+        activity_id, (long)time(NULL));
+    rc = harmony_hbus_call("harmony.engine?startactivity", params, reply, sizeof(reply));
+    f = send_json_start(fd, rc == 0 ? "200 OK" : "502 Bad Gateway");
+    if (!f) return;
+    fprintf(f, "{\"ok\":%s,\"activityId\":", rc == 0 ? "true" : "false");
+    json_write_string(f, activity_id);
+    fputs(",\"reply\":", f);
+    json_write_string(f, reply);
+    fputs("}\n", f);
+    fclose(f);
+}
+
+static int sync_activity_resources(char *reply, size_t reply_len) {
+    request_resource_reload_names("ActivityList\nMapList\nAutomationConfig\n");
+    usleep(1500 * 1000);
+    return harmony_hbus_call("setup.syncremotechanges", "{}", reply, reply_len);
+}
+
+static void render_activity_sync_json(int fd) {
+    char reply[8192];
+    int rc = sync_activity_resources(reply, sizeof(reply));
+    FILE *f = send_json_start(fd, rc == 0 ? "200 OK" : "502 Bad Gateway");
+    if (!f) return;
+    fprintf(f, "{\"ok\":%s,\"syncQueued\":%s,\"reply\":",
+        rc == 0 ? "true" : "false", rc == 0 ? "true" : "false");
+    json_write_string(f, reply);
+    fputs("}\n", f);
+    fclose(f);
+}
+
+static void render_activity_save_json(int fd, const struct request *req) {
+    char *activities = NULL, *maps = NULL, *old_activities = NULL, *old_maps = NULL;
+    char *saved_activities = NULL, *saved_maps = NULL;
+    size_t activities_len = 0, maps_len = 0, old_activities_len = 0, old_maps_len = 0;
+    size_t saved_activities_len = 0, saved_maps_len = 0;
+    char base_revision[64], current_revision[32], saved_revision[32], final_revision[32];
+    char msg[256], rollback_msg[256], sync_reply[8192];
+    int sync_remote, activity_changed, map_changed;
+    int wrote_activities = 0, wrote_maps = 0;
+    int sync_rc = 0, sync_conflict = 0, resource_conflict = 0;
+    int put_rc, rollback_ok;
+    FILE *f;
+    if (!req->body || !req->body_len ||
+        json_object_value_copy(req->body, "activityList", &activities, &activities_len) != 0 ||
+        json_object_value_copy(req->body, "mapList", &maps, &maps_len) != 0) {
+        f = send_json_start(fd, "400 Bad Request");
+        if (f) {
+            fputs("{\"ok\":false,\"error\":\"body must contain activityList and mapList JSON objects\"}\n", f);
+            fclose(f);
+        }
+        goto out;
+    }
+    base_revision[0] = 0;
+    json_string(req->body, "baseRevision", base_revision, sizeof(base_revision));
+    sync_remote = json_bool(req->body, "syncRemote", 0);
+    if (validate_resource_json(activities, activities_len, "Activities", msg, sizeof(msg)) != 0 ||
+        validate_resource_json(maps, maps_len, "ButtonMaps", msg, sizeof(msg)) != 0) {
+        f = send_json_start(fd, "400 Bad Request");
+        if (f) {
+            fputs("{\"ok\":false,\"error\":", f); json_write_string(f, msg); fputs("}\n", f);
+            fclose(f);
+        }
+        goto out;
+    }
+    old_activities = read_file_alloc(ACTIVITY_LIST, MAX_RESOURCE_FILE, &old_activities_len);
+    old_maps = read_file_alloc(MAP_LIST, MAX_RESOURCE_FILE, &old_maps_len);
+    if (!old_activities || !old_maps) {
+        f = send_json_start(fd, "503 Service Unavailable");
+        if (f) {
+            fputs("{\"ok\":false,\"error\":\"current ActivityList or MapList is unavailable\"}\n", f);
+            fclose(f);
+        }
+        goto out;
+    }
+    activity_revision(old_activities, old_activities_len, old_maps, old_maps_len,
+        current_revision, sizeof(current_revision));
+    if (!base_revision[0] || strcmp(base_revision, current_revision) != 0) {
+        f = send_json_start(fd, "409 Conflict");
+        if (f) {
+            fputs("{\"ok\":false,\"error\":\"activity resources changed since this editor loaded\",\"revision\":", f);
+            json_write_string(f, current_revision);
+            fputs("}\n", f);
+            fclose(f);
+        }
+        goto out;
+    }
+    activity_changed = !json_semantically_matches(
+        activities, activities_len, old_activities, old_activities_len);
+    map_changed = !json_semantically_matches(
+        maps, maps_len, old_maps, old_maps_len);
+    if (activity_changed || map_changed) {
+        backup_resources();
+    }
+    if (activity_changed) {
+        put_rc = harmony_resource_put("ActivityList", ACTIVITY_LIST,
+            activities, activities_len, msg, sizeof(msg));
+        if (put_rc != 0) {
+            resource_conflict = put_rc == -2;
+            wrote_activities = !written_resource_matches(
+                ACTIVITY_LIST, old_activities, old_activities_len);
+            goto rollback;
+        }
+        wrote_activities = 1;
+    }
+    if (map_changed) {
+        put_rc = harmony_resource_put("MapList", MAP_LIST,
+            maps, maps_len, msg, sizeof(msg));
+        if (put_rc != 0) {
+            resource_conflict = put_rc == -2;
+            wrote_maps = !written_resource_matches(MAP_LIST, old_maps, old_maps_len);
+            goto rollback;
+        }
+        wrote_maps = 1;
+    }
+    request_resource_reload_names("ActivityList\nMapList\nAutomationConfig\n");
+    saved_activities = read_file_alloc(ACTIVITY_LIST, MAX_RESOURCE_FILE, &saved_activities_len);
+    saved_maps = read_file_alloc(MAP_LIST, MAX_RESOURCE_FILE, &saved_maps_len);
+    if (!saved_activities || !saved_maps) {
+        snprintf(msg, sizeof(msg), "saved resources could not be read back");
+        goto rollback;
+    }
+    activity_revision(saved_activities, saved_activities_len, saved_maps, saved_maps_len,
+        saved_revision, sizeof(saved_revision));
+    snprintf(final_revision, sizeof(final_revision), "%s", saved_revision);
+    sync_reply[0] = 0;
+    if (sync_remote) {
+        sync_rc = sync_activity_resources(sync_reply, sizeof(sync_reply));
+        free(saved_activities); saved_activities = NULL;
+        free(saved_maps); saved_maps = NULL;
+        saved_activities = read_file_alloc(ACTIVITY_LIST, MAX_RESOURCE_FILE, &saved_activities_len);
+        saved_maps = read_file_alloc(MAP_LIST, MAX_RESOURCE_FILE, &saved_maps_len);
+        if (saved_activities && saved_maps) {
+            activity_revision(saved_activities, saved_activities_len, saved_maps, saved_maps_len,
+                final_revision, sizeof(final_revision));
+            sync_conflict = strcmp(final_revision, saved_revision) != 0;
+        }
+    }
+    f = send_json_start(fd, sync_remote && sync_rc != 0 ? "502 Bad Gateway" : "200 OK");
+    if (f) {
+        fprintf(f, "{\"ok\":%s,\"saved\":true,\"activityChanged\":%s,\"mapChanged\":%s,"
+            "\"synced\":%s,\"syncQueued\":%s,\"syncConflict\":%s,\"revision\":",
+            sync_remote && sync_rc != 0 ? "false" : "true",
+            activity_changed ? "true" : "false",
+            map_changed ? "true" : "false",
+            sync_remote && sync_rc == 0 ? "true" : "false",
+            sync_remote && sync_rc == 0 ? "true" : "false",
+            sync_conflict ? "true" : "false");
+        json_write_string(f, final_revision);
+        fputs(",\"message\":", f);
+        if (sync_conflict) {
+            json_write_string(f, "The remote sync changed activity resources after save. Reload before editing again.");
+        } else if (sync_remote && sync_rc != 0) {
+            json_write_string(f, "Activities were saved locally, but remote synchronization failed.");
+        } else if (sync_remote) {
+            json_write_string(f, "Activities saved through Harmony and submitted to the paired-remote sync queue.");
+        } else if (!activity_changed && !map_changed) {
+            json_write_string(f, "Activity resources already matched the Hub; no write was needed.");
+        } else {
+            json_write_string(f, "Activities saved through Harmony and reloaded on the Hub.");
+        }
+        fputs(",\"reply\":", f); json_write_string(f, sync_reply); fputs("}\n", f);
+        fclose(f);
+    }
+    goto out;
+
+rollback:
+    rollback_ok = 1;
+    rollback_msg[0] = 0;
+    if (wrote_maps && harmony_resource_put("MapList", MAP_LIST,
+            old_maps, old_maps_len, rollback_msg, sizeof(rollback_msg)) != 0) {
+        rollback_ok = 0;
+    }
+    if (wrote_activities && harmony_resource_put("ActivityList", ACTIVITY_LIST,
+            old_activities, old_activities_len, rollback_msg, sizeof(rollback_msg)) != 0) {
+        rollback_ok = 0;
+    }
+    if (!rollback_ok) {
+        if ((wrote_activities &&
+                write_file_atomic(ACTIVITY_LIST, old_activities, old_activities_len) != 0) ||
+            (wrote_maps && write_file_atomic(MAP_LIST, old_maps, old_maps_len) != 0)) {
+            snprintf(rollback_msg, sizeof(rollback_msg),
+                "The automatic rollback could not restore every resource.");
+        }
+    }
+    request_resource_reload_names("ActivityList\nMapList\nAutomationConfig\n");
+    rollback_ok = written_resource_matches(
+            ACTIVITY_LIST, old_activities, old_activities_len) &&
+        written_resource_matches(MAP_LIST, old_maps, old_maps_len);
+    f = send_json_start(fd,
+        resource_conflict ? "409 Conflict" : "500 Internal Server Error");
+    if (f) {
+        fprintf(f, "{\"ok\":false,\"rolledBack\":%s,\"error\":",
+            rollback_ok ? "true" : "false");
+        json_write_string(f, msg);
+        if (!rollback_ok) {
+            fputs(",\"rollbackError\":", f);
+            json_write_string(f, rollback_msg[0] ? rollback_msg :
+                "The previous activity resources could not be fully restored.");
+        }
+        fputs("}\n", f);
+        fclose(f);
+    }
+
+out:
+    free(activities); free(maps);
+    free(old_activities); free(old_maps);
+    free(saved_activities); free(saved_maps);
+}
+
+static void send_embedded_asset(
+    int fd,
+    const unsigned char *data,
+    unsigned int len,
+    const char *content_type
+) {
+    char hdr[320];
+    snprintf(hdr, sizeof(hdr),
+        "HTTP/1.1 200 OK\r\nContent-Type: %s\r\nContent-Length: %u\r\n"
+        "Cache-Control: no-store\r\nConnection: close\r\n\r\n",
+        content_type, len);
+    send_all(fd, hdr, strlen(hdr));
+    send_all(fd, (const char *)data, (size_t)len);
 }
 
 static int append_top_array_item(const char *path, const char *array_key, const char *item) {
@@ -2894,10 +4226,10 @@ static void page_head(FILE *f, const char *title) {
         "@media(max-width:860px){header{padding:12px 14px}.topbar{max-width:none;width:100%}.app-shell{width:100%;max-width:100%;grid-template-columns:minmax(0,1fr);padding:14px;gap:16px}.side-menu{position:sticky;top:62px;z-index:2;display:flex;max-width:100%;overflow-x:auto;gap:6px;border-radius:10px;box-shadow:0 4px 16px rgba(25,41,37,.06);scrollbar-width:thin}.menu-item{min-width:168px}.row,.wizard-grid,.device-sync,.lab-layout,.bt-layout,.bt-script-layout{grid-template-columns:minmax(0,1fr)}.kv{grid-template-columns:1fr}.command,.ir-command-row{grid-template-columns:1fr}.stepper{border-right:0;border-bottom:1px solid var(--line);grid-template-columns:repeat(2,1fr)}}"
         "@media(max-width:520px){body{font-size:13px}header{position:static;padding:10px}.topbar{align-items:flex-start;flex-direction:column;gap:8px}.brand-mark{width:30px;height:30px}.brand h1{font-size:16px}.top-status{justify-content:flex-start}.app-shell{padding:10px;gap:14px}.side-menu{position:static;display:grid;grid-template-columns:minmax(0,1fr);gap:7px;padding:7px}.menu-item{min-width:0;min-height:46px;padding:8px;grid-template-columns:28px 1fr}.menu-item span:first-child{width:24px;height:24px}.menu-item strong{font-size:12px}.menu-item small{font-size:10px}.section-head,.ir-work-head{align-items:flex-start;flex-direction:column}.panel,.stat,.wizard-body{padding:14px}.grid,.cards,.quick-actions,.lab-toolbar,.lab-quick{grid-template-columns:minmax(0,1fr)}.guide-step{grid-template-columns:24px 1fr;padding:8px}.actions button,.actions a.button{width:100%}.ir-quick-grid{grid-template-columns:minmax(0,1fr) minmax(0,1fr)}.ir-remote-shell{padding:8px}.ir-remote-skin{width:min(100%,230px)}.kb-panel{margin-left:-2px;margin-right:-2px}.kb-key{min-width:32px;height:36px;font-size:11px}.kb-15{min-width:48px}.kb-2{min-width:64px}.kb-225{min-width:74px}.kb-sp{min-width:150px}}"
         "@media(max-width:420px){.side-menu{grid-template-columns:minmax(0,1fr)}.menu-item{min-height:46px}}"
-        "</style></head><body>",
+        "</style><link rel='stylesheet' href='/assets/activity-ui.css'></head><body>",
         f);
     fprintf(f,
-        "<header><div class='topbar'><div class='brand'><div class='brand-mark'>H</div><div><h1>Harmony Hub Control</h1><small>Local smart home console</small></div></div><div class='top-status'><span class='pill'>Local control</span><span class='pill %s'>Logitech cloud %s</span></div></div></header><main class='app-shell'><aside class='side-menu' aria-label='Main menu'><button type='button' class='menu-item active' data-view-target='overview'><span>D</span><div><strong>Dashboard</strong><small>Status</small></div></button><button type='button' class='menu-item' data-view-target='control'><span>R</span><div><strong>Control</strong><small>Send buttons</small></div></button><button type='button' class='menu-item' data-view-target='ir'><span>IR</span><div><strong>IR Setup</strong><small>Add remotes</small></div></button><button type='button' class='menu-item' data-view-target='lab'><span>L</span><div><strong>Bulk IR Test</strong><small>Queue IR codes</small></div></button><button type='button' class='menu-item' data-view-target='bluetooth'><span>BT</span><div><strong>Bluetooth</strong><small>Keyboard</small></div></button><button type='button' class='menu-item' data-view-target='mqtt'><span>M</span><div><strong>MQTT</strong><small>Home Assistant</small></div></button><button type='button' class='menu-item' data-view-target='wifi'><span>W</span><div><strong>Wi-Fi</strong><small>Network</small></div></button><button type='button' class='menu-item' data-view-target='backup'><span>B</span><div><strong>Backup</strong><small>Import/export</small></div></button><button type='button' class='menu-item' data-view-target='system'><span>S</span><div><strong>System</strong><small>Logs/update</small></div></button></aside><div class='content'>",
+        "<header><div class='topbar'><div class='brand'><div class='brand-mark'>H</div><div><h1>Harmony Hub Control</h1><small>Local smart home console</small></div></div><div class='top-status'><span class='pill'>Local control</span><span class='pill %s'>Logitech cloud %s</span></div></div></header><main class='app-shell'><aside class='side-menu' aria-label='Main menu'><button type='button' class='menu-item active' data-view-target='overview'><span>D</span><div><strong>Dashboard</strong><small>Status</small></div></button><button type='button' class='menu-item' data-view-target='activities'><span>A</span><div><strong>Activities</strong><small>Scenes and routing</small></div></button><button type='button' class='menu-item' data-view-target='control'><span>R</span><div><strong>Control</strong><small>Send buttons</small></div></button><button type='button' class='menu-item' data-view-target='ir'><span>IR</span><div><strong>IR Setup</strong><small>Add remotes</small></div></button><button type='button' class='menu-item' data-view-target='lab'><span>L</span><div><strong>Bulk IR Test</strong><small>Queue IR codes</small></div></button><button type='button' class='menu-item' data-view-target='bluetooth'><span>BT</span><div><strong>Bluetooth</strong><small>Keyboard</small></div></button><button type='button' class='menu-item' data-view-target='mqtt'><span>M</span><div><strong>MQTT</strong><small>Home Assistant</small></div></button><button type='button' class='menu-item' data-view-target='wifi'><span>W</span><div><strong>Wi-Fi</strong><small>Network</small></div></button><button type='button' class='menu-item' data-view-target='backup'><span>B</span><div><strong>Backup</strong><small>Import/export</small></div></button><button type='button' class='menu-item' data-view-target='system'><span>S</span><div><strong>System</strong><small>Logs/update</small></div></button></aside><div class='content'>",
         cloud_blocked ? "ok" : "warn",
         cloud_blocked ? "blocked" : "allowed");
 }
@@ -3186,7 +4518,7 @@ static void page_end(FILE *f) {
         "const irdbForm=$('irdbImportForm');if(irdbForm){irdbForm.addEventListener('submit',e=>{updateIrdPayload();const payload=$('irdbPayload')?.value||'';if(!payload){e.preventDefault();irdbStatus('select at least one supported command');irdbLog('import blocked: no supported checked commands');return;}irdbLog('submitting '+payload.split('\\n').filter(Boolean).length+' selected commands');});}"
         "</script>",
         f);
-    fputs("</div></main></body></html>", f);
+    fputs("<script src='/assets/activity-ui.js'></script></div></main></body></html>", f);
 }
 
 static void status_panel(FILE *f, const struct mqtt_config *mqtt) {
@@ -3275,7 +4607,7 @@ static void status_panel(FILE *f, const struct mqtt_config *mqtt) {
     fprintf(f, "</span></div><div id='dashUpdateDetail' class='muted mini'>");
     html(f, update_detail);
     fprintf(f, "</div></div>");
-    fprintf(f, "</div><div class='quick-actions'><button type='button' data-view-target='control'><strong>Use a remote</strong><div class='muted mini'>Send saved buttons from the remote skin or command list.</div></button><button type='button' data-view-target='ir'><strong>Add or edit remotes</strong><div class='muted mini'>Create devices, search databases, learn buttons, and edit commands.</div></button><button type='button' data-view-target='lab'><strong>Bulk test IR codes</strong><div class='muted mini'>Search many code files, skip duplicates, then send a queue.</div></button><button type='button' data-view-target='mqtt'><strong>Set up Home Assistant</strong><div class='muted mini'>Configure MQTT topics, discovery, and state publishing.</div></button><button type='button' data-view-target='wifi'><strong>Change Wi-Fi</strong><div class='muted mini'>Update the network and reboot when you are ready.</div></button><button type='button' data-view-target='backup'><strong>Back up settings</strong><div class='muted mini'>Download a restore point before larger changes.</div></button></div><div class='grid' style='margin-top:12px'>");
+    fprintf(f, "</div><div class='quick-actions'><button type='button' data-view-target='activities'><strong>Manage activities</strong><div class='muted mini'>Create scenes, route device roles and inputs, map remote buttons, then synchronize the remote.</div></button><button type='button' data-view-target='control'><strong>Use a remote</strong><div class='muted mini'>Send saved buttons from the remote skin or command list.</div></button><button type='button' data-view-target='ir'><strong>Add or edit remotes</strong><div class='muted mini'>Create devices, search databases, learn buttons, and edit commands.</div></button><button type='button' data-view-target='lab'><strong>Bulk test IR codes</strong><div class='muted mini'>Search many code files, skip duplicates, then send a queue.</div></button><button type='button' data-view-target='mqtt'><strong>Set up Home Assistant</strong><div class='muted mini'>Configure MQTT topics, discovery, and state publishing.</div></button><button type='button' data-view-target='backup'><strong>Back up settings</strong><div class='muted mini'>Download a restore point before larger changes.</div></button></div><div class='grid' style='margin-top:12px'>");
     fprintf(f, "<details><summary>Network details</summary><pre>");
     html(f, ifconfig[0] ? ifconfig : "ath0 not available");
     fprintf(f, "</pre></details>");
@@ -3283,6 +4615,69 @@ static void status_panel(FILE *f, const struct mqtt_config *mqtt) {
     html(f, activity[0] ? activity : "no response");
     fprintf(f, "</pre></details></div>");
     fprintf(f, "</section>");
+}
+
+static void activity_panel(FILE *f) {
+    fputs(
+        "<section id='view-activities' data-view='activities' class='section'>"
+        "<div class='section-head'><div><h2>Activities</h2>"
+        "<div class='section-lead'>Build the scenes your Harmony remote runs: choose devices and inputs, assign remote buttons, start activities, and synchronize the paired remote.</div>"
+        "</div><button id='activityRefresh' type='button' class='secondary'>Reload from Hub</button></div>"
+        "<div class='activity-command'>"
+        "<div class='activity-hero'><div><div class='activity-eyebrow'>Now running</div>"
+        "<h3 id='activityCurrentName'>Waiting for Hub</h3>"
+        "<div id='activityCurrentMeta' class='activity-current-meta'><span class='activity-live-dot'></span>Current state has not been read yet</div></div>"
+        "<div class='activity-hero-actions'><button id='activityRefreshState' type='button'>Refresh state</button>"
+        "<button id='activityPowerOff' type='button'>Power everything off</button></div></div>"
+        "<div id='activityNotice' class='activity-notice' role='status' aria-live='polite'></div>"
+        "<div class='activity-layout'>"
+        "<aside class='panel activity-roster'><div class='activity-roster-head'><h3>Remote activity order</h3>"
+        "<div class='help'>This order is written back to ActivityList and shown on compatible Harmony remotes.</div>"
+        "<div class='activity-roster-actions'><button id='activityNew' type='button'>New blank</button>"
+        "<button id='activitySync' type='button' class='secondary'>Sync remote</button></div></div>"
+        "<div id='activityList' class='activity-list'><div class='activity-list-empty'>Open Activities to load the Hub.</div></div></aside>"
+        "<div class='activity-workspace'>"
+        "<div id='activityEmpty' class='panel activity-empty'><div><div class='activity-empty-mark'>▶</div>"
+        "<h3>Select an activity</h3><div class='muted'>Choose an activity from the ordered list, or create a blank one from the paired remote’s surface template.</div></div></div>"
+        "<div id='activityEditor' class='panel activity-editor hidden'>"
+        "<div class='activity-editor-head'><div><div class='activity-eyebrow' style='color:var(--accent)'>Activity editor</div>"
+        "<h3 id='activityEditorTitle'>Activity</h3><div id='activityEditorMeta' class='muted mini'></div></div>"
+        "<span id='activityDirty' class='activity-dirty'>Unsaved</span></div>"
+        "<div class='activity-tabs' role='tablist'>"
+        "<button type='button' class='activity-tab active' data-activity-tab='setup'>Devices &amp; inputs</button>"
+        "<button type='button' class='activity-tab' data-activity-tab='buttons'>Remote buttons</button>"
+        "<button type='button' class='activity-tab' data-activity-tab='advanced'>Advanced JSON</button></div>"
+        "<div class='activity-tab-panel active' data-activity-tab-panel='setup'>"
+        "<div class='activity-form-grid'><div><label for='activityName'>Activity name</label><input id='activityName' maxlength='96'></div>"
+        "<div><label for='activityType'>Activity kind</label><select id='activityType'></select></div>"
+        "<div><label for='activityIcon'>Icon key</label><input id='activityIcon' placeholder='Optional firmware icon'></div>"
+        "<div><label for='activityDefaultChannel'>Default channel</label><input id='activityDefaultChannel' placeholder='Optional'></div>"
+        "<div><label for='activityDefaultStation'>Default station name</label><input id='activityDefaultStation' placeholder='Optional'></div></div>"
+        "<div class='activity-section-title'><div><h4>Device roles and input routing</h4>"
+        "<div class='help'>Roles tell Harmony which device supplies picture, volume, channels, playback, or keyboard input.</div></div>"
+        "<button id='activityAddRole' type='button' class='secondary'>Add device role</button></div>"
+        "<div id='activityRoleList' class='activity-role-list'></div></div>"
+        "<div class='activity-tab-panel' data-activity-tab-panel='buttons'>"
+        "<div class='callout'><strong>Map the paired remote per surface.</strong>Press, long-press, and double-press assignments are saved in MapList together with the activity.</div>"
+        "<div class='activity-map-toolbar'><div><label for='activityMapSelect'>Remote surface</label><select id='activityMapSelect'></select></div>"
+        "<div class='actions'><button id='activityClearMap' type='button' class='danger'>Clear this surface</button></div></div>"
+        "<div id='activityMapSummary' class='activity-map-summary'>No map selected.</div>"
+        "<datalist id='activityCommandCatalog'></datalist>"
+        "<div id='activityButtonList' class='activity-button-list'></div></div>"
+        "<div class='activity-tab-panel' data-activity-tab-panel='advanced'>"
+        "<div class='callout'><strong>Full-fidelity editor.</strong>These objects preserve fields the guided editor does not expose, including entry/leave actions, sequence metadata, and firmware-specific values. Invalid JSON is never sent.</div>"
+        "<div class='activity-raw-grid'><div><label for='activityRawActivity'>Selected Activity object</label><textarea id='activityRawActivity' spellcheck='false'></textarea></div>"
+        "<div><label for='activityRawMaps'>Button maps for this Activity</label><textarea id='activityRawMaps' spellcheck='false'></textarea></div></div>"
+        "<div class='actions'><button id='activityApplyRaw' type='button' class='secondary'>Apply JSON to working copy</button>"
+        "<a class='button secondary' href='/export/activities'>Download ActivityList</a><a class='button secondary' href='/export/maps'>Download MapList</a></div></div>"
+        "<div class='activity-savebar'><div id='activitySaveState' class='activity-save-state'>Hub resources match this editor</div>"
+        "<div class='actions'><button id='activityRunSelected' type='button' class='secondary'>Run</button>"
+        "<button id='activityDuplicate' type='button' class='secondary'>Duplicate</button>"
+        "<button id='activityDelete' type='button' class='danger'>Delete</button>"
+        "<button id='activitySave' type='button'>Save to Hub</button>"
+        "<button id='activitySaveSync' type='button'>Save &amp; sync remote</button></div></div>"
+        "</div></div></div></div></section>",
+        f);
 }
 
 static void mqtt_form(FILE *f, const struct mqtt_config *cfg) {
@@ -3320,6 +4715,9 @@ static void backup_panel(FILE *f) {
     fprintf(f, "<a class='button' href='/export/devices'>Devices</a>");
     fprintf(f, "<a class='button' href='/export/functions'>Functions</a>");
     fprintf(f, "<a class='button' href='/export/protocols'>Protocols</a>");
+    fprintf(f, "<a class='button' href='/export/activities'>Activities</a>");
+    fprintf(f, "<a class='button' href='/export/maps'>Remote maps</a>");
+    fprintf(f, "<a class='button' href='/export/automation'>Automation</a>");
     fprintf(f, "<a class='button' href='/export/mqtt'>MQTT</a>");
     fprintf(f, "<a class='button' href='/export/wifi'>Wi-Fi</a>");
     fprintf(f, "<a class='button' href='/export/cloud'>Cloud blocker</a>");
@@ -3331,6 +4729,9 @@ static void backup_panel(FILE *f) {
     fprintf(f, "<option value='devices'>DeviceList.json</option>");
     fprintf(f, "<option value='functions'>FunctionList.json</option>");
     fprintf(f, "<option value='protocols'>ProtocolList.json</option>");
+    fprintf(f, "<option value='activities'>ActivityList.json</option>");
+    fprintf(f, "<option value='maps'>MapList.json</option>");
+    fprintf(f, "<option value='automation'>AutomationConfig.json</option>");
     fprintf(f, "<option value='mqtt'>MQTT config</option>");
     fprintf(f, "<option value='wifi'>Wi-Fi config</option>");
     fprintf(f, "<option value='cloud'>Cloud blocker setting</option>");
@@ -4382,6 +5783,7 @@ static void render_page(int fd, const char *message) {
         fprintf(f, "</div>");
     }
     status_panel(f, &mqtt);
+    activity_panel(f);
     fprintf(f, "<section id='view-mqtt' data-view='mqtt' class='section'><div class='section-head'><div><h2>MQTT</h2><div class='section-lead'>Connect the hub to Home Assistant through MQTT. The hub can publish its state and listen for activity or IR commands.</div></div></div><div class='grid'>");
     mqtt_form(f, &mqtt);
     fprintf(f, "</div></section>");
@@ -4544,6 +5946,9 @@ static const char *import_path_for_target(const char *target) {
     if (strcmp(target, "devices") == 0) return DEVICE_LIST;
     if (strcmp(target, "functions") == 0) return FUNCTION_LIST;
     if (strcmp(target, "protocols") == 0) return PROTOCOL_LIST;
+    if (strcmp(target, "activities") == 0) return ACTIVITY_LIST;
+    if (strcmp(target, "maps") == 0) return MAP_LIST;
+    if (strcmp(target, "automation") == 0) return AUTOMATION_CONFIG;
     if (strcmp(target, "mqtt") == 0) return MQTT_CONFIG;
     if (strcmp(target, "wifi") == 0) return WPA_CONFIG;
     if (strcmp(target, "cloud") == 0) return CLOUD_BLOCKER_CONFIG;
@@ -4556,6 +5961,9 @@ static const char *import_label_for_target(const char *target) {
     if (strcmp(target, "devices") == 0) return "DeviceList.json";
     if (strcmp(target, "functions") == 0) return "FunctionList.json";
     if (strcmp(target, "protocols") == 0) return "ProtocolList.json";
+    if (strcmp(target, "activities") == 0) return "ActivityList.json";
+    if (strcmp(target, "maps") == 0) return "MapList.json";
+    if (strcmp(target, "automation") == 0) return "AutomationConfig.json";
     if (strcmp(target, "mqtt") == 0) return "MQTT config";
     if (strcmp(target, "wifi") == 0) return "Wi-Fi config";
     if (strcmp(target, "cloud") == 0) return "cloud blocker setting";
@@ -4569,8 +5977,10 @@ static int validate_import_payload(const char *target, const char *payload, char
         return -1;
     }
     if (strcmp(target, "bundle") == 0) {
-        if (looks_like_json_object(payload) && strstr(payload, "harmony-owner-bundle-v1") && strstr(payload, "\"DeviceList.json\"")) return 0;
-        snprintf(msg, msglen, "Bundle import must be a harmony-owner-bundle-v1 JSON export.");
+        if (looks_like_json_object(payload) &&
+            (strstr(payload, "harmony-owner-bundle-v1") || strstr(payload, "harmony-owner-bundle-v2")) &&
+            strstr(payload, "\"DeviceList.json\"")) return 0;
+        snprintf(msg, msglen, "Bundle import must be a harmony-owner-bundle-v1 or v2 JSON export.");
         return -1;
     }
     if (strcmp(target, "wifi") == 0) {
@@ -4604,6 +6014,14 @@ static int validate_import_payload(const char *target, const char *payload, char
         snprintf(msg, msglen, "ProtocolList import must contain Protocols.");
         return -1;
     }
+    if (strcmp(target, "activities") == 0 && !strstr(payload, "\"Activities\"")) {
+        snprintf(msg, msglen, "ActivityList import must contain Activities.");
+        return -1;
+    }
+    if (strcmp(target, "maps") == 0 && !strstr(payload, "\"ButtonMaps\"")) {
+        snprintf(msg, msglen, "MapList import must contain ButtonMaps.");
+        return -1;
+    }
     if (strcmp(target, "mqtt") == 0 && (!strstr(payload, "\"broker\"") || !strstr(payload, "\"baseTopic\""))) {
         snprintf(msg, msglen, "MQTT import must contain broker and baseTopic.");
         return -1;
@@ -4620,80 +6038,97 @@ static int bundle_extract(const char *bundle, const char *key, char *out, size_t
 }
 
 static void handle_import_bundle(int fd, const char *payload) {
-    char msg[256];
+    char msg[256] = "";
     char cloud[32] = "";
     char *cloud_value;
-    char *devices, *functions, *protocols, *mqtt, *wifi, *bluetooth;
+    char *devices, *functions, *protocols, *activities, *maps, *automation;
+    char *mqtt, *wifi, *bluetooth;
+    int is_v2 = strstr(payload, "harmony-owner-bundle-v2") != NULL;
     devices = (char *)malloc(MAX_REQUEST_BODY);
     functions = (char *)malloc(MAX_REQUEST_BODY);
     protocols = (char *)malloc(MAX_REQUEST_BODY);
+    activities = (char *)malloc(MAX_REQUEST_BODY);
+    maps = (char *)malloc(MAX_REQUEST_BODY);
+    automation = (char *)malloc(MAX_REQUEST_BODY);
     mqtt = (char *)malloc(MAX_REQUEST_BODY);
     wifi = (char *)malloc(MAX_REQUEST_BODY);
     bluetooth = (char *)malloc(MAX_REQUEST_BODY);
-    if (!devices || !functions || !protocols || !mqtt || !wifi || !bluetooth) {
-        free(devices); free(functions); free(protocols); free(mqtt); free(wifi); free(bluetooth);
-        render_page(fd, "Not enough memory to import bundle.");
-        return;
+    if (!devices || !functions || !protocols || !activities || !maps || !automation ||
+        !mqtt || !wifi || !bluetooth) {
+        snprintf(msg, sizeof(msg), "Not enough memory to import bundle.");
+        goto done;
     }
+    activities[0] = 0;
+    maps[0] = 0;
+    automation[0] = 0;
     bluetooth[0] = 0;
     if (bundle_extract(payload, "DeviceList.json", devices, MAX_REQUEST_BODY, msg, sizeof(msg)) != 0 ||
         bundle_extract(payload, "FunctionList.json", functions, MAX_REQUEST_BODY, msg, sizeof(msg)) != 0 ||
         bundle_extract(payload, "ProtocolList.json", protocols, MAX_REQUEST_BODY, msg, sizeof(msg)) != 0 ||
         bundle_extract(payload, "mqtt-config.json", mqtt, MAX_REQUEST_BODY, msg, sizeof(msg)) != 0 ||
         bundle_extract(payload, "wpa_supplicant.conf", wifi, MAX_REQUEST_BODY, msg, sizeof(msg)) != 0) {
-        render_page(fd, msg);
-        free(devices); free(functions); free(protocols); free(mqtt); free(wifi); free(bluetooth);
-        return;
+        goto done;
+    }
+    json_string(payload, "ActivityList.json", activities, MAX_REQUEST_BODY);
+    json_string(payload, "MapList.json", maps, MAX_REQUEST_BODY);
+    json_string(payload, "AutomationConfig.json", automation, MAX_REQUEST_BODY);
+    if (is_v2 && (!activities[0] || !maps[0] || !automation[0])) {
+        snprintf(msg, sizeof(msg), "Version 2 bundle is missing ActivityList, MapList, or AutomationConfig.");
+        goto done;
     }
     if (validate_import_payload("devices", devices, msg, sizeof(msg)) != 0 ||
         validate_import_payload("functions", functions, msg, sizeof(msg)) != 0 ||
         validate_import_payload("protocols", protocols, msg, sizeof(msg)) != 0 ||
         validate_import_payload("mqtt", mqtt, msg, sizeof(msg)) != 0 ||
         validate_import_payload("wifi", wifi, msg, sizeof(msg)) != 0) {
-        render_page(fd, msg);
-        free(devices); free(functions); free(protocols); free(mqtt); free(wifi); free(bluetooth);
-        return;
+        goto done;
+    }
+    if ((activities[0] && validate_import_payload("activities", activities, msg, sizeof(msg)) != 0) ||
+        (maps[0] && validate_import_payload("maps", maps, msg, sizeof(msg)) != 0) ||
+        (automation[0] && validate_import_payload("automation", automation, msg, sizeof(msg)) != 0)) {
+        goto done;
     }
     json_string(payload, "bt-devices.json", bluetooth, MAX_REQUEST_BODY);
     if (bluetooth[0] && validate_import_payload("bluetooth", bluetooth, msg, sizeof(msg)) != 0) {
-        render_page(fd, msg);
-        free(devices); free(functions); free(protocols); free(mqtt); free(wifi); free(bluetooth);
-        return;
+        goto done;
     }
     json_string(payload, "cloud-blocker.conf", cloud, sizeof(cloud));
     cloud_value = trim_payload(cloud);
     if (cloud_value[0] && validate_import_payload("cloud", cloud_value, msg, sizeof(msg)) != 0) {
-        render_page(fd, msg);
-        free(devices); free(functions); free(protocols); free(mqtt); free(wifi); free(bluetooth);
-        return;
+        goto done;
     }
     backup_resources();
     backup_settings();
     if (write_file_atomic(DEVICE_LIST, devices, strlen(devices)) != 0 ||
         write_file_atomic(FUNCTION_LIST, functions, strlen(functions)) != 0 ||
         write_file_atomic(PROTOCOL_LIST, protocols, strlen(protocols)) != 0 ||
+        (activities[0] && write_file_atomic(ACTIVITY_LIST, activities, strlen(activities)) != 0) ||
+        (maps[0] && write_file_atomic(MAP_LIST, maps, strlen(maps)) != 0) ||
+        (automation[0] && write_file_atomic(AUTOMATION_CONFIG, automation, strlen(automation)) != 0) ||
         write_file_atomic(MQTT_CONFIG, mqtt, strlen(mqtt)) != 0 ||
         write_file_atomic(WPA_CONFIG, wifi, strlen(wifi)) != 0) {
-        render_page(fd, "Failed to import owner bundle.");
-        free(devices); free(functions); free(protocols); free(mqtt); free(wifi); free(bluetooth);
-        return;
+        snprintf(msg, sizeof(msg), "Failed to import owner bundle.");
+        goto done;
     }
     chmod(MQTT_CONFIG, 0600);
     chmod(WPA_CONFIG, 0600);
     if (bluetooth[0] && write_file_atomic(BT_DEVICE_STORE, bluetooth, strlen(bluetooth)) != 0) {
-        render_page(fd, "Bundle imported most files, but failed to save Bluetooth devices.");
-        free(devices); free(functions); free(protocols); free(mqtt); free(wifi); free(bluetooth);
-        return;
+        snprintf(msg, sizeof(msg), "Bundle imported most files, but failed to save Bluetooth devices.");
+        goto done;
     }
     if (bluetooth[0]) chmod(BT_DEVICE_STORE, 0644);
     if (cloud_value[0] && save_cloud_blocker(cloud_value_enabled(cloud_value)) != 0) {
-        render_page(fd, "Bundle imported most files, but failed to save the cloud blocker setting.");
-        free(devices); free(functions); free(protocols); free(mqtt); free(wifi); free(bluetooth);
-        return;
+        snprintf(msg, sizeof(msg), "Bundle imported most files, but failed to save the cloud blocker setting.");
+        goto done;
     }
-    request_resource_reload();
-    render_page(fd, "Backup bundle imported. Reboot when ready if Wi-Fi settings changed.");
-    free(devices); free(functions); free(protocols); free(mqtt); free(wifi); free(bluetooth);
+    request_resource_reload_names("DeviceList\nFunctionList\nProtocolList\nActivityList\nMapList\nAutomationConfig\n");
+    snprintf(msg, sizeof(msg), "Backup bundle imported. Reboot when ready if Wi-Fi settings changed.");
+
+done:
+    render_page(fd, msg[0] ? msg : "Bundle import failed.");
+    free(devices); free(functions); free(protocols);
+    free(activities); free(maps); free(automation);
+    free(mqtt); free(wifi); free(bluetooth);
 }
 
 static void handle_import(int fd, const struct request *req) {
@@ -4729,7 +6164,9 @@ static void handle_import(int fd, const struct request *req) {
         return;
     }
     len = strlen(payload);
-    if (strcmp(target, "devices") == 0 || strcmp(target, "functions") == 0 || strcmp(target, "protocols") == 0) {
+    if (strcmp(target, "devices") == 0 || strcmp(target, "functions") == 0 ||
+        strcmp(target, "protocols") == 0 || strcmp(target, "activities") == 0 ||
+        strcmp(target, "maps") == 0 || strcmp(target, "automation") == 0) {
         backup_resources();
     } else {
         backup_settings();
@@ -4757,7 +6194,12 @@ static void handle_import(int fd, const struct request *req) {
         chmod(BT_DEVICE_STORE, 0644);
         render_page(fd, "Bluetooth devices imported.");
     } else {
-        request_resource_reload();
+        if (strcmp(target, "activities") == 0 || strcmp(target, "maps") == 0 ||
+            strcmp(target, "automation") == 0) {
+            request_resource_reload_names("ActivityList\nMapList\nAutomationConfig\n");
+        } else {
+            request_resource_reload();
+        }
         snprintf(msg, sizeof(msg), "Imported %s and requested a Harmony resource reload.", import_label_for_target(target));
         render_page(fd, msg);
     }
@@ -6596,6 +8038,20 @@ static void handle_client(int client) {
     }
     if (strcmp(req.method, "GET") == 0 && (strcmp(req.path, "/") == 0 || strcmp(req.path, "/index.html") == 0)) {
         render_page(client, "");
+    } else if (strcmp(req.method, "GET") == 0 && strcmp(req.path, "/assets/activity-ui.css") == 0) {
+        send_embedded_asset(client, activity_ui_css, activity_ui_css_len, "text/css; charset=utf-8");
+    } else if (strcmp(req.method, "GET") == 0 && strcmp(req.path, "/assets/activity-ui.js") == 0) {
+        send_embedded_asset(client, activity_ui_js, activity_ui_js_len, "application/javascript; charset=utf-8");
+    } else if (strcmp(req.method, "GET") == 0 && strcmp(req.path, "/api/activity-config") == 0) {
+        render_activity_config_json(client);
+    } else if (strcmp(req.method, "GET") == 0 && strcmp(req.path, "/api/activity-state") == 0) {
+        render_activity_state_json(client);
+    } else if (strcmp(req.method, "POST") == 0 && strcmp(req.path, "/api/activity-run") == 0) {
+        render_activity_run_json(client, &req);
+    } else if (strcmp(req.method, "POST") == 0 && strcmp(req.path, "/api/activity-save") == 0) {
+        render_activity_save_json(client, &req);
+    } else if (strcmp(req.method, "POST") == 0 && strcmp(req.path, "/api/activity-sync") == 0) {
+        render_activity_sync_json(client);
     } else if (strcmp(req.method, "GET") == 0 && strcmp(req.path, "/api/inventory") == 0) {
         render_inventory_json(client);
     } else if ((strcmp(req.method, "GET") == 0 || strcmp(req.method, "POST") == 0) &&
@@ -6650,6 +8106,12 @@ static void handle_client(int client) {
         send_file_download(client, FUNCTION_LIST, "FunctionList.json", "application/json");
     } else if (strcmp(req.method, "GET") == 0 && strcmp(req.path, "/export/protocols") == 0) {
         send_file_download(client, PROTOCOL_LIST, "ProtocolList.json", "application/json");
+    } else if (strcmp(req.method, "GET") == 0 && strcmp(req.path, "/export/activities") == 0) {
+        send_file_download(client, ACTIVITY_LIST, "ActivityList.json", "application/json");
+    } else if (strcmp(req.method, "GET") == 0 && strcmp(req.path, "/export/maps") == 0) {
+        send_file_download(client, MAP_LIST, "MapList.json", "application/json");
+    } else if (strcmp(req.method, "GET") == 0 && strcmp(req.path, "/export/automation") == 0) {
+        send_file_download(client, AUTOMATION_CONFIG, "AutomationConfig.json", "application/json");
     } else if (strcmp(req.method, "GET") == 0 && strcmp(req.path, "/export/mqtt") == 0) {
         send_file_download(client, MQTT_CONFIG, "mqtt-config.json", "application/json");
     } else if (strcmp(req.method, "GET") == 0 && strcmp(req.path, "/export/wifi") == 0) {
@@ -6728,6 +8190,54 @@ static void start_bthid_keyboard_runtime(void) {
     }
 }
 
+#ifdef CODEX_WEBUI_SEMANTIC_TEST
+static int semantic_test_case(
+    const char *name,
+    const char *left,
+    const char *right,
+    int expected
+) {
+    int actual = json_semantically_matches(
+        left, strlen(left), right, strlen(right));
+    if (actual != expected) {
+        fprintf(stderr, "FAIL %s: expected %d, got %d\n",
+            name, expected, actual);
+        return 1;
+    }
+    return 0;
+}
+
+int main(void) {
+    const char *ordered =
+        "{\"b\":[1,{\"path\":\"a\\/b\",\"face\":\"\\uD83D\\uDE00\"}],"
+        "\"a\":1,\"enabled\":true,\"empty\":null}";
+    const char *reordered =
+        "{\"empty\":null,\"enabled\":true,\"a\":1.0,"
+        "\"b\":[1.0,{\"face\":\"\xf0\x9f\x98\x80\",\"path\":\"a/b\"}]}";
+    int failures = 0;
+    failures += semantic_test_case(
+        "object order, escapes, unicode, and number form",
+        ordered, reordered, 1);
+    failures += semantic_test_case(
+        "array order remains significant",
+        "{\"items\":[1,2,3]}", "{\"items\":[3,2,1]}", 0);
+    failures += semantic_test_case(
+        "different nested value",
+        "{\"item\":{\"value\":1}}", "{\"item\":{\"value\":2}}", 0);
+    failures += semantic_test_case(
+        "invalid JSON is not equal",
+        "{\"item\":1}", "{\"item\":1", 0);
+    if (!is_resource_backup_name("20260726_224354") ||
+        is_resource_backup_name("settings_20260726_224354") ||
+        is_resource_backup_name("20260726-224354")) {
+        fputs("FAIL resource backup retention name filter\n", stderr);
+        failures++;
+    }
+    if (failures) return 1;
+    puts("PASS semantic JSON equality and resource backup name filter");
+    return 0;
+}
+#else
 int main(int argc, char **argv) {
     int port = argc > 1 ? atoi(argv[1]) : 8080;
     int fd, one = 1;
@@ -6781,3 +8291,4 @@ int main(int argc, char **argv) {
         close(client);
     }
 }
+#endif

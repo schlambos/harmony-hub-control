@@ -3,8 +3,84 @@
 The web UI intentionally has no HTTP authentication. Run it only on a trusted
 LAN or behind your own access controls.
 
-All write endpoints accept `application/x-www-form-urlencoded` bodies. JSON
-responses use `ok: true` on success and `ok: false` with `error` on failure.
+Most write endpoints accept `application/x-www-form-urlencoded` bodies. The
+transactional activity save endpoint accepts `application/json`. JSON responses
+use `ok: true` on success and `ok: false` with `error` on failure.
+
+## Activities
+
+Load the native activity, remote-map, and device resources plus a conflict
+revision:
+
+```text
+GET /api/activity-config
+```
+
+Read or start the current activity:
+
+```powershell
+Invoke-RestMethod "http://<hub-ip>:8080/api/activity-state"
+
+Invoke-RestMethod "http://<hub-ip>:8080/api/activity-run" -Method Post -Body @{
+  activityId = "<activity-id>"
+}
+```
+
+Use `-1` as the activity ID to run `PowerOff`.
+
+The browser saves `ActivityList.json` and `MapList.json` as one transaction:
+
+```json
+{
+  "baseRevision": "01234567-89abcdef",
+  "syncRemote": true,
+  "activityList": {"Activities": []},
+  "mapList": {"ButtonMaps": [], "FunctionMaps": null}
+}
+```
+
+```text
+POST /api/activity-save
+Content-Type: application/json
+```
+
+`baseRevision` must match the value returned by `/api/activity-config`. A stale
+editor receives `409 Conflict`, preventing an official sync or a second browser
+from being overwritten. Before writing, the Hub snapshots all resource files.
+The five newest timestamped resource snapshots are retained so repeated edits
+cannot exhaust the Hub's small data partition; settings backups are not part of
+that rotation.
+The endpoint compares parsed JSON rather than serialized bytes, so whitespace,
+object-key order, escaped characters, and equivalent number formatting do not
+turn an unchanged browser payload into a firmware write. Only changed resources
+are sent through Harmony's native `proxy.resource?put` handler. The resource is
+embedded as a JSON object rather than an escaped JSON string, which keeps the
+large MapList request small enough for the Hub's memory and watchdog limits.
+
+Harmony checks the Hub etag, updates `index.json`, queues the corresponding
+service operation, and sends `config_new` to the engine. A successful write
+requires the matching HBus request ID and native `200`/`204` response, followed
+by a valid changed resource on disk. The firmware is allowed to choose its own
+JSON serialization. If either write or verification fails, resources already
+changed by the transaction are restored through the same native handler; the
+endpoint falls back to the on-disk snapshot only if Harmony cannot perform that
+rollback. Successful save responses include `activityChanged` and `mapChanged`
+so callers can distinguish a write from a semantic no-op.
+
+With `syncRemote: true`, the endpoint reloads `ActivityList`, `MapList`, and
+`AutomationConfig`, then invokes `setup.syncremotechanges`. That is the firmware
+path which processes locally queued resource PUTs; `setup.sync` is deliberately
+not used because it clears pending local requests before its cloud-to-Hub sync.
+The API reports that Harmony accepted the remote-sync request and checks whether
+the local resources changed immediately afterward. Physical remote propagation
+continues asynchronously inside the firmware; `syncQueued: true` (and the
+backward-compatible `synced: true`) means the firmware accepted that work, not
+that a handset acknowledgement was observed. Submit the currently stored
+resources for remote synchronization without an edit using:
+
+```text
+POST /api/activity-sync
+```
 
 ## Inventory
 
@@ -165,6 +241,9 @@ GET /export/bundle
 GET /export/devices
 GET /export/functions
 GET /export/protocols
+GET /export/activities
+GET /export/maps
+GET /export/automation
 GET /export/mqtt
 GET /export/wifi
 GET /export/cloud
@@ -172,6 +251,10 @@ GET /export/cloud
 
 Exports are for backups and debugging. Do not share files containing local
 network or credential material.
+
+The full bundle format is `harmony-owner-bundle-v2` and includes
+`ActivityList.json`, `MapList.json`, and `AutomationConfig.json`. Version 1
+bundles remain importable and leave those three resources unchanged.
 
 `/export/cloud` returns `1` when the Logitech cloud blocker is enabled and `0`
 when cloud tasks are allowed on the next network start.

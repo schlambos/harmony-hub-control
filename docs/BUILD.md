@@ -20,7 +20,34 @@ cd build
 
 It downloads the Bootlin MIPS uClibc toolchain and Dropbear source into
 `build/toolchains/` and `build/tmp/`, then writes fresh binaries to
-`build/output/`.
+`build/output/`. Before compilation it also runs
+`tools/embed_activity_ui.sh`, which regenerates
+`payload/source/activity_ui_assets.h` from the readable CSS and JavaScript under
+`payload/web/`.
+
+Deploy `codex_webui` and `codex_hbus` from the same build. Activity resource
+updates use the helper's `@params-file` input so the native Harmony PUT can carry
+the full MapList without shell argument or quoting limits.
+
+The host-side HBus smoke test deliberately sends notifications, a ping, an
+unrelated response, and a fragmented 350 KB response before the matching
+request ID:
+
+```sh
+cc -std=c99 -O2 -o /tmp/codex_hbus_host payload/source/codex_hbus.c
+python3 tools/hbus_notification_smoke.py /tmp/codex_hbus_host
+```
+
+The activity save path also has a host-side regression for semantic JSON
+comparison. It verifies that object-key order, escaped slashes, Unicode escape
+forms, and equivalent numeric forms do not create false resource writes:
+
+```sh
+tools/activity_json_semantic_smoke.sh
+```
+
+The Linux build script runs this semantic test automatically before downloading
+or invoking the cross toolchain.
 
 After rebuilding:
 

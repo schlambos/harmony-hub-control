@@ -59,7 +59,7 @@ local function checkResourceReload()
   os.remove(RESOURCE_RELOAD_FLAG)
   local resources = {}
   for name in string.gmatch(data, "[%w]+") do
-    if name == "all" or name == "DeviceList" or name == "ProtocolList" or name == "ActivityList" or name == "MapList" or name == "AutomationConfig" then
+    if name == "all" or name == "DeviceList" or name == "FunctionList" or name == "ProtocolList" or name == "ActivityList" or name == "MapList" or name == "AutomationConfig" then
       table.insert(resources, name)
     end
   end
@@ -660,8 +660,14 @@ local function mqttLoop()
     local cfg = readConfig()
     if not cfg.enabled or not cfg.broker or not cfg.broker.host then
       log.notice("codexmqtt disabled or missing broker host")
-      checkResourceReload()
-      system.sleep(60000)
+      local cfgRaw = readFile(CONFIG_FILE) or ""
+      for _ = 1, 60 do
+        checkResourceReload()
+        system.sleep(1000)
+        if stopRequested or (readFile(CONFIG_FILE) or "") ~= cfgRaw then
+          break
+        end
+      end
     else
       local sock, err = connectMqtt(cfg)
       if not sock then
@@ -702,7 +708,7 @@ local function mqttLoop()
             publishState(sock, cfg, false)
             lastPoll = now
           end
-          if now - lastConfigCheck >= 5 then
+          if now - lastConfigCheck >= 1 then
             checkResourceReload()
             local nextRaw = readFile(CONFIG_FILE) or ""
             if nextRaw ~= cfgRaw then
