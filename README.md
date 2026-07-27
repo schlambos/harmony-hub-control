@@ -18,9 +18,14 @@ MQTT credentials, firmware dumps, or personal backups.
 - Web UI runs on `http://<hub-ip>:8080/`.
 - HTTP authentication is intentionally disabled for LAN-only use.
 - Activities can be created, duplicated, reordered, edited, launched, and
-  submitted to the paired remote's native Harmony sync queue from the web UI.
-  Device/input roles and press, long-press, and double-press button maps are
-  edited together.
+  published to the Hub's paired-remote configuration entirely offline from the
+  web UI. Device/input roles and press, long-press, and double-press button maps
+  are edited together. Activity control groups in `FunctionList.json` are
+  created, repaired, validated, and available in the full-fidelity JSON editor.
+- Offline mode makes the Hub LAN-only, serves paired-remote resource reads from
+  local storage, acknowledges remote resource writes without cloud mutation,
+  and prevents the handset's normal `setup.sync` flow from replacing locally
+  owned activity resources with an older Logitech configuration.
 - IR devices can be configured from database lookup or manual learning.
 - Database import supports IRDB, Flipper-IRDB, and RemoteCentral-style Pronto
   sources.
@@ -44,12 +49,15 @@ MQTT credentials, firmware dumps, or personal backups.
   restore_backup.ps1       Restores the installer's hub-side backup
   payload/
     bin/                   MIPS binaries shipped to the hub
-    scripts/               Init, recovery, Dropbear wrappers, cloud suppression
+    scripts/               Init, recovery, Dropbear wrappers, offline enforcement
+    activity/              Fail-closed offline activity resource writer
     mqtt/                  MQTT bridge Lua plugin
     source/                C sources for the native helper binaries
     web/                   Readable activity editor CSS/JavaScript sources
   tools/
     embed_activity_ui.sh   Embeds web assets into the single web UI binary
+    activity_graph_repair.mjs
+                           Dry-run/apply repair for all activity graph resources
     ir_database_smoke_test.mjs
   build/
     build_harmony_tools_kali.sh
@@ -135,13 +143,14 @@ The installer will prompt for missing values, create a backup on the hub, upload
 the runtime, start Dropbear if needed, start the web UI, and write MQTT config
 if provided.
 
-By default the installer enables the web UI's cloud blocker setting. That keeps
-Logitech cloudapi, PubNub, and package-manager background tasks from starting
-while local web, MQTT, Bluetooth, Wi-Fi recovery, and SSH control continue to
-work. Fresh installs reboot once at the end so the patched network-service
-startup is actually active before the handoff finishes. Owners can change it
-later from **System > Cloud blocker** and use **Save and reboot** to apply the
-new mode.
+By default the installer enables strict offline ownership. It keeps Logitech
+cloudapi, PubNub, and package-manager background tasks from starting, removes
+the Hub's WAN default route, retains LAN and multicast routes, and replaces the
+paired remote's cloud-capable resource/sync handlers with local-only handlers.
+Local web, MQTT, Bluetooth, Wi-Fi recovery, discovery, and SSH control continue
+to work. Fresh installs reboot once so the guarded handlers are loaded before
+handoff. The **System > Cloud blocker** setting changes the egress route
+immediately; **Save and reboot** also reloads the handler and task policy.
 
 To stage the setting without the install-time reboot:
 

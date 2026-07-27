@@ -313,7 +313,7 @@ if (-not $HubId) {
 Info "using hub id $HubId"
 
 Step "Creating remote backup"
-$backupCmd = 'STAMP=$(date +%Y%m%d-%H%M%S); B=/data/codex-backups/webui-handoff-$STAMP; mkdir -p "$B"; for f in /etc/init.d/rcS.local /opt/luaworks/tasks/connectserver/netservicestarter.lua /usr/sbin/dropbear /usr/sbin/dropbearkey /data/codex/hub_id /data/codex/cloud_blocker.conf /data/codexmqtt/config.json; do if [ -e "$f" ]; then n=$(echo "$f" | sed ''s#/#_#g''); cp -p "$f" "$B/$n"; fi; done; echo "$B"'
+$backupCmd = 'STAMP=$(date +%Y%m%d-%H%M%S); B=/data/codex-backups/webui-handoff-$STAMP; mkdir -p "$B"; for f in /etc/init.d/rcS.local /opt/luaworks/tasks/connectserver/netservicestarter.lua /usr/sbin/dropbear /usr/sbin/dropbearkey /data/codex/hub_id /data/codex/cloud_blocker.conf /data/codex/offline_egress_guard.sh /data/codexmqtt/config.json /pkg/codexactivity/codexactivity.lua /pkg/codexactivity/manifest.json; do if [ -e "$f" ]; then n=$(echo "$f" | sed ''s#/#_#g''); cp -p "$f" "$B/$n"; fi; done; echo "$B"'
 $backupDir = (Invoke-Remote $backupCmd $null 30000).Trim()
 Info "backup=$backupDir"
 
@@ -330,6 +330,7 @@ Upload-Bytes (Join-Path $Payload "scripts\dropbearkey") "/usr/sbin/dropbearkey" 
 
 Step "Uploading runtime files"
 Upload-Bytes (Join-Path $Payload "scripts\init.sh") "/data/codex/init.sh" "755"
+Upload-Bytes (Join-Path $Payload "scripts\offline_egress_guard.sh") "/data/codex/offline_egress_guard.sh" "755"
 Upload-Bytes (Join-Path $Payload "scripts\recovery_ap.sh") "/data/codex/recovery_ap.sh" "755"
 Upload-Bytes (Join-Path $Payload "scripts\rcS.local") "/etc/init.d/rcS.local" "755"
 if (-not $SkipCloudSuppression) {
@@ -337,6 +338,7 @@ if (-not $SkipCloudSuppression) {
 } else {
     Info "skipped netservicestarter.lua cloud-suppression patch"
 }
+Upload-Bytes (Join-Path $Payload "activity\codexactivity.lua") "/pkg/codexactivity/codexactivity.lua" "644"
 Upload-Bytes (Join-Path $Payload "mqtt\codexmqtt.lua") "/pkg/codexmqtt/codexmqtt.lua" "644"
 
 Step "Uploading configuration"
@@ -347,24 +349,27 @@ if ($SkipCloudSuppression) {
     Upload-Text "1`n" "/data/codex/cloud_blocker.conf" "644"
 }
 Upload-Text "1`n" "/etc/tdeenable" "644"
+Upload-Text "{""plugin"":""codexactivity""}`n" "/pkg/codexactivity/manifest.json" "644"
 Upload-Text "{""plugin"":""codexmqtt""}`n" "/pkg/codexmqtt/manifest.json" "644"
 Upload-Text (Build-MqttConfig) "/data/codexmqtt/config.json" "600"
 
 Step "Post-install permissions and startup"
-$post = "mkdir -p /data/codex/bin /etc/dropbear /home/root/.ssh /data/codexmqtt /pkg/codexmqtt; " +
+$post = "mkdir -p /data/codex/bin /etc/dropbear /home/root/.ssh /data/codexmqtt /pkg/codexactivity /pkg/codexmqtt; " +
         "ln -sf dropbearmulti /data/codex/bin/dropbear; " +
         "ln -sf dropbearmulti /data/codex/bin/dropbearkey; " +
-        "chmod 755 /data/codex/bin/dropbearmulti /data/codex/bin/codex_dhcpd /data/codex/bin/codex_hbus /data/codex/bin/codex_hal_ltcp /data/codex/bin/codex_bthid_keyboard /data/codex/bin/codex_portal /data/codex/bin/codex_webui /data/codex/init.sh /data/codex/recovery_ap.sh /usr/sbin/dropbear /usr/sbin/dropbearkey /etc/init.d/rcS.local; " +
+        "chmod 755 /data/codex/bin/dropbearmulti /data/codex/bin/codex_dhcpd /data/codex/bin/codex_hbus /data/codex/bin/codex_hal_ltcp /data/codex/bin/codex_bthid_keyboard /data/codex/bin/codex_portal /data/codex/bin/codex_webui /data/codex/init.sh /data/codex/offline_egress_guard.sh /data/codex/recovery_ap.sh /usr/sbin/dropbear /usr/sbin/dropbearkey /etc/init.d/rcS.local; " +
         "chmod 600 /data/codexmqtt/config.json 2>/dev/null || true; " +
         "/bin/busybox sync 2>/dev/null || true"
 Invoke-Remote $post $null 60000 | Out-Null
 
 $start = "killall codex_webui 2>/dev/null || true; killall codex_bthid_keyboard 2>/dev/null || true; " +
+         "/data/codex/offline_egress_guard.sh monitor >> /cache/codex-init.log 2>&1 & " +
          "if ! ps | grep '[d]ropbear' >/dev/null 2>&1; then /usr/sbin/dropbear -R -p 22; fi; " +
          "mkdir -p /cache/bin; ln -sf /data/codex/bin/codex_bthid_keyboard /cache/bin/bthid_keyboard; " +
          "/data/codex/bin/codex_webui 8080 >> /cache/codex-init.log 2>&1 & " +
          "/data/codex/bin/codex_bthid_keyboard >> /cache/codex-init.log 2>&1 & " +
          "sleep 1; " +
+         "/data/codex/bin/codex_hbus $(Remote-Quote $HubId) harmony.automation?discover '{""gatewayType"":""codexactivity""}' >> /cache/codex-init.log 2>&1 || true; " +
          "/data/codex/bin/codex_hbus $(Remote-Quote $HubId) harmony.automation?discover '{""gatewayType"":""codexmqtt""}' >> /cache/codex-init.log 2>&1 || true; " +
          "ps | grep '[c]odex_webui' || true; ps | grep '[c]odex_bthid_keyboard' || true; ps | grep '[d]ropbear' || true"
 $running = Invoke-Remote $start $null 90000

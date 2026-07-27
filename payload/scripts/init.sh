@@ -11,6 +11,10 @@ if [ -z "$HUB_ID" ]; then
   echo "$(date) missing numeric /data/codex/hub_id; skipping HBus startup actions" >> "$LOG"
 fi
 
+if [ -x /data/codex/offline_egress_guard.sh ]; then
+  /data/codex/offline_egress_guard.sh monitor >> "$LOG" 2>&1 &
+fi
+
 if [ -x /data/codex/bin/dropbear ]; then
   echo '#!/bin/sh' > /usr/sbin/dropbear
   echo 'exec /data/codex/bin/dropbear -K 300 "$@"' >> /usr/sbin/dropbear
@@ -47,6 +51,7 @@ fi
 (
   sleep 70
   if [ -n "$HUB_ID" ] && [ -x /data/codex/bin/codex_hbus ]; then
+    /data/codex/bin/codex_hbus "$HUB_ID" "harmony.automation?discover" '{"gatewayType":"codexactivity"}' >> "$LOG" 2>&1
     /data/codex/bin/codex_hbus "$HUB_ID" "harmony.automation?discover" '{"gatewayType":"codexmqtt"}' >> "$LOG" 2>&1
   fi
 ) &

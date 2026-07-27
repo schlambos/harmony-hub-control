@@ -290,7 +290,7 @@ class Installer:
 STAMP=$(date +%Y%m%d-%H%M%S)
 B=/data/codex-backups/webui-handoff-$STAMP
 mkdir -p "$B"
-for f in /etc/init.d/rcS.local /opt/luaworks/tasks/connectserver/netservicestarter.lua /usr/sbin/dropbear /usr/sbin/dropbearkey /data/codex/hub_id /data/codex/cloud_blocker.conf /data/codexmqtt/config.json; do
+for f in /etc/init.d/rcS.local /opt/luaworks/tasks/connectserver/netservicestarter.lua /usr/sbin/dropbear /usr/sbin/dropbearkey /data/codex/hub_id /data/codex/cloud_blocker.conf /data/codex/offline_egress_guard.sh /data/codexmqtt/config.json /pkg/codexactivity/codexactivity.lua /pkg/codexactivity/manifest.json; do
   if [ -e "$f" ]; then
     n=$(echo "$f" | sed 's#/#_#g')
     cp -p "$f" "$B/$n"
@@ -314,6 +314,11 @@ echo "$B"
 
         step("Uploading runtime files")
         self.upload_bytes(PAYLOAD / "scripts" / "init.sh", "/data/codex/init.sh", "755")
+        self.upload_bytes(
+            PAYLOAD / "scripts" / "offline_egress_guard.sh",
+            "/data/codex/offline_egress_guard.sh",
+            "755",
+        )
         self.upload_bytes(PAYLOAD / "scripts" / "recovery_ap.sh", "/data/codex/recovery_ap.sh", "755")
         self.upload_bytes(PAYLOAD / "scripts" / "rcS.local", "/etc/init.d/rcS.local", "755")
         if not self.args.skip_cloud_suppression:
@@ -324,23 +329,30 @@ echo "$B"
             )
         else:
             info("skipped netservicestarter.lua cloud-suppression patch")
+        self.upload_bytes(
+            PAYLOAD / "activity" / "codexactivity.lua",
+            "/pkg/codexactivity/codexactivity.lua",
+            "644",
+        )
         self.upload_bytes(PAYLOAD / "mqtt" / "codexmqtt.lua", "/pkg/codexmqtt/codexmqtt.lua", "644")
 
         step("Uploading configuration")
         self.upload_text(f"{hub_id}\n", "/data/codex/hub_id", "644")
         self.upload_text("0\n" if self.args.skip_cloud_suppression else "1\n", "/data/codex/cloud_blocker.conf", "644")
         self.upload_text("1\n", "/etc/tdeenable", "644")
+        self.upload_text('{"plugin":"codexactivity"}\n', "/pkg/codexactivity/manifest.json", "644")
         self.upload_text('{"plugin":"codexmqtt"}\n', "/pkg/codexmqtt/manifest.json", "644")
         self.upload_text(self.build_mqtt_config(), "/data/codexmqtt/config.json", "600")
 
         step("Post-install permissions and startup")
         post = (
-            "mkdir -p /data/codex/bin /etc/dropbear /home/root/.ssh /data/codexmqtt /pkg/codexmqtt; "
+            "mkdir -p /data/codex/bin /etc/dropbear /home/root/.ssh /data/codexmqtt /pkg/codexactivity /pkg/codexmqtt; "
             "ln -sf dropbearmulti /data/codex/bin/dropbear; "
             "ln -sf dropbearmulti /data/codex/bin/dropbearkey; "
             "chmod 755 /data/codex/bin/dropbearmulti /data/codex/bin/codex_dhcpd /data/codex/bin/codex_hbus "
             "/data/codex/bin/codex_hal_ltcp /data/codex/bin/codex_bthid_keyboard /data/codex/bin/codex_portal "
-            "/data/codex/bin/codex_webui /data/codex/init.sh /data/codex/recovery_ap.sh /usr/sbin/dropbear "
+            "/data/codex/bin/codex_webui /data/codex/init.sh /data/codex/offline_egress_guard.sh "
+            "/data/codex/recovery_ap.sh /usr/sbin/dropbear "
             "/usr/sbin/dropbearkey /etc/init.d/rcS.local; "
             "chmod 600 /data/codexmqtt/config.json 2>/dev/null || true; "
             "/bin/busybox sync 2>/dev/null || true"
@@ -349,11 +361,14 @@ echo "$B"
 
         start = (
             "killall codex_webui 2>/dev/null || true; killall codex_bthid_keyboard 2>/dev/null || true; "
+            "/data/codex/offline_egress_guard.sh monitor >> /cache/codex-init.log 2>&1 & "
             "if ! ps | grep '[d]ropbear' >/dev/null 2>&1; then /usr/sbin/dropbear -R -p 22; fi; "
             "mkdir -p /cache/bin; ln -sf /data/codex/bin/codex_bthid_keyboard /cache/bin/bthid_keyboard; "
             "/data/codex/bin/codex_webui 8080 >> /cache/codex-init.log 2>&1 & "
             "/data/codex/bin/codex_bthid_keyboard >> /cache/codex-init.log 2>&1 & "
             "sleep 1; "
+            f"/data/codex/bin/codex_hbus {remote_quote(hub_id)} harmony.automation?discover "
+            f"{remote_quote('{\"gatewayType\":\"codexactivity\"}')} >> /cache/codex-init.log 2>&1 || true; "
             f"/data/codex/bin/codex_hbus {remote_quote(hub_id)} harmony.automation?discover "
             f"{remote_quote('{\"gatewayType\":\"codexmqtt\"}')} >> /cache/codex-init.log 2>&1 || true; "
             "ps | grep '[c]odex_webui' || true; ps | grep '[c]odex_bthid_keyboard' || true; ps | grep '[d]ropbear' || true"

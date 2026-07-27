@@ -81,7 +81,8 @@ The installer:
 - uploads and verifies the bundled MIPS binaries;
 - configures the optional MQTT bridge;
 - starts the hub-side web UI and Bluetooth helper;
-- enables the upstream cloud blocker by default; and
+- enables strict LAN-only mode by default, including the Hub egress route and
+  paired-remote sync guards; and
 - reboots only the **Harmony Hub** once by default so the blocker takes effect.
 
 Follow progress under **Docker > Harmony-Hub-Control > Logs**. On success, the

@@ -54,6 +54,12 @@
     commandCatalog: []
   };
 
+  const ACTION_FIELDS = [
+    "ButtonAction",
+    "ButtonLongPressAction",
+    "ButtonDoublePressAction"
+  ];
+
   function activities() {
     const list = state.config && state.config.activityList && state.config.activityList.Activities;
     return Array.isArray(list) ? list : [];
@@ -61,6 +67,11 @@
 
   function buttonMaps() {
     const list = state.config && state.config.mapList && state.config.mapList.ButtonMaps;
+    return Array.isArray(list) ? list : [];
+  }
+
+  function functionMaps() {
+    const list = state.config && state.config.functionList && state.config.functionList.FunctionMaps;
     return Array.isArray(list) ? list : [];
   }
 
@@ -91,6 +102,20 @@
 
   function activityMaps(activityId) {
     return buttonMaps().filter((map) => sameId(map && map["ActivityId-"], activityId));
+  }
+
+  function activityFunctionMaps(activityId) {
+    return functionMaps().filter((map) =>
+      text(map && map.__type).includes("ActivityFunctionMap") &&
+      sameId(map && map["ActivityId-"], activityId)
+    );
+  }
+
+  function deviceFunctionMap(deviceId) {
+    return functionMaps().find((map) =>
+      text(map && map.__type).includes("DeviceFunctionMap") &&
+      sameId(map && map["DeviceId-"], deviceId)
+    ) || null;
   }
 
   function sortedActivities() {
@@ -143,7 +168,8 @@
     }
     if (!value || typeof value !== "object") return;
     Object.entries(value).forEach(([childKey, child]) => {
-      if ((childKey === "Id-" || childKey === "Id" || /^ButtonMapId-?$/.test(childKey)) &&
+      if ((childKey === "Id-" || childKey === "Id" || childKey === "ButtonId" ||
+          /^ButtonMapId-?$/.test(childKey)) &&
           (typeof child === "number" || /^\d+$/.test(text(child)))) {
         const number = Number(child);
         if (Number.isSafeInteger(number) && number >= 0 && number < 2147483000) {
@@ -160,6 +186,7 @@
     state.idCursor = 10000000;
     scanIds(state.config && state.config.activityList);
     scanIds(state.config && state.config.mapList);
+    scanIds(state.config && state.config.functionList);
   }
 
   function newId() {
@@ -174,6 +201,309 @@
     sortedActivities().forEach((activity, index) => {
       activity.ActivityOrder = index;
     });
+  }
+
+  function activityMapSurfaceKey(map) {
+    if (!map || typeof map !== "object") return "";
+    const surface = map["SurfaceId-"] ?? map.SurfaceId;
+    const buttonSurface = map["ButtonMapSurfaceId-"] ?? map.ButtonMapSurfaceId;
+    if (surface == null && buttonSurface == null) return "";
+    return [
+      map["RemoteId-"] ?? map.RemoteId,
+      surface,
+      buttonSurface,
+      map.__type
+    ].map(text).join("|");
+  }
+
+  function resetOwnedIdentities(value) {
+    if (Array.isArray(value)) {
+      value.forEach(resetOwnedIdentities);
+      return;
+    }
+    if (!value || typeof value !== "object") return;
+    Object.entries(value).forEach(([key, child]) => {
+      if (key === "Id" || key === "Id-" || key === "ButtonId" ||
+          key === "SequenceId" || key === "SequenceId-") {
+        value[key] = 0;
+      } else {
+        resetOwnedIdentities(child);
+      }
+    });
+  }
+
+  function prepareNewMapIdentities(map) {
+    delete map["ButtonMapId-"];
+    delete map.ButtonMapId;
+    delete map["Id-"];
+    delete map.Id;
+    if (Array.isArray(map.Buttons)) {
+      map.Buttons.forEach((button) => {
+        if (!button || typeof button !== "object") return;
+        button.ButtonId = 0;
+        ACTION_FIELDS.forEach((field) => resetOwnedIdentities(button[field]));
+      });
+    }
+    resetOwnedIdentities(map.Sequences);
+  }
+
+  const FALLBACK_ACTIVITY_FUNCTION_GROUPS = new Set([
+    "NumericBasic",
+    "Volume",
+    "Channel",
+    "NavigationBasic",
+    "TransportBasic",
+    "TransportRecording",
+    "TransportExtended",
+    "NavigationDVD",
+    "NavigationDSTB",
+    "PictureAdjustment",
+    "GameType1",
+    "GameType3",
+    "NavigationExtended",
+    "DisplayMode",
+    "Setup",
+    "ColoredButtons",
+    "PlayMode",
+    "MediaCenter",
+    "RadioTuner"
+  ]);
+
+  function roleDeviceId(activity, roleType) {
+    const role = Array.isArray(activity && activity.Roles)
+      ? activity.Roles.find((item) => text(item && item.__type).includes(roleType))
+      : null;
+    return text(role && role["DeviceId-"]);
+  }
+
+  function activityFunctionGroupNames() {
+    const names = new Set();
+    functionMaps().forEach((map) => {
+      if (!text(map && map.__type).includes("ActivityFunctionMap")) return;
+      (Array.isArray(map.FunctionGroups) ? map.FunctionGroups : []).forEach((group) => {
+        const name = text(group && group.Name);
+        if (name) names.add(name);
+      });
+    });
+    return names.size ? names : FALLBACK_ACTIVITY_FUNCTION_GROUPS;
+  }
+
+  function composeActivityFunctionMap(activity) {
+    const activityId = objectId(activity);
+    const supportedGroups = activityFunctionGroupNames();
+    const groups = new Map();
+    const playDevice =
+      roleDeviceId(activity, "PlayGameActivityRole") ||
+      roleDeviceId(activity, "PlayMovieActivityRole") ||
+      roleDeviceId(activity, "PlayMediaActivityRole") ||
+      roleDeviceId(activity, "ChannelChangingActivityRole") ||
+      roleDeviceId(activity, "KeyboardTextEntryActivityRole") ||
+      roleDeviceId(activity, "DisplayActivityRole");
+    const volumeDevice = roleDeviceId(activity, "VolumeActivityRole");
+    const channelDevice = roleDeviceId(activity, "ChannelChangingActivityRole");
+    const displayDevice = roleDeviceId(activity, "DisplayActivityRole");
+
+    const addGroups = (deviceId, accepted, overwrite = false) => {
+      const map = deviceFunctionMap(deviceId);
+      const sourceGroups = map && Array.isArray(map.FunctionGroups) ? map.FunctionGroups : [];
+      sourceGroups.forEach((group) => {
+        const name = text(group && group.Name);
+        if (!name || !supportedGroups.has(name) || !accepted(name)) return;
+        if (overwrite || !groups.has(name)) groups.set(name, clone(group));
+      });
+    };
+
+    if (playDevice) {
+      addGroups(playDevice, (name) =>
+        name !== "Power" &&
+        name !== "Miscellaneous" &&
+        name !== "Volume" &&
+        name !== "DisplayMode" &&
+        name !== "PictureAdjustment" &&
+        (name !== "Channel" || !!channelDevice)
+      );
+    }
+    if (channelDevice) {
+      addGroups(
+        channelDevice,
+        (name) => name === "NumericBasic" || name === "Channel",
+        true
+      );
+    }
+    if (volumeDevice) {
+      addGroups(volumeDevice, (name) => name === "Volume", true);
+    }
+    if (displayDevice) {
+      addGroups(
+        displayDevice,
+        (name) => name === "DisplayMode" || name === "PictureAdjustment",
+        true
+      );
+    }
+
+    return {
+      UIModeName: `Functions.UserConfigurator.${activityId}`,
+      __type: "ActivityFunctionMap",
+      "ActivityId-": numericValue(activityId),
+      FunctionGroups: [...groups.values()]
+    };
+  }
+
+  function replaceActivityFunctionMap(activity, nextMap = null) {
+    if (!state.config || !state.config.functionList) return;
+    const id = objectId(activity);
+    const maps = functionMaps();
+    const index = maps.findIndex((map) =>
+      text(map && map.__type).includes("ActivityFunctionMap") &&
+      sameId(map && map["ActivityId-"], id)
+    );
+    const replacement = nextMap || composeActivityFunctionMap(activity);
+    if (index >= 0) maps.splice(index, 1, replacement);
+    else maps.push(replacement);
+  }
+
+  function cloneFunctionMapForActivity(sourceMap, oldActivityId, newActivityId) {
+    const map = clone(sourceMap);
+    map["ActivityId-"] = numericValue(newActivityId);
+    map.__type = "ActivityFunctionMap";
+    map.UIModeName = replaceIdentifier(
+      text(map.UIModeName || `Functions.UserConfigurator.${oldActivityId}`),
+      oldActivityId,
+      newActivityId,
+      "",
+      ""
+    );
+    return map;
+  }
+
+  function clearOrphanedActivityActions(validActivityIds = null) {
+    const ids = validActivityIds || new Set(
+      activities().map((activity) => objectId(activity)).filter(Boolean)
+    );
+    const cleared = [];
+    buttonMaps().forEach((map) => {
+      let mapChanged = false;
+      if (!map || !Array.isArray(map.Buttons)) return;
+      map.Buttons.forEach((button) => {
+        ACTION_FIELDS.forEach((field) => {
+          const action = button && button[field];
+          const activityId = text(action && action["ActivityId-"]);
+          if (!activityId || activityId === "-1" || ids.has(activityId)) return;
+          cleared.push({
+            map,
+            button,
+            field,
+            activityId
+          });
+          button[field] = null;
+          mapChanged = true;
+        });
+      });
+      if (mapChanged && Object.prototype.hasOwnProperty.call(map, "DateModified")) {
+        map.DateModified = harmonyDate();
+      }
+    });
+    return cleared;
+  }
+
+  function reconcileActivityMaps() {
+    if (!state.config || !state.config.activityList || !state.config.mapList ||
+        !state.config.functionList ||
+        !Array.isArray(state.config.activityList.Activities) ||
+        !Array.isArray(state.config.mapList.ButtonMaps) ||
+        !Array.isArray(state.config.functionList.FunctionMaps)) {
+      return {
+        changed: false,
+        removed: [],
+        created: [],
+        removedFunctions: [],
+        createdFunctions: [],
+        clearedActivityActions: []
+      };
+    }
+    const ids = new Set(activities().map((activity) => objectId(activity)).filter(Boolean));
+    const currentDeviceIds = new Set(devices().map((device) => device.id));
+    const originalMaps = buttonMaps().slice();
+    const templates = new Map();
+    originalMaps.forEach((map) => {
+      const activityId = text(map && map["ActivityId-"]);
+      if (!activityId || activityId === "-1") return;
+      const key = activityMapSurfaceKey(map);
+      if (!key) return;
+      const current = templates.get(key);
+      if (!current || (ids.has(activityId) && !ids.has(text(current["ActivityId-"])))) {
+        templates.set(key, map);
+      }
+    });
+
+    const removed = originalMaps.filter((map) => {
+      const activityId = text(map && map["ActivityId-"]);
+      const deviceId = text(map && map["DeviceId-"]);
+      return (
+        (activityId && activityId !== "-1" && !ids.has(activityId)) ||
+        (deviceId && !currentDeviceIds.has(deviceId))
+      );
+    });
+    state.config.mapList.ButtonMaps = originalMaps.filter((map) => !removed.includes(map));
+    const clearedActivityActions = clearOrphanedActivityActions(ids);
+
+    const created = [];
+    activities().forEach((activity) => {
+      const activityId = objectId(activity);
+      const existing = new Set(
+        activityMaps(activityId).map(activityMapSurfaceKey).filter(Boolean)
+      );
+      templates.forEach((template, key) => {
+        if (existing.has(key)) return;
+        const map = cloneMapForActivity(
+          template,
+          template["ActivityId-"],
+          activityId,
+          false
+        );
+        state.config.mapList.ButtonMaps.push(map);
+        created.push(map);
+        existing.add(key);
+      });
+    });
+
+    const originalFunctions = functionMaps().slice();
+    const seenActivityFunctions = new Set();
+    const removedFunctions = originalFunctions.filter((map) => {
+      const mapType = text(map && map.__type);
+      if (mapType.includes("ActivityFunctionMap")) {
+        const activityId = text(map && map["ActivityId-"]);
+        if (!ids.has(activityId) || seenActivityFunctions.has(activityId)) return true;
+        seenActivityFunctions.add(activityId);
+      } else if (mapType.includes("DeviceFunctionMap")) {
+        if (!currentDeviceIds.has(text(map && map["DeviceId-"]))) return true;
+      }
+      return false;
+    });
+    state.config.functionList.FunctionMaps = originalFunctions.filter(
+      (map) => !removedFunctions.includes(map)
+    );
+
+    const createdFunctions = [];
+    activities().forEach((activity) => {
+      if (activityFunctionMaps(objectId(activity)).length) return;
+      const map = composeActivityFunctionMap(activity);
+      functionMaps().push(map);
+      createdFunctions.push(map);
+    });
+    return {
+      changed:
+        removed.length > 0 ||
+        created.length > 0 ||
+        removedFunctions.length > 0 ||
+        createdFunctions.length > 0 ||
+        clearedActivityActions.length > 0,
+      removed,
+      created,
+      removedFunctions,
+      createdFunctions,
+      clearedActivityActions
+    };
   }
 
   function inputNamesForDevice(deviceId) {
@@ -294,24 +624,42 @@
   async function loadActivities(options = {}) {
     if (state.loading) return;
     state.loading = true;
-    markNotice("Loading native Harmony resources…");
+    markNotice("Loading local Harmony resources…");
     try {
       const config = await fetchJson("/api/activity-config");
       state.config = config;
       state.revision = text(config.revision);
       buildCommandCatalog();
       resetIdPool();
+      const repair = reconcileActivityMaps();
+      if (repair.changed) resetIdPool();
       const available = sortedActivities();
       if (!available.some((activity) => sameId(objectId(activity), state.selectedId))) {
         state.selectedId = available.length ? objectId(available[0]) : "";
       }
       state.selectedMap = 0;
-      setDirty(false);
+      setDirty(repair.changed);
       renderAll();
       await refreshCurrentState(true);
-      markNotice(options.afterSync
-        ? "Harmony accepted the remote-sync request. The editor reloaded the Hub’s resulting resources."
-        : `Loaded ${available.length} activities and ${buttonMaps().length} button maps.`);
+      if (repair.changed) {
+        const removed = repair.removed.length;
+        const created = repair.created.length;
+        const removedFunctions = repair.removedFunctions.length;
+        const createdFunctions = repair.createdFunctions.length;
+        const clearedActions = repair.clearedActivityActions.length;
+        markNotice(
+          `Recovered an inconsistent Harmony graph: removed ${removed} stale button map${removed === 1 ? "" : "s"}, cleared ${clearedActions} stale activity shortcut${clearedActions === 1 ? "" : "s"}, created ${created} missing remote-surface map${created === 1 ? "" : "s"}, removed ${removedFunctions} stale control map${removedFunctions === 1 ? "" : "s"}, and created ${createdFunctions} missing activity control map${createdFunctions === 1 ? "" : "s"}. Review and save this repair.`,
+          "warn"
+        );
+      } else if (options.afterSave) {
+        markNotice(options.afterSync
+          ? "The Hub persisted all three activity resources, refreshed its paired-remote configuration revision locally, and reloaded the canonical result."
+          : "The Hub persisted all three activity resources, reloaded its activity engine, and made the new local configuration available to paired remotes.");
+      } else {
+        markNotice(options.afterSync
+          ? "The Hub refreshed its paired-remote configuration revision locally. The editor reloaded the resulting resources."
+          : `Loaded ${available.length} activities, ${buttonMaps().length} button maps, and ${functionMaps().filter((map) => text(map && map.__type).includes("ActivityFunctionMap")).length} activity control maps.`);
+      }
     } catch (error) {
       state.config = null;
       renderAll();
@@ -549,8 +897,16 @@
   function renderRaw(activity) {
     const rawActivity = byId("activityRawActivity");
     const rawMaps = byId("activityRawMaps");
+    const rawFunctions = byId("activityRawFunctions");
     if (rawActivity) rawActivity.value = JSON.stringify(activity, null, 2);
     if (rawMaps) rawMaps.value = JSON.stringify(activityMaps(objectId(activity)), null, 2);
+    if (rawFunctions) {
+      rawFunctions.value = JSON.stringify(
+        activityFunctionMaps(objectId(activity))[0] || composeActivityFunctionMap(activity),
+        null,
+        2
+      );
+    }
   }
 
   function renderEditor() {
@@ -598,11 +954,15 @@
     const activity = selectedActivity();
     const role = roleAt(index);
     if (!activity || !role) return;
-    if (field === "type") role.__type = value;
+    if (field === "type") {
+      role.__type = value;
+      replaceActivityFunctionMap(activity);
+    }
     if (field === "device") {
       const device = devices().find((item) => sameId(item.id, value));
       role["DeviceId-"] = device ? device.idValue : numericValue(value);
       role.SelectedInput = null;
+      replaceActivityFunctionMap(activity);
       touch(activity);
       renderRoles(activity);
       return;
@@ -633,6 +993,7 @@
       "Id-": newId(),
       PowerOffOrder: order
     });
+    replaceActivityFunctionMap(activity);
     touch(activity);
     renderRoles(activity);
   }
@@ -645,6 +1006,7 @@
       role.PowerOnOrder = nextIndex;
       role.PowerOffOrder = nextIndex;
     });
+    replaceActivityFunctionMap(activity);
     touch(activity);
     renderRoles(activity);
   }
@@ -714,21 +1076,15 @@
 
   function cloneMapForActivity(sourceMap, oldActivityId, newActivityId, keepActions) {
     const map = clone(sourceMap);
-    const oldMapId = mapId(map);
-    const nextMapId = newId();
     map["ActivityId-"] = numericValue(newActivityId);
-    if (Object.prototype.hasOwnProperty.call(map, "ButtonMapId-")) map["ButtonMapId-"] = nextMapId;
-    if (Object.prototype.hasOwnProperty.call(map, "ButtonMapId")) map.ButtonMapId = nextMapId;
-    if (Object.prototype.hasOwnProperty.call(map, "Id-") && !Object.prototype.hasOwnProperty.call(map, "ButtonMapId-")) {
-      map["Id-"] = nextMapId;
-    }
+    prepareNewMapIdentities(map);
     if (Object.prototype.hasOwnProperty.call(map, "ButtonMapIdentifier")) {
       map.ButtonMapIdentifier = replaceIdentifier(
         map.ButtonMapIdentifier,
         oldActivityId,
         newActivityId,
-        oldMapId,
-        nextMapId
+        "",
+        ""
       );
     }
     if (Object.prototype.hasOwnProperty.call(map, "DateModified")) map.DateModified = harmonyDate();
@@ -808,16 +1164,48 @@
     templates.forEach((map) => {
       buttonMaps().push(cloneMapForActivity(map, map["ActivityId-"], id, duplicate));
     });
+    if (duplicate) {
+      const sourceFunctionMap = activityFunctionMaps(oldId)[0];
+      if (sourceFunctionMap) {
+        functionMaps().push(cloneFunctionMapForActivity(sourceFunctionMap, oldId, id));
+      }
+    }
     normalizeOrders();
     state.selectedId = text(id);
     state.selectedMap = 0;
     touch(activity);
     renderAll();
     markNotice(duplicate
-      ? "Duplicated the activity, its roles, and paired-remote button maps. Review the name and routing, then save."
-      : "Created a blank activity using the paired remote’s surface templates. Add device roles and button actions, then save.");
+      ? "Duplicated the activity, its roles, remote button maps, and control groups. Review the name and routing, then save."
+      : "Created a blank activity using the paired remote’s surface templates. Add device roles and button actions; its control groups will be generated locally when you save.");
     byId("activityName").focus();
     byId("activityName").select();
+  }
+
+  function removeActivityFromGraph(id) {
+    const beforeActivities = activities().length;
+    const beforeMaps = buttonMaps().length;
+    const beforeFunctions = functionMaps().length;
+    state.config.activityList.Activities = activities().filter(
+      (item) => !sameId(objectId(item), id)
+    );
+    state.config.mapList.ButtonMaps = buttonMaps().filter(
+      (map) => !sameId(map && map["ActivityId-"], id)
+    );
+    state.config.functionList.FunctionMaps = functionMaps().filter((map) =>
+      !(
+        text(map && map.__type).includes("ActivityFunctionMap") &&
+        sameId(map && map["ActivityId-"], id)
+      )
+    );
+    const clearedActivityActions = clearOrphanedActivityActions();
+    normalizeOrders();
+    return {
+      removedActivities: beforeActivities - activities().length,
+      removedMaps: beforeMaps - buttonMaps().length,
+      removedFunctions: beforeFunctions - functionMaps().length,
+      clearedActivityActions
+    };
   }
 
   function deleteActivity() {
@@ -828,16 +1216,18 @@
       markNotice("This activity is currently running. Switch activities or power off before deleting it.", "warn");
       return;
     }
-    if (!window.confirm(`Delete “${activityName(activity)}” and all of its remote button maps?`)) return;
-    state.config.activityList.Activities = activities().filter((item) => !sameId(objectId(item), id));
-    state.config.mapList.ButtonMaps = buttonMaps().filter((map) => !sameId(map && map["ActivityId-"], id));
-    normalizeOrders();
+    if (!window.confirm(`Delete “${activityName(activity)}” and all of its remote button and control maps?`)) return;
+    const removed = removeActivityFromGraph(id);
     const next = sortedActivities()[0];
     state.selectedId = next ? objectId(next) : "";
     state.selectedMap = 0;
     setDirty(true);
     renderAll();
-    markNotice("Activity removed from the working copy. Save to apply the deletion to the Hub.", "warn");
+    const cleared = removed.clearedActivityActions.length;
+    markNotice(
+      `Activity removed from the working copy with ${removed.removedMaps} remote button map${removed.removedMaps === 1 ? "" : "s"}, ${removed.removedFunctions} control map${removed.removedFunctions === 1 ? "" : "s"}, and ${cleared} activity shortcut${cleared === 1 ? "" : "s"}. Save to apply the deletion to the Hub.`,
+      "warn"
+    );
   }
 
   function moveActivity(id, direction) {
@@ -855,7 +1245,8 @@
   }
 
   function validateGraph() {
-    if (!state.config || !state.config.activityList || !state.config.mapList) {
+    if (!state.config || !state.config.activityList || !state.config.mapList ||
+        !state.config.functionList) {
       throw new Error("Activity resources are not loaded.");
     }
     if (!Array.isArray(state.config.activityList.Activities)) {
@@ -864,9 +1255,16 @@
     if (!Array.isArray(state.config.mapList.ButtonMaps)) {
       throw new Error("MapList.ButtonMaps must be an array.");
     }
+    if (!Array.isArray(state.config.functionList.FunctionMaps)) {
+      throw new Error("FunctionList.FunctionMaps must be an array.");
+    }
     const ids = new Set();
     const names = new Set();
+    const deviceIds = new Set(devices().map((device) => device.id));
     const mapIds = new Set();
+    const buttonIds = new Set();
+    const activitySurfaces = new Map();
+    const activityFunctionCounts = new Map();
     activities().forEach((activity) => {
       const id = objectId(activity);
       const name = activityName(activity).trim();
@@ -880,6 +1278,15 @@
       activity.Roles.forEach((role) => {
         const deviceId = text(role && role["DeviceId-"]);
         if (!deviceId) throw new Error(`Activity “${name}” has a role without a device ID.`);
+        if (!deviceIds.has(deviceId)) {
+          throw new Error(`Activity “${name}” references unavailable device ${deviceId}.`);
+        }
+        const selectedInput = text(role && role.SelectedInput && role.SelectedInput.Name);
+        if (selectedInput && !inputNamesForDevice(deviceId).includes(selectedInput)) {
+          throw new Error(
+            `Activity “${name}” input “${selectedInput}” is not available on device ${deviceId}.`
+          );
+        }
       });
     });
     buttonMaps().forEach((map) => {
@@ -887,15 +1294,125 @@
       if (activityId && activityId !== "-1" && !ids.has(activityId)) {
         throw new Error(`Button map ${mapId(map) || "unknown"} references missing activity ${activityId}.`);
       }
+      if (activityId && activityId !== "-1") {
+        const identifier = text(map && map.ButtonMapIdentifier);
+        const identifierActivity = identifier.match(/Activity(-?\d+)$/);
+        if (identifierActivity && identifierActivity[1] !== activityId) {
+          throw new Error(`Button map ${mapId(map) || identifier} identifies activity ${identifierActivity[1]} but references ${activityId}.`);
+        }
+        const surface = activityMapSurfaceKey(map);
+        if (!surface) throw new Error(`Activity ${activityId} has a button map without a remote surface.`);
+        if (!activitySurfaces.has(activityId)) activitySurfaces.set(activityId, new Set());
+        if (activitySurfaces.get(activityId).has(surface)) {
+          throw new Error(`Activity ${activityId} has more than one button map for remote surface ${surface}.`);
+        }
+        activitySurfaces.get(activityId).add(surface);
+      }
+      const deviceId = text(map && map["DeviceId-"]);
+      if (deviceId && !deviceIds.has(deviceId)) {
+        throw new Error(`Button map ${mapId(map) || "unknown"} references unavailable device ${deviceId}.`);
+      }
       const id = mapId(map);
-      if (id && mapIds.has(id)) throw new Error(`Button map ID ${id} is duplicated.`);
-      if (id) mapIds.add(id);
+      if (id && id !== "0" && mapIds.has(id)) throw new Error(`Button map ID ${id} is duplicated.`);
+      if (id && id !== "0") mapIds.add(id);
+      if (map && Array.isArray(map.Buttons)) {
+        map.Buttons.forEach((button) => {
+          const buttonId = text(button && button.ButtonId);
+          if (buttonId && buttonId !== "0") {
+            if (buttonIds.has(buttonId)) throw new Error(`Remote button ID ${buttonId} is duplicated.`);
+            buttonIds.add(buttonId);
+          }
+          ACTION_FIELDS.forEach((field) => {
+            const action = button && button[field];
+            if (!action || typeof action !== "object") return;
+            const actionDeviceId = text(action["DeviceId-"]);
+            if (actionDeviceId && !deviceIds.has(actionDeviceId)) {
+              throw new Error(
+                `Button map ${mapId(map) || "unknown"} ${field} references unavailable device ${actionDeviceId}.`
+              );
+            }
+            const actionActivityId = text(action["ActivityId-"]);
+            if (actionActivityId && actionActivityId !== "-1" && !ids.has(actionActivityId)) {
+              throw new Error(
+                `Button map ${mapId(map) || "unknown"} ${field} references missing activity ${actionActivityId}.`
+              );
+            }
+          });
+        });
+      }
+    });
+    functionMaps().forEach((map) => {
+      if (!map || typeof map !== "object" || Array.isArray(map)) {
+        throw new Error("FunctionList contains a non-object function map.");
+      }
+      const type = text(map.__type);
+      if (type.includes("ActivityFunctionMap")) {
+        const activityId = text(map["ActivityId-"]);
+        if (!ids.has(activityId)) {
+          throw new Error(`FunctionList references missing activity ${activityId || "unknown"}.`);
+        }
+        activityFunctionCounts.set(
+          activityId,
+          (activityFunctionCounts.get(activityId) || 0) + 1
+        );
+        const modeId = text(map.UIModeName).match(/(\d+)$/);
+        if (modeId && modeId[1] !== activityId) {
+          throw new Error(
+            `Function map for activity ${activityId} identifies activity ${modeId[1]}.`
+          );
+        }
+      } else if (type.includes("DeviceFunctionMap")) {
+        const deviceId = text(map["DeviceId-"]);
+        if (!deviceIds.has(deviceId)) {
+          throw new Error(`FunctionList device map references unavailable device ${deviceId}.`);
+        }
+      } else {
+        throw new Error(`FunctionList contains unknown map type “${type || "missing"}”.`);
+      }
+      if (!Array.isArray(map.FunctionGroups)) {
+        throw new Error(`${type || "Function map"} is missing its FunctionGroups array.`);
+      }
+      map.FunctionGroups.forEach((group) => {
+        if (!group || !Array.isArray(group.Functions)) {
+          throw new Error(`${type || "Function map"} contains an invalid function group.`);
+        }
+        group.Functions.forEach((action) => {
+          const deviceId = text(action && action["DeviceId-"]);
+          if (!deviceId || !deviceIds.has(deviceId)) {
+            throw new Error(
+              `Control group “${text(group.Name) || "unnamed"}” references unavailable device ${deviceId || "unknown"}.`
+            );
+          }
+        });
+      });
+    });
+    ids.forEach((activityId) => {
+      const count = activityFunctionCounts.get(activityId) || 0;
+      if (count !== 1) {
+        throw new Error(`Activity ${activityId} has ${count} control-group FunctionMaps; exactly one is required.`);
+      }
+    });
+    const expectedSurfaces = new Set();
+    activitySurfaces.forEach((surfaces) => surfaces.forEach((surface) => expectedSurfaces.add(surface)));
+    ids.forEach((activityId) => {
+      const surfaces = activitySurfaces.get(activityId) || new Set();
+      expectedSurfaces.forEach((surface) => {
+        if (!surfaces.has(surface)) {
+          throw new Error(`Activity ${activityId} is missing remote surface ${surface}.`);
+        }
+      });
     });
     normalizeOrders();
   }
 
   async function saveActivities(syncRemote) {
     if (!state.config) return;
+    const repair = reconcileActivityMaps();
+    if (repair.changed) {
+      resetIdPool();
+      setDirty(true);
+      renderAll();
+    }
     try {
       validateGraph();
     } catch (error) {
@@ -907,8 +1424,8 @@
     if (save) save.disabled = true;
     if (saveSync) saveSync.disabled = true;
     markNotice(syncRemote
-      ? "Saving through Harmony and submitting the paired-remote sync request…"
-      : "Saving both activity resources through Harmony as one transaction…");
+      ? "Saving locally and refreshing the paired-remote configuration revision…"
+      : "Saving all three activity resources as one offline Hub transaction…");
     try {
       const response = await fetch("/api/activity-save", {
         method: "POST",
@@ -917,7 +1434,8 @@
           baseRevision: state.revision,
           syncRemote: !!syncRemote,
           activityList: state.config.activityList,
-          mapList: state.config.mapList
+          mapList: state.config.mapList,
+          functionList: state.config.functionList
         })
       });
       const raw = await response.text();
@@ -937,18 +1455,10 @@
         error.response = result;
         throw error;
       }
-      if (result.syncConflict) {
-        markNotice(result.message, "warn");
-        await loadActivities({ afterSync: true });
-      } else {
-        markNotice(result.message || "Activities saved.");
-        await refreshCurrentState(true);
-      }
+      await loadActivities({ afterSave: true, afterSync: !!syncRemote });
     } catch (error) {
       if (error.status === 409 || (error.response && error.response.revision)) {
         markNotice("The Hub’s resources changed while this page was open. Reload before making another save.", "warn");
-      } else if (error.response && error.response.saved) {
-        markNotice(`${error.message} Your activity edits are saved locally; retry remote sync when ready.`, "warn");
       } else {
         markNotice(`Save failed: ${error.message}`, "error");
       }
@@ -963,12 +1473,12 @@
       await saveActivities(true);
       return;
     }
-    markNotice("Submitting Harmony’s paired-remote sync request…");
+    markNotice("Refreshing the paired-remote configuration revision on the Hub…");
     try {
       await fetchJson("/api/activity-sync", { method: "POST" });
       await loadActivities({ afterSync: true });
     } catch (error) {
-      markNotice(`Remote sync failed: ${error.message}`, "error");
+      markNotice(`Local remote refresh failed: ${error.message}`, "error");
     }
   }
 
@@ -1002,13 +1512,18 @@
     let activityIndex = -1;
     let previousActivity = null;
     let previousMaps = null;
+    let previousFunctions = null;
     try {
       const nextActivity = JSON.parse(byId("activityRawActivity").value);
       const nextMaps = JSON.parse(byId("activityRawMaps").value);
+      const nextFunctionMap = JSON.parse(byId("activityRawFunctions").value);
       if (!nextActivity || typeof nextActivity !== "object" || Array.isArray(nextActivity)) {
         throw new Error("Activity JSON must be an object.");
       }
       if (!Array.isArray(nextMaps)) throw new Error("Activity maps JSON must be an array.");
+      if (!nextFunctionMap || typeof nextFunctionMap !== "object" || Array.isArray(nextFunctionMap)) {
+        throw new Error("Activity FunctionMap JSON must be an object.");
+      }
       if (!sameId(objectId(nextActivity), objectId(current))) {
         throw new Error("Advanced JSON cannot change the selected activity ID.");
       }
@@ -1020,22 +1535,34 @@
           throw new Error(`Button map ${mapId(map) || index + 1} must reference activity ${state.selectedId}.`);
         }
       });
+      if (!text(nextFunctionMap.__type).includes("ActivityFunctionMap") ||
+          !sameId(nextFunctionMap["ActivityId-"], state.selectedId)) {
+        throw new Error(`Activity FunctionMap must reference activity ${state.selectedId}.`);
+      }
       activityIndex = activities().findIndex((item) => sameId(objectId(item), state.selectedId));
       previousActivity = state.config.activityList.Activities[activityIndex];
       previousMaps = state.config.mapList.ButtonMaps;
+      previousFunctions = state.config.functionList.FunctionMaps;
       state.config.activityList.Activities[activityIndex] = nextActivity;
       state.config.mapList.ButtonMaps = buttonMaps()
         .filter((map) => !sameId(map && map["ActivityId-"], state.selectedId))
         .concat(nextMaps);
+      state.config.functionList.FunctionMaps = functionMaps()
+        .filter((map) => !(
+          text(map && map.__type).includes("ActivityFunctionMap") &&
+          sameId(map && map["ActivityId-"], state.selectedId)
+        ))
+        .concat([nextFunctionMap]);
       validateGraph();
       resetIdPool();
       touch(nextActivity);
       renderAll();
       markNotice("Advanced JSON applied to the working copy. Review it, then save.");
     } catch (error) {
-      if (activityIndex >= 0 && previousActivity && previousMaps) {
+      if (activityIndex >= 0 && previousActivity && previousMaps && previousFunctions) {
         state.config.activityList.Activities[activityIndex] = previousActivity;
         state.config.mapList.ButtonMaps = previousMaps;
+        state.config.functionList.FunctionMaps = previousFunctions;
         resetIdPool();
       }
       markNotice(`Advanced JSON was not applied: ${error.message}`, "error");
@@ -1158,6 +1685,23 @@
       event.preventDefault();
       event.returnValue = "";
     });
+  }
+
+  if (globalThis.__HARMONY_ACTIVITY_TEST__) {
+    globalThis.__HARMONY_ACTIVITY_TEST__.api = {
+      state,
+      resetIdPool,
+      cloneMapForActivity,
+      cloneFunctionMapForActivity,
+      composeActivityFunctionMap,
+      reconcileActivityMaps,
+      clearOrphanedActivityActions,
+      removeActivityFromGraph,
+      validateGraph,
+      activityMapSurfaceKey,
+      activityFunctionMaps
+    };
+    return;
   }
 
   bindUi();

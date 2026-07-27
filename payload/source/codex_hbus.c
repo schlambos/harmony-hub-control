@@ -12,7 +12,8 @@
 
 #define MAX_PARAMS_BYTES (2 * 1024 * 1024)
 #define MAX_RESPONSE_BYTES (2 * 1024 * 1024)
-#define RESPONSE_TIMEOUT_MS 35000
+#define RESPONSE_TIMEOUT_MS 95000
+#define REQUEST_TIMEOUT_SECONDS 90
 #define MAX_RESPONSE_FRAMES 256
 
 #ifdef CODEX_HBUS_DEBUG
@@ -58,7 +59,7 @@ static int connect_local(void) {
     if (fd < 0) {
         return -1;
     }
-    tv.tv_sec = 35;
+    tv.tv_sec = 95;
     tv.tv_usec = 0;
     setsockopt(fd, SOL_SOCKET, SO_RCVTIMEO, &tv, sizeof(tv));
     tv.tv_sec = 8;
@@ -419,8 +420,8 @@ int main(int argc, char **argv) {
         return 1;
     }
     snprintf(payload, payload_len,
-        "{\"hubId\":\"%s\",\"timeout\":30,\"hbus\":{\"id\":\"%s\",\"cmd\":\"%s\",\"params\":%s}}",
-        hub_id, request_id, cmd, params);
+        "{\"hubId\":\"%s\",\"timeout\":%d,\"hbus\":{\"id\":\"%s\",\"cmd\":\"%s\",\"params\":%s}}",
+        hub_id, REQUEST_TIMEOUT_SECONDS, request_id, cmd, params);
     fd = connect_local();
     if (fd < 0) {
         perror("connect");

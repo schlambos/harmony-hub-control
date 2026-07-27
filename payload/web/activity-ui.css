@@ -482,6 +482,14 @@
   tab-size: 2;
 }
 
+.activity-raw-functions {
+  grid-column: 1 / -1;
+}
+
+.activity-raw-functions textarea {
+  min-height: 320px;
+}
+
 .activity-savebar {
   position: sticky;
   bottom: 0;

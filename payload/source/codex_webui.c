@@ -34,10 +34,11 @@
 #define ACTIVITY_LIST "/data/resources/ActivityList.json"
 #define MAP_LIST "/data/resources/MapList.json"
 #define AUTOMATION_CONFIG "/data/resources/AutomationConfig.json"
-#define CONTEXT_CONFIG "/data/resources/Context.json"
-#define RESOURCE_INDEX "/data/resources/index.json"
+#define OFFLINE_EGRESS_GUARD "/data/codex/offline_egress_guard.sh"
 #define RESOURCE_RELOAD_FLAG "/data/codex/reload_resources"
 #define RESOURCE_BACKUP_DIR "/data/codex/resource-backups"
+#define ACTIVITY_REQUEST_FILE "/var/volatile/codex-activity-request.json"
+#define ACTIVITY_RESPONSE_FILE "/var/volatile/codex-activity-response.json"
 #define IR_EVENT_LOG "/data/codex/ir-events.log"
 #define IR_CANCEL_PREFIX "/tmp/codex_ir_cancel_"
 #define BT_TEXT_FIFO "/tmp/bthid_input"
@@ -299,6 +300,9 @@ static int save_cloud_blocker(int enabled) {
     const char *value = enabled ? "1" : "0";
     if (write_file_atomic(CLOUD_BLOCKER_CONFIG, value, strlen(value)) != 0) return -1;
     chmod(CLOUD_BLOCKER_CONFIG, 0644);
+    if (access(OFFLINE_EGRESS_GUARD, X_OK) == 0) {
+        system(OFFLINE_EGRESS_GUARD " >/dev/null 2>&1");
+    }
     return 0;
 }
 
@@ -1826,12 +1830,15 @@ static void activity_revision(
     size_t activities_len,
     const char *maps,
     size_t maps_len,
+    const char *functions,
+    size_t functions_len,
     char *out,
     size_t outlen
 ) {
-    snprintf(out, outlen, "%08x-%08x",
+    snprintf(out, outlen, "%08x-%08x-%08x",
         resource_hash(activities, activities_len),
-        resource_hash(maps, maps_len));
+        resource_hash(maps, maps_len),
+        resource_hash(functions, functions_len));
 }
 
 static int json_object_value_copy(
@@ -2581,184 +2588,88 @@ static int harmony_hbus_call(
     return rc;
 }
 
-static long json_long_flexible_range(
-    const char *start,
-    const char *end,
-    const char *key,
-    long def
-) {
-    const char *p = find_key_range(start, end, key);
-    char *value_end;
-    long value;
-    if (!p) return def;
-    p = strchr(p + strlen(key) + 2, ':');
-    if (!p || (end && p >= end)) return def;
-    p++;
-    while (*p && (!end || p < end) && isspace((unsigned char)*p)) p++;
-    if (*p == '"') p++;
-    errno = 0;
-    value = strtol(p, &value_end, 10);
-    if (errno != 0 || value_end == p) return def;
-    return value;
-}
-
-static long hbus_reply_data_code(const char *reply) {
-    const char *field, *colon, *object, *object_end;
-    if (!reply) return -1;
-    field = find_key_range(reply, NULL, "data");
-    if (!field) return -1;
-    colon = strchr(field + 6, ':');
-    if (!colon) return -1;
-    object = colon + 1;
-    while (*object && isspace((unsigned char)*object)) object++;
-    if (*object != '{') return -1;
-    object_end = find_matching_json(object, '{', '}');
-    if (!object_end) return -1;
-    return json_long_flexible_range(object, object_end, "code", -1);
-}
-
-static int load_resource_put_metadata(
-    const char *resource_name,
-    char *uri,
-    size_t uri_len,
-    char *hetag,
-    size_t hetag_len,
-    int *mode,
+static int offline_activity_commit(
+    const char *activities,
+    size_t activities_len,
+    const char *maps,
+    size_t maps_len,
+    const char *functions,
+    size_t functions_len,
+    int activity_changed,
+    int map_changed,
+    int function_changed,
+    char *reply,
+    size_t reply_len,
     char *msg,
     size_t msg_len
 ) {
-    char *context = NULL, *index = NULL;
-    char index_entry[512];
-    size_t context_len = 0, index_len = 0;
-    long account_id, context_mode;
-    int rc = -1;
-    context = read_file_alloc(CONTEXT_CONFIG, MAX_RESOURCE_FILE, &context_len);
-    index = read_file_alloc(RESOURCE_INDEX, MAX_RESOURCE_FILE, &index_len);
-    if (!context || !index) {
-        snprintf(msg, msg_len, "Harmony Context or resource index is unavailable.");
+    char request_id[96], response_id[96], error[512];
+    char *request = NULL, *response = NULL;
+    size_t request_len, response_len = 0;
+    int attempt, written, rc = -1;
+    snprintf(request_id, sizeof(request_id), "%ld-%ld-%08x-%08x",
+        (long)getpid(), (long)time(NULL),
+        resource_hash(activities, activities_len),
+        resource_hash(maps, maps_len) ^ resource_hash(functions, functions_len));
+    request_len = activities_len + maps_len + functions_len +
+        strlen(request_id) + 480;
+    request = (char *)malloc(request_len);
+    if (!request) {
+        snprintf(msg, msg_len, "not enough memory for the offline activity transaction");
         goto out;
     }
-    account_id = json_long_range(context, NULL, "AccountId-", -1);
-    context_mode = json_long_range(context, NULL, "Mode", -1);
-    if (account_id <= 0 || context_mode < 0) {
-        snprintf(msg, msg_len, "Harmony account or connection mode is missing from Context.");
+    written = snprintf(request, request_len,
+        "{\"id\":\"%s\",\"op\":\"CommitActivityResources\","
+        "\"activityChanged\":%s,\"mapChanged\":%s,\"functionChanged\":%s,"
+        "\"activityList\":%s,\"mapList\":%s,\"functionList\":%s}",
+        request_id,
+        activity_changed ? "true" : "false",
+        map_changed ? "true" : "false",
+        function_changed ? "true" : "false",
+        activities,
+        maps,
+        functions);
+    if (written < 0 || (size_t)written >= request_len) {
+        snprintf(msg, msg_len, "offline activity transaction was too large");
         goto out;
     }
-    if (!json_string(index, resource_name, index_entry, sizeof(index_entry)) ||
-        !json_string(index_entry, "hetag", hetag, hetag_len) || !hetag[0]) {
-        snprintf(msg, msg_len, "Harmony revision metadata for %s is unavailable.", resource_name);
+    unlink(ACTIVITY_RESPONSE_FILE);
+    unlink(ACTIVITY_REQUEST_FILE);
+    if (write_file_atomic(ACTIVITY_REQUEST_FILE, request, (size_t)written) != 0) {
+        snprintf(msg, msg_len, "could not submit the local activity transaction");
         goto out;
     }
-    snprintf(uri, uri_len, "harmony://Account/%ld/%s", account_id, resource_name);
-    *mode = (int)context_mode;
-    rc = 0;
+    chmod(ACTIVITY_REQUEST_FILE, 0600);
+    for (attempt = 0; attempt < 450; attempt++) {
+        response = read_file_alloc(ACTIVITY_RESPONSE_FILE, 32768, &response_len);
+        if (response) {
+            response_id[0] = 0;
+            json_string(response, "id", response_id, sizeof(response_id));
+            if (strcmp(response_id, request_id) == 0) {
+                unlink(ACTIVITY_RESPONSE_FILE);
+                if (reply && reply_len) snprintf(reply, reply_len, "%s", response);
+                if (json_bool(response, "ok", 0)) {
+                    rc = 0;
+                } else {
+                    error[0] = 0;
+                    json_string(response, "error", error, sizeof(error));
+                    snprintf(msg, msg_len, "%s",
+                        error[0] ? error : "the offline activity writer rejected the transaction");
+                }
+                goto out;
+            }
+            free(response);
+            response = NULL;
+        }
+        usleep(100 * 1000);
+    }
+    snprintf(msg, msg_len,
+        "the offline activity writer did not answer; its local plugin may not be running");
 out:
-    free(context);
-    free(index);
-    (void)context_len;
-    (void)index_len;
+    unlink(ACTIVITY_REQUEST_FILE);
+    free(request);
+    free(response);
     return rc;
-}
-
-static int harmony_resource_put(
-    const char *resource_name,
-    const char *path,
-    const char *resource,
-    size_t resource_len,
-    char *msg,
-    size_t msg_len
-) {
-#ifdef CODEX_WEBUI_ACTIVITY_PUT_TEST
-    if (write_file_atomic(path, resource, resource_len) != 0) {
-        snprintf(msg, msg_len, "test write failed for %s", resource_name);
-        return -1;
-    }
-    return 0;
-#else
-    char uri[192], hetag[64], reply[8192];
-    char validation_msg[256];
-    char *quoted_uri = NULL, *quoted_hetag = NULL;
-    char *before = NULL, *actual = NULL;
-    char *params = NULL;
-    size_t params_len, before_len = 0, actual_len = 0;
-    unsigned int before_hash, actual_hash;
-    const char *array_key;
-    long top_code, data_code;
-    int mode, rc = -1;
-    if (load_resource_put_metadata(resource_name, uri, sizeof(uri),
-            hetag, sizeof(hetag), &mode, msg, msg_len) != 0) {
-        return -1;
-    }
-    before = read_file_alloc(path, MAX_RESOURCE_FILE, &before_len);
-    if (!before) {
-        snprintf(msg, msg_len, "current %s data could not be read.", resource_name);
-        goto out;
-    }
-    before_hash = resource_hash(before, before_len);
-    free(before);
-    before = NULL;
-    quoted_uri = json_escape_alloc(uri);
-    quoted_hetag = json_escape_alloc(hetag);
-    if (!quoted_uri || !quoted_hetag) {
-        snprintf(msg, msg_len, "not enough memory to prepare %s", resource_name);
-        goto out;
-    }
-    params_len = strlen(quoted_uri) + strlen(quoted_hetag) +
-        resource_len + 128;
-    params = (char *)malloc(params_len);
-    if (!params) {
-        snprintf(msg, msg_len, "not enough memory to prepare %s", resource_name);
-        goto out;
-    }
-    if (mode == 3) {
-        snprintf(params, params_len,
-            "{\"uri\":%s,\"hetag\":%s,\"resource\":%s}",
-            quoted_uri, quoted_hetag, resource);
-    } else {
-        snprintf(params, params_len,
-            "{\"requests\":[{\"uri\":%s,\"hetag\":%s,\"resource\":%s}]}",
-            quoted_uri, quoted_hetag, resource);
-    }
-    if (harmony_hbus_call("proxy.resource?put", params, reply, sizeof(reply)) != 0) {
-        snprintf(msg, msg_len, "Harmony did not accept the %s update.", resource_name);
-        goto out;
-    }
-    top_code = json_long_flexible_range(reply, NULL, "code", -1);
-    data_code = hbus_reply_data_code(reply);
-    if (data_code == 412) {
-        snprintf(msg, msg_len, "%s changed on the Hub before it could be saved.", resource_name);
-        rc = -2;
-        goto out;
-    }
-    if ((top_code != 200 && top_code != 204) ||
-        (data_code >= 0 && data_code != 200 && data_code != 204)) {
-        snprintf(msg, msg_len, "Harmony rejected %s (status %ld/%ld).",
-            resource_name, top_code, data_code);
-        goto out;
-    }
-    actual = read_file_alloc(path, MAX_RESOURCE_FILE, &actual_len);
-    array_key = strcmp(resource_name, "ActivityList") == 0 ?
-        "Activities" : "ButtonMaps";
-    if (!actual || validate_resource_json(actual, actual_len,
-            array_key, validation_msg, sizeof(validation_msg)) != 0) {
-        snprintf(msg, msg_len, "Harmony left invalid %s data after saving.", resource_name);
-        goto out;
-    }
-    actual_hash = resource_hash(actual, actual_len);
-    if (actual_len == before_len && actual_hash == before_hash) {
-        snprintf(msg, msg_len, "Harmony accepted %s but the stored resource did not change.",
-            resource_name);
-        goto out;
-    }
-    rc = 0;
-out:
-    free(before);
-    free(actual);
-    free(quoted_uri);
-    free(quoted_hetag);
-    free(params);
-    return rc;
-#endif
 }
 
 static int safe_activity_id(const char *value) {
@@ -2772,25 +2683,31 @@ static int safe_activity_id(const char *value) {
 }
 
 static void render_activity_config_json(int fd) {
-    char *activities, *maps, *devices;
-    size_t activities_len = 0, maps_len = 0, devices_len = 0;
-    char revision[32];
+    char *activities, *maps, *functions, *devices;
+    size_t activities_len = 0, maps_len = 0;
+    size_t functions_len = 0, devices_len = 0;
+    char revision[40];
     FILE *f;
     activities = read_file_alloc(ACTIVITY_LIST, MAX_RESOURCE_FILE, &activities_len);
     maps = read_file_alloc(MAP_LIST, MAX_RESOURCE_FILE, &maps_len);
+    functions = read_file_alloc(FUNCTION_LIST, MAX_RESOURCE_FILE, &functions_len);
     devices = read_file_alloc(DEVICE_LIST, MAX_RESOURCE_FILE, &devices_len);
-    if (!activities || !maps || !devices) {
-        free(activities); free(maps); free(devices);
+    if (!activities || !maps || !functions || !devices) {
+        free(activities); free(maps); free(functions); free(devices);
         f = send_json_start(fd, "503 Service Unavailable");
         if (!f) return;
-        fputs("{\"ok\":false,\"error\":\"ActivityList, MapList, or DeviceList is unavailable\"}\n", f);
+        fputs("{\"ok\":false,\"error\":\"ActivityList, MapList, FunctionList, or DeviceList is unavailable\"}\n", f);
         fclose(f);
         return;
     }
-    activity_revision(activities, activities_len, maps, maps_len, revision, sizeof(revision));
+    activity_revision(
+        activities, activities_len,
+        maps, maps_len,
+        functions, functions_len,
+        revision, sizeof(revision));
     f = send_json_start(fd, "200 OK");
     if (!f) {
-        free(activities); free(maps); free(devices);
+        free(activities); free(maps); free(functions); free(devices);
         return;
     }
     fputs("{\"ok\":true,\"revision\":", f);
@@ -2799,11 +2716,13 @@ static void render_activity_config_json(int fd) {
     fwrite(activities, 1, activities_len, f);
     fputs(",\"mapList\":", f);
     fwrite(maps, 1, maps_len, f);
+    fputs(",\"functionList\":", f);
+    fwrite(functions, 1, functions_len, f);
     fputs(",\"deviceList\":", f);
     fwrite(devices, 1, devices_len, f);
     fputs("}\n", f);
     fclose(f);
-    free(activities); free(maps); free(devices);
+    free(activities); free(maps); free(functions); free(devices);
 }
 
 static void render_activity_state_json(int fd) {
@@ -2843,42 +2762,88 @@ static void render_activity_run_json(int fd, const struct request *req) {
     fclose(f);
 }
 
-static int sync_activity_resources(char *reply, size_t reply_len) {
-    request_resource_reload_names("ActivityList\nMapList\nAutomationConfig\n");
-    usleep(1500 * 1000);
-    return harmony_hbus_call("setup.syncremotechanges", "{}", reply, reply_len);
-}
-
 static void render_activity_sync_json(int fd) {
-    char reply[8192];
-    int rc = sync_activity_resources(reply, sizeof(reply));
-    FILE *f = send_json_start(fd, rc == 0 ? "200 OK" : "502 Bad Gateway");
-    if (!f) return;
-    fprintf(f, "{\"ok\":%s,\"syncQueued\":%s,\"reply\":",
-        rc == 0 ? "true" : "false", rc == 0 ? "true" : "false");
-    json_write_string(f, reply);
-    fputs("}\n", f);
-    fclose(f);
+    char *activities = NULL, *maps = NULL, *functions = NULL;
+    size_t activities_len = 0, maps_len = 0, functions_len = 0;
+    char reply[32768], msg[768];
+    int rc;
+    FILE *f;
+    msg[0] = 0;
+    activities = read_file_alloc(ACTIVITY_LIST, MAX_RESOURCE_FILE, &activities_len);
+    maps = read_file_alloc(MAP_LIST, MAX_RESOURCE_FILE, &maps_len);
+    functions = read_file_alloc(FUNCTION_LIST, MAX_RESOURCE_FILE, &functions_len);
+    if (!activities || !maps || !functions ||
+        validate_resource_json(activities, activities_len,
+            "Activities", msg, sizeof(msg)) != 0 ||
+        validate_resource_json(maps, maps_len,
+            "ButtonMaps", msg, sizeof(msg)) != 0 ||
+        validate_resource_json(functions, functions_len,
+            "FunctionMaps", msg, sizeof(msg)) != 0) {
+        f = send_json_start(fd, "503 Service Unavailable");
+        if (f) {
+            fputs("{\"ok\":false,\"localOnly\":true,\"error\":", f);
+            json_write_string(f, msg[0] ? msg :
+                "ActivityList, MapList, or FunctionList is unavailable.");
+            fputs("}\n", f);
+            fclose(f);
+        }
+        free(activities);
+        free(maps);
+        free(functions);
+        return;
+    }
+    reply[0] = 0;
+    msg[0] = 0;
+    rc = offline_activity_commit(
+        activities, activities_len,
+        maps, maps_len,
+        functions, functions_len,
+        0, 0, 0,
+        reply, sizeof(reply), msg, sizeof(msg));
+    f = send_json_start(fd, rc == 0 ? "200 OK" : "503 Service Unavailable");
+    if (f) {
+        fprintf(f,
+            "{\"ok\":%s,\"localOnly\":true,\"remoteRefreshed\":%s,"
+            "\"syncQueued\":false,\"synced\":false",
+            rc == 0 ? "true" : "false", rc == 0 ? "true" : "false");
+        if (rc == 0) {
+            fputs(",\"message\":"
+                "\"The local activity engine and paired-remote configuration revision were refreshed.\"",
+                f);
+        } else {
+            fputs(",\"error\":", f);
+            json_write_string(f, msg[0] ? msg :
+                "The local activity refresh failed.");
+        }
+        fputs(",\"reply\":", f);
+        json_write_string(f, reply);
+        fputs("}\n", f);
+        fclose(f);
+    }
+    free(activities);
+    free(maps);
+    free(functions);
 }
 
 static void render_activity_save_json(int fd, const struct request *req) {
-    char *activities = NULL, *maps = NULL, *old_activities = NULL, *old_maps = NULL;
-    char *saved_activities = NULL, *saved_maps = NULL;
-    size_t activities_len = 0, maps_len = 0, old_activities_len = 0, old_maps_len = 0;
-    size_t saved_activities_len = 0, saved_maps_len = 0;
-    char base_revision[64], current_revision[32], saved_revision[32], final_revision[32];
-    char msg[256], rollback_msg[256], sync_reply[8192];
-    int sync_remote, activity_changed, map_changed;
-    int wrote_activities = 0, wrote_maps = 0;
-    int sync_rc = 0, sync_conflict = 0, resource_conflict = 0;
-    int put_rc, rollback_ok;
+    char *activities = NULL, *maps = NULL, *functions = NULL;
+    char *old_activities = NULL, *old_maps = NULL, *old_functions = NULL;
+    char *saved_activities = NULL, *saved_maps = NULL, *saved_functions = NULL;
+    size_t activities_len = 0, maps_len = 0, functions_len = 0;
+    size_t old_activities_len = 0, old_maps_len = 0, old_functions_len = 0;
+    size_t saved_activities_len = 0, saved_maps_len = 0, saved_functions_len = 0;
+    char base_revision[64], current_revision[40], final_revision[40];
+    char msg[768], commit_reply[32768], rollback_reply[32768], rollback_msg[768];
+    int sync_remote, activity_changed, map_changed, function_changed;
+    int commit_rc = 0, rollback_ok = 1;
     FILE *f;
     if (!req->body || !req->body_len ||
         json_object_value_copy(req->body, "activityList", &activities, &activities_len) != 0 ||
-        json_object_value_copy(req->body, "mapList", &maps, &maps_len) != 0) {
+        json_object_value_copy(req->body, "mapList", &maps, &maps_len) != 0 ||
+        json_object_value_copy(req->body, "functionList", &functions, &functions_len) != 0) {
         f = send_json_start(fd, "400 Bad Request");
         if (f) {
-            fputs("{\"ok\":false,\"error\":\"body must contain activityList and mapList JSON objects\"}\n", f);
+            fputs("{\"ok\":false,\"error\":\"body must contain activityList, mapList, and functionList JSON objects\"}\n", f);
             fclose(f);
         }
         goto out;
@@ -2887,7 +2852,8 @@ static void render_activity_save_json(int fd, const struct request *req) {
     json_string(req->body, "baseRevision", base_revision, sizeof(base_revision));
     sync_remote = json_bool(req->body, "syncRemote", 0);
     if (validate_resource_json(activities, activities_len, "Activities", msg, sizeof(msg)) != 0 ||
-        validate_resource_json(maps, maps_len, "ButtonMaps", msg, sizeof(msg)) != 0) {
+        validate_resource_json(maps, maps_len, "ButtonMaps", msg, sizeof(msg)) != 0 ||
+        validate_resource_json(functions, functions_len, "FunctionMaps", msg, sizeof(msg)) != 0) {
         f = send_json_start(fd, "400 Bad Request");
         if (f) {
             fputs("{\"ok\":false,\"error\":", f); json_write_string(f, msg); fputs("}\n", f);
@@ -2897,15 +2863,19 @@ static void render_activity_save_json(int fd, const struct request *req) {
     }
     old_activities = read_file_alloc(ACTIVITY_LIST, MAX_RESOURCE_FILE, &old_activities_len);
     old_maps = read_file_alloc(MAP_LIST, MAX_RESOURCE_FILE, &old_maps_len);
-    if (!old_activities || !old_maps) {
+    old_functions = read_file_alloc(FUNCTION_LIST, MAX_RESOURCE_FILE, &old_functions_len);
+    if (!old_activities || !old_maps || !old_functions) {
         f = send_json_start(fd, "503 Service Unavailable");
         if (f) {
-            fputs("{\"ok\":false,\"error\":\"current ActivityList or MapList is unavailable\"}\n", f);
+            fputs("{\"ok\":false,\"error\":\"current ActivityList, MapList, or FunctionList is unavailable\"}\n", f);
             fclose(f);
         }
         goto out;
     }
-    activity_revision(old_activities, old_activities_len, old_maps, old_maps_len,
+    activity_revision(
+        old_activities, old_activities_len,
+        old_maps, old_maps_len,
+        old_functions, old_functions_len,
         current_revision, sizeof(current_revision));
     if (!base_revision[0] || strcmp(base_revision, current_revision) != 0) {
         f = send_json_start(fd, "409 Conflict");
@@ -2921,110 +2891,105 @@ static void render_activity_save_json(int fd, const struct request *req) {
         activities, activities_len, old_activities, old_activities_len);
     map_changed = !json_semantically_matches(
         maps, maps_len, old_maps, old_maps_len);
-    if (activity_changed || map_changed) {
+    function_changed = !json_semantically_matches(
+        functions, functions_len, old_functions, old_functions_len);
+    if (activity_changed || map_changed || function_changed) {
         backup_resources();
     }
-    if (activity_changed) {
-        put_rc = harmony_resource_put("ActivityList", ACTIVITY_LIST,
-            activities, activities_len, msg, sizeof(msg));
-        if (put_rc != 0) {
-            resource_conflict = put_rc == -2;
-            wrote_activities = !written_resource_matches(
-                ACTIVITY_LIST, old_activities, old_activities_len);
-            goto rollback;
-        }
-        wrote_activities = 1;
+    commit_reply[0] = 0;
+    msg[0] = 0;
+    if (activity_changed || map_changed || function_changed || sync_remote) {
+        commit_rc = offline_activity_commit(
+            activities, activities_len,
+            maps, maps_len,
+            functions, functions_len,
+            activity_changed, map_changed, function_changed,
+            commit_reply, sizeof(commit_reply), msg, sizeof(msg));
+        if (commit_rc != 0) goto rollback;
     }
-    if (map_changed) {
-        put_rc = harmony_resource_put("MapList", MAP_LIST,
-            maps, maps_len, msg, sizeof(msg));
-        if (put_rc != 0) {
-            resource_conflict = put_rc == -2;
-            wrote_maps = !written_resource_matches(MAP_LIST, old_maps, old_maps_len);
-            goto rollback;
-        }
-        wrote_maps = 1;
-    }
-    request_resource_reload_names("ActivityList\nMapList\nAutomationConfig\n");
     saved_activities = read_file_alloc(ACTIVITY_LIST, MAX_RESOURCE_FILE, &saved_activities_len);
     saved_maps = read_file_alloc(MAP_LIST, MAX_RESOURCE_FILE, &saved_maps_len);
-    if (!saved_activities || !saved_maps) {
-        snprintf(msg, sizeof(msg), "saved resources could not be read back");
+    saved_functions = read_file_alloc(FUNCTION_LIST, MAX_RESOURCE_FILE, &saved_functions_len);
+    if (!saved_activities || !saved_maps || !saved_functions) {
+        snprintf(msg, sizeof(msg), "saved activity resources could not be read back");
         goto rollback;
     }
-    activity_revision(saved_activities, saved_activities_len, saved_maps, saved_maps_len,
-        saved_revision, sizeof(saved_revision));
-    snprintf(final_revision, sizeof(final_revision), "%s", saved_revision);
-    sync_reply[0] = 0;
-    if (sync_remote) {
-        sync_rc = sync_activity_resources(sync_reply, sizeof(sync_reply));
-        free(saved_activities); saved_activities = NULL;
-        free(saved_maps); saved_maps = NULL;
-        saved_activities = read_file_alloc(ACTIVITY_LIST, MAX_RESOURCE_FILE, &saved_activities_len);
-        saved_maps = read_file_alloc(MAP_LIST, MAX_RESOURCE_FILE, &saved_maps_len);
-        if (saved_activities && saved_maps) {
-            activity_revision(saved_activities, saved_activities_len, saved_maps, saved_maps_len,
-                final_revision, sizeof(final_revision));
-            sync_conflict = strcmp(final_revision, saved_revision) != 0;
-        }
+    if (!json_semantically_matches(
+            saved_activities, saved_activities_len, activities, activities_len) ||
+        !json_semantically_matches(
+            saved_maps, saved_maps_len, maps, maps_len) ||
+        !json_semantically_matches(
+            saved_functions, saved_functions_len, functions, functions_len)) {
+        snprintf(msg, sizeof(msg),
+            "the offline writer returned success, but its stored resources did not match");
+        goto rollback;
     }
-    f = send_json_start(fd, sync_remote && sync_rc != 0 ? "502 Bad Gateway" : "200 OK");
+    activity_revision(
+        saved_activities, saved_activities_len,
+        saved_maps, saved_maps_len,
+        saved_functions, saved_functions_len,
+        final_revision, sizeof(final_revision));
+    f = send_json_start(fd, "200 OK");
     if (f) {
-        fprintf(f, "{\"ok\":%s,\"saved\":true,\"activityChanged\":%s,\"mapChanged\":%s,"
-            "\"synced\":%s,\"syncQueued\":%s,\"syncConflict\":%s,\"revision\":",
-            sync_remote && sync_rc != 0 ? "false" : "true",
+        fprintf(f,
+            "{\"ok\":true,\"saved\":true,\"localOnly\":true,"
+            "\"activityChanged\":%s,\"mapChanged\":%s,\"functionChanged\":%s,"
+            "\"remoteRefreshed\":%s,\"synced\":false,\"syncQueued\":false,"
+            "\"syncConflict\":false,\"revision\":",
             activity_changed ? "true" : "false",
             map_changed ? "true" : "false",
-            sync_remote && sync_rc == 0 ? "true" : "false",
-            sync_remote && sync_rc == 0 ? "true" : "false",
-            sync_conflict ? "true" : "false");
+            function_changed ? "true" : "false",
+            (activity_changed || map_changed || function_changed || sync_remote)
+                ? "true" : "false");
         json_write_string(f, final_revision);
         fputs(",\"message\":", f);
-        if (sync_conflict) {
-            json_write_string(f, "The remote sync changed activity resources after save. Reload before editing again.");
-        } else if (sync_remote && sync_rc != 0) {
-            json_write_string(f, "Activities were saved locally, but remote synchronization failed.");
-        } else if (sync_remote) {
-            json_write_string(f, "Activities saved through Harmony and submitted to the paired-remote sync queue.");
-        } else if (!activity_changed && !map_changed) {
-            json_write_string(f, "Activity resources already matched the Hub; no write was needed.");
+        if (!activity_changed && !map_changed && !function_changed && !sync_remote) {
+            json_write_string(f,
+                "Activity resources already matched the Hub; no write was needed.");
+        } else if (!activity_changed && !map_changed && !function_changed) {
+            json_write_string(f,
+                "The local activity engine and paired-remote configuration revision were refreshed.");
         } else {
-            json_write_string(f, "Activities saved through Harmony and reloaded on the Hub.");
+            json_write_string(f,
+                "Activities were saved locally, reloaded in the Hub engine, and published as a new paired-remote configuration revision.");
         }
-        fputs(",\"reply\":", f); json_write_string(f, sync_reply); fputs("}\n", f);
+        fputs(",\"reply\":", f);
+        json_write_string(f, commit_reply);
+        fputs("}\n", f);
         fclose(f);
     }
     goto out;
 
 rollback:
-    rollback_ok = 1;
-    rollback_msg[0] = 0;
-    if (wrote_maps && harmony_resource_put("MapList", MAP_LIST,
-            old_maps, old_maps_len, rollback_msg, sizeof(rollback_msg)) != 0) {
-        rollback_ok = 0;
-    }
-    if (wrote_activities && harmony_resource_put("ActivityList", ACTIVITY_LIST,
-            old_activities, old_activities_len, rollback_msg, sizeof(rollback_msg)) != 0) {
-        rollback_ok = 0;
-    }
-    if (!rollback_ok) {
-        if ((wrote_activities &&
-                write_file_atomic(ACTIVITY_LIST, old_activities, old_activities_len) != 0) ||
-            (wrote_maps && write_file_atomic(MAP_LIST, old_maps, old_maps_len) != 0)) {
-            snprintf(rollback_msg, sizeof(rollback_msg),
-                "The automatic rollback could not restore every resource.");
-        }
-    }
-    request_resource_reload_names("ActivityList\nMapList\nAutomationConfig\n");
     rollback_ok = written_resource_matches(
             ACTIVITY_LIST, old_activities, old_activities_len) &&
-        written_resource_matches(MAP_LIST, old_maps, old_maps_len);
-    f = send_json_start(fd,
-        resource_conflict ? "409 Conflict" : "500 Internal Server Error");
+        written_resource_matches(MAP_LIST, old_maps, old_maps_len) &&
+        written_resource_matches(
+            FUNCTION_LIST, old_functions, old_functions_len);
+    rollback_msg[0] = 0;
+    if (!rollback_ok) {
+        rollback_reply[0] = 0;
+        rollback_ok = offline_activity_commit(
+                old_activities, old_activities_len,
+                old_maps, old_maps_len,
+                old_functions, old_functions_len,
+                1, 1, 1,
+                rollback_reply, sizeof(rollback_reply),
+                rollback_msg, sizeof(rollback_msg)) == 0 &&
+            written_resource_matches(
+                ACTIVITY_LIST, old_activities, old_activities_len) &&
+            written_resource_matches(MAP_LIST, old_maps, old_maps_len) &&
+            written_resource_matches(
+                FUNCTION_LIST, old_functions, old_functions_len);
+    }
+    f = send_json_start(fd, "500 Internal Server Error");
     if (f) {
-        fprintf(f, "{\"ok\":false,\"rolledBack\":%s,\"error\":",
+        fprintf(f,
+            "{\"ok\":false,\"saved\":false,\"localOnly\":true,"
+            "\"rolledBack\":%s,\"error\":",
             rollback_ok ? "true" : "false");
-        json_write_string(f, msg);
+        json_write_string(f, msg[0] ? msg :
+            "The offline activity transaction failed.");
         if (!rollback_ok) {
             fputs(",\"rollbackError\":", f);
             json_write_string(f, rollback_msg[0] ? rollback_msg :
@@ -3035,9 +3000,9 @@ rollback:
     }
 
 out:
-    free(activities); free(maps);
-    free(old_activities); free(old_maps);
-    free(saved_activities); free(saved_maps);
+    free(activities); free(maps); free(functions);
+    free(old_activities); free(old_maps); free(old_functions);
+    free(saved_activities); free(saved_maps); free(saved_functions);
 }
 
 static void send_embedded_asset(
@@ -4599,7 +4564,7 @@ static void status_panel(FILE *f, const struct mqtt_config *mqtt) {
     fprintf(f, "<div class='stat'><div class='label'>Logitech cloud</div><div class='value'><span class='badge %s'>%s</span></div><div class='muted mini'>%s</div></div>",
         cloud_blocked ? "ok" : "warn",
         cloud_blocked ? "blocked" : "allowed",
-        cloud_blocked ? "local control only" : "takes effect after restart");
+        cloud_blocked ? "LAN-only egress enforced" : "cloud egress allowed");
     fprintf(f, "<div class='stat'><div class='label'>Activity API</div><div class='value'><span class='badge %s'>%s</span></div></div>",
         activity[0] ? "ok" : "warn", activity[0] ? "responding" : "quiet");
     fprintf(f, "<div class='stat'><div class='label'>Software update</div><div class='value'><span id='dashUpdateBadge' class='badge %s'>", update_class);
@@ -4607,7 +4572,7 @@ static void status_panel(FILE *f, const struct mqtt_config *mqtt) {
     fprintf(f, "</span></div><div id='dashUpdateDetail' class='muted mini'>");
     html(f, update_detail);
     fprintf(f, "</div></div>");
-    fprintf(f, "</div><div class='quick-actions'><button type='button' data-view-target='activities'><strong>Manage activities</strong><div class='muted mini'>Create scenes, route device roles and inputs, map remote buttons, then synchronize the remote.</div></button><button type='button' data-view-target='control'><strong>Use a remote</strong><div class='muted mini'>Send saved buttons from the remote skin or command list.</div></button><button type='button' data-view-target='ir'><strong>Add or edit remotes</strong><div class='muted mini'>Create devices, search databases, learn buttons, and edit commands.</div></button><button type='button' data-view-target='lab'><strong>Bulk test IR codes</strong><div class='muted mini'>Search many code files, skip duplicates, then send a queue.</div></button><button type='button' data-view-target='mqtt'><strong>Set up Home Assistant</strong><div class='muted mini'>Configure MQTT topics, discovery, and state publishing.</div></button><button type='button' data-view-target='backup'><strong>Back up settings</strong><div class='muted mini'>Download a restore point before larger changes.</div></button></div><div class='grid' style='margin-top:12px'>");
+    fprintf(f, "</div><div class='quick-actions'><button type='button' data-view-target='activities'><strong>Manage activities</strong><div class='muted mini'>Create scenes, route device roles and inputs, map remote buttons, then refresh the paired remote locally.</div></button><button type='button' data-view-target='control'><strong>Use a remote</strong><div class='muted mini'>Send saved buttons from the remote skin or command list.</div></button><button type='button' data-view-target='ir'><strong>Add or edit remotes</strong><div class='muted mini'>Create devices, search databases, learn buttons, and edit commands.</div></button><button type='button' data-view-target='lab'><strong>Bulk test IR codes</strong><div class='muted mini'>Search many code files, skip duplicates, then send a queue.</div></button><button type='button' data-view-target='mqtt'><strong>Set up Home Assistant</strong><div class='muted mini'>Configure MQTT topics, discovery, and state publishing.</div></button><button type='button' data-view-target='backup'><strong>Back up settings</strong><div class='muted mini'>Download a restore point before larger changes.</div></button></div><div class='grid' style='margin-top:12px'>");
     fprintf(f, "<details><summary>Network details</summary><pre>");
     html(f, ifconfig[0] ? ifconfig : "ath0 not available");
     fprintf(f, "</pre></details>");
@@ -4621,7 +4586,7 @@ static void activity_panel(FILE *f) {
     fputs(
         "<section id='view-activities' data-view='activities' class='section'>"
         "<div class='section-head'><div><h2>Activities</h2>"
-        "<div class='section-lead'>Build the scenes your Harmony remote runs: choose devices and inputs, assign remote buttons, start activities, and synchronize the paired remote.</div>"
+        "<div class='section-lead'>Build the scenes your Harmony remote runs: choose devices and inputs, assign remote buttons, start activities, and refresh paired remotes entirely on the local Hub.</div>"
         "</div><button id='activityRefresh' type='button' class='secondary'>Reload from Hub</button></div>"
         "<div class='activity-command'>"
         "<div class='activity-hero'><div><div class='activity-eyebrow'>Now running</div>"
@@ -4634,7 +4599,7 @@ static void activity_panel(FILE *f) {
         "<aside class='panel activity-roster'><div class='activity-roster-head'><h3>Remote activity order</h3>"
         "<div class='help'>This order is written back to ActivityList and shown on compatible Harmony remotes.</div>"
         "<div class='activity-roster-actions'><button id='activityNew' type='button'>New blank</button>"
-        "<button id='activitySync' type='button' class='secondary'>Sync remote</button></div></div>"
+        "<button id='activitySync' type='button' class='secondary'>Refresh remote locally</button></div></div>"
         "<div id='activityList' class='activity-list'><div class='activity-list-empty'>Open Activities to load the Hub.</div></div></aside>"
         "<div class='activity-workspace'>"
         "<div id='activityEmpty' class='panel activity-empty'><div><div class='activity-empty-mark'>▶</div>"
@@ -4665,17 +4630,19 @@ static void activity_panel(FILE *f) {
         "<datalist id='activityCommandCatalog'></datalist>"
         "<div id='activityButtonList' class='activity-button-list'></div></div>"
         "<div class='activity-tab-panel' data-activity-tab-panel='advanced'>"
-        "<div class='callout'><strong>Full-fidelity editor.</strong>These objects preserve fields the guided editor does not expose, including entry/leave actions, sequence metadata, and firmware-specific values. Invalid JSON is never sent.</div>"
+        "<div class='callout'><strong>Full-fidelity editor.</strong>These objects preserve fields the guided editor does not expose, including entry/leave actions, control groups, sequence metadata, and firmware-specific values. Invalid JSON is never sent.</div>"
         "<div class='activity-raw-grid'><div><label for='activityRawActivity'>Selected Activity object</label><textarea id='activityRawActivity' spellcheck='false'></textarea></div>"
-        "<div><label for='activityRawMaps'>Button maps for this Activity</label><textarea id='activityRawMaps' spellcheck='false'></textarea></div></div>"
+        "<div><label for='activityRawMaps'>Button maps for this Activity</label><textarea id='activityRawMaps' spellcheck='false'></textarea></div>"
+        "<div class='activity-raw-functions'><label for='activityRawFunctions'>Control-group FunctionMap for this Activity</label><textarea id='activityRawFunctions' spellcheck='false'></textarea></div></div>"
         "<div class='actions'><button id='activityApplyRaw' type='button' class='secondary'>Apply JSON to working copy</button>"
-        "<a class='button secondary' href='/export/activities'>Download ActivityList</a><a class='button secondary' href='/export/maps'>Download MapList</a></div></div>"
+        "<a class='button secondary' href='/export/activities'>Download ActivityList</a><a class='button secondary' href='/export/maps'>Download MapList</a>"
+        "<a class='button secondary' href='/export/functions'>Download FunctionList</a></div></div>"
         "<div class='activity-savebar'><div id='activitySaveState' class='activity-save-state'>Hub resources match this editor</div>"
         "<div class='actions'><button id='activityRunSelected' type='button' class='secondary'>Run</button>"
         "<button id='activityDuplicate' type='button' class='secondary'>Duplicate</button>"
         "<button id='activityDelete' type='button' class='danger'>Delete</button>"
         "<button id='activitySave' type='button'>Save to Hub</button>"
-        "<button id='activitySaveSync' type='button'>Save &amp; sync remote</button></div></div>"
+        "<button id='activitySaveSync' type='button'>Save &amp; refresh remote</button></div></div>"
         "</div></div></div></div></section>",
         f);
 }
@@ -5755,9 +5722,9 @@ static void system_panel(FILE *f) {
     fprintf(f, "</pre></details><details><summary>Logs</summary><pre>");
     html(f, logs[0] ? logs : "no matching logs");
     fprintf(f, "</pre></details></div>");
-    fprintf(f, "<div class='panel' style='margin-top:12px'><h3>Cloud blocker</h3><div class='help'>Block Logitech cloud background services while keeping local web, MQTT, Bluetooth, Wi-Fi recovery, and SSH control available. The change is saved immediately and is applied by the Harmony network service after reboot or network reconnect.</div><form method='post' action='/system#system'>");
+    fprintf(f, "<div class='panel' style='margin-top:12px'><h3>Cloud blocker</h3><div class='help'>Make the Hub LAN-only while keeping local web, MQTT, Bluetooth, Wi-Fi recovery, discovery, and SSH control available. Blocking removes the WAN default route and intercepts paired-remote resource and sync commands before they can invoke Logitech services.</div><form method='post' action='/system#system'>");
     fprintf(f, "<label class='inline-check'><input type='checkbox' name='cloudBlocker' value='1' %s> Block Logitech cloud services</label>", cloud_blocked ? "checked" : "");
-    fprintf(f, "<div class='help'>Current saved mode: <strong>%s</strong>. Blocking prevents cloudapi, PubNub, and package manager tasks from starting.</div>", cloud_blocked ? "blocked" : "allowed after restart");
+    fprintf(f, "<div class='help'>Current saved mode: <strong>%s</strong>. The egress route is updated immediately; rebooting also reloads the guarded Harmony handlers and background-task policy.</div>", cloud_blocked ? "blocked" : "allowed");
     fprintf(f, "<div class='actions'><button name='action' value='cloud' type='submit'>Save cloud blocker setting</button><button name='action' value='cloud_reboot' type='submit' class='secondary'>Save and reboot</button></div></form></div>");
     fprintf(f, "<div class='panel' style='margin-top:12px'><h3>Web UI sign-in</h3><div class='help'>Optional HTTP Basic authentication for every page, API call, and export. Leave it off for a trusted local-only hub, or enable it when the hub is reachable by guests or other devices.</div><form method='post' action='/system#system' autocomplete='off'>");
     fprintf(f, "<label class='inline-check'><input type='checkbox' name='authEnabled' value='1' %s> Require username and password</label>", auth.enabled ? "checked" : "");
@@ -5888,7 +5855,7 @@ static void handle_system(int fd, const struct request *req) {
             sync();
             system("/sbin/reboot >/dev/null 2>&1 &");
         } else {
-            render_page(fd, enabled ? "Cloud blocker enabled. Reboot when ready to apply it." : "Cloud blocker disabled. Reboot when ready to allow Logitech cloud services.");
+            render_page(fd, enabled ? "Cloud blocker enabled and LAN-only egress applied." : "Cloud blocker disabled and the saved WAN route restored.");
         }
     } else if (strcmp(action, "auth") == 0) {
         struct webui_auth_config old, cfg;
@@ -6188,7 +6155,7 @@ static void handle_import(int fd, const struct request *req) {
         if (save_cloud_blocker(cloud_value_enabled(payload)) != 0) {
             render_page(fd, "Failed to import cloud blocker setting.");
         } else {
-            render_page(fd, "Cloud blocker setting imported. Reboot when ready to apply it.");
+            render_page(fd, "Cloud blocker setting imported and its egress mode applied.");
         }
     } else if (strcmp(target, "bluetooth") == 0) {
         chmod(BT_DEVICE_STORE, 0644);

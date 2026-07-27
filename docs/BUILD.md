@@ -26,8 +26,10 @@ It downloads the Bootlin MIPS uClibc toolchain and Dropbear source into
 `payload/web/`.
 
 Deploy `codex_webui` and `codex_hbus` from the same build. Activity resource
-updates use the helper's `@params-file` input so the native Harmony PUT can carry
-the full MapList without shell argument or quoting limits.
+updates use the fail-closed `payload/activity/codexactivity.lua` plugin and a
+root-only volatile file channel, so the full ActivityList, MapList, and
+FunctionList transaction never passes through a shell argument or firmware
+network-sync command.
 
 The host-side HBus smoke test deliberately sends notifications, a ping, an
 unrelated response, and a fragmented 350 KB response before the matching
@@ -46,8 +48,24 @@ forms, and equivalent numeric forms do not create false resource writes:
 tools/activity_json_semantic_smoke.sh
 ```
 
-The Linux build script runs this semantic test automatically before downloading
-or invoking the cross toolchain.
+The activity editor model regression verifies orphan-map repair, required
+per-surface and activity-function-map creation, the zero/omitted local identity
+format, and duplicate canonical button-ID rejection:
+
+```sh
+node tools/activity_ui_model_smoke.mjs
+```
+
+The offline guard rejects resource-proxy, firmware-sync, queue, socket, session,
+and account-service paths in the activity writer. It also verifies that the
+paired-remote HBus guards and reversible LAN-only route guard are packaged:
+
+```sh
+tools/activity_offline_guard.sh
+```
+
+The Linux build script runs all three tests automatically before downloading or
+invoking the cross toolchain.
 
 After rebuilding:
 

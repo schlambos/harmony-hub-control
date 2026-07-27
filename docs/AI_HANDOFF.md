@@ -20,12 +20,17 @@ already rooted Logitech Harmony Hub.
 ## Main Files
 
 - `payload/source/codex_webui.c`: single-binary web server and front-end assets.
+- `payload/activity/codexactivity.lua`: fail-closed local activity resource
+  transaction and paired-remote configuration refresh.
 - `payload/mqtt/codexmqtt.lua`: Home Assistant MQTT bridge.
 - `payload/scripts/init.sh`: hub boot startup for local services.
 - `payload/scripts/recovery_ap.sh`: reset-button recovery AP flow.
 - `payload/scripts/netservicestarter.lua`: local service starter that reads
-  `/data/codex/cloud_blocker.conf` before starting or blocking Logitech cloud
-  tasks.
+  `/data/codex/cloud_blocker.conf`, blocks Logitech background tasks, and
+  replaces the paired remote's resource/sync API handlers with local-only
+  implementations.
+- `payload/scripts/offline_egress_guard.sh`: reversible route guard that removes
+  WAN egress while retaining the Hub's LAN and multicast routes.
 - `install_webui.ps1`: Windows SSH uploader/installer.
 - `install_webui.py`: Linux/macOS Python SSH uploader/installer.
 - `restore_backup.ps1`: rollback helper.
@@ -39,10 +44,12 @@ already rooted Logitech Harmony Hub.
 /data/codex/bin/codex_dhcpd
 /data/codex/bin/codex_portal
 /data/codex/init.sh
+/data/codex/offline_egress_guard.sh
 /data/codex/recovery_ap.sh
 /data/codex/hub_id
 /data/codex/cloud_blocker.conf
 /data/codexmqtt/config.json
+/pkg/codexactivity/codexactivity.lua
 /pkg/codexmqtt/codexmqtt.lua
 /usr/sbin/dropbear
 /usr/sbin/dropbearkey
@@ -66,11 +73,21 @@ already rooted Logitech Harmony Hub.
   per key and avoids long key-held repeats.
 - MQTT should publish enough state for Home Assistant debugging, including IP
   address and bridge health.
-- Cloud blocker defaults to enabled. The System page saves
-  `/data/codex/cloud_blocker.conf`; missing or `1` blocks cloudapi, PubNub, and
-  package-manager tasks, while `0` allows them after reboot or network
-  reconnect. The installers reboot once after a normal cloud-blocking install
-  so new deployments finish with the blocker already active.
+- Cloud blocker defaults to enabled. Exact value `1` removes the WAN default
+  route, preserves LAN/multicast routing, blocks cloudapi, PubNub, and
+  package-manager tasks, and makes `proxy.resource?get`,
+  `proxy.resource?put`, and `setup.sync*` local-only. Value `0` restores the
+  saved WAN route and delegates those handlers to firmware; reboot or network
+  reconnect is still required to start cloud background workers.
+- Activity writes must stay offline. The web UI talks to `codexactivity.lua`
+  through `/var/volatile`; that plugin must fail closed when the cloud blocker
+  is inactive and must not use the firmware resource proxy, sync task, offline
+  queue, session, or a network socket.
+- Activity edits are a three-resource transaction: `ActivityList` owns the
+  activity/roles, `MapList` owns paired-remote buttons, and `FunctionList` owns
+  the generated control groups. Every activity must have two compatible remote
+  surface maps and exactly one `ActivityFunctionMap`; validate references to
+  both activities and current devices before saving.
 
 ## Verification Checklist
 
@@ -78,8 +95,8 @@ After changing web UI or runtime behavior:
 
 1. Deploy with `install_webui.ps1` on Windows or `python3 install_webui.py` on Linux/macOS.
 2. Open `http://<hub-ip>:8080/`.
-3. Check Dashboard, IR Devices, IR Sweep, Bluetooth, MQTT, Wi-Fi, Backup, and
-   System sections.
+3. Check Dashboard, Activities, IR Devices, IR Sweep, Bluetooth, MQTT, Wi-Fi,
+   Backup, and System sections.
 4. Confirm no browser auth prompt appears.
 5. Import a small IR database file and verify supported/unsupported counts.
 6. Send one known-good IR command.
@@ -87,3 +104,8 @@ After changing web UI or runtime behavior:
 8. If MQTT changed, verify discovery and state topics in Home Assistant.
 9. Tail `/cache/codex-init.log` and `/data/codex/ir-events.log`.
 10. Confirm rollback can find the newest backup.
+11. If Activities changed, verify `tools/activity_offline_guard.sh`, confirm the
+    blocker remains enabled, confirm the routing table has LAN and multicast
+    routes but no default route, confirm no offline-queue entry was created,
+    exercise guarded `proxy.resource?put` and `setup.sync`, and inspect
+    `harmony.engine?config` for the expected control-group count.
