@@ -10,6 +10,7 @@ local connect = require("tasks.connectserver.core.utils")
 local REQUEST_FILE = "/var/volatile/codex-activity-request.json"
 local RESPONSE_FILE = "/var/volatile/codex-activity-response.json"
 local CLOUD_BLOCKER_FILE = "/data/codex/cloud_blocker.conf"
+local ACTIVITY_ENGINE_BARRIER_MESSAGE = "process_activity"
 
 local moduleObj
 local workerTask
@@ -171,6 +172,22 @@ local function reloadActivityEngine()
   )
   if not ok or result ~= true then
     return nil, "Harmony activity engine rejected the local resource reload"
+  end
+  return true
+end
+
+local function waitForActivityEngine()
+  if not system.isMessageRegistered(ACTIVITY_ENGINE_BARRIER_MESSAGE) then
+    return nil, "Harmony activity execution barrier is unavailable"
+  end
+  local ok, result = pcall(
+    system.sendMessage,
+    ACTIVITY_ENGINE_BARRIER_MESSAGE,
+    {}
+  )
+  if not ok then
+    return nil, "Harmony activity engine did not finish rebuilding: " ..
+      tostring(result)
   end
   return true
 end
@@ -519,6 +536,18 @@ local function commitActivityResources(request)
       error = err
     }
   end
+  ok, err = waitForActivityEngine()
+  if not ok then
+    local restored = restoreSnapshots(
+      oldActivities, oldMaps, oldFunctions, previousConfigVersion
+    )
+    return {
+      ok = false,
+      localOnly = true,
+      rolledBack = restored and true or false,
+      error = err
+    }
+  end
 
   digest.configVersion = previousConfigVersion + 1
   local digestOk, digestError = pcall(function()
@@ -542,6 +571,7 @@ local function commitActivityResources(request)
     ok = true,
     localOnly = true,
     reloaded = true,
+    activityEngineReady = true,
     configVersion = digest.configVersion,
     activityEtag = activityEtag,
     mapEtag = mapEtag,

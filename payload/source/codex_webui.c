@@ -44,8 +44,12 @@
 #define BT_TEXT_FIFO "/tmp/bthid_input"
 #define BT_TEXT_STATUS "/tmp/bthid_status"
 #define BT_TARGET_FILE "/data/codex/bthid_target"
+#define BT_PROFILE_FILE "/data/codex/bthid_profile"
 #define BT_DEVICE_STORE "/data/codex/bt-devices.json"
+#define BT_PAIR_AGENT_PID "/var/run/codex-bt-pair-agent.pid"
+#define BT_HID_CONTROL_PID "/var/run/codex-bt-hid-control.pid"
 #define CODEX_BIN_DIR "/data/codex/bin"
+#define BT_PAIR_AGENT_BIN CODEX_BIN_DIR "/codex_bt_pair_agent"
 #ifndef CODEX_HBUS_BIN
 #define CODEX_HBUS_BIN CODEX_BIN_DIR "/codex_hbus"
 #endif
@@ -67,6 +71,7 @@
 static const char *UPDATE_FILES[] = {
     "codex_webui",
     "codex_bthid_keyboard",
+    "codex_bt_pair_agent",
     "codex_hal_ltcp",
     "codex_hbus",
     "codex_portal",
@@ -177,7 +182,16 @@ static void analyze_capture_storage(const char *raw_code, const char *keycode_in
 static int repair_known_protocols_for_current_commands(void);
 static int safe_bt_addr(const char *s);
 static int bt_type_allowed(const char *type);
+static void read_bthid_profile(char *type, size_t typelen);
 static void save_bthid_target(const char *type, const char *bdaddr);
+static void save_bthid_profile(const char *type);
+static int bt_connection_active(const char *wanted, char *raw, size_t rawlen);
+static int bt_connection_authenticated(const char *wanted, char *raw, size_t rawlen);
+static int wait_for_bt_connection(const char *bdaddr, int timeout_seconds, char *raw, size_t rawlen);
+static void ensure_bt_hid_control_runtime(void);
+static int load_bt_link_key(const char *bdaddr);
+static int bt_native_code(const char *reply);
+static int run_hal_json(const char *cmd_name, const char *params_json, int timeout, char *out, size_t outlen);
 static int run_bt_saved_script(const char *type, const char *bdaddr, const char *script, int gap_ms, char *out, size_t outlen);
 
 static void chomp(char *s) {
@@ -4127,13 +4141,111 @@ static void log_ir_note_event(const char *event, const char *source, const char 
     fclose(f);
 }
 
+static int find_ir_bluetooth_target(const char *device_id, char *address, size_t address_len) {
+    char *raw, *id_end;
+    const char *p;
+    long wanted_id;
+    if (!address || address_len == 0) return 0;
+    address[0] = 0;
+    if (!device_id || !device_id[0]) return 0;
+    wanted_id = strtol(device_id, &id_end, 10);
+    if (wanted_id <= 0 || *id_end) return 0;
+    raw = read_file_alloc(DEVICE_LIST, MAX_RESOURCE_FILE, NULL);
+    if (!raw) return 0;
+    p = raw;
+    while ((p = strstr(p, "\"Device\":{")) != NULL) {
+        const char *dev_obj = strchr(p, '{');
+        const char *dev_end = dev_obj ? find_matching_json(dev_obj, '{', '}') : NULL;
+        long id;
+        if (!dev_obj || !dev_end) break;
+        id = json_long_range(dev_obj, dev_end, "Id-", 0);
+        if (id == wanted_id) {
+            int transport = (int)json_long_range(dev_obj, dev_end, "Transport", 1);
+            if (transport == 32) {
+                json_string_range(dev_obj, dev_end, "BTAddress", address, address_len);
+                free(raw);
+                return 1;
+            }
+            break;
+        }
+        p = dev_end + 1;
+    }
+    free(raw);
+    return 0;
+}
+
+static int ensure_ir_bluetooth_connection(const char *device_id, char *detail, size_t detail_len) {
+    char address[32], profile[40], params[160], reply[2048], connection[2048], command[160];
+    int command_rc, native_code;
+    if (detail && detail_len) detail[0] = 0;
+    if (!find_ir_bluetooth_target(device_id, address, sizeof(address))) return 0;
+    if (!safe_bt_addr(address) || strcmp(address, "00:00:00:00:00:00") == 0) {
+        if (detail && detail_len) {
+            snprintf(detail, detail_len,
+                "Bluetooth device %s has no valid target address.", device_id);
+        }
+        return -1;
+    }
+    if (bt_connection_authenticated(address, connection, sizeof(connection))) return 0;
+
+    read_bthid_profile(profile, sizeof(profile));
+    ensure_bt_hid_control_runtime();
+    load_bt_link_key(address);
+    if (bt_connection_active(address, connection, sizeof(connection))) {
+        snprintf(command, sizeof(command), "hcitool dc '%s' 2>&1", address);
+        run_cmd(command, reply, sizeof(reply));
+        usleep(500000);
+    }
+    snprintf(params, sizeof(params),
+        "{\"type\":\"%s\",\"bdaddr\":\"%s\"}", profile, address);
+    reply[0] = 0;
+    command_rc = run_hal_json("bthid.connect", params, 10, reply, sizeof(reply));
+    native_code = bt_native_code(reply);
+    if (command_rc != 0 || native_code != 200) {
+        if (detail && detail_len) {
+            snprintf(detail, detail_len,
+                "Could not connect Bluetooth device %s at %s (native code %d).",
+                device_id, address, native_code);
+        }
+        return -1;
+    }
+    if (!wait_for_bt_connection(address, 10, connection, sizeof(connection))) {
+        if (detail && detail_len) {
+            snprintf(detail, detail_len,
+                "Bluetooth device %s at %s did not establish a stable link.",
+                device_id, address);
+        }
+        return -1;
+    }
+    save_bthid_profile(profile);
+    save_bthid_target(profile, address);
+    if (detail && detail_len) {
+        snprintf(detail, detail_len,
+            "Connected Bluetooth device %s at %s before sending the command.",
+            device_id, address);
+    }
+    return 1;
+}
+
 static void send_ir_command_action_ex(const char *device_id, const char *command, const char *source, const char *run_id, char *out, size_t outlen) {
     char hub_id[64];
     char action[512], params[768], esc_id[128], esc_params[1024], cmd[1400];
+    char bt_detail[256];
+    int bt_connection;
     if (!load_hub_id(hub_id, sizeof(hub_id))) {
         snprintf(out, outlen, "Hub ID is missing. Re-run the root tool or reinstall with the numeric Hub ID printed as hub_id=...");
         log_ir_event(source, run_id, device_id, command, out);
         return;
+    }
+    bt_connection = ensure_ir_bluetooth_connection(device_id, bt_detail, sizeof(bt_detail));
+    if (bt_connection < 0) {
+        snprintf(out, outlen, "%s", bt_detail[0] ? bt_detail :
+            "Bluetooth target could not be connected before sending the command.");
+        log_ir_event(source, run_id, device_id, command, out);
+        return;
+    }
+    if (bt_connection > 0) {
+        log_ir_note_event("bt_preconnect", source, run_id, bt_detail);
     }
     snprintf(action, sizeof(action), "{\\\"type\\\":\\\"IRCommand\\\",\\\"deviceId\\\":\\\"%s\\\",\\\"command\\\":\\\"%s\\\"}", device_id, command);
     snprintf(params, sizeof(params), "{\"status\":\"pressrelease\",\"count\":1,\"action\":\"%s\"}", action);
@@ -4412,11 +4524,13 @@ static void page_end(FILE *f) {
         "function btAppend(t){const el=$('btLog');if(!el)return;let p=el.textContent||'';if(/^Ready\\./.test(p))p='';if(p.length>6000)p=p.slice(-5000);el.textContent=(p?p+'\\n':'')+String(t||'');el.scrollTop=el.scrollHeight;}"
         "function btPairStatus(t){const el=$('btPairStatus');if(el)el.textContent=t||'';}"
         "function btMaybeFillAddr(raw){raw=String(raw||'');let m=raw.match(/ACL\\s+([0-9A-F]{2}(?::[0-9A-F]{2}){5})/i)||raw.match(/dev_([0-9A-F]{2}(?:_[0-9A-F]{2}){5})/i);if(m){const addr=m[1].replace(/_/g,':').toUpperCase(),el=$('btAddr');if(el&&!el.value.trim()){el.value=addr;btAppend('target address detected: '+addr);}}}"
-        "function btSummarizeAdapter(raw){raw=String(raw||'');const addr=(raw.match(/BD Address:\\s*([0-9A-F:]{17})/i)||[])[1]||'',name=(raw.match(/Name:\\s*'([^']+)'/i)||[])[1]||'',mode=(raw.match(/UP RUNNING[^\\n]*/)||[])[0]||'',disc=/\"Discoverable\"[\\s\\S]{0,80}boolean true/.test(raw),pair=/\"Pairable\"[\\s\\S]{0,80}boolean true/.test(raw);return [name?('Name: '+name):'',addr?('Address: '+addr):'',mode?('Mode: '+mode.trim()):'',('Discoverable: '+(disc?'yes':'no')),('Pairable: '+(pair?'yes':'no'))].filter(Boolean).join('\\n')+'\\n\\n'+raw;}"
-        "async function btRuntimeStatus(){try{const j=await (await fetch('/api/bt-text-status')).json(),s=$('btRuntimeStatus');const age=j.updated?Math.max(0,Math.round(Date.now()/1000-j.updated)):null;const lines=['Runtime: '+(j.runtime?'running':'missing'),'State: '+(j.state||'unknown'),j.pid?('PID: '+j.pid):'',j.target?('Target: '+j.target):'Target: none',age!==null?('Updated: '+age+'s ago'):'','Sent: '+(j.sent||0)+'  Skipped: '+(j.skipped||0),j.error?('Note: '+j.error):''];if(s)s.textContent=lines.filter(Boolean).join('\\n');btAppend('FIFO runtime '+(j.runtime?j.state:(j.state||'missing')));return j;}catch(e){const s=$('btRuntimeStatus');if(s)s.textContent='Runtime status failed: '+(e.message||e);btAppend('runtime status failed: '+(e.message||e));}}"
-        "async function btPost(action,extra,quiet){const data=Object.assign(btFields(),extra||{},{action:action});if(!quiet)btLog(action+'...');try{const j=await postJson('/api/bt-call',data);if(j.detectedAddress){const el=$('btAddr');if(el&&!el.value.trim())el.value=j.detectedAddress;btAppend('target address detected: '+j.detectedAddress);}if(['pairing_on','pairing_off','adapter_status'].includes(action)){btPairStatus(btSummarizeAdapter(j.responseRaw||''));btMaybeFillAddr(j.responseRaw||'');}if(j.connectionRaw)btMaybeFillAddr(j.connectionRaw);if(!quiet)btLog(JSON.stringify(j,null,2));return j;}catch(e){if(quiet)throw e;btLog(action+' failed: '+(e.message||e));}}"
+        "function btSummarizeAdapter(raw){raw=String(raw||'');const addr=(raw.match(/BD Address:\\s*([0-9A-F:]{17})/i)||[])[1]||'',name=(raw.match(/Name:\\s*'([^']+)'/i)||[])[1]||'',mode=(raw.match(/UP RUNNING[^\\n]*/)||[])[0]||'',acl=(raw.match(/ACL\\s+([0-9A-F:]{17})/i)||[])[1]||'',disc=/\"Discoverable\"[\\s\\S]{0,80}boolean true/.test(raw),pair=/\"Pairable\"[\\s\\S]{0,80}boolean true/.test(raw);return [name?('Name: '+name):'',addr?('Address: '+addr):'',mode?('Mode: '+mode.trim()):'',('Connected target: '+(acl||'none')),('Discoverable: '+(disc?'yes':'no')),('Pairable: '+(pair?'yes':'no'))].filter(Boolean).join('\\n')+'\\n\\n'+raw;}"
+        "let btLiveConnected=false;function btSetConnected(v,address){btLiveConnected=!!v;const s=$('btPairStatus');if(s)s.dataset.connected=btLiveConnected?'true':'false';const b=$('btConnectionBadge');if(b){b.classList.remove('ok','bad','warn');b.classList.add(btLiveConnected?'ok':'bad');b.textContent=btLiveConnected?('Connected'+(address?' · '+address:'')):'Not connected';}}"
+        "async function btRuntimeStatus(){try{const j=await (await fetch('/api/bt-text-status',{cache:'no-store'})).json(),s=$('btRuntimeStatus'),stamp=Number(j.updated||0),now=Math.round(Date.now()/1000),age=stamp>946684800&&stamp<=now+300?Math.max(0,now-stamp):null,live=j.runtime&&j.state==='listening'&&!!j.target;btSetConnected(live,j.target||'');const lines=['Runtime: '+(j.runtime?'running':'missing'),'State: '+(j.state||'unknown'),j.pid?('PID: '+j.pid):'',j.target?('Target: '+j.target):'Target: none',age!==null?('Updated: '+age+'s ago'):(stamp?'Updated: current hub session':''),'Sent: '+(j.sent||0)+'  Skipped: '+(j.skipped||0),j.error?('Note: '+j.error):''];if(s)s.textContent=lines.filter(Boolean).join('\\n');btAppend('FIFO runtime '+(j.runtime?j.state:(j.state||'missing')));return j;}catch(e){btSetConnected(false,'');const s=$('btRuntimeStatus');if(s)s.textContent='Runtime status failed: '+(e.message||e);btAppend('runtime status failed: '+(e.message||e));}}"
+        "async function btPost(action,extra,quiet){const data=Object.assign(btFields(),extra||{},{action:action});if(!quiet)btLog(action+'...');try{const j=await postJson('/api/bt-call',data),target=j.detectedAddress||data.bdaddr||'';if(typeof j.connected==='boolean')btSetConnected(j.connected,j.connected?target:'');if(j.detectedAddress){const el=$('btAddr');if(el&&!el.value.trim())el.value=j.detectedAddress;btAppend('target address detected: '+j.detectedAddress);}if(['pairing_on','pairing_off','adapter_status'].includes(action)){btPairStatus(btSummarizeAdapter(j.responseRaw||''));btMaybeFillAddr(j.responseRaw||'');}else if(action==='status'){btPairStatus((j.connected?('Connected target: '+(target||'detected')):'Connected target: none')+'\\n\\n'+(j.responseRaw||''));}if(j.connectionRaw)btMaybeFillAddr(j.connectionRaw);if(!quiet)btLog(JSON.stringify(j,null,2));return j;}catch(e){btSetConnected(false,'');if(quiet)throw e;btLog(action+' failed: '+(e.message||e));}}"
+        "async function btRefreshStatus(){await btRuntimeStatus();try{return await btPost('status',{},true);}catch(e){btAppend('connection status failed: '+(e.message||e));return null;}}"
         "function btSavedTargetData(){const d=btFields();return{name:d.name||'Bluetooth keyboard target',type:d.type||'btkeyboard',bdaddr:String(d.bdaddr||'').toUpperCase()};}"
-        "const btSaveTargetForm=$('btSaveTargetForm');if(btSaveTargetForm){btSaveTargetForm.addEventListener('submit',e=>{const d=btSavedTargetData();if(!/^[0-9A-F]{2}(:[0-9A-F]{2}){5}$/.test(d.bdaddr)){e.preventDefault();btAppend('save target needs a paired target address. Refresh status after pairing, or enter the address manually.');return;}const n=$('btSaveTargetName'),t=$('btSaveTargetType'),a=$('btSaveTargetAddr');if(n)n.value=d.name;if(t)t.value=d.type;if(a)a.value=d.bdaddr;});}"
+        "const btSaveTargetForm=$('btSaveTargetForm');if(btSaveTargetForm){btSaveTargetForm.addEventListener('submit',e=>{const d=btSavedTargetData();if(!btLiveConnected){e.preventDefault();btAppend('save target blocked: paired is not enough; establish a live connected target first.');return;}if(!/^[0-9A-F]{2}(:[0-9A-F]{2}){5}$/.test(d.bdaddr)){e.preventDefault();btAppend('save target needs the connected target address. Refresh status after pairing.');return;}const n=$('btSaveTargetName'),t=$('btSaveTargetType'),a=$('btSaveTargetAddr');if(n)n.value=d.name;if(t)t.value=d.type;if(a)a.value=d.bdaddr;});}"
         "const btSaveScript=$('btSaveScriptCommand');if(btSaveScript){btSaveScript.addEventListener('click',async()=>{const deviceId=$('btScriptDevice')?.value||'',name=($('btScriptCommandName')?.value||'').trim(),script=$('btScript')?.value||'',delay=String(btDelay());if(!deviceId){btAppend('choose a saved Bluetooth device first');return;}if(!name){btAppend('enter a command name before saving the script');return;}if(!script.trim()){btAppend('paste a keyboard script before saving');return;}try{btAppend('saving Bluetooth command '+name+'...');const res=await postForm('/bt/command',{deviceId:deviceId,name:name,delayMs:delay,script:script});btAppend(plainText(res.text)||'Bluetooth command saved');setTimeout(()=>location.reload(),600);}catch(e){btAppend('save command failed: '+(e.message||e));}});}"
         "function btSleep(ms){return new Promise(r=>setTimeout(r,ms));}"
         "function btDelay(){let v=parseInt($('btScriptDelay')?.value||'35',10);if(!Number.isFinite(v))v=35;v=Math.max(15,Math.min(5000,v));const e=$('btScriptDelay');if(e)e.value=String(v);return v;}"
@@ -4430,7 +4544,7 @@ static void page_end(FILE *f) {
         "let btScriptStop=false,btScriptRunning=false;function btScriptButtons(on){btScriptRunning=on;['btScriptRun','btScriptPreviewBtn'].forEach(id=>{const e=$(id);if(e)e.disabled=on;});}"
         "async function btRunScript(){if(btScriptRunning)return;const r=btPreviewScript(),gap=btDelay(),chunkSize=24,releaseAll='hex:A1010000000000000000';if(!r.steps.length){btAppend('script has no steps');return;}btScriptStop=false;btScriptButtons(true);let sent=0,buf=[];await btRuntimeStatus();async function sendKeyChunk(keys,label){if(!keys.length)return;const input=$('btCode');if(input)input.value=keys.join('\\n');btAppend(label+': '+keys.length+' keys, '+gap+' ms after release');const j=await btPost('reportseq',{code:keys.join('\\n'),gapMs:String(gap)},true);sent+=keys.length;const tail=String(j.responseRaw||'').trim();btAppend('key chunk ok: '+tail.slice(0,180));await btSleep(25);}async function flush(){if(!buf.length)return;const keys=buf.slice();buf=[];await sendKeyChunk(keys,'send key chunk');}async function sendTextFallback(text){let keys=[],skipped=0;for(const ch of Array.from(text)){const c=btCharCode(ch);if(c)keys.push(c);else skipped++;if(keys.length>=chunkSize){await sendKeyChunk(keys,'fallback text chunk');keys=[];}}if(keys.length)await sendKeyChunk(keys,'fallback text chunk');if(skipped)btAppend('fallback skipped '+skipped+' unsupported text chars');}async function sendText(text){await flush();btAppend('send text: '+text.length+' chars through keyboard FIFO');try{const j=await postJson('/api/bt-text',{text:text});sent+=text.length;btAppend('text ok: '+(j.bytes||text.length)+' bytes');await btSleep(gap);}catch(e){btAppend('FIFO text unavailable, using paired HID reports: '+(e.message||e));await sendTextFallback(text);}}btAppend('script start: '+r.steps.length+' steps, '+gap+' ms post-step gap');try{await btPost('report',{code:releaseAll,gapMs:String(gap)},true);for(const step of r.steps){if(btScriptStop){await flush();btAppend('script stopped after '+sent+' units');break;}if(step.kind==='wait'){await flush();btAppend('wait '+step.ms+' ms');await btSleep(step.ms);continue;}if(step.kind==='text'){await sendText(step.text);continue;}buf.push(step.code);if(buf.length>=chunkSize)await flush();}if(!btScriptStop){await flush();btAppend('script complete: '+sent+' units');}}catch(e){btAppend('script failed: '+(e.message||e));}finally{try{await btPost('report',{code:releaseAll,gapMs:String(gap)},true);btAppend('release all sent');}catch(e){}btScriptButtons(false);btRuntimeStatus();}}"
         "async function btSendTextBlock(){const el=$('btTextBlock'),text=el?el.value:'';if(!text){btAppend('text box is empty');return;}const send=$('btTextSend');if(send)send.disabled=true;try{btAppend('sending text block: '+text.length+' chars');const j=await postJson('/api/bt-text',{text:text});btAppend('text block sent: '+(j.bytes||text.length)+' bytes');await btRuntimeStatus();}catch(e){btAppend('text block failed: '+(e.message||e));}finally{if(send)send.disabled=false;}}"
-        "const btPairOn=$('btPairingOn');if(btPairOn)btPairOn.addEventListener('click',()=>btPost('pairing_on'));const btPairOff=$('btPairingOff');if(btPairOff)btPairOff.addEventListener('click',()=>btPost('pairing_off'));const btAdapter=$('btAdapterStatus');if(btAdapter)btAdapter.addEventListener('click',()=>btPost('adapter_status'));const btRuntime=$('btRuntimeRefresh');if(btRuntime)btRuntime.addEventListener('click',btRuntimeStatus);const btClassic=$('btClassicScan');if(btClassic)btClassic.addEventListener('click',()=>btPost('classic_scan'));const btScan=$('btScan');if(btScan)btScan.addEventListener('click',()=>btPost('scan'));const btStatus=$('btStatus');if(btStatus)btStatus.addEventListener('click',()=>btPost('status'));const btConnect=$('btConnect');if(btConnect)btConnect.addEventListener('click',()=>btPost('connect'));const btDisconnect=$('btDisconnect');if(btDisconnect)btDisconnect.addEventListener('click',()=>btPost('disconnect'));const btRelease=$('btReleaseAll');if(btRelease)btRelease.addEventListener('click',()=>btPost('report',{code:'hex:A1010000000000000000',gapMs:String(btDelay())}));const btEnter=$('btEnterTest');if(btEnter)btEnter.addEventListener('click',()=>sendBtKey('enter'));const btPrev=$('btScriptPreviewBtn');if(btPrev)btPrev.addEventListener('click',btPreviewScript);const btRun=$('btScriptRun');if(btRun)btRun.addEventListener('click',btRunScript);const btStop=$('btScriptStop');if(btStop)btStop.addEventListener('click',()=>{btScriptStop=true;btAppend('stop requested');});"
+        "const btPairOn=$('btPairingOn');if(btPairOn)btPairOn.addEventListener('click',()=>btPost('pairing_on'));const btPairOff=$('btPairingOff');if(btPairOff)btPairOff.addEventListener('click',()=>btPost('pairing_off'));const btAdapter=$('btAdapterStatus');if(btAdapter)btAdapter.addEventListener('click',async()=>{await btPost('adapter_status');await btRuntimeStatus();});const btRuntime=$('btRuntimeRefresh');if(btRuntime)btRuntime.addEventListener('click',btRefreshStatus);const btClassic=$('btClassicScan');if(btClassic)btClassic.addEventListener('click',()=>btPost('classic_scan'));const btScan=$('btScan');if(btScan)btScan.addEventListener('click',()=>btPost('scan'));const btStatus=$('btStatus');if(btStatus)btStatus.addEventListener('click',btRefreshStatus);const btConnect=$('btConnect');if(btConnect)btConnect.addEventListener('click',()=>btPost('connect'));const btDisconnect=$('btDisconnect');if(btDisconnect)btDisconnect.addEventListener('click',()=>btPost('disconnect'));const btRelease=$('btReleaseAll');if(btRelease)btRelease.addEventListener('click',()=>btPost('report',{code:'hex:A1010000000000000000',gapMs:String(btDelay())}));const btEnter=$('btEnterTest');if(btEnter)btEnter.addEventListener('click',()=>sendBtKey('enter'));const btPrev=$('btScriptPreviewBtn');if(btPrev)btPrev.addEventListener('click',btPreviewScript);const btRun=$('btScriptRun');if(btRun)btRun.addEventListener('click',btRunScript);const btStop=$('btScriptStop');if(btStop)btStop.addEventListener('click',()=>{btScriptStop=true;btAppend('stop requested');});"
         "const btTextSend=$('btTextSend');if(btTextSend)btTextSend.addEventListener('click',btSendTextBlock);const btTextClear=$('btTextClear');if(btTextClear)btTextClear.addEventListener('click',()=>{const el=$('btTextBlock');if(el)el.value='';});"
         "const KB_MODS={lctrl:'ctrl',rctrl:'ctrl',lshift:'shift',rshift:'shift',lalt:'alt',ralt:'alt',lwin:'win',rwin:'win'};"
         "const kbMods={ctrl:false,shift:false,alt:false,win:false};"
@@ -4447,7 +4561,7 @@ static void page_end(FILE *f) {
         "function domKeyToCode(e){const k=e.key;if(['Control','Shift','Alt','Meta','OS','Dead'].includes(k))return '';let base='';if(k.length===1&&/^[a-z]$/i.test(k))base=k.toLowerCase();else if(k.length===1&&/^[0-9]$/.test(k))base='number'+k;else if(k.charCodeAt(0)===39)base='apostrophe';else if(k.charCodeAt(0)===92)base='backslash';else if(k.charCodeAt(0)===34)base='apostrophe';else if(keyNameMap[k])base=keyNameMap[k];else if(shiftSym[k])base=shiftSym[k];else if(/^F([1-9]|1[0-2])$/.test(k))base=k.toLowerCase();if(!base)return '';let mods='';if(e.ctrlKey)mods+='ctrl';if(e.shiftKey&&!shiftSym[k]&&!/^[A-Z]$/.test(k))mods+='shift';if(e.altKey)mods+='alt';if(e.metaKey)mods+='win';if(/^[A-Z]$/.test(k))mods+='shift';return mods+base;}"
         "let btFwdActive=false;const btFwdToggle=$('btFwdToggle');if(btFwdToggle){btFwdToggle.addEventListener('click',()=>{btFwdActive=!btFwdActive;btFwdToggle.textContent=btFwdActive?'⌨ Stop forwarding':'⌨ Forward my keyboard';btFwdToggle.classList.toggle('danger',btFwdActive);btFwdToggle.classList.toggle('secondary',!btFwdActive);btAppend(btFwdActive?'keyboard forwarding on':'keyboard forwarding off');});}"
         "document.addEventListener('keydown',e=>{if(!btFwdActive)return;if(e.repeat)return;const code=domKeyToCode(e);if(!code)return;e.preventDefault();const btn=document.querySelector('[data-kb=\"'+code.replace(/^(ctrl|shift|alt|win)+/,'')+'\"]');if(btn){btn.classList.add('kb-on');setTimeout(()=>btn.classList.remove('kb-on'),120);}if(!e.ctrlKey&&!e.altKey&&!e.metaKey&&e.key&&e.key.length===1){postJson('/api/bt-text',{text:e.key}).catch(err=>btPost('report',{code:code,gapMs:'60'},true).catch(()=>btAppend('fwd: '+(err.message||err))));return;}btPost('report',{code:code,gapMs:'60'},true).catch(e=>btAppend('fwd: '+(e.message||e)));});"
-        "btRuntimeStatus();"
+        "btRefreshStatus();"
         "const LAB_AUTO_DEVICE='__auto_lab__';const lab={queue:[],index:[],cursor:0,key:'',running:false,stop:false,imported:false,runId:'',streaming:false,seenCodes:new Set(),dupes:0};"
         "function labStatus(t){const s=$('labStatus');if(s)s.textContent=t||'';}function labSleep(ms){return new Promise(r=>setTimeout(r,ms));}"
         "function labNum(id,def,min,max){let v=parseInt($(id)?.value||def,10);if(!Number.isFinite(v))v=def;v=Math.max(min,Math.min(max,v));const e=$(id);if(e)e.value=String(v);return v;}"
@@ -5356,6 +5470,7 @@ static int upsert_bt_device(const char *device_id, const char *name, const char 
         return -1;
     }
     save_bthid_target(type, bdaddr);
+    save_bthid_profile(type);
     snprintf(msg, msglen, "Saved Bluetooth device %s.", name);
     return 0;
 }
@@ -5506,11 +5621,11 @@ struct bt_quick_key {
 };
 
 static const char *bt_type_label(const char *type) {
-    if (strcmp(type, "btkeyboard-nexus") == 0) return "Nexus keyboard";
+    if (strcmp(type, "btkeyboard-nexus") == 0) return "Nexus Player keyboard";
     if (strcmp(type, "fire") == 0) return "Fire TV / media keys";
     if (strcmp(type, "ps3") == 0) return "PlayStation 3";
     if (strcmp(type, "wii") == 0) return "Nintendo Wii";
-    return "Standard keyboard";
+    return "Standard keyboard (Android TV / SHIELD)";
 }
 
 static void bt_type_options(FILE *f, const char *selected) {
@@ -5630,11 +5745,11 @@ static void bluetooth_panel(FILE *f) {
     };
     size_t i;
     load_bt_inventory(&btinv);
-    fprintf(f, "<section id='view-bluetooth' data-view='bluetooth' class='section'><div class='section-head'><div><h2>Bluetooth keyboard</h2><div class='section-lead'>Make the hub appear as a Bluetooth keyboard, pair it from the device you want to control, then send keys or scripts.</div></div><span class='pill'>Keyboard mode</span></div>");
+    fprintf(f, "<section id='view-bluetooth' data-view='bluetooth' class='section'><div class='section-head'><div><h2>Bluetooth keyboard</h2><div class='section-lead'>Make the hub appear as a Bluetooth keyboard, pair it from the device you want to control, then send keys or scripts.</div></div><span id='btConnectionBadge' class='pill warn'>Checking connection…</span></div>");
     fprintf(f, "<div class='bt-layout'><div class='panel'><h3>Pair a device</h3><div class='guide-steps'><div class='guide-step'><b>1</b><div><strong>Start pairing mode here.</strong><div class='muted mini'>The hub becomes visible as the name below.</div></div></div><div class='guide-step'><b>2</b><div><strong>Pair from the target device.</strong><div class='muted mini'>Open Bluetooth settings on the TV, computer, console, or media box and choose the hub.</div></div></div><div class='guide-step'><b>3</b><div><strong>Refresh status, then send keys.</strong><div class='muted mini'>The status box should show a connected target before scripts run.</div></div></div></div>");
-    fprintf(f, "<div class='row'><div><label>Name shown during pairing</label><input id='btName' value='Harmony Keyboard' maxlength='48'></div><div><label>Keyboard type</label><select id='btType'><option value='btkeyboard' selected>Standard keyboard</option><option value='btkeyboard-nexus'>Nexus keyboard</option><option value='fire'>Fire TV / media keys</option><option value='ps3'>PlayStation 3</option><option value='wii'>Nintendo Wii</option></select></div></div>");
+    fprintf(f, "<div class='row'><div><label>Name shown during pairing</label><input id='btName' value='Harmony Keyboard' maxlength='48'></div><div><label>Keyboard type</label><select id='btType'><option value='btkeyboard' selected>Standard keyboard (Android TV / SHIELD)</option><option value='btkeyboard-nexus'>Nexus Player only</option><option value='fire'>Fire TV / media keys</option><option value='ps3'>PlayStation 3</option><option value='wii'>Nintendo Wii</option></select></div></div>");
     fprintf(f, "<div class='actions'><button id='btPairingOn' type='button'>Start pairing mode</button><button id='btAdapterStatus' type='button' class='secondary'>Refresh status</button><button id='btPairingOff' type='button' class='danger'>Stop pairing mode</button></div>");
-    fprintf(f, "<div class='help'>After pairing, Refresh status usually finds the connected device automatically. The status box also shows technical details for troubleshooting.</div><pre id='btPairStatus' class='mini' style='margin-top:12px'>Pairing status has not been refreshed yet.</pre>");
+    fprintf(f, "<div class='help'><strong>Google TV, Android TV, and NVIDIA SHIELD:</strong> use Standard keyboard. Nexus is only for the original Nexus Player. Start pairing initializes the local HID profile and keeps the hub discoverable for ten minutes; wait for its success response before selecting the keyboard. If the target was paired with the wrong type, forget the keyboard on both devices before pairing it again. Paired does not mean connected; the live status must show an authenticated encrypted link before keys can be sent.</div><pre id='btPairStatus' class='mini' style='margin-top:12px'>Checking live Bluetooth connection…</pre>");
     fprintf(f, "<details class='lab-advanced'><summary>Manual connection tools</summary><div class='row'><div><label>Bluetooth address</label><input id='btAddr' placeholder='AA:BB:CC:DD:EE:FF'></div><div><label>PIN if requested</label><input id='btPin' inputmode='numeric' placeholder='Optional legacy PIN'></div></div><div class='row'><div><label>Search time (seconds)</label><input id='btTimeout' inputmode='numeric' value='8'></div><div></div></div><div class='actions'><button id='btClassicScan' type='button' class='secondary'>Find classic devices</button><button id='btScan' type='button' class='secondary'>Find BLE devices</button><button id='btStatus' type='button' class='secondary'>Check connection</button><button id='btConnect' type='button' class='secondary'>Connect</button><button id='btDisconnect' type='button' class='danger'>Disconnect</button></div></details>");
     fprintf(f, "<form id='btSaveTargetForm' method='post' action='/bt/device#bluetooth'><input id='btSaveTargetName' type='hidden' name='name'><input id='btSaveTargetType' type='hidden' name='type'><input id='btSaveTargetAddr' type='hidden' name='bdaddr'><div class='actions'><button type='submit' class='secondary'>Save paired target</button></div><div class='help'>Saves the connected Bluetooth target so scripts can be stored as reusable commands.</div></form></div>");
     fprintf(f, "<div class='panel'><h3>Keyboard</h3><div class='help'>Click keys or enable forwarding to type from your physical keyboard. Shift / Ctrl / Alt / Win are sticky — click one then click the target key.</div>");
@@ -6431,7 +6546,7 @@ static int extract_bt_addr_from_text(const char *text, char *out, size_t outlen)
             char candidate[18];
             for (i = 0; i < 17 && p[i]; i++) candidate[i] = (char)toupper((unsigned char)p[i]);
             candidate[17] = 0;
-            if (safe_bt_addr(candidate)) {
+            if (safe_bt_addr(candidate) && strcmp(candidate, "00:00:00:00:00:00") != 0) {
                 snprintf(out, outlen, "%s", candidate);
                 return 1;
             }
@@ -6453,6 +6568,144 @@ static int detect_connected_bt_addr(char *out, size_t outlen, char *raw, size_t 
     return extract_bt_addr_from_text(reply, out, outlen);
 }
 
+static int bt_text_has_addr(const char *text, const char *wanted) {
+    const char *p = text;
+    if (!text || !safe_bt_addr(wanted)) return 0;
+    while (*p) {
+        if (isxdigit((unsigned char)p[0]) && isxdigit((unsigned char)p[1]) &&
+            p[2] == ':' && isxdigit((unsigned char)p[3]) && isxdigit((unsigned char)p[4])) {
+            char candidate[18];
+            int i;
+            for (i = 0; i < 17 && p[i]; i++) candidate[i] = (char)toupper((unsigned char)p[i]);
+            candidate[17] = 0;
+            if (safe_bt_addr(candidate) && strcasecmp(candidate, wanted) == 0) return 1;
+        }
+        p++;
+    }
+    return 0;
+}
+
+static int bt_connection_active(const char *wanted, char *raw, size_t rawlen) {
+    char reply[2048], detected[32];
+    reply[0] = 0;
+    run_cmd("hcitool con 2>&1", reply, sizeof(reply));
+    if (raw && rawlen) snprintf(raw, rawlen, "%s", reply);
+    if (wanted && safe_bt_addr(wanted) && strcmp(wanted, "00:00:00:00:00:00") != 0) {
+        return bt_text_has_addr(reply, wanted);
+    }
+    return extract_bt_addr_from_text(reply, detected, sizeof(detected));
+}
+
+static int bt_connection_authenticated(const char *wanted, char *raw, size_t rawlen) {
+    char reply[2048];
+    const char *line;
+
+    if (!wanted || !safe_bt_addr(wanted) ||
+        strcmp(wanted, "00:00:00:00:00:00") == 0) {
+        return 0;
+    }
+    reply[0] = 0;
+    run_cmd("hcitool con 2>&1", reply, sizeof(reply));
+    if (raw && rawlen) snprintf(raw, rawlen, "%s", reply);
+    line = reply;
+    while (*line) {
+        const char *end = strchr(line, '\n');
+        char sample[512];
+        size_t length = end ? (size_t)(end - line) : strlen(line);
+        if (length >= sizeof(sample)) length = sizeof(sample) - 1;
+        memcpy(sample, line, length);
+        sample[length] = 0;
+        if (bt_text_has_addr(sample, wanted) &&
+            strstr(sample, "AUTH") && strstr(sample, "ENCRYPT")) {
+            return 1;
+        }
+        if (!end) break;
+        line = end + 1;
+    }
+    return 0;
+}
+
+static int wait_for_bt_connection(const char *bdaddr, int timeout_seconds, char *raw, size_t rawlen) {
+    int elapsed_ms = 0, stable_samples = 0;
+    char sample[2048];
+    if (timeout_seconds < 1) timeout_seconds = 1;
+    if (timeout_seconds > 30) timeout_seconds = 30;
+    while (elapsed_ms <= timeout_seconds * 1000) {
+        int active = bt_connection_authenticated(bdaddr, sample, sizeof(sample));
+        if (raw && rawlen) snprintf(raw, rawlen, "%s", sample);
+        if (active) {
+            stable_samples++;
+            if (stable_samples >= 5) return 1;
+        } else {
+            stable_samples = 0;
+        }
+        usleep(250000);
+        elapsed_ms += 250;
+    }
+    return 0;
+}
+
+static void ensure_bt_hid_control_runtime(void) {
+    char reply[512];
+    run_cmd(
+        "if [ -x " BT_PAIR_AGENT_BIN " ]; then "
+        "running=0; pid=$(cat " BT_HID_CONTROL_PID " 2>/dev/null); "
+        "if [ -n \"$pid\" ] && kill -0 \"$pid\" 2>/dev/null; then "
+        "if tr '\\000' ' ' < /proc/$pid/cmdline 2>/dev/null | "
+        "grep 'hid-control-daemon' >/dev/null 2>&1; then running=1; fi; "
+        "fi; "
+        "if [ \"$running\" != 1 ]; then "
+        "rm -f " BT_HID_CONTROL_PID "; "
+        BT_PAIR_AGENT_BIN " btkeyboard 600 --hid-control-daemon </dev/null "
+        "> /cache/codex-bt-hid-control.log 2>&1 & "
+        "echo $! > " BT_HID_CONTROL_PID "; "
+        "fi; "
+        "fi",
+        reply, sizeof(reply));
+}
+
+static int load_bt_link_key(const char *bdaddr) {
+    char cmd[256], reply[512];
+    if (!safe_bt_addr(bdaddr) ||
+        strcmp(bdaddr, "00:00:00:00:00:00") == 0) {
+        return -1;
+    }
+    snprintf(cmd, sizeof(cmd),
+        "hciconfig hci0 putkey '%s' 2>&1", bdaddr);
+    return run_cmd(cmd, reply, sizeof(reply));
+}
+
+static int start_bt_pair_agent(const char *type, char *reply, size_t replylen) {
+    char cmd[1024];
+    if (!bt_type_allowed(type) ||
+        access(BT_PAIR_AGENT_BIN, X_OK) != 0) {
+        if (reply && replylen) {
+            snprintf(reply, replylen,
+                "local Bluetooth pairing helper is not installed");
+        }
+        return -1;
+    }
+    snprintf(cmd, sizeof(cmd),
+        "oldpid=$(cat " BT_PAIR_AGENT_PID " 2>/dev/null); "
+        "if [ -n \"$oldpid\" ]; then kill \"$oldpid\" 2>/dev/null; fi; "
+        "rm -f " BT_PAIR_AGENT_PID "; "
+        BT_PAIR_AGENT_BIN " '%s' 600 </dev/null "
+        ">> /cache/codex-bt-pair-agent.log 2>&1 & "
+        "newpid=$!; echo $newpid > " BT_PAIR_AGENT_PID "; "
+        "sleep 1; kill -0 \"$newpid\" 2>/dev/null",
+        type);
+    return run_cmd(cmd, reply, replylen);
+}
+
+static void stop_bt_pair_agent(void) {
+    char reply[256];
+    run_cmd(
+        "oldpid=$(cat " BT_PAIR_AGENT_PID " 2>/dev/null); "
+        "if [ -n \"$oldpid\" ]; then kill \"$oldpid\" 2>/dev/null; fi; "
+        "rm -f " BT_PAIR_AGENT_PID,
+        reply, sizeof(reply));
+}
+
 static int bt_type_allowed(const char *type) {
     return strcmp(type, "fire") == 0 ||
         strcmp(type, "btkeyboard") == 0 ||
@@ -6461,12 +6714,46 @@ static int bt_type_allowed(const char *type) {
         strcmp(type, "wii") == 0;
 }
 
+static void read_bthid_profile(char *type, size_t typelen) {
+    char raw[128], *value;
+    if (!type || typelen == 0) return;
+    snprintf(type, typelen, "btkeyboard");
+    if (read_text(BT_PROFILE_FILE, raw, sizeof(raw)) <= 0) return;
+    chomp(raw);
+    value = strncmp(raw, "type=", 5) == 0 ? raw + 5 : raw;
+    chomp(value);
+    if (bt_type_allowed(value)) snprintf(type, typelen, "%s", value);
+}
+
 static void save_bthid_target(const char *type, const char *bdaddr) {
     char buf[128];
     if (!bt_type_allowed(type) || !safe_bt_addr(bdaddr) || strcmp(bdaddr, "00:00:00:00:00:00") == 0) return;
     snprintf(buf, sizeof(buf), "type=%s\nbdaddr=%s\n", type, bdaddr);
     write_file_atomic(BT_TARGET_FILE, buf, strlen(buf));
     chmod(BT_TARGET_FILE, 0644);
+}
+
+static void save_bthid_profile(const char *type) {
+    char buf[80];
+    if (!bt_type_allowed(type)) return;
+    snprintf(buf, sizeof(buf), "type=%s\n", type);
+    if (write_file_atomic(BT_PROFILE_FILE, buf, strlen(buf)) == 0) chmod(BT_PROFILE_FILE, 0644);
+}
+
+static int bt_native_code(const char *reply) {
+    return json_int(reply, "code", -1);
+}
+
+static int bt_native_reply_ok(const char *reply) {
+    return bt_native_code(reply) == 200;
+}
+
+static void append_reply_note(char *reply, size_t replylen, const char *note) {
+    size_t used;
+    if (!reply || !replylen || !note || !note[0]) return;
+    used = strlen(reply);
+    if (used && used + 1 < replylen) reply[used++] = '\n';
+    if (used < replylen) snprintf(reply + used, replylen - used, "%s", note);
 }
 
 static int run_hal_json(const char *cmd_name, const char *params_json, int timeout, char *out, size_t outlen) {
@@ -6704,6 +6991,7 @@ static void write_bthid_missing_status(FILE *f, const char *state, const char *m
 static int write_bt_text_fifo(const char *text, char *err, size_t errlen) {
     int fd, idle_waits = 0, max_idle_waits;
     size_t len, off = 0;
+    char status[1024], state[48], target[64];
     if (!text || !text[0]) {
         snprintf(err, errlen, "missing Bluetooth text");
         return -1;
@@ -6711,6 +6999,21 @@ static int write_bt_text_fifo(const char *text, char *err, size_t errlen) {
     len = strlen(text);
     if (len > MAX_BT_SEQUENCE_BODY) {
         snprintf(err, errlen, "Bluetooth text is too large");
+        return -1;
+    }
+    status[0] = 0;
+    state[0] = 0;
+    target[0] = 0;
+    if (read_text(BT_TEXT_STATUS, status, sizeof(status)) <= 0 ||
+        !bthid_status_runtime_alive(status)) {
+        snprintf(err, errlen, "Bluetooth text runtime is not running");
+        return -1;
+    }
+    json_string(status, "state", state, sizeof(state));
+    json_string(status, "target", target, sizeof(target));
+    if (strcmp(state, "listening") != 0 || !safe_bt_addr(target) ||
+        !bt_connection_authenticated(target, NULL, 0)) {
+        snprintf(err, errlen, "no live Bluetooth HID connection; reconnect the paired target first");
         return -1;
     }
     fd = open(BT_TEXT_FIFO, O_WRONLY | O_NONBLOCK);
@@ -6787,8 +7090,9 @@ static int flush_bt_saved_sequence(const char *type, const char *bdaddr, char **
     free(ja);
     reply[0] = 0;
     rc = run_hal_json_binary_sequence("bthid.report", params, *seq, 8, gap_ms, reply, sizeof(reply));
-    if (rc != 0) {
-        snprintf(note, sizeof(note), "key sequence failed after %d keys: %s", total_keys ? *total_keys : 0, reply[0] ? reply : "no response");
+    if (rc != 0 || !bt_native_reply_ok(reply)) {
+        snprintf(note, sizeof(note), "key sequence rejected after %d keys (native code %d): %s",
+            total_keys ? *total_keys : 0, bt_native_code(reply), reply[0] ? reply : "no response");
         append_run_status(out, outlen, note);
         free(*seq);
         *seq = NULL;
@@ -6825,6 +7129,11 @@ static int run_bt_saved_script(const char *type, const char *bdaddr, const char 
     }
     if (gap_ms < 15) gap_ms = 35;
     if (gap_ms > 5000) gap_ms = 5000;
+    if (!bt_connection_authenticated(bdaddr, NULL, 0)) {
+        snprintf(out, outlen, "saved Bluetooth target has no authenticated encrypted connection");
+        return -1;
+    }
+    save_bthid_profile(type);
     save_bthid_target(type, bdaddr);
     script_len = strlen(script);
     copy = (char *)malloc(script_len + 1);
@@ -7390,6 +7699,8 @@ static void render_update_apply_json(int fd, const struct request *req) {
             setsid();
             execl("/bin/sh", "sh", "-c",
                   "sleep 3; "
+                  "killall codex_bt_pair_agent 2>/dev/null; "
+                  "rm -f " BT_HID_CONTROL_PID " " BT_PAIR_AGENT_PID "; "
                   "killall codex_bthid_keyboard 2>/dev/null; "
                   "/data/codex/bin/codex_bthid_keyboard >> /cache/codex-bthid-keyboard.log 2>&1 & "
                   "killall codex_webui 2>/dev/null; "
@@ -7402,10 +7713,11 @@ static void render_update_apply_json(int fd, const struct request *req) {
 
 static void render_bluetooth_call_json(int fd, const struct request *req) {
     char action[32], type[40], bdaddr[32], pin[24], code[MAX_BT_SEQUENCE_BODY], name[64], timeout_text[24], gap_text[24];
-    char params[768], reply[8192], cmd[2048], esc_name[128], *jt = NULL, *ja = NULL, *jp = NULL, *jc = NULL;
-    char detected_addr[32], connection_raw[2048];
+    char params[768], reply[8192], profile_reply[2048], pair_agent_reply[2048], error[256], cmd[2048], esc_name[128], *jt = NULL, *ja = NULL, *jp = NULL;
+    char detected_addr[32], connection_raw[2048], profile_probe_raw[2048];
     const char *cmd_name = NULL;
     int timeout, call_timeout, gap_ms, auto_detected_addr = 0, command_rc = 0;
+    int connected = 0, native_code = -1, profile_settle_ms = 0;
     FILE *f;
 
     form_value(req->body, "action", action, sizeof(action));
@@ -7422,7 +7734,7 @@ static void render_bluetooth_call_json(int fd, const struct request *req) {
     chomp(pin);
     chomp(code);
     chomp(name);
-    if (!type[0]) strcpy(type, "fire");
+    if (!type[0]) strcpy(type, "btkeyboard");
     if (!name[0]) strcpy(name, "Harmony Keyboard");
     timeout = atoi(timeout_text);
     if (timeout < 1) timeout = 2;
@@ -7431,34 +7743,98 @@ static void render_bluetooth_call_json(int fd, const struct request *req) {
     if (gap_ms < 15) gap_ms = 35;
     if (gap_ms > 5000) gap_ms = 5000;
     params[0] = 0;
+    error[0] = 0;
     detected_addr[0] = 0;
     connection_raw[0] = 0;
+    profile_probe_raw[0] = 0;
 
     if (strcmp(action, "adapter_status") == 0) {
         reply[0] = 0;
         run_cmd("echo '--- adapter ---'; hciconfig hci0 -a 2>&1; echo; echo '--- connections ---'; hcitool con 2>&1; echo; echo '--- bluez ---'; adapter=$(dbus-send --system --print-reply --dest=org.bluez / org.bluez.Manager.DefaultAdapter 2>/dev/null | sed -n 's/.*object path \"\\(.*\\)\".*/\\1/p'); if [ -n \"$adapter\" ]; then dbus-send --system --print-reply --dest=org.bluez \"$adapter\" org.bluez.Adapter.GetProperties 2>&1; else echo 'BlueZ adapter not found'; fi", reply, sizeof(reply));
+        connected = detect_connected_bt_addr(detected_addr, sizeof(detected_addr),
+            connection_raw, sizeof(connection_raw));
+        if (connected) {
+            connected = bt_connection_authenticated(detected_addr,
+                connection_raw, sizeof(connection_raw));
+        }
         f = send_json_start(fd, "200 OK");
         if (!f) return;
         fputs("{\"ok\":true,\"action\":", f); json_write_string(f, action);
-        fputs(",\"cmd\":\"adapter_status\",\"params\":\"\",\"responseRaw\":", f);
+        fputs(",\"cmd\":\"adapter_status\",\"params\":\"\",\"connected\":", f);
+        fputs(connected ? "true" : "false", f);
+        if (connected) {
+            fputs(",\"detectedAddress\":", f);
+            json_write_string(f, detected_addr);
+        }
+        fputs(",\"responseRaw\":", f);
         json_write_string(f, reply[0] ? reply : "no response");
         fputs("}\n", f);
         fclose(f);
         return;
     } else if (strcmp(action, "pairing_on") == 0) {
-        if (!safe_bt_name(name)) {
+        if (!safe_bt_name(name) || !bt_type_allowed(type)) {
             f = send_json_start(fd, "400 Bad Request");
             if (!f) return;
-            fputs("{\"ok\":false,\"error\":\"invalid Bluetooth display name\"}\n", f);
+            fputs("{\"ok\":false,\"error\":\"invalid Bluetooth display name or keyboard type\"}\n", f);
             fclose(f);
             return;
         }
         shell_escape_single(name, esc_name, sizeof(esc_name));
         snprintf(cmd, sizeof(cmd),
-            "echo '--- enabling keyboard pairing mode ---'; "
+            "echo '--- preparing keyboard adapter ---'; "
+            "adapter=$(dbus-send --system --print-reply --dest=org.bluez / org.bluez.Manager.DefaultAdapter 2>/dev/null | sed -n 's/.*object path \"\\(.*\\)\".*/\\1/p'); "
+            "if [ -n \"$adapter\" ]; then "
+            "dbus-send --system --dest=org.bluez \"$adapter\" org.bluez.Adapter.SetProperty string:Discoverable variant:boolean:false 2>&1; "
+            "fi; "
             "hciconfig hci0 up 2>&1; "
             "hciconfig hci0 name '%s' 2>&1; "
             "hciconfig hci0 class 0x002540 2>&1; "
+            "hciconfig hci0 pscan 2>&1",
+            esc_name);
+        reply[0] = 0;
+        command_rc = run_cmd(cmd, reply, sizeof(reply));
+        ensure_bt_hid_control_runtime();
+        snprintf(params, sizeof(params), "{\"type\":\"%s\"}", type);
+        profile_reply[0] = 0;
+        if (command_rc == 0) {
+            command_rc = run_hal_json("bthid.connect", params, 4, profile_reply, sizeof(profile_reply));
+        }
+        native_code = bt_native_code(profile_reply);
+        if (command_rc != 0 || native_code != 200) {
+            f = send_json_start(fd, "502 Bad Gateway");
+            if (!f) return;
+            fputs("{\"ok\":false,\"error\":\"Harmony could not register the selected Bluetooth HID profile before pairing\",\"profile\":", f);
+            json_write_string(f, type);
+            fputs(",\"nativeCode\":", f); fprintf(f, "%d", native_code);
+            fputs(",\"responseRaw\":", f); json_write_string(f, profile_reply[0] ? profile_reply : reply);
+            fputs("}\n", f);
+            fclose(f);
+            return;
+        }
+        pair_agent_reply[0] = 0;
+        if (start_bt_pair_agent(type, pair_agent_reply,
+                sizeof(pair_agent_reply)) != 0) {
+            run_cmd("hciconfig hci0 pscan 2>&1", reply, sizeof(reply));
+            f = send_json_start(fd, "502 Bad Gateway");
+            if (!f) return;
+            fputs("{\"ok\":false,\"error\":\"Local Bluetooth pairing helper could not start\",\"profile\":", f);
+            json_write_string(f, type);
+            fputs(",\"nativeCode\":", f); fprintf(f, "%d", native_code);
+            fputs(",\"profileResponse\":", f); json_write_string(f, profile_reply);
+            fputs(",\"responseRaw\":", f);
+            json_write_string(f, pair_agent_reply[0] ? pair_agent_reply : "pairing helper exited during startup");
+            fputs("}\n", f);
+            fclose(f);
+            return;
+        }
+        usleep(750000);
+        profile_settle_ms = 1750;
+        profile_probe_raw[0] = 0;
+        run_cmd("hcitool con 2>&1", profile_probe_raw, sizeof(profile_probe_raw));
+        save_bthid_profile(type);
+        snprintf(cmd, sizeof(cmd),
+            "echo '--- enabling keyboard pairing mode ---'; "
+            "hciconfig hci0 name '%s' 2>&1; "
             "adapter=$(dbus-send --system --print-reply --dest=org.bluez / org.bluez.Manager.DefaultAdapter 2>/dev/null | sed -n 's/.*object path \"\\(.*\\)\".*/\\1/p'); "
             "if [ -n \"$adapter\" ]; then "
             "dbus-send --system --dest=org.bluez \"$adapter\" org.bluez.Adapter.SetProperty string:Pairable variant:boolean:true 2>&1; "
@@ -7469,16 +7845,38 @@ static void render_bluetooth_call_json(int fd, const struct request *req) {
             "echo; echo '--- bluez ---'; if [ -n \"$adapter\" ]; then dbus-send --system --print-reply --dest=org.bluez \"$adapter\" org.bluez.Adapter.GetProperties 2>&1; fi",
             esc_name);
         reply[0] = 0;
-        run_cmd(cmd, reply, sizeof(reply));
+        command_rc = run_cmd(cmd, reply, sizeof(reply));
+        if (command_rc != 0) {
+            stop_bt_pair_agent();
+            run_cmd("hciconfig hci0 pscan 2>&1", profile_probe_raw,
+                sizeof(profile_probe_raw));
+            f = send_json_start(fd, "502 Bad Gateway");
+            if (!f) return;
+            fputs("{\"ok\":false,\"error\":\"Bluetooth adapter could not enter pairing mode\",\"responseRaw\":", f);
+            json_write_string(f, reply[0] ? reply : "no response");
+            fputs("}\n", f);
+            fclose(f);
+            return;
+        }
         f = send_json_start(fd, "200 OK");
         if (!f) return;
         fputs("{\"ok\":true,\"action\":", f); json_write_string(f, action);
         fputs(",\"cmd\":\"pairing_on\",\"params\":", f); json_write_string(f, name);
+        fputs(",\"profile\":", f); json_write_string(f, type);
+        fputs(",\"profileRegistered\":true,\"profileSettled\":true,\"profileSettleMs\":", f);
+        fprintf(f, "%d", profile_settle_ms);
+        fputs(",\"pairAgent\":true,\"connected\":false,\"profileResponse\":", f);
+        json_write_string(f, profile_reply);
+        fputs(",\"pairAgentResponse\":", f);
+        json_write_string(f, pair_agent_reply[0] ? pair_agent_reply : "local pairing helper running");
+        fputs(",\"profileProbeRaw\":", f);
+        json_write_string(f, profile_probe_raw[0] ? profile_probe_raw : "Connections:\n");
         fputs(",\"responseRaw\":", f); json_write_string(f, reply[0] ? reply : "no response");
         fputs("}\n", f);
         fclose(f);
         return;
     } else if (strcmp(action, "pairing_off") == 0) {
+        stop_bt_pair_agent();
         reply[0] = 0;
         run_cmd("echo '--- disabling discoverable mode ---'; adapter=$(dbus-send --system --print-reply --dest=org.bluez / org.bluez.Manager.DefaultAdapter 2>/dev/null | sed -n 's/.*object path \"\\(.*\\)\".*/\\1/p'); if [ -n \"$adapter\" ]; then dbus-send --system --dest=org.bluez \"$adapter\" org.bluez.Adapter.SetProperty string:Discoverable variant:boolean:false 2>&1; fi; hciconfig hci0 pscan 2>&1; echo; echo '--- adapter ---'; hciconfig hci0 -a 2>&1; echo; echo '--- bluez ---'; if [ -n \"$adapter\" ]; then dbus-send --system --print-reply --dest=org.bluez \"$adapter\" org.bluez.Adapter.GetProperties 2>&1; fi", reply, sizeof(reply));
         f = send_json_start(fd, "200 OK");
@@ -7512,12 +7910,44 @@ static void render_bluetooth_call_json(int fd, const struct request *req) {
             fclose(f);
             return;
         }
-        if (!bdaddr[0] && (strcmp(action, "report") == 0 || strcmp(action, "reportseq") == 0 || strcmp(action, "status") == 0 || strcmp(action, "disconnect") == 0)) {
+        if (strcmp(action, "status") == 0) {
+            if (bdaddr[0] && !safe_bt_addr(bdaddr)) {
+                f = send_json_start(fd, "400 Bad Request");
+                if (!f) return;
+                fputs("{\"ok\":false,\"error\":\"invalid Bluetooth address\"}\n", f);
+                fclose(f);
+                return;
+            }
+            if (bdaddr[0]) {
+                connected = bt_connection_authenticated(bdaddr,
+                    connection_raw, sizeof(connection_raw));
+            } else {
+                int detected = detect_connected_bt_addr(
+                    detected_addr, sizeof(detected_addr), connection_raw, sizeof(connection_raw));
+                connected = detected && bt_connection_authenticated(detected_addr,
+                    connection_raw, sizeof(connection_raw));
+                if (detected) {
+                    copy_text(bdaddr, sizeof(bdaddr), detected_addr);
+                    auto_detected_addr = 1;
+                }
+            }
+            f = send_json_start(fd, "200 OK");
+            if (!f) return;
+            fputs("{\"ok\":true,\"action\":\"status\",\"cmd\":\"hcitool con\",\"connected\":", f);
+            fputs(connected ? "true" : "false", f);
+            if (connected && bdaddr[0]) {
+                fputs(",\"detectedAddress\":", f);
+                json_write_string(f, bdaddr);
+            }
+            fputs(",\"responseRaw\":", f);
+            json_write_string(f, connection_raw[0] ? connection_raw : "Connections:\n");
+            fputs("}\n", f);
+            fclose(f);
+            return;
+        }
+        if (!bdaddr[0] && (strcmp(action, "report") == 0 || strcmp(action, "reportseq") == 0 || strcmp(action, "disconnect") == 0)) {
             auto_detected_addr = detect_connected_bt_addr(detected_addr, sizeof(detected_addr), connection_raw, sizeof(connection_raw));
             if (auto_detected_addr) copy_text(bdaddr, sizeof(bdaddr), detected_addr);
-        }
-        if (!bdaddr[0] && strcmp(action, "status") == 0) {
-            strcpy(bdaddr, "00:00:00:00:00:00");
         }
         if (!bdaddr[0] && (strcmp(action, "report") == 0 || strcmp(action, "reportseq") == 0)) {
             f = send_json_start(fd, "400 Bad Request");
@@ -7533,28 +7963,40 @@ static void render_bluetooth_call_json(int fd, const struct request *req) {
             fclose(f);
             return;
         }
-        if (strcmp(action, "disconnect") == 0) {
-            unlink(BT_TARGET_FILE);
-        } else if (strcmp(action, "connect") == 0 || strcmp(action, "status") == 0 ||
-            strcmp(action, "report") == 0 || strcmp(action, "reportseq") == 0) {
-            save_bthid_target(type, bdaddr);
+        if ((strcmp(action, "report") == 0 || strcmp(action, "reportseq") == 0) &&
+            !bt_connection_authenticated(bdaddr, connection_raw, sizeof(connection_raw))) {
+            f = send_json_start(fd, "409 Conflict");
+            if (!f) return;
+            fputs("{\"ok\":false,\"error\":\"Bluetooth target is not on an authenticated encrypted HID link; no report was sent\",\"connected\":false,\"responseRaw\":", f);
+            json_write_string(f, connection_raw[0] ? connection_raw : "Connections:\n");
+            fputs("}\n", f);
+            fclose(f);
+            return;
+        }
+        if (strcmp(action, "connect") == 0) {
+            ensure_bt_hid_control_runtime();
+            load_bt_link_key(bdaddr);
+            if (bt_connection_active(bdaddr, connection_raw,
+                    sizeof(connection_raw)) &&
+                !bt_connection_authenticated(bdaddr, connection_raw,
+                    sizeof(connection_raw))) {
+                snprintf(cmd, sizeof(cmd), "hcitool dc '%s' 2>&1", bdaddr);
+                run_cmd(cmd, reply, sizeof(reply));
+                usleep(500000);
+            }
         }
         jt = json_escape_alloc(type);
         ja = json_escape_alloc(bdaddr);
         jp = json_escape_alloc(pin);
-        jc = json_escape_alloc(code);
-        if (!jt || !ja || !jp || !jc) {
-            free(jt); free(ja); free(jp); free(jc);
+        if (!jt || !ja || !jp) {
+            free(jt); free(ja); free(jp);
             f = send_json_start(fd, "500 Internal Server Error");
             if (!f) return;
             fputs("{\"ok\":false,\"error\":\"not enough memory for Bluetooth command\"}\n", f);
             fclose(f);
             return;
         }
-        if (strcmp(action, "status") == 0) {
-            cmd_name = "bthid.status";
-            snprintf(params, sizeof(params), "{\"type\":%s,\"bdaddr\":%s}", jt, ja);
-        } else if (strcmp(action, "connect") == 0) {
+        if (strcmp(action, "connect") == 0) {
             cmd_name = "bthid.connect";
             if (pin[0]) snprintf(params, sizeof(params), "{\"type\":%s,\"bdaddr\":%s,\"pin\":%s}", jt, ja, jp);
             else snprintf(params, sizeof(params), "{\"type\":%s,\"bdaddr\":%s}", jt, ja);
@@ -7565,7 +8007,7 @@ static void render_bluetooth_call_json(int fd, const struct request *req) {
             cmd_name = "bthid.report";
             snprintf(params, sizeof(params), "{\"type\":%s,\"bdaddr\":%s}", jt, ja);
         }
-        free(jt); free(ja); free(jp); free(jc);
+        free(jt); free(ja); free(jp);
         call_timeout = 8;
     }
 
@@ -7625,16 +8067,60 @@ static void render_bluetooth_call_json(int fd, const struct request *req) {
     } else {
         command_rc = run_hal_json(cmd_name, params, call_timeout, reply, sizeof(reply));
     }
-    f = send_json_start(fd, command_rc == 0 ? "200 OK" : "502 Bad Gateway");
+    native_code = bt_native_code(reply);
+    if (command_rc == 0 && native_code != 200) {
+        command_rc = -1;
+        snprintf(error, sizeof(error), "Harmony HAL rejected %s (native code %d)", cmd_name, native_code);
+    }
+    if (command_rc == 0 && strcmp(action, "connect") == 0) {
+        connected = wait_for_bt_connection(bdaddr, call_timeout, connection_raw, sizeof(connection_raw));
+        if (!connected) {
+            command_rc = -1;
+            snprintf(error, sizeof(error),
+                "Harmony accepted the connect request but no stable Bluetooth HID link formed");
+            append_reply_note(reply, sizeof(reply),
+                "connection verification failed: hcitool never showed a stable target link");
+        } else {
+            save_bthid_profile(type);
+            save_bthid_target(type, bdaddr);
+        }
+    } else if (command_rc == 0 &&
+        (strcmp(action, "report") == 0 || strcmp(action, "reportseq") == 0)) {
+        connected = bt_connection_authenticated(bdaddr, connection_raw,
+            sizeof(connection_raw));
+        save_bthid_profile(type);
+        save_bthid_target(type, bdaddr);
+    } else if (strcmp(action, "disconnect") == 0) {
+        connected = bt_connection_active(bdaddr, connection_raw, sizeof(connection_raw));
+        if (command_rc == 0 && connected) {
+            command_rc = -1;
+            snprintf(error, sizeof(error), "Harmony accepted disconnect but the Bluetooth link is still active");
+        } else if (command_rc == 0) {
+            unlink(BT_TARGET_FILE);
+        }
+    }
+    if (command_rc != 0 && !error[0]) {
+        snprintf(error, sizeof(error), "%s failed before Harmony returned a valid success response", cmd_name);
+    }
+    f = send_json_start(fd, command_rc == 0 ? "200 OK" :
+        (strcmp(action, "connect") == 0 ? "409 Conflict" : "502 Bad Gateway"));
     if (!f) return;
     fputs("{\"ok\":", f); fputs(command_rc == 0 ? "true" : "false", f);
     fputs(",\"action\":", f); json_write_string(f, action);
     fputs(",\"cmd\":", f); json_write_string(f, cmd_name);
     fputs(",\"params\":", f); json_write_string(f, params);
     fputs(",\"exitCode\":", f); fprintf(f, "%d", command_rc);
+    fputs(",\"nativeCode\":", f); fprintf(f, "%d", native_code);
+    fputs(",\"connected\":", f); fputs(connected ? "true" : "false", f);
+    if (error[0]) {
+        fputs(",\"error\":", f);
+        json_write_string(f, error);
+    }
     fputs(",\"responseRaw\":", f); json_write_string(f, reply[0] ? reply : "no response");
     if (auto_detected_addr) {
         fputs(",\"detectedAddress\":", f); json_write_string(f, detected_addr);
+        fputs(",\"connectionRaw\":", f); json_write_string(f, connection_raw);
+    } else if (connection_raw[0]) {
         fputs(",\"connectionRaw\":", f); json_write_string(f, connection_raw);
     }
     fputs("}\n", f);
@@ -8200,8 +8686,26 @@ int main(void) {
         fputs("FAIL resource backup retention name filter\n", stderr);
         failures++;
     }
+    if (bt_native_code("{\"id\":1,\"code\":200,\"connected\":false}") != 200 ||
+        !bt_native_reply_ok("{\"id\":1,\"code\":200}") ||
+        bt_native_reply_ok("{\"id\":1,\"code\":505}") ||
+        bt_native_code("{\"id\":1}") != -1) {
+        fputs("FAIL Bluetooth native response validation\n", stderr);
+        failures++;
+    }
+    {
+        char addr[32];
+        if (extract_bt_addr_from_text(
+                "Connections:\n< ACL 00:00:00:00:00:00 handle 0", addr, sizeof(addr)) ||
+            !extract_bt_addr_from_text(
+                "Connections:\n< ACL 00:04:4B:72:67:03 handle 1", addr, sizeof(addr)) ||
+            strcmp(addr, "00:04:4B:72:67:03") != 0) {
+            fputs("FAIL Bluetooth placeholder address filtering\n", stderr);
+            failures++;
+        }
+    }
     if (failures) return 1;
-    puts("PASS semantic JSON equality and resource backup name filter");
+    puts("PASS semantic JSON, resource backup, and Bluetooth native response validation");
     return 0;
 }
 #else
@@ -8216,6 +8720,7 @@ int main(int argc, char **argv) {
     sigemptyset(&sa.sa_mask);
     sa.sa_flags = SA_RESTART;
     sigaction(SIGCHLD, &sa, NULL);
+    ensure_bt_hid_control_runtime();
     start_bthid_keyboard_runtime();
     fd = socket(AF_INET, SOCK_STREAM, 0);
     if (fd < 0) {

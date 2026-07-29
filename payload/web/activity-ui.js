@@ -15,6 +15,10 @@
     const parsed = Number(value);
     return Number.isSafeInteger(parsed) ? parsed : value;
   };
+  const positiveId = (value) => {
+    const parsed = Number(value);
+    return Number.isSafeInteger(parsed) && parsed > 0 ? parsed : 0;
+  };
   const harmonyDate = () => `/Date(${Date.now()}+0000)/`;
   const objectId = (value) => text(value && (value["Id-"] ?? value.Id ?? value.id));
   const activityName = (activity) => text(
@@ -41,6 +45,19 @@
     ["KeyboardTextEntryActivityRole", "Keyboard / text entry"]
   ];
 
+  // Highest map and button identities Logitech ever issued for this Hub. Offline
+  // allocation starts above them so it can never reuse a cloud-issued value.
+  const MAP_ID_FLOOR = 52944089;
+  const BUTTON_ID_FLOOR = 1878029713;
+  const ID_CEILING = 2147483000;
+  const IDENTITY_KEYS = new Set([
+    "Id",
+    "Id-",
+    "ButtonId",
+    "ButtonMapId",
+    "ButtonMapId-"
+  ]);
+
   const state = {
     config: null,
     revision: "",
@@ -49,7 +66,8 @@
     currentId: "",
     dirty: false,
     loading: false,
-    idCursor: 10000000,
+    mapCursor: { next: MAP_ID_FLOOR + 1 },
+    buttonCursor: { next: BUTTON_ID_FLOOR + 1 },
     knownIds: new Set(),
     commandCatalog: []
   };
@@ -118,6 +136,68 @@
     ) || null;
   }
 
+  function deviceButtonMaps(deviceId) {
+    return buttonMaps().filter((map) =>
+      text(map && map.__type).includes("DeviceButtonMap") &&
+      sameId(map && map["DeviceId-"], deviceId)
+    );
+  }
+
+  function isKeyboardHidActivityMap(map) {
+    return /^16420Activity-?\d+$/.test(text(map && map.ButtonMapIdentifier));
+  }
+
+  function isActivityButtonMap(map) {
+    return text(map && map.__type).includes("ActivityButtonMap");
+  }
+
+  function isBluetoothKeyboardDevice(deviceId) {
+    const device = devices().find((item) => sameId(item.id, deviceId));
+    return !!device &&
+      Number(device.raw && device.raw.Transport) === 32 &&
+      device.raw.IsKeyboardAssociated !== false;
+  }
+
+  function ensureBluetoothKeyboardRoles() {
+    const created = [];
+    activities().forEach((activity) => {
+      if (!Array.isArray(activity.Roles)) return;
+      const existing = new Set(
+        activity.Roles
+          .filter((role) => text(role && role.__type).includes("KeyboardTextEntryActivityRole"))
+          .map((role) => text(role && role["DeviceId-"]))
+          .filter(Boolean)
+      );
+      const sources = new Map();
+      activity.Roles.forEach((role) => {
+        const type = text(role && role.__type);
+        const deviceId = text(role && role["DeviceId-"]);
+        if (!deviceId || type.includes("KeyboardTextEntryActivityRole") ||
+            !isBluetoothKeyboardDevice(deviceId) || sources.has(deviceId)) {
+          return;
+        }
+        sources.set(deviceId, role);
+      });
+      sources.forEach((source, deviceId) => {
+        if (existing.has(deviceId)) return;
+        const role = {
+          "DeviceId-": source["DeviceId-"],
+          __type: "KeyboardTextEntryActivityRole",
+          PowerOffOrder: source.PowerOffOrder ?? 0,
+          "Id-": newButtonId(),
+          NextDevicePowerOnDelay: source.NextDevicePowerOnDelay ?? null,
+          PowerOnOrder: source.PowerOnOrder ?? 0,
+          SelectedInput: null
+        };
+        activity.Roles.push(role);
+        existing.add(deviceId);
+        created.push({ activity, role });
+        activity.DateModified = harmonyDate();
+      });
+    });
+    return created;
+  }
+
   function sortedActivities() {
     return activities().slice().sort((a, b) => {
       const ao = Number(a.ActivityOrder);
@@ -161,40 +241,58 @@
     setDirty(true);
   }
 
-  function scanIds(value, key = "") {
+  function scanIds(value) {
     if (Array.isArray(value)) {
-      value.forEach((item) => scanIds(item, key));
+      value.forEach((item) => scanIds(item));
       return;
     }
     if (!value || typeof value !== "object") return;
     Object.entries(value).forEach(([childKey, child]) => {
-      if ((childKey === "Id-" || childKey === "Id" || childKey === "ButtonId" ||
-          /^ButtonMapId-?$/.test(childKey)) &&
+      if (IDENTITY_KEYS.has(childKey) &&
           (typeof child === "number" || /^\d+$/.test(text(child)))) {
         const number = Number(child);
-        if (Number.isSafeInteger(number) && number >= 0 && number < 2147483000) {
+        if (Number.isSafeInteger(number) && number >= 0 && number < ID_CEILING) {
           state.knownIds.add(text(number));
-          state.idCursor = Math.max(state.idCursor, number + 1);
+          if (childKey === "ButtonId") {
+            state.buttonCursor.next = Math.max(state.buttonCursor.next, number + 1);
+          } else if (childKey === "ButtonMapId" || childKey === "ButtonMapId-") {
+            state.mapCursor.next = Math.max(state.mapCursor.next, number + 1);
+          }
         }
       }
-      scanIds(child, childKey);
+      scanIds(child);
     });
   }
 
   function resetIdPool() {
     state.knownIds = new Set();
-    state.idCursor = 10000000;
+    state.mapCursor = { next: MAP_ID_FLOOR + 1 };
+    state.buttonCursor = { next: BUTTON_ID_FLOOR + 1 };
     scanIds(state.config && state.config.activityList);
     scanIds(state.config && state.config.mapList);
     scanIds(state.config && state.config.functionList);
+    scanIds(state.config && state.config.deviceList);
   }
 
-  function newId() {
-    while (state.knownIds.has(text(state.idCursor))) state.idCursor += 1;
-    const value = state.idCursor;
+  function allocateId(cursor, label) {
+    let value = cursor.next;
+    while (state.knownIds.has(text(value))) value += 1;
+    if (value > ID_CEILING) {
+      throw new Error(
+        `No ${label} identity is available below ${ID_CEILING}; the Hub configuration is exhausted.`
+      );
+    }
     state.knownIds.add(text(value));
-    state.idCursor += 1;
+    cursor.next = value + 1;
     return value;
+  }
+
+  function newMapId() {
+    return allocateId(state.mapCursor, "button map");
+  }
+
+  function newButtonId() {
+    return allocateId(state.buttonCursor, "remote button");
   }
 
   function normalizeOrders() {
@@ -205,6 +303,7 @@
 
   function activityMapSurfaceKey(map) {
     if (!map || typeof map !== "object") return "";
+    if (isKeyboardHidActivityMap(map)) return "virtual|16420|ActivityButtonMap";
     const surface = map["SurfaceId-"] ?? map.SurfaceId;
     const buttonSurface = map["ButtonMapSurfaceId-"] ?? map.ButtonMapSurfaceId;
     if (surface == null && buttonSurface == null) return "";
@@ -216,35 +315,38 @@
     ].map(text).join("|");
   }
 
-  function resetOwnedIdentities(value) {
+  function isClientAction(action) {
+    return text(action && action.__type).includes("ButtonClientAction");
+  }
+
+  // ButtonCommandAction and ButtonActivityAction always ship with Id 0, while a
+  // ButtonClientAction carries a Hub-issued Id that must survive a clone.
+  function resetActionIdentities(value) {
     if (Array.isArray(value)) {
-      value.forEach(resetOwnedIdentities);
+      value.forEach(resetActionIdentities);
       return;
     }
     if (!value || typeof value !== "object") return;
-    Object.entries(value).forEach(([key, child]) => {
-      if (key === "Id" || key === "Id-" || key === "ButtonId" ||
-          key === "SequenceId" || key === "SequenceId-") {
-        value[key] = 0;
-      } else {
-        resetOwnedIdentities(child);
-      }
-    });
+    if (Object.prototype.hasOwnProperty.call(value, "Id") && !isClientAction(value)) {
+      value.Id = 0;
+    }
+    Object.values(value).forEach(resetActionIdentities);
   }
 
   function prepareNewMapIdentities(map) {
-    delete map["ButtonMapId-"];
     delete map.ButtonMapId;
     delete map["Id-"];
     delete map.Id;
+    map["ButtonMapId-"] = newMapId();
     if (Array.isArray(map.Buttons)) {
       map.Buttons.forEach((button) => {
         if (!button || typeof button !== "object") return;
-        button.ButtonId = 0;
-        ACTION_FIELDS.forEach((field) => resetOwnedIdentities(button[field]));
+        button.ButtonId = newButtonId();
+        button.ButtonState = 1;
+        ACTION_FIELDS.forEach((field) => resetActionIdentities(button[field]));
       });
     }
-    resetOwnedIdentities(map.Sequences);
+    map.Sequences = [];
   }
 
   const FALLBACK_ACTIVITY_FUNCTION_GROUPS = new Set([
@@ -274,6 +376,157 @@
       ? activity.Roles.find((item) => text(item && item.__type).includes(roleType))
       : null;
     return text(role && role["DeviceId-"]);
+  }
+
+  function buttonIdentity(button) {
+    return text(button && (
+      button.ButtonKey ||
+      button.TextOnRemote ||
+      button.ButtonName ||
+      button.ButtonLabel
+    )).toLowerCase();
+  }
+
+  function sameRemoteSurface(left, right) {
+    if (!left || !right) return false;
+    return sameId(left["RemoteId-"] ?? left.RemoteId, right["RemoteId-"] ?? right.RemoteId) &&
+      sameId(left["SurfaceId-"] ?? left.SurfaceId, right["SurfaceId-"] ?? right.SurfaceId) &&
+      sameId(
+        left["ButtonMapSurfaceId-"] ?? left.ButtonMapSurfaceId,
+        right["ButtonMapSurfaceId-"] ?? right.ButtonMapSurfaceId
+      );
+  }
+
+  function preferredButtonDeviceId(activity, identity) {
+    if (/^(volumeup|volumedown|volumemute|mute)$/.test(identity)) {
+      return roleDeviceId(activity, "VolumeActivityRole");
+    }
+    if (/^(channelup|channeldown|number[0-9]|[0-9])$/.test(identity)) {
+      const channelDevice = roleDeviceId(activity, "ChannelChangingActivityRole");
+      if (channelDevice) return channelDevice;
+    }
+    return roleDeviceId(activity, "PlayGameActivityRole") ||
+      roleDeviceId(activity, "PlayMovieActivityRole") ||
+      roleDeviceId(activity, "PlayMediaActivityRole") ||
+      roleDeviceId(activity, "ChannelChangingActivityRole") ||
+      roleDeviceId(activity, "KeyboardTextEntryActivityRole") ||
+      roleDeviceId(activity, "DisplayActivityRole");
+  }
+
+  function findMappedButton(maps, targetMap, targetButton, field) {
+    const identity = buttonIdentity(targetButton);
+    if (!identity) return null;
+    const ranked = maps.slice().sort((left, right) =>
+      Number(sameRemoteSurface(right, targetMap)) -
+      Number(sameRemoteSurface(left, targetMap))
+    );
+    for (const map of ranked) {
+      const match = (Array.isArray(map.Buttons) ? map.Buttons : []).find((button) =>
+        buttonIdentity(button) === identity &&
+        button &&
+        button[field] &&
+        typeof button[field] === "object"
+      );
+      if (match) return match[field];
+    }
+    return null;
+  }
+
+  function backfillActivityButtonMaps(activity) {
+    const activityId = objectId(activity);
+    const maps = activityMaps(activityId).filter((map) => !isKeyboardHidActivityMap(map));
+    let changes = 0;
+    maps.forEach((map) => {
+      (Array.isArray(map.Buttons) ? map.Buttons : []).forEach((button) => {
+        const identity = buttonIdentity(button);
+        if (!identity) return;
+        const siblingMaps = maps.filter((candidate) => candidate !== map);
+        const deviceId = preferredButtonDeviceId(activity, identity);
+        const sourceDeviceMaps = deviceId ? deviceButtonMaps(deviceId) : [];
+        ACTION_FIELDS.forEach((field) => {
+          if (button[field] && typeof button[field] === "object") return;
+          const action =
+            findMappedButton(siblingMaps, map, button, field) ||
+            findMappedButton(sourceDeviceMaps, map, button, field);
+          if (!action) return;
+          button[field] = clone(action);
+          resetActionIdentities(button[field]);
+          changes += 1;
+        });
+      });
+      if (changes > 0 && Object.prototype.hasOwnProperty.call(map, "DateModified")) {
+        map.DateModified = harmonyDate();
+      }
+    });
+    return changes;
+  }
+
+  const HID_DIRECT_COMMANDS = new Set([
+    "Back", "DirectionDown", "DirectionLeft", "DirectionRight", "DirectionUp",
+    "F1", "F2", "F3", "F4", "F5", "F6", "F7", "F8", "F9", "F10", "F11", "F12",
+    "FastForward", "Info", "Menu", "Pause", "Play", "Rewind", "Stop",
+    "VolumeDown", "VolumeUp"
+  ]);
+
+  function hidButtonKey(commandName) {
+    const name = text(commandName);
+    if (/^[0-9]$/.test(name)) return `Number${name}`;
+    if (name === "Mute") return "VolumeMute";
+    if (name === "Select") return "Enter";
+    return HID_DIRECT_COMMANDS.has(name) ? name : "";
+  }
+
+  function createCommandAction(device, command) {
+    return {
+      "DeviceId-": device.idValue,
+      __type: "ButtonCommandAction",
+      "FunctionId-": command["FunctionId-"] ?? command.FunctionId ?? command["Id-"] ?? command.Id ?? 0,
+      Order: 0,
+      CommandName: text(command.Name || command.CommandName),
+      EventType: 1,
+      Id: 0
+    };
+  }
+
+  function composeKeyboardHidMap(activity, deviceId) {
+    const device = devices().find((item) => sameId(item.id, deviceId));
+    if (!device) return null;
+    const source = activityMaps(objectId(activity)).find((map) =>
+      !isKeyboardHidActivityMap(map) &&
+      /^16414Activity/.test(text(map && map.ButtonMapIdentifier))
+    ) || activityMaps(objectId(activity)).find((map) => !isKeyboardHidActivityMap(map));
+    if (!source) return null;
+    const buttons = [];
+    const seen = new Set();
+    device.commands.forEach((command) => {
+      const commandName = text(command && (command.Name || command.CommandName));
+      const key = hidButtonKey(commandName);
+      if (!key || seen.has(key.toLowerCase())) return;
+      seen.add(key.toLowerCase());
+      buttons.push({
+        ButtonId: newButtonId(),
+        __type: "HardRemoteButton",
+        ButtonAction: createCommandAction(device, command),
+        ButtonDoublePressAction: null,
+        FunctionGroupType: /^Number[0-9]$/.test(key) ? 2 : 0,
+        ButtonState: 1,
+        ButtonKey: key,
+        ButtonLongPressAction: null
+      });
+    });
+    const map = {
+      "ButtonMapId-": newMapId(),
+      "ActivityId-": numericValue(objectId(activity)),
+      Buttons: buttons,
+      "ButtonMapSurfaceId-": source["ButtonMapSurfaceId-"] ?? source.ButtonMapSurfaceId,
+      "RemoteId-": source["RemoteId-"] ?? source.RemoteId,
+      __type: "ActivityButtonMap",
+      ButtonMapIdentifier: `16420Activity${objectId(activity)}`,
+      DateModified: harmonyDate(),
+      Sequences: [],
+      "SurfaceId-": source["SurfaceId-"] ?? source.SurfaceId
+    };
+    return map;
   }
 
   function activityFunctionGroupNames() {
@@ -406,6 +659,58 @@
     return cleared;
   }
 
+  // A persisted map without a ButtonMapId-, or a button with ButtonId 0 or
+  // ButtonState 0, stops the paired remote from transmitting.
+  function repairActivityMapIdentities() {
+    const repair = {
+      repairedMaps: 0,
+      allocatedMapIds: 0,
+      allocatedButtonIds: 0,
+      correctedButtonStates: 0
+    };
+    buttonMaps().forEach((map) => {
+      if (!isActivityButtonMap(map)) return;
+      let changed = false;
+      const legacyMapId = positiveId(map.ButtonMapId);
+      if (legacyMapId && !positiveId(map["ButtonMapId-"])) {
+        map["ButtonMapId-"] = legacyMapId;
+        changed = true;
+      }
+      if (Object.prototype.hasOwnProperty.call(map, "ButtonMapId")) {
+        delete map.ButtonMapId;
+        changed = true;
+      }
+      if (!positiveId(map["ButtonMapId-"])) {
+        map["ButtonMapId-"] = newMapId();
+        repair.allocatedMapIds += 1;
+        changed = true;
+      }
+      if (!Array.isArray(map.Sequences)) {
+        map.Sequences = [];
+        changed = true;
+      }
+      (Array.isArray(map.Buttons) ? map.Buttons : []).forEach((button) => {
+        if (!button || typeof button !== "object") return;
+        if (!positiveId(button.ButtonId)) {
+          button.ButtonId = newButtonId();
+          repair.allocatedButtonIds += 1;
+          changed = true;
+        }
+        if (Number(button.ButtonState) !== 1) {
+          button.ButtonState = 1;
+          repair.correctedButtonStates += 1;
+          changed = true;
+        }
+      });
+      if (!changed) return;
+      repair.repairedMaps += 1;
+      if (Object.prototype.hasOwnProperty.call(map, "DateModified")) {
+        map.DateModified = harmonyDate();
+      }
+    });
+    return repair;
+  }
+
   function reconcileActivityMaps() {
     if (!state.config || !state.config.activityList || !state.config.mapList ||
         !state.config.functionList ||
@@ -418,16 +723,33 @@
         created: [],
         removedFunctions: [],
         createdFunctions: [],
-        clearedActivityActions: []
+        clearedActivityActions: [],
+        repairedIdentifiers: [],
+        createdKeyboardRoles: [],
+        routedButtonActions: 0,
+        createdKeyboardHidMaps: [],
+        removedKeyboardHidMaps: [],
+        repairedMapIdentities: 0,
+        allocatedMapIds: 0,
+        allocatedButtonIds: 0,
+        correctedButtonStates: 0
       };
     }
     const ids = new Set(activities().map((activity) => objectId(activity)).filter(Boolean));
     const currentDeviceIds = new Set(devices().map((device) => device.id));
+    const createdKeyboardRoles = ensureBluetoothKeyboardRoles();
+    const keyboardDevicesByActivity = new Map(activities().map((activity) => [
+      objectId(activity),
+      new Set((Array.isArray(activity.Roles) ? activity.Roles : [])
+        .filter((role) => text(role && role.__type).includes("KeyboardTextEntryActivityRole"))
+        .map((role) => text(role && role["DeviceId-"]))
+        .filter(Boolean))
+    ]));
     const originalMaps = buttonMaps().slice();
     const templates = new Map();
     originalMaps.forEach((map) => {
       const activityId = text(map && map["ActivityId-"]);
-      if (!activityId || activityId === "-1") return;
+      if (!activityId || activityId === "-1" || isKeyboardHidActivityMap(map)) return;
       const key = activityMapSurfaceKey(map);
       if (!key) return;
       const current = templates.get(key);
@@ -441,11 +763,24 @@
       const deviceId = text(map && map["DeviceId-"]);
       return (
         (activityId && activityId !== "-1" && !ids.has(activityId)) ||
-        (deviceId && !currentDeviceIds.has(deviceId))
+        (deviceId && !currentDeviceIds.has(deviceId)) ||
+        (isKeyboardHidActivityMap(map) &&
+          !(keyboardDevicesByActivity.get(activityId)?.size > 0))
       );
     });
+    const removedKeyboardHidMaps = removed.filter(isKeyboardHidActivityMap);
     state.config.mapList.ButtonMaps = originalMaps.filter((map) => !removed.includes(map));
     const clearedActivityActions = clearOrphanedActivityActions(ids);
+    const repairedIdentifiers = [];
+    buttonMaps().forEach((map) => {
+      const activityId = text(map && map["ActivityId-"]);
+      if (!activityId || activityId === "-1" || !ids.has(activityId)) return;
+      if (!normalizeActivityMapIdentifiers(map, activityId)) return;
+      if (Object.prototype.hasOwnProperty.call(map, "DateModified")) {
+        map.DateModified = harmonyDate();
+      }
+      repairedIdentifiers.push(map);
+    });
 
     const created = [];
     activities().forEach((activity) => {
@@ -466,6 +801,26 @@
         existing.add(key);
       });
     });
+
+    let routedButtonActions = 0;
+    activities().forEach((activity) => {
+      routedButtonActions += backfillActivityButtonMaps(activity);
+    });
+
+    const createdKeyboardHidMaps = [];
+    activities().forEach((activity) => {
+      const activityId = objectId(activity);
+      const keyboardDevices = keyboardDevicesByActivity.get(activityId) || new Set();
+      if (!keyboardDevices.size) return;
+      const existing = activityMaps(activityId).find(isKeyboardHidActivityMap);
+      if (existing) return;
+      const map = composeKeyboardHidMap(activity, [...keyboardDevices][0]);
+      if (!map) return;
+      state.config.mapList.ButtonMaps.push(map);
+      createdKeyboardHidMaps.push(map);
+    });
+
+    const identityRepair = repairActivityMapIdentities();
 
     const originalFunctions = functionMaps().slice();
     const seenActivityFunctions = new Set();
@@ -497,12 +852,27 @@
         created.length > 0 ||
         removedFunctions.length > 0 ||
         createdFunctions.length > 0 ||
-        clearedActivityActions.length > 0,
+        clearedActivityActions.length > 0 ||
+        repairedIdentifiers.length > 0 ||
+        createdKeyboardRoles.length > 0 ||
+        routedButtonActions > 0 ||
+        createdKeyboardHidMaps.length > 0 ||
+        removedKeyboardHidMaps.length > 0 ||
+        identityRepair.repairedMaps > 0,
       removed,
       created,
       removedFunctions,
       createdFunctions,
-      clearedActivityActions
+      clearedActivityActions,
+      repairedIdentifiers,
+      createdKeyboardRoles,
+      routedButtonActions,
+      createdKeyboardHidMaps,
+      removedKeyboardHidMaps,
+      repairedMapIdentities: identityRepair.repairedMaps,
+      allocatedMapIds: identityRepair.allocatedMapIds,
+      allocatedButtonIds: identityRepair.allocatedButtonIds,
+      correctedButtonStates: identityRepair.correctedButtonStates
     };
   }
 
@@ -647,8 +1017,16 @@
         const removedFunctions = repair.removedFunctions.length;
         const createdFunctions = repair.createdFunctions.length;
         const clearedActions = repair.clearedActivityActions.length;
+        const repairedIdentifiers = repair.repairedIdentifiers.length;
+        const createdKeyboardRoles = repair.createdKeyboardRoles.length;
+        const routedButtonActions = repair.routedButtonActions;
+        const createdKeyboardHidMaps = repair.createdKeyboardHidMaps.length;
+        const removedKeyboardHidMaps = repair.removedKeyboardHidMaps.length;
+        const allocatedMapIds = repair.allocatedMapIds;
+        const allocatedButtonIds = repair.allocatedButtonIds;
+        const correctedButtonStates = repair.correctedButtonStates;
         markNotice(
-          `Recovered an inconsistent Harmony graph: removed ${removed} stale button map${removed === 1 ? "" : "s"}, cleared ${clearedActions} stale activity shortcut${clearedActions === 1 ? "" : "s"}, created ${created} missing remote-surface map${created === 1 ? "" : "s"}, removed ${removedFunctions} stale control map${removedFunctions === 1 ? "" : "s"}, and created ${createdFunctions} missing activity control map${createdFunctions === 1 ? "" : "s"}. Review and save this repair.`,
+          `Recovered an inconsistent Harmony graph: removed ${removed} stale button map${removed === 1 ? "" : "s"}, cleared ${clearedActions} stale activity shortcut${clearedActions === 1 ? "" : "s"}, corrected ${repairedIdentifiers} remote menu identifier${repairedIdentifiers === 1 ? "" : "s"}, added ${createdKeyboardRoles} Bluetooth keyboard role${createdKeyboardRoles === 1 ? "" : "s"}, routed ${routedButtonActions} missing remote action${routedButtonActions === 1 ? "" : "s"}, created ${createdKeyboardHidMaps} keyboard HID map${createdKeyboardHidMaps === 1 ? "" : "s"}, removed ${removedKeyboardHidMaps} stale keyboard HID map${removedKeyboardHidMaps === 1 ? "" : "s"}, created ${created} missing remote-surface map${created === 1 ? "" : "s"}, removed ${removedFunctions} stale control map${removedFunctions === 1 ? "" : "s"}, created ${createdFunctions} missing activity control map${createdFunctions === 1 ? "" : "s"}, issued ${allocatedMapIds} activity button map ID${allocatedMapIds === 1 ? "" : "s"} and ${allocatedButtonIds} physical button ID${allocatedButtonIds === 1 ? "" : "s"}, and enabled ${correctedButtonStates} remote button${correctedButtonStates === 1 ? "" : "s"}. Review and save this repair.`,
           "warn"
         );
       } else if (options.afterSave) {
@@ -841,6 +1219,7 @@
   }
 
   function mapLabel(map, index) {
+    if (isKeyboardHidActivityMap(map)) return "Keyboard HID";
     const surface = map && (map["SurfaceId-"] ?? map["ButtonMapSurfaceId-"] ?? map.SurfaceId);
     const type = text(map && map.__type).replace("ButtonMap", "") || "Surface";
     return `${type} ${surface == null ? index + 1 : surface}`;
@@ -969,7 +1348,7 @@
     }
     if (field === "input") {
       role.SelectedInput = value
-        ? { ChannelNumber: null, "Id-": newId(), Name: value }
+        ? { ChannelNumber: null, "Id-": newButtonId(), Name: value }
         : null;
     }
     if (field === "powerOn") role.PowerOnOrder = Number(value) || 0;
@@ -990,7 +1369,7 @@
       PowerOnOrder: order,
       "DeviceId-": device ? device.idValue : 0,
       NextDevicePowerOnDelay: null,
-      "Id-": newId(),
+      "Id-": newButtonId(),
       PowerOffOrder: order
     });
     replaceActivityFunctionMap(activity);
@@ -1066,27 +1445,47 @@
     renderMappings(activity);
   }
 
-  function replaceIdentifier(value, oldActivityId, newActivityId, oldMapId, newMapId) {
+  function replaceIdentifier(value, oldActivityId, newActivityId, oldMapKey, newMapKey) {
     if (typeof value !== "string") return value;
     let next = value;
     if (oldActivityId) next = next.split(text(oldActivityId)).join(text(newActivityId));
-    if (oldMapId) next = next.split(text(oldMapId)).join(text(newMapId));
+    if (oldMapKey) next = next.split(text(oldMapKey)).join(text(newMapKey));
     return next;
+  }
+
+  function normalizeActivityMapIdentifiers(map, activityId) {
+    if (!map || !activityId) return false;
+    const id = text(activityId);
+    let changed = false;
+    const identifier = text(map.ButtonMapIdentifier);
+    const identifierMatch = identifier.match(/Activity-?\d+$/);
+    if (identifierMatch) {
+      const expected = identifier.replace(/Activity-?\d+$/, `Activity${id}`);
+      if (expected !== identifier) {
+        map.ButtonMapIdentifier = expected;
+        changed = true;
+      }
+    }
+    if (Array.isArray(map.Buttons)) {
+      map.Buttons.forEach((button) => {
+        const menu = button && button.MenuItem;
+        const menuName = text(menu && menu.MenuName);
+        if (!/^Activity\.-?\d+$/.test(menuName)) return;
+        const expected = `Activity.${id}`;
+        if (menuName !== expected) {
+          menu.MenuName = expected;
+          changed = true;
+        }
+      });
+    }
+    return changed;
   }
 
   function cloneMapForActivity(sourceMap, oldActivityId, newActivityId, keepActions) {
     const map = clone(sourceMap);
     map["ActivityId-"] = numericValue(newActivityId);
     prepareNewMapIdentities(map);
-    if (Object.prototype.hasOwnProperty.call(map, "ButtonMapIdentifier")) {
-      map.ButtonMapIdentifier = replaceIdentifier(
-        map.ButtonMapIdentifier,
-        oldActivityId,
-        newActivityId,
-        "",
-        ""
-      );
-    }
+    normalizeActivityMapIdentifiers(map, newActivityId);
     if (Object.prototype.hasOwnProperty.call(map, "DateModified")) map.DateModified = harmonyDate();
     if (!keepActions && Array.isArray(map.Buttons)) {
       map.Buttons.forEach((button) => {
@@ -1094,7 +1493,6 @@
         button.ButtonLongPressAction = null;
         button.ButtonDoublePressAction = null;
       });
-      if (Array.isArray(map.Sequences)) map.Sequences = [];
     }
     return map;
   }
@@ -1142,8 +1540,8 @@
       activity.DefaultStationName = null;
     } else if (Array.isArray(activity.Roles)) {
       activity.Roles.forEach((role) => {
-        role["Id-"] = newId();
-        if (role.SelectedInput) role.SelectedInput["Id-"] = newId();
+        role["Id-"] = newButtonId();
+        if (role.SelectedInput) role.SelectedInput["Id-"] = newButtonId();
       });
     }
     return activity;
@@ -1153,7 +1551,7 @@
     if (!state.config) return;
     const source = selectedActivity() || sortedActivities()[0] || null;
     const oldId = source ? objectId(source) : "";
-    const id = newId();
+    const id = newButtonId();
     const activity = baselineActivity(source, id, duplicate);
     activities().push(activity);
 
@@ -1261,10 +1659,20 @@
     const ids = new Set();
     const names = new Set();
     const deviceIds = new Set(devices().map((device) => device.id));
+    const bluetoothKeyboardIds = new Set(
+      devices()
+        .filter((device) =>
+          Number(device.raw && device.raw.Transport) === 32 &&
+          device.raw.IsKeyboardAssociated !== false
+        )
+        .map((device) => device.id)
+    );
     const mapIds = new Set();
     const buttonIds = new Set();
     const activitySurfaces = new Map();
     const activityFunctionCounts = new Map();
+    const keyboardActivityIds = new Set();
+    const keyboardHidCounts = new Map();
     activities().forEach((activity) => {
       const id = objectId(activity);
       const name = activityName(activity).trim();
@@ -1275,8 +1683,11 @@
       ids.add(id);
       names.add(name.toLowerCase());
       if (!Array.isArray(activity.Roles)) throw new Error(`Activity “${name}” has an invalid Roles value.`);
+      const bluetoothRoleDevices = new Set();
+      const keyboardRoleDevices = new Set();
       activity.Roles.forEach((role) => {
         const deviceId = text(role && role["DeviceId-"]);
+        const roleType = text(role && role.__type);
         if (!deviceId) throw new Error(`Activity “${name}” has a role without a device ID.`);
         if (!deviceIds.has(deviceId)) {
           throw new Error(`Activity “${name}” references unavailable device ${deviceId}.`);
@@ -1287,7 +1698,20 @@
             `Activity “${name}” input “${selectedInput}” is not available on device ${deviceId}.`
           );
         }
+        if (roleType.includes("KeyboardTextEntryActivityRole")) {
+          keyboardRoleDevices.add(deviceId);
+        } else if (bluetoothKeyboardIds.has(deviceId)) {
+          bluetoothRoleDevices.add(deviceId);
+        }
       });
+      bluetoothRoleDevices.forEach((deviceId) => {
+        if (!keyboardRoleDevices.has(deviceId)) {
+          throw new Error(
+            `Activity “${name}” uses Bluetooth keyboard device ${deviceId} without a KeyboardTextEntryActivityRole.`
+          );
+        }
+      });
+      if (keyboardRoleDevices.size > 0) keyboardActivityIds.add(id);
     });
     buttonMaps().forEach((map) => {
       const activityId = text(map && map["ActivityId-"]);
@@ -1297,30 +1721,74 @@
       if (activityId && activityId !== "-1") {
         const identifier = text(map && map.ButtonMapIdentifier);
         const identifierActivity = identifier.match(/Activity(-?\d+)$/);
+        if (isActivityButtonMap(map) && !identifierActivity) {
+          throw new Error(`Button map ${identifier || mapId(map) || "unknown"} must identify activity ${activityId} in its ButtonMapIdentifier.`);
+        }
         if (identifierActivity && identifierActivity[1] !== activityId) {
           throw new Error(`Button map ${mapId(map) || identifier} identifies activity ${identifierActivity[1]} but references ${activityId}.`);
         }
+        if (isKeyboardHidActivityMap(map)) {
+          keyboardHidCounts.set(activityId, (keyboardHidCounts.get(activityId) || 0) + 1);
+        }
         const surface = activityMapSurfaceKey(map);
         if (!surface) throw new Error(`Activity ${activityId} has a button map without a remote surface.`);
-        if (!activitySurfaces.has(activityId)) activitySurfaces.set(activityId, new Set());
-        if (activitySurfaces.get(activityId).has(surface)) {
-          throw new Error(`Activity ${activityId} has more than one button map for remote surface ${surface}.`);
+        if (!isKeyboardHidActivityMap(map)) {
+          if (!activitySurfaces.has(activityId)) activitySurfaces.set(activityId, new Set());
+          if (activitySurfaces.get(activityId).has(surface)) {
+            throw new Error(`Activity ${activityId} has more than one button map for remote surface ${surface}.`);
+          }
+          activitySurfaces.get(activityId).add(surface);
         }
-        activitySurfaces.get(activityId).add(surface);
       }
       const deviceId = text(map && map["DeviceId-"]);
       if (deviceId && !deviceIds.has(deviceId)) {
         throw new Error(`Button map ${mapId(map) || "unknown"} references unavailable device ${deviceId}.`);
       }
+      if (isActivityButtonMap(map) && !positiveId(map["ButtonMapId-"])) {
+        throw new Error(
+          `Activity button map ${text(map.ButtonMapIdentifier) || activityId || "unknown"} needs a positive ButtonMapId-.`
+        );
+      }
       const id = mapId(map);
-      if (id && id !== "0" && mapIds.has(id)) throw new Error(`Button map ID ${id} is duplicated.`);
-      if (id && id !== "0") mapIds.add(id);
+      if (id && id !== "0") {
+        if (mapIds.has(id)) throw new Error(`Button map ID ${id} is duplicated.`);
+        mapIds.add(id);
+      }
       if (map && Array.isArray(map.Buttons)) {
         map.Buttons.forEach((button) => {
-          const buttonId = text(button && button.ButtonId);
-          if (buttonId && buttonId !== "0") {
-            if (buttonIds.has(buttonId)) throw new Error(`Remote button ID ${buttonId} is duplicated.`);
-            buttonIds.add(buttonId);
+          if (activityId && activityId !== "-1") {
+            const menuName = text(button && button.MenuItem && button.MenuItem.MenuName);
+            const menuActivity = menuName.match(/^Activity\.(-?\d+)$/);
+            if (menuActivity && menuActivity[1] !== activityId) {
+              throw new Error(
+                `Button map ${mapId(map) || "unknown"} menu identifies activity ${menuActivity[1]} but references ${activityId}.`
+              );
+            }
+          }
+          const buttonId = positiveId(button && button.ButtonId);
+          if (!buttonId) {
+            throw new Error(
+              `Button map ${mapId(map) || "unknown"} has a button without a positive ButtonId.`
+            );
+          }
+          if (buttonIds.has(text(buttonId))) {
+            throw new Error(`Remote button ID ${buttonId} is duplicated.`);
+          }
+          buttonIds.add(text(buttonId));
+          const buttonState = Number(button.ButtonState);
+          if (buttonState !== 0 && buttonState !== 1) {
+            throw new Error(
+              `Remote button ${buttonId} has ButtonState ${text(button.ButtonState) || "none"}; only 0 or 1 is valid.`
+            );
+          }
+          const buttonType = text(button.__type);
+          if ((buttonType.includes("HardRemoteButton") || buttonType.includes("GestureRemoteButton")) &&
+              !text(button.ButtonKey).trim()) {
+            throw new Error(`Remote button ${buttonId} is missing the ButtonKey the firmware dispatches on.`);
+          }
+          if (buttonType.includes("SoftRemoteButton") &&
+              !Number.isSafeInteger(Number(button.MenuItem && button.MenuItem.IndexInMenu))) {
+            throw new Error(`Remote button ${buttonId} is missing its MenuItem.IndexInMenu.`);
           }
           ACTION_FIELDS.forEach((field) => {
             const action = button && button[field];
@@ -1401,6 +1869,13 @@
           throw new Error(`Activity ${activityId} is missing remote surface ${surface}.`);
         }
       });
+      const hidCount = keyboardHidCounts.get(activityId) || 0;
+      if (keyboardActivityIds.has(activityId) && hidCount !== 1) {
+        throw new Error(`Activity ${activityId} has ${hidCount} keyboard HID maps; exactly one is required.`);
+      }
+      if (!keyboardActivityIds.has(activityId) && hidCount !== 0) {
+        throw new Error(`Activity ${activityId} has a keyboard HID map without a keyboard role.`);
+      }
     });
     normalizeOrders();
   }

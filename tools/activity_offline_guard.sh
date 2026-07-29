@@ -18,6 +18,7 @@ for required in \
   'core.resourcemanager' \
   'saveResource' \
   'config_new' \
+  'process_activity' \
   'FunctionList' \
   'configVersion' \
   'connect.stateDigest?notify'

@@ -86,8 +86,10 @@ already rooted Logitech Harmony Hub.
 - Activity edits are a three-resource transaction: `ActivityList` owns the
   activity/roles, `MapList` owns paired-remote buttons, and `FunctionList` owns
   the generated control groups. Every activity must have two compatible remote
-  surface maps and exactly one `ActivityFunctionMap`; validate references to
-  both activities and current devices before saving.
+  surface maps and exactly one `ActivityFunctionMap`. Activities with a
+  Bluetooth `KeyboardTextEntryActivityRole` also require a third map, the
+  firmware Bluetooth keyboard/HID map `16420Activity<ActivityId>`. Validate
+  references to both activities and current devices before saving.
 
 ## Verification Checklist
 

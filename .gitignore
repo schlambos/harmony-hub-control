@@ -49,3 +49,4 @@ build/tmp/
 __pycache__/
 *.pyc
 *.ps1xml
+build/zig-cache/
