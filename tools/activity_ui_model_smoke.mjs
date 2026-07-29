@@ -20,6 +20,7 @@ const {
   cloneFunctionMapForActivity,
   reconcileActivityMaps,
   removeActivityFromGraph,
+  pruneActionlessButtons,
   validateGraph
 } = context.__HARMONY_ACTIVITY_TEST__.api;
 
@@ -210,23 +211,34 @@ for (const entry of newMaps) {
     Number(entry["ButtonMapId-"]) > MAP_ID_FLOOR,
     "allocated map IDs never reuse a value Logitech already issued"
   );
-  assert.ok(
-    isPositiveInt(entry.Buttons[0].ButtonId),
-    "new local maps carry locally allocated positive physical button IDs"
-  );
-  assert.ok(
-    Number(entry.Buttons[0].ButtonId) > BUTTON_ID_FLOOR,
-    "allocated button IDs never reuse a value Logitech already issued"
-  );
-  assert.equal(
-    entry.Buttons[0].ButtonState,
-    1,
-    "ButtonState 0 stops the paired remote from transmitting; it must be 1"
-  );
   assert.ok(Array.isArray(entry.Sequences), "Sequences is an empty array, not null");
-  assert.equal(entry.Buttons[0].ButtonAction, null, "blank recovery maps do not inherit actions");
-  assert.equal(entry.Buttons[0].MenuItem.MenuName, "Activity.200");
   assert.match(entry.ButtonMapIdentifier, /Activity200$/);
+  // A blank recovery map inherits no actions, so pruning action-less buttons
+  // legitimately empties it rather than persisting buttons that wedge the remote.
+  assert.equal(
+    entry.Buttons.length,
+    0,
+    "a blank recovery map keeps no action-less buttons"
+  );
+}
+
+const populated = state.config.mapList.ButtonMaps.filter(
+  (entry) =>
+    String(entry.__type).includes("ActivityButtonMap") && (entry.Buttons || []).length > 0
+);
+assert.ok(populated.length > 0, "populated activity maps exist to assert identities against");
+for (const entry of populated) {
+  for (const button of entry.Buttons) {
+    assert.ok(
+      isPositiveInt(button.ButtonId),
+      "every surviving activity button carries a positive allocated ButtonId"
+    );
+    assert.equal(
+      button.ButtonState,
+      1,
+      "ButtonState 0 stops the paired remote from transmitting; it must be 1"
+    );
+  }
 }
 const keyboardHidMap = state.config.mapList.ButtonMaps.find(
   (entry) => entry.ButtonMapIdentifier === "16420Activity200"
@@ -262,39 +274,40 @@ const duplicateFunctions = cloneFunctionMapForActivity(functionMap(100), 100, 30
 assert.equal(duplicateFunctions["ActivityId-"], 300);
 assert.match(duplicateFunctions.UIModeName, /300$/);
 
-const restoreButtonId = newMaps[0].Buttons[0].ButtonId;
-newMaps[0].Buttons[0].ButtonId = 5000;
+const probe = sourceMapB.Buttons[0];
+const restoreButtonId = probe.ButtonId;
+probe.ButtonId = 5000;
 assert.throws(
   () => validateGraph(),
   /Remote button ID 5000 is duplicated/,
   "canonical nonzero button identities must remain unique"
 );
-newMaps[0].Buttons[0].ButtonId = 0;
+probe.ButtonId = 0;
 assert.throws(
   () => validateGraph(),
   /without a positive ButtonId/,
   "zero physical button identities are rejected, not blessed"
 );
-newMaps[0].Buttons[0].ButtonId = restoreButtonId;
+probe.ButtonId = restoreButtonId;
 validateGraph();
 
 // ButtonState is what the paired remote reads; only 0 or 1 may ever be persisted.
-newMaps[0].Buttons[0].ButtonState = 2;
+probe.ButtonState = 2;
 assert.throws(
   () => validateGraph(),
   /ButtonState/,
   "an out-of-range ButtonState is rejected"
 );
-newMaps[0].Buttons[0].ButtonState = 1;
+probe.ButtonState = 1;
 validateGraph();
 
-newMaps[0].Buttons[0].MenuItem.MenuName = "Activity.999";
+probe.MenuItem.MenuName = "Activity.999";
 assert.throws(
   () => validateGraph(),
-  /menu identifies activity 999 but references 200/,
+  /menu identifies activity 999 but references 100/,
   "remote menu identifiers must match their activity map"
 );
-newMaps[0].Buttons[0].MenuItem.MenuName = "Activity.200";
+probe.MenuItem.MenuName = "Activity.100";
 validateGraph();
 
 const removed = removeActivityFromGraph(100);
@@ -380,6 +393,83 @@ validateGraph();
     "deviceList identities are scanned into the pool so allocation cannot collide"
   );
   assert.ok(state.knownIds.has("500"), "existing device identities are pooled");
+}
+
+// An action-less button (no ButtonAction, ButtonLongPressAction or
+// ButtonDoublePressAction) is dropped by the hub but wedges the paired remote:
+// it flashes "starting activity", returns to home and stops responding until
+// power-cycled. Genuine Logitech configs contain zero of them.
+{
+  const actionless = (b) =>
+    !b.ButtonAction && !b.ButtonLongPressAction && !b.ButtonDoublePressAction;
+
+  for (const entry of state.config.mapList.ButtonMaps) {
+    if (!String(entry.__type).includes("ActivityButtonMap")) continue;
+    const stray = (entry.Buttons || []).filter(actionless);
+    assert.equal(
+      stray.length,
+      0,
+      `activity map ${entry.ButtonMapIdentifier} must not persist action-less buttons`
+    );
+  }
+
+  const pruning = reconcileActivityMaps();
+  assert.equal(
+    pruning.prunedActionlessButtons,
+    0,
+    "a clean graph prunes nothing, so pruning is idempotent"
+  );
+  validateGraph();
+
+  const survivingId = state.config.activityList.Activities[0]["Id-"];
+  const probeMap = map(1400, survivingId, 40, 5400, 0);
+  probeMap.ButtonMapIdentifier = `skinActivity${survivingId}`;
+  probeMap.Buttons[0].MenuItem.MenuName = `Activity.${survivingId}`;
+  state.config.mapList.ButtonMaps.push(probeMap);
+  validateGraph();
+
+  probeMap.Buttons[0].ButtonAction = null;
+  probeMap.Buttons[0].ButtonLongPressAction = null;
+  probeMap.Buttons[0].ButtonDoublePressAction = null;
+  assert.throws(
+    () => validateGraph(),
+    /has no press, long-press, or double-press action/,
+    "validateGraph rejects an action-less button in an activity map"
+  );
+
+  assert.equal(
+    pruneActionlessButtons(probeMap),
+    1,
+    "the prune pass drops the action-less button"
+  );
+  assert.equal(probeMap.Buttons.length, 0, "no action-less button survives the prune");
+  validateGraph();
+
+  state.config.mapList.ButtonMaps = state.config.mapList.ButtonMaps.filter(
+    (entry) => entry !== probeMap
+  );
+  validateGraph();
+
+  // The root map legitimately ships action-less shortcut buttons; rejecting or
+  // pruning it would block every save.
+  assert.ok(
+    rootMap.Buttons.length > 0,
+    "the root map survives with its own buttons"
+  );
+  const rootVictim = rootMap.Buttons[0];
+  const rootAction = rootVictim.ButtonAction;
+  const rootLong = rootVictim.ButtonLongPressAction;
+  rootVictim.ButtonAction = null;
+  rootVictim.ButtonLongPressAction = null;
+  validateGraph();
+  assert.equal(
+    rootMap.Buttons.length,
+    1,
+    "an action-less root button is neither pruned nor rejected"
+  );
+  rootVictim.ButtonAction = rootAction;
+  rootVictim.ButtonLongPressAction = rootLong;
+  validateGraph();
 }
 
 console.log("activity UI model smoke: ok");

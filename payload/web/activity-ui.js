@@ -349,6 +349,23 @@
     map.Sequences = [];
   }
 
+  function hasButtonAction(button) {
+    return ACTION_FIELDS.some((field) => {
+      const action = button && button[field];
+      return !!action && typeof action === "object";
+    });
+  }
+
+  // A button with no action wedges the paired remote when it starts the activity.
+  // Genuine Logitech maps vary in button count and only ever list buttons that act.
+  function pruneActionlessButtons(map) {
+    if (!map || !Array.isArray(map.Buttons)) return 0;
+    const acting = map.Buttons.filter(hasButtonAction);
+    const removed = map.Buttons.length - acting.length;
+    if (removed > 0) map.Buttons = acting;
+    return removed;
+  }
+
   const FALLBACK_ACTIVITY_FUNCTION_GROUPS = new Set([
     "NumericBasic",
     "Volume",
@@ -526,6 +543,7 @@
       Sequences: [],
       "SurfaceId-": source["SurfaceId-"] ?? source.SurfaceId
     };
+    pruneActionlessButtons(map);
     return map;
   }
 
@@ -711,6 +729,22 @@
     return repair;
   }
 
+  // Scoped to ActivityButtonMap: the live 16414Root legitimately carries action-less
+  // shortcut buttons, and pruning those would break activity selection and PowerOff.
+  function pruneActionlessActivityButtons() {
+    let removed = 0;
+    buttonMaps().forEach((map) => {
+      if (!isActivityButtonMap(map)) return;
+      const pruned = pruneActionlessButtons(map);
+      if (!pruned) return;
+      removed += pruned;
+      if (Object.prototype.hasOwnProperty.call(map, "DateModified")) {
+        map.DateModified = harmonyDate();
+      }
+    });
+    return removed;
+  }
+
   function reconcileActivityMaps() {
     if (!state.config || !state.config.activityList || !state.config.mapList ||
         !state.config.functionList ||
@@ -732,7 +766,8 @@
         repairedMapIdentities: 0,
         allocatedMapIds: 0,
         allocatedButtonIds: 0,
-        correctedButtonStates: 0
+        correctedButtonStates: 0,
+        prunedActionlessButtons: 0
       };
     }
     const ids = new Set(activities().map((activity) => objectId(activity)).filter(Boolean));
@@ -820,6 +855,7 @@
       createdKeyboardHidMaps.push(map);
     });
 
+    const prunedActionlessButtons = pruneActionlessActivityButtons();
     const identityRepair = repairActivityMapIdentities();
 
     const originalFunctions = functionMaps().slice();
@@ -858,6 +894,7 @@
         routedButtonActions > 0 ||
         createdKeyboardHidMaps.length > 0 ||
         removedKeyboardHidMaps.length > 0 ||
+        prunedActionlessButtons > 0 ||
         identityRepair.repairedMaps > 0,
       removed,
       created,
@@ -872,7 +909,8 @@
       repairedMapIdentities: identityRepair.repairedMaps,
       allocatedMapIds: identityRepair.allocatedMapIds,
       allocatedButtonIds: identityRepair.allocatedButtonIds,
-      correctedButtonStates: identityRepair.correctedButtonStates
+      correctedButtonStates: identityRepair.correctedButtonStates,
+      prunedActionlessButtons
     };
   }
 
@@ -1025,8 +1063,9 @@
         const allocatedMapIds = repair.allocatedMapIds;
         const allocatedButtonIds = repair.allocatedButtonIds;
         const correctedButtonStates = repair.correctedButtonStates;
+        const prunedActionlessButtons = repair.prunedActionlessButtons;
         markNotice(
-          `Recovered an inconsistent Harmony graph: removed ${removed} stale button map${removed === 1 ? "" : "s"}, cleared ${clearedActions} stale activity shortcut${clearedActions === 1 ? "" : "s"}, corrected ${repairedIdentifiers} remote menu identifier${repairedIdentifiers === 1 ? "" : "s"}, added ${createdKeyboardRoles} Bluetooth keyboard role${createdKeyboardRoles === 1 ? "" : "s"}, routed ${routedButtonActions} missing remote action${routedButtonActions === 1 ? "" : "s"}, created ${createdKeyboardHidMaps} keyboard HID map${createdKeyboardHidMaps === 1 ? "" : "s"}, removed ${removedKeyboardHidMaps} stale keyboard HID map${removedKeyboardHidMaps === 1 ? "" : "s"}, created ${created} missing remote-surface map${created === 1 ? "" : "s"}, removed ${removedFunctions} stale control map${removedFunctions === 1 ? "" : "s"}, created ${createdFunctions} missing activity control map${createdFunctions === 1 ? "" : "s"}, issued ${allocatedMapIds} activity button map ID${allocatedMapIds === 1 ? "" : "s"} and ${allocatedButtonIds} physical button ID${allocatedButtonIds === 1 ? "" : "s"}, and enabled ${correctedButtonStates} remote button${correctedButtonStates === 1 ? "" : "s"}. Review and save this repair.`,
+          `Recovered an inconsistent Harmony graph: removed ${removed} stale button map${removed === 1 ? "" : "s"}, cleared ${clearedActions} stale activity shortcut${clearedActions === 1 ? "" : "s"}, corrected ${repairedIdentifiers} remote menu identifier${repairedIdentifiers === 1 ? "" : "s"}, added ${createdKeyboardRoles} Bluetooth keyboard role${createdKeyboardRoles === 1 ? "" : "s"}, routed ${routedButtonActions} missing remote action${routedButtonActions === 1 ? "" : "s"}, created ${createdKeyboardHidMaps} keyboard HID map${createdKeyboardHidMaps === 1 ? "" : "s"}, removed ${removedKeyboardHidMaps} stale keyboard HID map${removedKeyboardHidMaps === 1 ? "" : "s"}, created ${created} missing remote-surface map${created === 1 ? "" : "s"}, removed ${removedFunctions} stale control map${removedFunctions === 1 ? "" : "s"}, created ${createdFunctions} missing activity control map${createdFunctions === 1 ? "" : "s"}, issued ${allocatedMapIds} activity button map ID${allocatedMapIds === 1 ? "" : "s"} and ${allocatedButtonIds} physical button ID${allocatedButtonIds === 1 ? "" : "s"}, enabled ${correctedButtonStates} remote button${correctedButtonStates === 1 ? "" : "s"}, and dropped ${prunedActionlessButtons} action-less activity button${prunedActionlessButtons === 1 ? "" : "s"} that would leave the paired remote unresponsive. Review and save this repair.`,
           "warn"
         );
       } else if (options.afterSave) {
@@ -1487,7 +1526,11 @@
     prepareNewMapIdentities(map);
     normalizeActivityMapIdentifiers(map, newActivityId);
     if (Object.prototype.hasOwnProperty.call(map, "DateModified")) map.DateModified = harmonyDate();
-    if (!keepActions && Array.isArray(map.Buttons)) {
+    if (keepActions) {
+      if (isActivityButtonMap(map)) pruneActionlessButtons(map);
+    } else if (Array.isArray(map.Buttons)) {
+      // The skeleton stays so backfillActivityButtonMaps can route actions into it;
+      // pruneActionlessActivityButtons drops the rest, so it must run after routing.
       map.Buttons.forEach((button) => {
         button.ButtonAction = null;
         button.ButtonLongPressAction = null;
@@ -1789,6 +1832,11 @@
           if (buttonType.includes("SoftRemoteButton") &&
               !Number.isSafeInteger(Number(button.MenuItem && button.MenuItem.IndexInMenu))) {
             throw new Error(`Remote button ${buttonId} is missing its MenuItem.IndexInMenu.`);
+          }
+          if (isActivityButtonMap(map) && !hasButtonAction(button)) {
+            throw new Error(
+              `Activity button map ${text(map.ButtonMapIdentifier) || mapId(map) || "unknown"} button ${buttonId} has no press, long-press, or double-press action; the paired remote stops responding when it starts an activity whose map contains one.`
+            );
           }
           ACTION_FIELDS.forEach((field) => {
             const action = button && button[field];
@@ -2172,6 +2220,7 @@
       reconcileActivityMaps,
       clearOrphanedActivityActions,
       removeActivityFromGraph,
+      pruneActionlessButtons,
       validateGraph,
       activityMapSurfaceKey,
       activityFunctionMaps

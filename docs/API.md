@@ -125,6 +125,26 @@ does).
   `ButtonClientAction.Id` must be preserved, never zeroed.
 - Retain the remote and surface references.
 - Use the new activity ID in `ActivityId-` and `ButtonMapIdentifier`.
+- An `ActivityButtonMap` must contain **only** buttons that carry an action.
+  Never persist a button whose `ButtonAction`, `ButtonLongPressAction` and
+  `ButtonDoublePressAction` are all null, and never pad a map to a fixed size.
+  Genuine Logitech configs contain zero action-less buttons in all 19 maps, and
+  their activity map button counts vary (15 to 54) because Logitech includes only
+  the buttons an activity can actually drive; a two-device activity legitimately
+  has 15 buttons rather than a padded 36.
+
+  This is not cosmetic. The hub tolerates action-less buttons and silently drops
+  them (`getButtonMaps` only registers a button when its parsed action list is
+  non-empty), so every hub-side check passes. The paired physical remote does
+  not: starting an activity whose maps contain an action-less button makes the
+  remote flash "starting activity", return to its home screen, and stop
+  responding to every button until it is power-cycled. Verified on hardware -
+  pruning the action-less buttons from two affected activities restored full
+  remote control immediately.
+
+  Pruning is scoped to activity maps. `RootButtonMap` legitimately ships
+  action-less shortcut buttons, and activity selection and power-off work
+  through it, so it is neither pruned nor rejected.
 
 Firmware identity keys (from `harmony-userconfigreader.decompiled.lua`): maps
 are keyed by the string `ButtonMapIdentifier` (lines 11574/11578/11585); buttons

@@ -315,9 +315,27 @@ function activityRoleDeviceIds(activity) {
   );
 }
 
+// The hub tolerates a button whose three action slots are all empty because
+// harmony-userconfigreader only registers a button that carries at least one
+// action, but the paired remote wedges when it starts an activity whose maps
+// hold one. Every map in a genuine config carries action-bearing buttons only,
+// and genuine activity map sizes vary, so activity maps are never padded.
+function hasButtonAction(button) {
+  return ACTION_FIELDS.some((field) => button?.[field] != null);
+}
+
+function pruneActionlessButtons(map) {
+  if (!Array.isArray(map.Buttons)) return 0;
+  const kept = map.Buttons.filter(hasButtonAction);
+  const pruned = map.Buttons.length - kept.length;
+  if (pruned > 0) map.Buttons = kept;
+  return pruned;
+}
+
 // The single field contract for every ActivityButtonMap this tool creates or
-// touches. It only fills identities that are absent, null or non-positive, so
-// a second run over its own output reports no work.
+// touches. It only fills identities that are absent, null or non-positive and
+// only drops buttons that carry no action at all, so a second run over its own
+// output reports no work.
 function applyActivityMapContract(map, ledger) {
   const repair = {
     identifier: map.ButtonMapIdentifier ?? null,
@@ -327,6 +345,7 @@ function applyActivityMapContract(map, ledger) {
     migratedMapIdAlias: false,
     allocatedButtonIds: 0,
     buttonStateCorrections: 0,
+    prunedActionlessButtons: 0,
     normalizedSequences: false
   };
   if (Object.prototype.hasOwnProperty.call(map, "ButtonMapId")) {
@@ -342,6 +361,9 @@ function applyActivityMapContract(map, ledger) {
     repair.allocatedMapId = map["ButtonMapId-"];
   }
   repair.mapId = map["ButtonMapId-"];
+  // Pruning precedes identity work so a button on its way out never draws a
+  // ButtonId, and this pass is the last thing to touch the map's buttons.
+  repair.prunedActionlessButtons = pruneActionlessButtons(map);
   for (const button of map.Buttons || []) {
     if (!isAllocatedIdentity(button.ButtonId)) {
       button.ButtonId = ledger.allocateButtonId();
@@ -358,7 +380,7 @@ function applyActivityMapContract(map, ledger) {
   }
   if (repair.allocatedMapId !== null || repair.migratedMapIdAlias ||
       repair.allocatedButtonIds > 0 || repair.buttonStateCorrections > 0 ||
-      repair.normalizedSequences) {
+      repair.prunedActionlessButtons > 0 || repair.normalizedSequences) {
     ledger.repairs.push(repair);
   }
   return repair;
@@ -381,8 +403,6 @@ function cloneAllocationMap(source, activity, ledger) {
   delete map.ButtonMapId;
   map.Sequences = [];
   for (const button of map.Buttons || []) {
-    button.ButtonId = ledger.allocateButtonId();
-    button.ButtonState = 1;
     for (const field of ACTION_FIELDS) {
       const action = button?.[field];
       if (action && !roleDeviceIds.has(idText(action["DeviceId-"]))) {
@@ -391,6 +411,12 @@ function cloneAllocationMap(source, activity, ledger) {
         resetActionIdentity(action);
       }
     }
+    // A button the template's devices cannot serve is not padded into the
+    // clone with null actions: action routing gets a chance to give it an
+    // action, and the map contract then either allocates its identity or
+    // prunes it. Only the survivors reach the hub.
+    button.ButtonId = hasButtonAction(button) ? ledger.allocateButtonId() : 0;
+    button.ButtonState = 1;
   }
   return map;
 }
@@ -613,8 +639,11 @@ function composeKeyboardHidMap(source, device, ledger) {
 }
 
 // Repairs maps the tool already persisted: the live hub holds ActivityButtonMaps
-// with no map ID and buttons stuck at ButtonId 0 / ButtonState 0, which is why
-// the paired remote stops transmitting once an activity starts.
+// with no map ID, buttons stuck at ButtonId 0 / ButtonState 0, and buttons left
+// behind with all three actions null, which is why the paired remote stops
+// transmitting once an activity starts. Runs after every creation and routing
+// step so a button that earned an action along the way survives, and it is
+// scoped to activity maps: 16414Root legitimately carries action-less buttons.
 function repairPersistedActivityMaps(mapList, ledger) {
   for (const map of mapList.ButtonMaps) {
     if (!String(map?.__type || "").includes("ActivityButtonMap")) continue;
@@ -622,8 +651,10 @@ function repairPersistedActivityMaps(mapList, ledger) {
   }
 }
 
-// Guards the exact defect this tool once wrote to the hub: an activity map
-// without a map ID, or a button left at ButtonId 0 / ButtonState 0.
+// Guards the exact defects this tool once wrote to the hub: an activity map
+// without a map ID, a button left at ButtonId 0 / ButtonState 0, or a button
+// with no action at all. Device and root maps are exempt from the action check
+// because 16414Root ships action-less shortcut buttons.
 function assertActivityMapIdentities(maps) {
   const owners = new Map();
   for (const map of maps) {
@@ -643,6 +674,12 @@ function assertActivityMapIdentities(maps) {
         throw new Error(
           `post-repair activity map ${identifier} button ${buttonKey} has ` +
           `ButtonState ${idText(button?.ButtonState)}`
+        );
+      }
+      if (isActivityMap && !hasButtonAction(button)) {
+        throw new Error(
+          `post-repair activity map ${identifier} button ${buttonKey} has no ` +
+          "action and would wedge the paired remote"
         );
       }
       const buttonId = identityNumber(button?.ButtonId);
@@ -665,6 +702,10 @@ function identityTotals(repairs) {
     allocatedButtonIds: totals.allocatedButtonIds + repair.allocatedButtonIds,
     buttonStateCorrections:
       totals.buttonStateCorrections + repair.buttonStateCorrections,
+    prunedActionlessButtons:
+      totals.prunedActionlessButtons + repair.prunedActionlessButtons,
+    prunedActionlessMaps:
+      totals.prunedActionlessMaps + (repair.prunedActionlessButtons > 0 ? 1 : 0),
     normalizedSequences:
       totals.normalizedSequences + (repair.normalizedSequences ? 1 : 0)
   }), {
@@ -672,6 +713,8 @@ function identityTotals(repairs) {
     migratedMapIdAliases: 0,
     allocatedButtonIds: 0,
     buttonStateCorrections: 0,
+    prunedActionlessButtons: 0,
+    prunedActionlessMaps: 0,
     normalizedSequences: 0
   });
 }
@@ -1262,6 +1305,8 @@ const condensed = {
   allocatedMapIdCount: identities.allocatedMapIds,
   allocatedButtonIdCount: identities.allocatedButtonIds,
   buttonStateCorrectionCount: identities.buttonStateCorrections,
+  prunedActionlessButtonCount: identities.prunedActionlessButtons,
+  prunedActionlessMapCount: identities.prunedActionlessMaps,
   migratedMapIdAliasCount: identities.migratedMapIdAliases,
   normalizedSequenceCount: identities.normalizedSequences,
   identityRepairs: summary.identityRepairs,
