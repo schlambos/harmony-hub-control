@@ -1153,6 +1153,20 @@ function repairGraph(config) {
     });
   }
 
+  // A paired physical remote refuses to transmit for a Bluetooth device whose
+  // IsKeyboardAssociated is true and reports "use the Harmony App to pair".
+  for (const device of devices.values()) {
+    if (device.transport !== 32 || !device.keyboardAssociated) continue;
+    const inActivity = activityList.Activities.some((activity) =>
+      (activity.Roles || []).some((role) => idText(role["DeviceId-"]) === device.id)
+    );
+    if (!inActivity) continue;
+    problems.push(
+      `Device ${device.name} (${device.id}) is used by an activity with Transport 32 and ` +
+      `IsKeyboardAssociated true; a paired remote cannot control it until that is false`
+    );
+  }
+
   if (problems.length) {
     throw new Error(`repair is incomplete:\n- ${[...new Set(problems)].join("\n- ")}`);
   }

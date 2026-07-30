@@ -253,7 +253,9 @@ if (mode === "reuse-template") {
 
   templateDevice.Name = options.name || identity.name;
   templateDevice.BTAddress = options.address.toUpperCase();
-  templateDevice.IsKeyboardAssociated = true;
+  // A paired physical remote refuses to transmit for a Bluetooth device whose
+  // IsKeyboardAssociated is true and reports "use the Harmony App to pair".
+  templateDevice.IsKeyboardAssociated = false;
   templateDevice.Transport = 32;
   templateDevice.ControlPort = 7;
 
@@ -315,7 +317,8 @@ targetDevice.ParentDeviceModel = identity.parentModel;
 targetDevice.ParentDeviceId = null;
 targetDevice["ParentDevice-"] = 0;
 targetDevice.BTAddress = options.address.toUpperCase();
-targetDevice.IsKeyboardAssociated = true;
+// See above: true blocks physical-remote control of this device.
+targetDevice.IsKeyboardAssociated = false;
 targetDevice.Transport = 32;
 targetDevice.ControlPort = 7;
 targetDevice.PrivateAddType = 1;
