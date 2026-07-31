@@ -1,0 +1,320 @@
+/* Loaded AFTER vendor/activity-ui.css so these rules win. */
+
+#view-activities {
+  color: var(--text-primary);
+}
+
+#view-activities .section-head h2 {
+  color: var(--text-primary);
+}
+
+#view-activities .section-lead,
+#view-activities .help,
+#view-activities .muted,
+#view-activities .mini {
+  color: var(--text-secondary);
+}
+
+#view-activities .activity-command {
+  gap: var(--space-4);
+}
+
+#view-activities .panel,
+#view-activities .activity-roster,
+#view-activities .activity-editor,
+#view-activities .activity-empty {
+  background: var(--surface-secondary) !important;
+  border: 1px solid var(--border-default) !important;
+  color: var(--text-primary) !important;
+  box-shadow: none !important;
+}
+
+#view-activities .activity-hero {
+  border: 1px solid rgba(61, 202, 160, 0.24) !important;
+  border-radius: var(--radius-panel) !important;
+  background:
+    radial-gradient(circle at 83% 8%, rgba(61, 202, 160, 0.16), transparent 34%),
+    linear-gradient(135deg, #0e1a1c 0%, #123336 62%, #0f4b47 100%) !important;
+  box-shadow: none !important;
+  color: var(--text-primary) !important;
+}
+
+#view-activities .activity-hero:after {
+  border-color: rgba(255, 255, 255, 0.04) !important;
+}
+
+#view-activities .activity-eyebrow {
+  color: var(--status-live) !important;
+}
+
+#view-activities .activity-hero h3,
+#view-activities .activity-hero .activity-current-meta {
+  color: rgba(232, 234, 237, 0.9) !important;
+}
+
+#view-activities .activity-live-dot {
+  background: var(--status-live) !important;
+  box-shadow: 0 0 0 5px var(--status-live-glow) !important;
+}
+
+#view-activities .activity-hero-actions button {
+  border: 1px solid rgba(255, 255, 255, 0.22) !important;
+  background: rgba(255, 255, 255, 0.08) !important;
+  color: #fff !important;
+}
+
+#view-activities .activity-hero-actions button:hover {
+  background: rgba(255, 255, 255, 0.16) !important;
+}
+
+#view-activities .activity-notice {
+  display: block;
+  border: 1px solid var(--border-default) !important;
+  border-left: 4px solid var(--accent-primary) !important;
+  background: var(--surface-primary) !important;
+  color: var(--text-secondary) !important;
+}
+
+#view-activities .activity-notice.error {
+  border-color: var(--border-error) !important;
+  border-left-color: var(--status-error) !important;
+  background: var(--status-error-muted) !important;
+  color: var(--status-error) !important;
+}
+
+#view-activities .activity-notice.warn {
+  border-color: var(--border-warn) !important;
+  border-left-color: var(--status-warn) !important;
+  background: var(--status-warn-muted) !important;
+  color: #e6c36a !important;
+}
+
+#view-activities .activity-roster {
+  top: calc(var(--topbar-h) + 1px + var(--space-4));
+}
+
+#view-activities .activity-list {
+  background: var(--surface-inset) !important;
+  border: 1px solid var(--border-default) !important;
+}
+
+#view-activities .activity-list-empty {
+  background: transparent !important;
+  color: var(--text-tertiary) !important;
+}
+
+#view-activities .activity-card {
+  background: var(--surface-elevated) !important;
+  border: 1px solid var(--border-default) !important;
+  color: var(--text-primary) !important;
+}
+
+#view-activities .activity-card:hover,
+#view-activities .activity-card.selected {
+  border-color: var(--border-strong) !important;
+  background: var(--surface-primary) !important;
+}
+
+#view-activities .activity-card.selected {
+  box-shadow: inset 3px 0 0 var(--accent-primary) !important;
+}
+
+#view-activities .activity-card.running {
+  border-color: var(--border-live) !important;
+  background: var(--status-live-muted) !important;
+}
+
+#view-activities .activity-card.running.selected {
+  box-shadow: inset 3px 0 0 var(--status-live) !important;
+}
+
+#view-activities .activity-card-main {
+  background: transparent !important;
+  color: inherit !important;
+  border: 0 !important;
+  box-shadow: none !important;
+}
+
+#view-activities .activity-card-name {
+  color: var(--text-primary) !important;
+}
+
+#view-activities .activity-card-meta {
+  color: var(--text-tertiary) !important;
+}
+
+#view-activities .activity-card-order button {
+  border: 1px solid var(--border-default) !important;
+  background: var(--surface-secondary) !important;
+  color: var(--text-secondary) !important;
+  min-width: 32px;
+  min-height: 32px;
+}
+
+#view-activities .activity-empty-mark {
+  border: 1px solid var(--border-default) !important;
+  background: var(--surface-primary) !important;
+  color: var(--accent-primary) !important;
+}
+
+#view-activities .activity-editor-head {
+  background: linear-gradient(180deg, var(--surface-elevated), var(--surface-secondary)) !important;
+  border-bottom: 1px solid var(--border-default) !important;
+}
+
+#view-activities .activity-tabs {
+  background: var(--surface-primary) !important;
+  border-bottom: 1px solid var(--border-default) !important;
+}
+
+#view-activities .activity-tab {
+  background: transparent !important;
+  color: var(--text-tertiary) !important;
+  border: 0 !important;
+  box-shadow: none !important;
+}
+
+#view-activities .activity-tab:hover {
+  color: var(--text-secondary) !important;
+}
+
+#view-activities .activity-tab.active {
+  background: var(--surface-secondary) !important;
+  color: var(--accent-primary) !important;
+  border-bottom: 2px solid var(--accent-primary) !important;
+}
+
+#view-activities .activity-section-title h4,
+#view-activities .activity-editor h3,
+#view-activities .activity-editor h4,
+#view-activities label {
+  color: var(--text-primary) !important;
+}
+
+#view-activities input,
+#view-activities select,
+#view-activities textarea {
+  background: var(--surface-inset) !important;
+  border: 1px solid var(--border-default) !important;
+  color: var(--text-primary) !important;
+  border-radius: 8px !important;
+  box-shadow: none !important;
+}
+
+#view-activities input:focus,
+#view-activities select:focus,
+#view-activities textarea:focus {
+  outline: none !important;
+  border-color: var(--border-accent) !important;
+  box-shadow: var(--ring-focus) !important;
+}
+
+#view-activities .activity-role,
+#view-activities .activity-button-row,
+#view-activities .callout {
+  background: var(--surface-primary) !important;
+  border: 1px solid var(--border-default) !important;
+  color: var(--text-secondary) !important;
+}
+
+#view-activities .callout strong {
+  color: var(--text-primary) !important;
+}
+
+#view-activities .activity-map-summary,
+#view-activities .activity-button-key span {
+  color: var(--text-tertiary) !important;
+}
+
+#view-activities .activity-raw-grid textarea,
+#view-activities .activity-raw-functions textarea {
+  font-family: var(--font-mono) !important;
+  background: var(--surface-inset) !important;
+  color: var(--text-primary) !important;
+}
+
+#view-activities .activity-dirty {
+  color: var(--status-warn) !important;
+}
+
+#view-activities .activity-savebar {
+  background: rgba(18, 21, 26, 0.96) !important;
+  border-top: 1px solid var(--border-default) !important;
+  backdrop-filter: blur(10px);
+}
+
+#view-activities .activity-save-state {
+  color: var(--text-secondary) !important;
+}
+
+#view-activities button,
+#view-activities a.button {
+  border-radius: var(--radius-btn) !important;
+  border: 1px solid var(--border-default) !important;
+  background: var(--surface-elevated) !important;
+  color: var(--text-primary) !important;
+  box-shadow: none !important;
+}
+
+#view-activities button:hover,
+#view-activities a.button:hover {
+  border-color: var(--border-strong) !important;
+  background: var(--surface-primary) !important;
+}
+
+#view-activities button.secondary,
+#view-activities a.button.secondary {
+  background: var(--surface-primary) !important;
+  color: var(--text-secondary) !important;
+}
+
+#view-activities button.danger {
+  background: transparent !important;
+  border-color: var(--border-error) !important;
+  color: var(--status-error) !important;
+}
+
+#view-activities .activity-savebar button:not(.secondary):not(.danger):not(.ghost),
+#view-activities #activitySave {
+  background: var(--accent-primary) !important;
+  border-color: transparent !important;
+  color: var(--text-inverse) !important;
+}
+
+#view-activities .activity-savebar button:not(.secondary):not(.danger):not(.ghost):hover,
+#view-activities #activitySave:hover {
+  background: var(--accent-hover) !important;
+}
+
+#view-activities button.ghost {
+  background: transparent !important;
+  border-color: transparent !important;
+  color: var(--text-secondary) !important;
+}
+
+#view-activities button.ghost:hover {
+  color: var(--text-primary) !important;
+  background: var(--surface-primary) !important;
+}
+
+#view-activities .activity-notice {
+  padding: var(--space-3) var(--space-4) !important;
+  font-size: var(--text-body-sm) !important;
+  line-height: 1.5 !important;
+}
+
+#view-activities .activity-layout {
+  grid-template-columns: minmax(270px, 340px) minmax(0, 1fr);
+  gap: var(--space-4);
+}
+
+#view-activities a.button.wiz-cta {
+  background: var(--accent-primary) !important;
+  border-color: transparent !important;
+  color: var(--text-inverse) !important;
+  text-decoration: none;
+}
+
+#view-activities a.button.wiz-cta:hover {
+  background: var(--accent-hover) !important;
+}
