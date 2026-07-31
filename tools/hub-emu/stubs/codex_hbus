@@ -1,0 +1,4 @@
+#!/bin/sh
+# hub-emu: run the REAL codex_hbus client (MIPS32 BE) under qemu user-mode.
+# It connects to the emulated HBus WebSocket gateway on 127.0.0.1:8088.
+exec qemu-mips /opt/hub/bin/codex_hbus.mips "$@"

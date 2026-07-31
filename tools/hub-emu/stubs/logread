@@ -1,0 +1,3 @@
+#!/bin/sh
+# hub-emu stub: syslog ring buffer is not emulated.
+exit 0

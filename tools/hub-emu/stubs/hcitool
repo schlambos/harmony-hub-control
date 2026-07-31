@@ -1,0 +1,16 @@
+#!/bin/sh
+# hub-emu stub: emulate the box's hcitool for the paths codex_webui exercises.
+# `hcitool con` must show an authenticated+encrypted ACL link for every
+# Bluetooth device address in DeviceList.json so ensure_ir_bluetooth_connection
+# treats targets as already connected (matches the live hub's steady state).
+if [ "${1:-}" = "con" ]; then
+    echo "Connections:"
+    grep -o '"BTAddress":"[^"]*"' /data/resources/DeviceList.json 2>/dev/null \
+        | cut -d'"' -f4 | sort -u | while read -r addr; do
+        [ -n "$addr" ] && [ "$addr" != "00:00:00:00:00:00" ] || continue
+        echo "	< ACL $addr handle 1 state 1 lm SLAVE AUTH ENCRYPT"
+    done
+    exit 0
+fi
+# dc (disconnect) and anything else: succeed quietly.
+exit 0

@@ -1,0 +1,19 @@
+#!/bin/sh
+# hub-emu stub: HAL local-TCP helper. Real HAL drives the CC2544/BT silicon;
+# here every call reports a healthy, connected Bluetooth runtime so the
+# webui's BT status paths behave like the live hub's steady state.
+CMD="${1:-}"
+ADDR=$(grep -o '"BTAddress":"[^"]*"' /data/resources/DeviceList.json 2>/dev/null \
+    | cut -d'"' -f4 | grep -v '^00:00:00:00:00:00$' | head -1)
+case "$CMD" in
+    bthid.status)
+        printf '{"id":1,"code":200,"connected":true,"type":"btkeyboard","bdaddr":"%s"}\n' "${ADDR:-}"
+        ;;
+    bthid.connect|bthid.disconnect)
+        printf '{"id":1,"code":200,"connected":true}\n'
+        ;;
+    *)
+        printf '{"id":1,"code":200}\n'
+        ;;
+esac
+exit 0
