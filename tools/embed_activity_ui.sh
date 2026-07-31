@@ -38,3 +38,7 @@ emit_array() {
 } > "$TMP"
 
 mv "$TMP" "$OUT"
+
+# Regenerate the harmony shell embed (production HTML/JS/CSS arrays) so all
+# embedded-asset generation happens before any compile step that calls this.
+sh "$SCRIPT_DIR/package_harmony_shell.sh"
