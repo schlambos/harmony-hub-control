@@ -1482,16 +1482,23 @@ static int load_ir_inventory(struct ir_inventory *inv) {
 }
 
 static int find_ir_device_by_name(const char *name, char *device_id, size_t device_id_len) {
-    struct ir_inventory inv;
+    struct ir_inventory *inv;
     int i;
     if (!name || !name[0] || !device_id || !device_id_len) return -1;
-    if (load_ir_inventory(&inv) != 0) return -1;
-    for (i = 0; i < inv.device_count; i++) {
-        if (strcasecmp(inv.devices[i].name, name) == 0) {
-            snprintf(device_id, device_id_len, "%s", inv.devices[i].id);
+    /* struct ir_inventory is ~12 MB; it must live on the heap like the other
+     * call sites (ir_control_panel etc.) or the request child overflows its
+     * stack and dies before replying. */
+    inv = (struct ir_inventory *)calloc(1, sizeof(*inv));
+    if (!inv) return -1;
+    if (load_ir_inventory(inv) != 0) { free(inv); return -1; }
+    for (i = 0; i < inv->device_count; i++) {
+        if (strcasecmp(inv->devices[i].name, name) == 0) {
+            snprintf(device_id, device_id_len, "%s", inv->devices[i].id);
+            free(inv);
             return 0;
         }
     }
+    free(inv);
     return -1;
 }
 
