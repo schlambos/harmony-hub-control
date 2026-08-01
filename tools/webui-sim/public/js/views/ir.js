@@ -23,6 +23,17 @@ import {
   normalizeRemoteCentralPath,
   describeInventory,
 } from "./ir-model.js";
+import {
+  DOC_LINKS,
+  detectFormat,
+  parseLibraryText,
+  loadLibraryIndex,
+  filterLibraryIndex,
+  fetchLibraryFile,
+  rowsToImportPayload,
+  planImport,
+  formatSourceErrors,
+} from "../ir-library.js";
 
 /* One amber primary on the whole page: the live sweep. Everything repeatable
    is btn-quiet, every delete is a red two-step danger guard. */
@@ -793,12 +804,32 @@ export function createIrView(section) {
     updateBatchButtons();
   }
 
-  /* ---------------- IRDB import ---------------- */
+  /* ---------------- IRDB import + guided find ---------------- */
+  const findState = {
+    matches: [],
+    preview: null, // { path, source, format, rows, supported, text, plan }
+    indexError: "",
+    sourceErrors: [],
+  };
+
   function updateImportPreview() {
     const { rows, skipped } = parseIrdbLines(refs.importPayload.value);
-    setText(refs.importPreview, rows.length || skipped
-      ? `${rows.length} command${rows.length === 1 ? "" : "s"} ready to stage · ${skipped} line${skipped === 1 ? "" : "s"} the hub will skip`
-      : "Paste pipe rows (name|keycode) or IRDB CSV rows (name,protocol,device,subdevice,function).");
+    const device = inventory?.devices?.find((d) => d.id === refs.importDevice.value);
+    const existing = device?.commands?.length ?? 0;
+    const shaped = rows.map((r) => ({
+      name: r.name,
+      mode: r.mode === "irdb" ? "keycode" : r.mode,
+      code: r.code,
+      supported: Boolean(r.name && r.code),
+    }));
+    const plan = planImport(shaped, existing);
+    setText(
+      refs.importPreview,
+      rows.length || skipped
+        ? `${plan.summary} ${plan.notes.slice(1).join(" ")} Hub backs up DeviceList before writing.`
+        : "Paste pipe rows (name|keycode) or IRDB CSV rows (name,protocol,device,subdevice,function). " +
+          `Limits: ${LIMITS.storedCommands} commands per device, ${LIMITS.batchCommands} per import request. The hub backs up DeviceList before writing.`,
+    );
   }
 
   async function doImport() {
@@ -813,7 +844,7 @@ export function createIrView(section) {
       return;
     }
     refs.importBtn.disabled = true;
-    setNotice(refs.importStatus, "info", "Importing…");
+    setNotice(refs.importStatus, "info", "Importing… the hub takes a DeviceList backup first.");
     try {
       const j = await postApiForm("/api/irdb-import", { deviceId, payload });
       setNotice(refs.importStatus, "ok", j.message || "Import complete.");
@@ -824,6 +855,227 @@ export function createIrView(section) {
       setNotice(refs.importStatus, "error", error.message || "Import failed.");
     } finally {
       refs.importBtn.disabled = false;
+    }
+  }
+
+  function renderFindResults() {
+    clear(refs.findResults);
+    if (findState.indexError) {
+      refs.findResults.appendChild(notice("error", findState.indexError));
+      return;
+    }
+    if (findState.sourceErrors.length) {
+      refs.findResults.appendChild(
+        notice("warn", formatSourceErrors(findState.sourceErrors)),
+      );
+    }
+    if (!findState.matches.length) {
+      refs.findResults.appendChild(
+        el("p", {
+          className: "mini muted",
+          text: "Search results appear here. IRDB loads in this browser — the hub stays offline. For Flipper codes, download a .ir from GitHub and drop it below.",
+        }),
+      );
+      return;
+    }
+    const list = el("div", { className: "setup-fields" });
+    findState.matches.forEach((m) => {
+      const btn = button("Preview", "btn-quiet btn-sm", () => previewLibraryEntry(m));
+      list.appendChild(
+        el("div", {
+          className: "act-card",
+          children: [
+            el("div", {
+              className: "act-main",
+              children: [
+                el("span", { className: "act-name mono", text: m.path }),
+                el("span", {
+                  className: "act-meta mono",
+                  text: `${m.source} · score ${m.score}`,
+                }),
+              ],
+            }),
+            el("div", { className: "act-side", children: [btn] }),
+          ],
+        }),
+      );
+    });
+    refs.findResults.appendChild(list);
+  }
+
+  function renderFindPreview() {
+    clear(refs.findPreview);
+    const p = findState.preview;
+    if (!p) {
+      refs.findPreview.appendChild(
+        el("p", {
+          className: "mini muted",
+          text: "Pick a match or drop a code file to preview commands before anything is written.",
+        }),
+      );
+      refs.findImportBtn.disabled = true;
+      return;
+    }
+    const device = inventory?.devices?.find((d) => d.id === refs.findDevice.value);
+    const existing = device?.commands?.length ?? 0;
+    const plan = planImport(p.rows, existing);
+    p.plan = plan;
+    refs.findPreview.appendChild(
+      el("div", {
+        children: [
+          el("p", {
+            className: "mini",
+            text: `${p.source} · ${p.path || p.filename || "file"} · format ${p.format}`,
+          }),
+          el("p", { className: "mini", text: plan.summary }),
+          el("p", { className: "mini muted", text: plan.notes.slice(1).join(" ") }),
+          el("p", {
+            className: "mini muted",
+            text: "The hub backs up DeviceList.json before import. Nothing is written until you press Import to device.",
+          }),
+          el("pre", {
+            className: "mono mini",
+            attrs: { style: "max-height:160px;overflow:auto;white-space:pre-wrap" },
+            text: p.rows
+              .filter((r) => r.supported)
+              .slice(0, 24)
+              .map((r) => `${r.name} · ${r.mode} · ${r.meta || ""}`)
+              .join("\n") || "(no supported commands)",
+          }),
+        ],
+      }),
+    );
+    refs.findImportBtn.disabled = plan.willImport <= 0 || !refs.findDevice.value;
+  }
+
+  async function doFindSearch() {
+    const q = [refs.findMfr.value, refs.findModel.value].map((s) => s.trim()).filter(Boolean).join(" ");
+    refs.findSearchBtn.disabled = true;
+    findState.indexError = "";
+    findState.sourceErrors = [];
+    findState.matches = [];
+    findState.preview = null;
+    setNotice(refs.findStatus, "info", "Loading IRDB index in this browser…");
+    renderFindResults();
+    renderFindPreview();
+    try {
+      const { entries, errors } = await loadLibraryIndex({ sources: ["irdb"] });
+      findState.sourceErrors = errors;
+      const { matches, message } = filterLibraryIndex(entries, q, { sourceErrors: errors });
+      findState.matches = matches;
+      if (!matches.length) {
+        setNotice(refs.findStatus, "warn", message);
+      } else if (errors.length) {
+        setNotice(refs.findStatus, "warn", message);
+      } else {
+        setNotice(refs.findStatus, "ok", message);
+      }
+      renderFindResults();
+    } catch (error) {
+      findState.indexError = error.message || String(error);
+      setNotice(refs.findStatus, "error", findState.indexError);
+      renderFindResults();
+    } finally {
+      refs.findSearchBtn.disabled = false;
+    }
+  }
+
+  async function previewLibraryEntry(entry) {
+    setNotice(refs.findStatus, "info", `Fetching ${entry.path} in this browser…`);
+    refs.findSearchBtn.disabled = true;
+    try {
+      const text = await fetchLibraryFile(entry);
+      const parsed = parseLibraryText(text, {
+        filename: entry.path,
+        formatHint: entry.source === "irdb" ? "irdb-csv" : entry.source === "flipper" ? "flipper" : "",
+      });
+      findState.preview = {
+        ...parsed,
+        source: entry.source,
+        path: entry.path,
+        text,
+      };
+      setNotice(
+        refs.findStatus,
+        parsed.supported ? "ok" : "warn",
+        parsed.supported
+          ? `Preview ready — ${parsed.supported} supported command${parsed.supported === 1 ? "" : "s"}.`
+          : "File loaded but no supported commands were decoded.",
+      );
+      renderFindPreview();
+    } catch (error) {
+      setNotice(refs.findStatus, "error", error.message || "Fetch failed.");
+    } finally {
+      refs.findSearchBtn.disabled = false;
+    }
+  }
+
+  function previewLocalFile(file, text) {
+    const parsed = parseLibraryText(text, { filename: file.name });
+    findState.preview = {
+      ...parsed,
+      source: "file",
+      filename: file.name,
+      path: file.name,
+      text,
+    };
+    findState.matches = [];
+    renderFindResults();
+    renderFindPreview();
+    setNotice(
+      refs.findStatus,
+      parsed.supported ? "ok" : "warn",
+      `Detected ${parsed.format} · ${parsed.supported} supported command${parsed.supported === 1 ? "" : "s"} in ${file.name}.`,
+    );
+  }
+
+  async function doFindImport() {
+    const p = findState.preview;
+    const deviceId = refs.findDevice.value;
+    if (!p?.rows?.length) {
+      setNotice(refs.findStatus, "error", "Nothing to import — preview a file with supported commands first.");
+      return;
+    }
+    if (!isSafeLabel(deviceId, LIMITS.deviceId)) {
+      setNotice(refs.findStatus, "error", "Choose a device to import into.");
+      return;
+    }
+    const device = inventory?.devices?.find((d) => d.id === deviceId);
+    const plan = planImport(p.rows, device?.commands?.length ?? 0);
+    const payload = rowsToImportPayload(p.rows, { max: plan.willImport });
+    if (!payload || plan.willImport <= 0) {
+      setNotice(
+        refs.findStatus,
+        "error",
+        `No importable rows (${plan.summary})`,
+      );
+      return;
+    }
+    refs.findImportBtn.disabled = true;
+    setNotice(
+      refs.findStatus,
+      "info",
+      `Importing ${plan.willImport} command${plan.willImport === 1 ? "" : "s"}… the hub backs up DeviceList first.`,
+    );
+    try {
+      const j = await postApiForm("/api/irdb-import", { deviceId, payload });
+      setNotice(
+        refs.findStatus,
+        "ok",
+        `${j.message || "Import complete."} Planned ${plan.willImport} of ${plan.found} found (${plan.unsupported} unsupported` +
+          (plan.unsafeName ? `, ${plan.unsafeName} unsafe name` : "") +
+          (plan.truncated ? `, ${plan.truncated} held back by limits` : "") +
+          ").",
+      );
+      refs.importPayload.value = payload;
+      refs.importDevice.value = deviceId;
+      updateImportPreview();
+      await mutated();
+    } catch (error) {
+      setNotice(refs.findStatus, "error", error.message || "Import failed.");
+    } finally {
+      refs.findImportBtn.disabled = false;
+      renderFindPreview();
     }
   }
 
@@ -916,7 +1168,7 @@ export function createIrView(section) {
 
   /* ---------------- shared device selects ---------------- */
   function renderDeviceSelects() {
-    for (const sel of [refs.learnDevice, refs.importDevice]) {
+    for (const sel of [refs.learnDevice, refs.importDevice, refs.findDevice].filter(Boolean)) {
       const current = sel.value;
       clear(sel);
       sel.appendChild(el("option", { text: "Choose a device…", attrs: { value: "" } }));
@@ -1057,7 +1309,79 @@ export function createIrView(section) {
     }));
     section.appendChild(midRow);
 
-    /* two-up: import | remotecentral */
+    /* Guided find (browser-side libraries) */
+    refs.findMfr = textInput("irFindMfr", { placeholder: "Manufacturer (any spelling)" });
+    refs.findModel = textInput("irFindModel", { placeholder: "Model (optional)" });
+    refs.findSearchBtn = button("Search IRDB", "btn-secondary", doFindSearch);
+    refs.findDevice = el("select", { attrs: { id: "irFindDevice" } });
+    refs.findDevice.addEventListener("change", () => renderFindPreview());
+    refs.findImportBtn = button("Import to device", "btn-primary", doFindImport);
+    refs.findImportBtn.disabled = true;
+    refs.findFile = el("input", {
+      attrs: { type: "file", id: "irFindFile", accept: ".csv,.ir,.txt,.conf,.lirc,.lircd,text/csv,text/plain" },
+    });
+    refs.findFile.addEventListener("change", () => {
+      const file = refs.findFile.files && refs.findFile.files[0];
+      if (!file) return;
+      const reader = new FileReader();
+      reader.onload = () => previewLocalFile(file, String(reader.result || ""));
+      reader.onerror = () => setNotice(refs.findStatus, "error", `Could not read ${file.name}.`);
+      reader.readAsText(file);
+    });
+    refs.findResults = el("div");
+    refs.findPreview = el("div");
+    refs.findStatus = el("div", { className: "setup-status" });
+    const docLinks = el("p", {
+      className: "mini muted",
+      children: [
+        el("span", { text: "Sources (open in your browser): " }),
+        ...DOC_LINKS.flatMap((d, i) => {
+          const nodes = [
+            el("a", { attrs: { href: d.href, target: "_blank", rel: "noopener noreferrer" }, text: d.label }),
+          ];
+          if (i < DOC_LINKS.length - 1) nodes.push(el("span", { text: " · " }));
+          return nodes;
+        }),
+      ],
+    });
+    section.appendChild(panel({
+      label: "Find codes",
+      title: "Find codes for my device",
+      children: [
+        notice(
+          "info",
+          "IRDB search and file reads run in this browser so the hub can stay cloud-blocked. " +
+            "Only the final Import posts codes to the hub. " +
+            "Flipper-IRDB cannot be browsed here (its package index is blocked by the CDN size limit) — " +
+            "download a .ir from GitHub and drop it below. " +
+            `Limits: ${LIMITS.storedCommands} stored commands per device, ${LIMITS.batchCommands} per import batch.`,
+        ),
+        docLinks,
+        el("div", {
+          className: "row",
+          children: [
+            field("Manufacturer", refs.findMfr),
+            field("Model", refs.findModel),
+          ],
+        }),
+        el("div", {
+          className: "setup-actions",
+          children: [refs.findSearchBtn],
+        }),
+        field("Or drop a code file", refs.findFile),
+        el("p", {
+          className: "setup-field-hint",
+          text: "Accepts IRDB CSV, Flipper .ir (from a file you downloaded), pipe rows (name|keycode), and Pronto hex. Format is detected automatically.",
+        }),
+        refs.findResults,
+        field("Import into device", refs.findDevice),
+        refs.findPreview,
+        el("div", { className: "setup-actions", children: [refs.findImportBtn] }),
+        refs.findStatus,
+      ],
+    }));
+
+    /* two-up: manual paste | remotecentral */
     const lowRow = el("div", { className: "row" });
 
     refs.importDevice = el("select", { attrs: { id: "irImportDevice" } });
@@ -1067,9 +1391,13 @@ export function createIrView(section) {
     refs.importBtn = button("Import", "btn-quiet", doImport);
     refs.importStatus = el("div", { className: "setup-status" });
     lowRow.appendChild(panel({
-      label: "IRDB import",
-      title: "Import codes",
+      label: "Manual paste",
+      title: "Paste codes",
       children: [
+        el("p", {
+          className: "help",
+          text: "Power-user path: paste pipe rows or IRDB CSV directly. Prefer Find codes above when you do not already have a file.",
+        }),
         field("Device", refs.importDevice),
         field("Codes", refs.importPayload),
         refs.importPreview,
@@ -1086,7 +1414,7 @@ export function createIrView(section) {
       label: "RemoteCentral",
       title: "RemoteCentral",
       children: [
-        notice("info", "Outbound, offline by design: this asks the hub itself to read remotecentral.com through /api/remotecentral-fetch. The hub's outbound reader can fail (redirect, timeout, or blocked egress) and the error is shown as-is. Nothing is fetched until you press Fetch."),
+        notice("info", "This path still asks the hub to fetch remotecentral.com (/api/remotecentral-fetch) — an existing outbound exception. Prefer Find codes (browser-side) when offline policy matters. Nothing is fetched until you press Fetch."),
         field("Path", refs.rcPath),
         el("div", { className: "setup-actions", children: [refs.rcBtn] }),
         refs.rcResults,
