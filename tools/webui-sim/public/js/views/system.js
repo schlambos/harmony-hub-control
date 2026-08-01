@@ -31,6 +31,7 @@ import {
   authDisabledMessage,
   formatBytes,
   updateCheckSummary,
+  missingBinariesRemedy,
 } from "./system-model.js";
 
 export function createSystemView(section) {
@@ -339,6 +340,8 @@ export function createSystemView(section) {
       dl.appendChild(row);
     }
     els.binList.appendChild(dl);
+    const remedy = missingBinariesRemedy(updateStatus.files);
+    if (remedy) els.binList.appendChild(notice("warn", remedy));
   }
 
   /* ---- build the DOM once --------------------------------------------- */

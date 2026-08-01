@@ -177,3 +177,22 @@ export function updateCheckSummary(checkState) {
   }
   return `No update available — last checked ${when}${via}.`;
 }
+
+/**
+ * Remedy when /api/update-status reports files missing under /data/codex/bin.
+ * That path is what render_update_status_json / update_dest_path check; the
+ * installers upload every payload/bin/MANIFEST.txt entry there.
+ */
+export function missingBinariesRemedy(files) {
+  const list = Array.isArray(files) ? files : [];
+  const missing = list.filter((f) => f && f.present === false).map((f) => f.name).filter(Boolean);
+  if (!missing.length) return "";
+  const names = missing.length <= 4
+    ? missing.join(", ")
+    : `${missing.slice(0, 3).join(", ")} and ${missing.length - 3} more`;
+  return (
+    `${names} ${missing.length === 1 ? "is" : "are"} not on the hub under /data/codex/bin. ` +
+    "Re-run the host installer (install_webui.py / install_webui.ps1) so every MANIFEST.txt binary is uploaded — " +
+    "browser self-update is disabled and will not restore a missing install."
+  );
+}
