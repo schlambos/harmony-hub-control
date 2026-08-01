@@ -120,16 +120,24 @@ Send log is a separate collapsed panel. Rows still send immediately; copy says s
 - Where: `tools/webui-sim/public/js/views/control.js`, `control-panel-state.js`,
   `css/remote.css`, `DESIGN.md`.
 
-### B6. IR onboarding assumes you arrive with codes  ☐
+### B6. IR onboarding assumes you arrive with codes  ☑
 
-"Add device" creates an empty shell; import wants pasted pipe/CSV rows;
-there is no in-UI brand/model code-database browser. The capability already
-exists host-side (`tools/ir_database_smoke_test.mjs --configure`).
+Guided **Find codes for my device**: browser-side **IRDB** index search + file
+drop (IRDB CSV, Flipper `.ir`, pipe, Pronto) with format detection, preview
+accounting (found / supported / will import), then explicit `/api/irdb-import`.
+Hub stays offline for library fetches. Flipper is **file-drop only** (CDN
+package index permanently 403s on size; GitHub trees are rate-limited). Partial
+source failures surface in the UI. Manual paste and RemoteCentral kept.
 
-- Fix: guided "find codes for my device" flow — even just a file picker +
-  format detection wrapping the existing importer, with a doc link for
-  IRDB/Flipper sources.
-- Where: `tools/webui-sim/public/js/views/ir.js`, `ir-model.js`.
+- Where: `tools/webui-sim/public/js/ir-library.js`, `views/ir.js`; tests in
+  `tools/webui-sim/test/ir-library.test.mjs`.
+
+### B6-follow. Smoke-test library indexes may 403 on jsDelivr /flat  ☐
+
+`tools/ir_database_smoke_test.mjs` still uses
+`data.jsdelivr.com/v1/package/gh/.../flat` for LIRC (works today) and SmartIR
+(403 package-size, same class as Flipper). Flipper path there uses GitHub trees
+(CLI-only, token-friendly). Track separately from the UI.
 
 ### B7. Dead ends without remediation  ☐
 
