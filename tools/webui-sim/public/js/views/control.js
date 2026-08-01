@@ -8,6 +8,12 @@ import {
   matchCommand,
 } from "../remote-layout.js";
 import { commandsPanelShouldOpen } from "./control-panel-state.js";
+import {
+  resolveSkinPowerAction,
+  offStateSendNote,
+  skinPowerLabel,
+  isEverythingOff,
+} from "./control-power.js";
 
 const HOLD_MS = 550;
 const LOG_MAX = 14;
@@ -222,6 +228,10 @@ export function createControlView(section) {
       if (!el || el.disabled) return;
       const r = resolutions[Number(el.dataset.index)];
       if (!r) return;
+      if (r.activityPowerOff) {
+        suppressClick = true;
+        return;
+      }
       suppressClick = true;
       holdFired = false;
       if (r.hold) {
@@ -244,7 +254,12 @@ export function createControlView(section) {
       release();
       if (!el || el.disabled || holdFired) return;
       const r = resolutions[Number(el.dataset.index)];
-      if (r) sendAction(r, REMOTE_BUTTONS[Number(el.dataset.index)].label, el);
+      if (!r) return;
+      if (r.activityPowerOff) {
+        powerOff();
+        return;
+      }
+      sendAction(r, REMOTE_BUTTONS[Number(el.dataset.index)].label, el);
     });
     els.body.addEventListener("pointercancel", release);
     els.body.addEventListener("pointerleave", () => {
@@ -259,12 +274,21 @@ export function createControlView(section) {
       const el = e.target.closest(".remote-hotspot");
       if (!el || el.disabled) return;
       const r = resolutions[Number(el.dataset.index)];
-      if (r) sendAction(r, REMOTE_BUTTONS[Number(el.dataset.index)].label, el);
+      if (!r) return;
+      if (r.activityPowerOff) {
+        powerOff();
+        return;
+      }
+      sendAction(r, REMOTE_BUTTONS[Number(el.dataset.index)].label, el);
     });
 
     const preview = (el) => {
       const r = el && resolutions[Number(el.dataset.index)];
       if (!r) return;
+      if (r.activityPowerOff) {
+        setStatus("Power off", "will end the running activity", "");
+        return;
+      }
       setStatus(`${hub.deviceName(r.deviceId)} · ${r.command}`, "will send", "");
     };
     els.body.addEventListener("pointerover", (e) => preview(e.target.closest(".remote-hotspot")));
@@ -307,6 +331,34 @@ export function createControlView(section) {
     };
   }
 
+  function applySkinPowerKey() {
+    const powerIdx = REMOTE_BUTTONS.findIndex((b) => b.label === "Power off");
+    if (powerIdx < 0) return;
+    const device = hub.deviceById(selectedDeviceId);
+    const action = resolveSkinPowerAction({
+      mode,
+      currentActivityId: hub.state.currentId,
+      selectedDeviceId,
+      deviceCommands: device?.commands,
+    });
+    if (action.kind === "activity-poweroff") {
+      /* UI-only: same as toolbar Power off — never written to a ButtonMap. */
+      resolutions[powerIdx] = { activityPowerOff: true, hold: null };
+      return;
+    }
+    if (action.kind === "device-power") {
+      resolutions[powerIdx] = {
+        deviceId: action.deviceId,
+        command: action.command,
+        functionId: action.functionId,
+        buttonKey: null,
+        hold: null,
+      };
+      return;
+    }
+    resolutions[powerIdx] = null;
+  }
+
   function applyMapping() {
     resolutions = REMOTE_BUTTONS.map(() => null);
     softButtons = [];
@@ -320,6 +372,8 @@ export function createControlView(section) {
         if (entry.ButtonKey) {
           const index = REMOTE_BUTTONS.findIndex((b) =>
             aliasMatch(commandKey(entry.ButtonKey), b.aliases));
+          /* Never let a saved map claim the photo power key — activity end is UI-only. */
+          if (index !== -1 && REMOTE_BUTTONS[index].label === "Power off") continue;
           if (index !== -1 && !resolutions[index]) {
             const holdEntry = entry.ButtonLongPressAction?.CommandName
               ? {
@@ -342,6 +396,7 @@ export function createControlView(section) {
     } else {
       const device = hub.deviceById(selectedDeviceId);
       REMOTE_BUTTONS.forEach((b, i) => {
+        if (b.label === "Power off") return;
         const cmd = matchCommand(device?.commands, b.aliases);
         if (cmd) {
           resolutions[i] = {
@@ -354,6 +409,7 @@ export function createControlView(section) {
         }
       });
     }
+    applySkinPowerKey();
     renderKeys();
     renderChips();
     renderResolve();
@@ -364,6 +420,15 @@ export function createControlView(section) {
       const i = Number(el.dataset.index);
       const b = REMOTE_BUTTONS[i];
       const r = resolutions[i];
+      if (r?.activityPowerOff) {
+        el.disabled = false;
+        el.classList.remove("disabled");
+        el.classList.remove("has-hold");
+        const label = skinPowerLabel({ kind: "activity-poweroff" });
+        el.title = label;
+        el.setAttribute("aria-label", label);
+        return;
+      }
       if (r) {
         el.disabled = false;
         el.classList.remove("disabled");
@@ -377,8 +442,21 @@ export function createControlView(section) {
         el.disabled = true;
         el.classList.add("disabled");
         el.classList.remove("has-hold");
-        el.title = `${b.label} (not mapped)`;
-        el.setAttribute("aria-label", `${b.label} — not mapped`);
+        if (b.label === "Power off") {
+          const device = hub.deviceById(selectedDeviceId);
+          const inert = resolveSkinPowerAction({
+            mode,
+            currentActivityId: hub.state.currentId,
+            selectedDeviceId,
+            deviceCommands: device?.commands,
+          });
+          const label = skinPowerLabel(inert);
+          el.title = label;
+          el.setAttribute("aria-label", label);
+        } else {
+          el.title = `${b.label} (not mapped)`;
+          el.setAttribute("aria-label", `${b.label} — not mapped`);
+        }
       }
     });
   }
@@ -422,11 +500,18 @@ export function createControlView(section) {
       return;
     }
     els.resolveList.innerHTML = mapped
-      .map(({ r, i }) =>
-        `<button type="button" class="resolve-row" data-resolve="${i}" title="Send now">
+      .map(({ r, i }) => {
+        if (r.activityPowerOff) {
+          return `<button type="button" class="resolve-row" data-act="poweroff" title="End running activity">
+          <span class="resolve-key">${escapeHtml(REMOTE_BUTTONS[i].label)}</span>
+          <span class="resolve-target">end running activity</span>
+        </button>`;
+        }
+        return `<button type="button" class="resolve-row" data-resolve="${i}" title="Send now">
           <span class="resolve-key">${escapeHtml(REMOTE_BUTTONS[i].label)}</span>
           <span class="resolve-target">${escapeHtml(`${hub.deviceName(r.deviceId)} · ${r.command}${r.hold ? ` · hold: ${r.hold.command}` : ""}`)}</span>
-        </button>`)
+        </button>`;
+      })
       .join("");
   }
 
@@ -527,12 +612,21 @@ export function createControlView(section) {
   /* -- sending -------------------------------------------------------------- */
 
   async function sendAction(action, label, el) {
+    if (!action?.deviceId || !action?.command) return;
     const target = `${hub.deviceName(action.deviceId)} · ${action.command}`;
     flash(el);
     setStatus(target, "sending…", "");
     const { note, cls } = await directIr(action, "sent");
-    setStatus(`${label} → ${target}`, note, cls);
-    addLog(target, note, cls);
+    const statusNote =
+      mode === "activities" && cls === "is-ok"
+        ? offStateSendNote({
+            baseNote: note,
+            currentActivityId: hub.state.currentId,
+            selectedActivityName: hub.activityName(hub.activityById(selectedActivityId)),
+          })
+        : note;
+    setStatus(`${label} → ${target}`, statusNote, cls);
+    addLog(target, statusNote, cls);
   }
 
   async function directIr(action, okNote) {

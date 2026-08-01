@@ -143,6 +143,11 @@ teal reserved for “live / on air” status only.
   amber flash (35% fill) that fades. Hold window: glow intensifies
 - Hold-capable tick: 4px amber dot, revealed only on hover/focus of that key
 - Unmapped: transparent, no pointer (photo shows the physical key underneath)
+- **Skin power key:** UI affordance only (never saved into a ButtonMap). In
+  Activities mode it mirrors toolbar Power off (`activity-run -1`) while an
+  activity is running, and stays inert when nothing is on. In Devices mode it
+  sends the selected device's own power command when aliases resolve, else inert.
+  Same danger styling/weight as toolbar Power off — never amber.
 - Percent geometry is sacred — no min-size overrides on mobile; enlarged
   targets overlap neighboring keys and mislead taps
 - Status line sits **above** the remote, pinned under the now-strip:
