@@ -12,6 +12,11 @@
    the advanced editor's reconcile/validate contract. */
 
 import * as api from "./api.js";
+import {
+  BUTTON_KEY_BY_LABEL,
+  REMOTE_BUTTONS,
+  matchCommand,
+} from "./remote-layout.js";
 
 /* Highest identities Logitech ever issued for this hub; local allocation
    starts above them so it can never reuse a cloud-issued value. */
@@ -48,6 +53,165 @@ export const ROLE_TYPES = [
 
 export function roleLabel(type) {
   return ROLE_TYPES.find((r) => r.type === type)?.label ?? type;
+}
+
+/* ---- Button defaults (step 3 arrival state) -----------------------------
+   Mirrors activity-ui preferredButtonDeviceId role routing, then resolves
+   each remote key against real device commands via remote-layout aliases.
+   Draft-only `source` tags distinguish defaults from user/existing mappings;
+   they are never written into the saved graph. */
+
+export const BUTTON_SOURCE = {
+  default: "default",
+  user: "user",
+  existing: "existing",
+};
+
+function roleDeviceId(roles, roleType) {
+  const role = (roles ?? []).find(
+    (r) => r?.deviceId && String(r.roleType ?? "").includes(roleType),
+  );
+  return role ? String(role.deviceId) : "";
+}
+
+/** Same priority chain as activity-ui.js preferredButtonDeviceId. */
+export function preferredDeviceForButtonKey(buttonKey, roles) {
+  const identity = String(buttonKey ?? "").toLowerCase();
+  if (!identity) return "";
+  if (/^(volumeup|volumedown|volumemute|mute)$/.test(identity)) {
+    return roleDeviceId(roles, "VolumeActivityRole");
+  }
+  if (/^(channelup|channeldown|number[0-9]|[0-9])$/.test(identity)) {
+    const channel = roleDeviceId(roles, "ChannelChangingActivityRole");
+    if (channel) return channel;
+  }
+  return (
+    roleDeviceId(roles, "PlayGameActivityRole") ||
+    roleDeviceId(roles, "PlayMovieActivityRole") ||
+    roleDeviceId(roles, "PlayMediaActivityRole") ||
+    roleDeviceId(roles, "ChannelChangingActivityRole") ||
+    roleDeviceId(roles, "KeyboardTextEntryActivityRole") ||
+    roleDeviceId(roles, "DisplayActivityRole") ||
+    ""
+  );
+}
+
+function deviceIndex(devices) {
+  const map = new Map();
+  for (const d of devices ?? []) {
+    if (d?.id != null) map.set(String(d.id), d);
+  }
+  return map;
+}
+
+/**
+ * Pure derivation: every assignable wizard key → mapping when the preferred
+ * role device actually has a matching command. Unresolvable keys stay out.
+ */
+export function deriveDefaultButtons(roles, devices) {
+  const byId = deviceIndex(devices);
+  const out = {};
+  for (const button of REMOTE_BUTTONS) {
+    const buttonKey = BUTTON_KEY_BY_LABEL[button.label];
+    if (!buttonKey) continue;
+    const deviceId = preferredDeviceForButtonKey(buttonKey, roles);
+    if (!deviceId) continue;
+    const device = byId.get(deviceId);
+    if (!device) continue;
+    const command = matchCommand(device.commands, button.aliases);
+    if (!command?.name) continue;
+    out[buttonKey] = {
+      deviceId,
+      command: {
+        name: command.name,
+        functionId: command.functionId ?? command["FunctionId-"] ?? 0,
+      },
+      hold: null,
+      source: BUTTON_SOURCE.default,
+    };
+  }
+  return out;
+}
+
+function mappingPointsAtRoleDevice(mapping, roleDeviceIds) {
+  return roleDeviceIds.has(String(mapping?.deviceId ?? ""));
+}
+
+/**
+ * Reconcile draft.buttons after role/device changes or when entering step 3.
+ * - Drops mappings whose device is no longer in the role list.
+ * - Never overwrites source=user or source=existing.
+ * - Fills empty keys (and refreshes source=default) from deriveDefaultButtons.
+ */
+export function reconcileWizardButtons(buttons, roles, devices) {
+  const roleDeviceIds = new Set(
+    (roles ?? []).map((r) => String(r?.deviceId ?? "")).filter(Boolean),
+  );
+  const defaults = deriveDefaultButtons(roles, devices);
+  const next = {};
+
+  for (const [key, mapping] of Object.entries(buttons ?? {})) {
+    if (!mapping?.command?.name) continue;
+    if (!mappingPointsAtRoleDevice(mapping, roleDeviceIds)) continue;
+    const source = mapping.source || BUTTON_SOURCE.user;
+    if (source === BUTTON_SOURCE.user || source === BUTTON_SOURCE.existing) {
+      next[key] = { ...mapping, source };
+    }
+    /* source=default entries are dropped so they refresh from defaults. */
+  }
+
+  for (const [key, def] of Object.entries(defaults)) {
+    if (next[key]) continue;
+    next[key] = def;
+  }
+  return next;
+}
+
+/** Clear non-locked keys and re-derive defaults (reset-all affordance). */
+export function resetWizardButtonsToDefaults(buttons, roles, devices) {
+  const kept = {};
+  for (const [key, mapping] of Object.entries(buttons ?? {})) {
+    if (mapping?.source === BUTTON_SOURCE.existing) {
+      kept[key] = mapping;
+    }
+  }
+  return reconcileWizardButtons(kept, roles, devices);
+}
+
+/** Revert one key to a fresh default (or remove it if none resolves). */
+export function revertWizardButtonToDefault(buttons, buttonKey, roles, devices) {
+  const next = { ...(buttons ?? {}) };
+  const current = next[buttonKey];
+  if (current?.source === BUTTON_SOURCE.existing) return next;
+  delete next[buttonKey];
+  const defaults = deriveDefaultButtons(roles, devices);
+  if (defaults[buttonKey]) next[buttonKey] = defaults[buttonKey];
+  return next;
+}
+
+export function wizardButtonStats(buttons) {
+  const entries = Object.values(buttons ?? {}).filter((m) => m?.command?.name);
+  let user = 0;
+  let existing = 0;
+  let defaults = 0;
+  for (const m of entries) {
+    if (m.source === BUTTON_SOURCE.user) user += 1;
+    else if (m.source === BUTTON_SOURCE.existing) existing += 1;
+    else defaults += 1;
+  }
+  return {
+    mapped: entries.length,
+    user,
+    existing,
+    defaults,
+    assignable: Object.keys(BUTTON_KEY_BY_LABEL).length,
+  };
+}
+
+export function mappingSourceLabel(source) {
+  if (source === BUTTON_SOURCE.user) return "set by you";
+  if (source === BUTTON_SOURCE.existing) return "from this activity";
+  return "wizard default";
 }
 
 export function createAllocator(config) {

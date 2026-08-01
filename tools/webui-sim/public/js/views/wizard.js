@@ -4,7 +4,18 @@
 
 import * as hub from "../state.js";
 import { REMOTE_BUTTONS, BUTTON_KEY_BY_LABEL } from "../remote-layout.js";
-import { ACTIVITY_TYPES, ROLE_TYPES, roleLabel, saveDraft } from "../wizard-model.js";
+import {
+  ACTIVITY_TYPES,
+  ROLE_TYPES,
+  roleLabel,
+  saveDraft,
+  BUTTON_SOURCE,
+  reconcileWizardButtons,
+  resetWizardButtonsToDefaults,
+  revertWizardButtonToDefault,
+  wizardButtonStats,
+  mappingSourceLabel,
+} from "../wizard-model.js";
 
 const STEPS = [
   { id: "basics", label: "Name it" },
@@ -99,8 +110,20 @@ export function createWizardView(section) {
 
   /* -- navigation --------------------------------------------------- */
 
+  function syncButtonDefaults() {
+    draft.buttons = reconcileWizardButtons(
+      draft.buttons,
+      draft.roles,
+      hub.devices(),
+    );
+  }
+
   function go(next) {
-    step = Math.max(0, Math.min(STEPS.length - 1, next));
+    const target = Math.max(0, Math.min(STEPS.length - 1, next));
+    /* Entering the map step (or returning to it) always refreshes defaults
+       without clobbering user/existing mappings. */
+    if (target === 2) syncButtonDefaults();
+    step = target;
     selectedKey = null;
     render();
   }
@@ -225,25 +248,43 @@ export function createWizardView(section) {
       </div>`;
   }
 
+  function buttonCounterText() {
+    const stats = wizardButtonStats(draft.buttons);
+    const parts = [`${stats.mapped} of ${stats.assignable} keys mapped`];
+    if (stats.user) parts.push(`${stats.user} set by you`);
+    if (stats.defaults) parts.push(`${stats.defaults} wizard defaults`);
+    if (stats.existing) parts.push(`${stats.existing} from this activity`);
+    return parts.join(" · ");
+  }
+
   function renderButtons() {
-    const mappedCount = Object.keys(draft.buttons).length;
     const assignable = REMOTE_BUTTONS.filter((b) => BUTTON_KEY_BY_LABEL[b.label]);
+    const stats = wizardButtonStats(draft.buttons);
     els.body.innerHTML = `
       <section class="panel wiz-panel">
         <h3>What should the buttons do?</h3>
-        <p class="help">Click a key on the remote, then pick the device and command it sends. Mapped keys glow. Skip anything you don't need — you can refine later in the full editor.</p>
+        <p class="help">Keys start mapped from the devices and jobs you picked — transport on the player, volume on the volume device, channels and digits on the channel device when you have one. Click a key to change it. Soft glow is a wizard default; solid glow is something you set (or that was already on this activity).</p>
+        <p class="mini muted" id="wizMapStats">${escapeHtml(buttonCounterText())}</p>
         <div class="wiz-map">
           <div class="ir-remote-shell wiz-remote">
             <div class="ir-remote-skin" id="wizRemoteBody" role="group" aria-label="Harmony remote — pick a key to map">
               <img src="${SKIN_SRC}" alt="Harmony remote control layout" width="591" height="1280" draggable="false">
               ${assignable.map((b) => {
                 const key = BUTTON_KEY_BY_LABEL[b.label];
-                const mapped = Boolean(draft.buttons[key]);
+                const mapping = draft.buttons[key];
+                const mapped = Boolean(mapping?.command?.name);
+                const source = mapping?.source || "";
+                const sourceClass = !mapped
+                  ? ""
+                  : source === BUTTON_SOURCE.user || source === BUTTON_SOURCE.existing
+                    ? "is-mapped is-mapped-user"
+                    : "is-mapped is-mapped-default";
+                const sourceAria = mapped ? mappingSourceLabel(source) : "not mapped";
                 return `<button type="button"
-                  class="remote-hotspot wiz-key ${mapped ? "is-mapped" : ""} ${selectedKey === b.label ? "is-selected" : ""}"
-                  data-key-label="${b.label}"
+                  class="remote-hotspot wiz-key ${sourceClass} ${selectedKey === b.label ? "is-selected" : ""}"
+                  data-key-label="${escapeHtml(b.label)}"
                   style="left:${b.x}%;top:${b.y}%;width:${b.w}%;height:${b.h}%"
-                  aria-label="${b.label} — ${mapped ? "mapped" : "not mapped"}"
+                  aria-label="${escapeHtml(b.label)} — ${sourceAria}"
                   aria-pressed="${mapped}"></button>`;
               }).join("")}
             </div>
@@ -252,7 +293,12 @@ export function createWizardView(section) {
             ${selectedKey ? assignPanel() : `
               <div class="state-block">
                 <span class="state-title">No key selected</span>
-                Pick a key on the remote to assign it — ${mappedCount} of ${assignable.length} keys mapped so far.
+                Pick a key on the remote to change it — ${escapeHtml(buttonCounterText())}.
+              </div>
+              <div class="wiz-assign-actions" style="margin-top:var(--space-3)">
+                <button type="button" class="btn btn-quiet btn-sm" data-wiz="reset-defaults" ${stats.user ? "" : "disabled"}>
+                  Reset my changes to defaults
+                </button>
               </div>`}
           </div>
         </div>
@@ -270,12 +316,20 @@ export function createWizardView(section) {
     const devices = hub.devices();
     const deviceId = panelDeviceId || existing?.deviceId || defaultAssignDevice();
     const device = devices.find((d) => d.id === deviceId);
-    const mappedCount = Object.keys(draft.buttons).length;
+    const source = existing?.source || "";
+    const sourceLine = existing
+      ? `Currently: ${mappingSourceLabel(source)}${existing.command?.name ? ` · ${existing.command.name}` : ""}.`
+      : "Currently unmapped.";
+    const canRevert =
+      existing &&
+      existing.source !== BUTTON_SOURCE.existing &&
+      existing.source === BUTTON_SOURCE.user;
     return `
       <div class="wiz-assign-head">
-        <h4>“${selectedKey}” sends…</h4>
-        <span class="mono muted">${mappedCount} mapped</span>
+        <h4>“${escapeHtml(selectedKey)}” sends…</h4>
+        <span class="mono muted">${escapeHtml(buttonCounterText())}</span>
       </div>
+      <p class="mini muted">${escapeHtml(sourceLine)}</p>
       <label for="wizAssignDevice">Device</label>
       <select id="wizAssignDevice">
         ${devices.map((d) => `<option value="${d.id}" ${d.id === deviceId ? "selected" : ""}>${escapeHtml(d.name)}</option>`).join("")}
@@ -296,8 +350,12 @@ export function createWizardView(section) {
         </div>
       </div>
       <div class="wiz-assign-actions">
-        <button type="button" class="btn btn-primary btn-sm" data-wiz="apply-key">Apply to “${selectedKey}”</button>
+        <button type="button" class="btn btn-primary btn-sm" data-wiz="apply-key">Apply to “${escapeHtml(selectedKey)}”</button>
+        ${canRevert ? `<button type="button" class="btn btn-quiet btn-sm" data-wiz="revert-key">Reset this key to default</button>` : ""}
         ${existing ? `<button type="button" class="btn btn-quiet btn-sm" data-wiz="clear-key">Remove mapping</button>` : ""}
+      </div>
+      <div class="wiz-assign-actions" style="margin-top:var(--space-2)">
+        <button type="button" class="btn btn-quiet btn-sm" data-wiz="reset-defaults">Reset my changes to defaults</button>
       </div>`;
   }
 
@@ -343,7 +401,7 @@ export function createWizardView(section) {
             <span class="eyebrow">Buttons · ${mapped.length}</span>
             ${mapped.length ? mapped.map(([key, m]) => {
               const d = devices.find((x) => x.id === m.deviceId);
-              return `<span class="wiz-review-line"><strong>${key}</strong> → ${escapeHtml(d?.name ?? m.deviceId)} · ${escapeHtml(m.command.name)}${m.hold?.command ? ` (hold: ${escapeHtml(m.hold.command.name)})` : ""}</span>`;
+              return `<span class="wiz-review-line"><strong>${escapeHtml(key)}</strong> → ${escapeHtml(d?.name ?? m.deviceId)} · ${escapeHtml(m.command.name)}${m.hold?.command ? ` (hold: ${escapeHtml(m.hold.command.name)})` : ""} <span class="muted">(${escapeHtml(mappingSourceLabel(m.source))})</span></span>`;
             }).join("") : `<span class="wiz-review-line muted">No buttons mapped — the activity still runs, and you can map keys later in the full editor.</span>`}
           </div>
         </div>
@@ -380,11 +438,29 @@ export function createWizardView(section) {
     } else if (act === "remove-role") {
       const row = e.target.closest("[data-role-index]");
       draft.roles.splice(Number(row.dataset.roleIndex), 1);
+      syncButtonDefaults();
       renderDevices();
     } else if (act === "apply-key") {
       applyKey();
     } else if (act === "clear-key") {
       delete draft.buttons[BUTTON_KEY_BY_LABEL[selectedKey]];
+      renderButtons();
+    } else if (act === "revert-key") {
+      const key = BUTTON_KEY_BY_LABEL[selectedKey];
+      draft.buttons = revertWizardButtonToDefault(
+        draft.buttons,
+        key,
+        draft.roles,
+        hub.devices(),
+      );
+      renderButtons();
+    } else if (act === "reset-defaults") {
+      draft.buttons = resetWizardButtonsToDefaults(
+        draft.buttons,
+        draft.roles,
+        hub.devices(),
+      );
+      selectedKey = null;
       renderButtons();
     } else if (act === "run-saved" && saved) {
       hub.setRunning(saved.activityId).then(() => { location.hash = "#control"; });
@@ -403,7 +479,10 @@ export function createWizardView(section) {
       const role = draft.roles[Number(row.dataset.roleIndex)];
       if (role) {
         role[field] = e.target.value;
-        if (field === "deviceId" || field === "roleType") renderDevices();
+        if (field === "deviceId" || field === "roleType") {
+          syncButtonDefaults();
+          renderDevices();
+        }
       }
       return;
     }
@@ -453,8 +532,12 @@ export function createWizardView(section) {
               command: { name: b.ButtonLongPressAction.CommandName, functionId: b.ButtonLongPressAction["FunctionId-"] },
             }
           : null,
+        /* Existing activity mappings are locked against default overwrite. */
+        source: BUTTON_SOURCE.existing,
       };
     }
+    /* Fill only keys the activity left empty — never replace existing. */
+    draft.buttons = reconcileWizardButtons(draft.buttons, draft.roles, hub.devices());
     renderBasics();
   }
 
@@ -482,6 +565,7 @@ export function createWizardView(section) {
       deviceId,
       command: { name: command.name, functionId: command.functionId },
       hold,
+      source: BUTTON_SOURCE.user,
     };
     setNote("");
     renderButtons();

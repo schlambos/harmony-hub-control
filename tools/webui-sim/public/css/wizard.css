@@ -152,11 +152,24 @@
   box-shadow: 0 0 0 1.5px var(--border-accent);
 }
 
+/* Soft: wizard-derived default. Solid: user-set or loaded from the activity. */
+.wiz-key.is-mapped-default {
+  background: rgba(232, 165, 75, 0.18);
+  box-shadow: 0 0 0 1px var(--border-accent);
+  opacity: 0.92;
+}
+
+.wiz-key.is-mapped-user {
+  background: var(--accent-muted);
+  box-shadow: 0 0 0 2px var(--border-accent);
+}
+
 .wiz-key.is-selected {
   background: rgba(232, 165, 75, 0.35);
   box-shadow:
     0 0 0 2px var(--accent-primary),
     0 0 18px 4px var(--accent-muted);
+  opacity: 1;
 }
 
 .wiz-assign {
