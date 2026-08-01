@@ -130,6 +130,23 @@ def split_remote_dir(path: str) -> str:
     return parent if parent else "/"
 
 
+def bin_manifest_names() -> list[str]:
+    """Install binary list from payload/bin/MANIFEST.txt (canonical inventory)."""
+    manifest = PAYLOAD / "bin" / "MANIFEST.txt"
+    names: list[str] = []
+    for line in manifest.read_text(encoding="utf-8").splitlines():
+        parts = line.split()
+        if len(parts) >= 2 and len(parts[0]) == 32:
+            names.append(parts[-1])
+    if not names:
+        raise RuntimeError(f"no binaries listed in {manifest}")
+    for name in names:
+        path = PAYLOAD / "bin" / name
+        if not path.is_file():
+            raise RuntimeError(f"MANIFEST lists {name} but {path} is missing")
+    return names
+
+
 def local_md5(path: Path) -> str:
     h = hashlib.md5()
     with path.open("rb") as f:
@@ -302,13 +319,10 @@ echo "$B"
         info(f"backup={backup_dir}")
 
         step("Uploading binaries")
-        self.upload_bytes(PAYLOAD / "bin" / "dropbearmulti", "/data/codex/bin/dropbearmulti", "755")
-        self.upload_bytes(PAYLOAD / "bin" / "codex_dhcpd", "/data/codex/bin/codex_dhcpd", "755")
-        self.upload_bytes(PAYLOAD / "bin" / "codex_hbus", "/data/codex/bin/codex_hbus", "755")
-        self.upload_bytes(PAYLOAD / "bin" / "codex_hal_ltcp", "/data/codex/bin/codex_hal_ltcp", "755")
-        self.upload_bytes(PAYLOAD / "bin" / "codex_bthid_keyboard", "/data/codex/bin/codex_bthid_keyboard", "755")
-        self.upload_bytes(PAYLOAD / "bin" / "codex_portal", "/data/codex/bin/codex_portal", "755")
-        self.upload_bytes(PAYLOAD / "bin" / "codex_webui", "/data/codex/bin/codex_webui", "755")
+        bin_names = bin_manifest_names()
+        info(f"from MANIFEST.txt: {', '.join(bin_names)}")
+        for name in bin_names:
+            self.upload_bytes(PAYLOAD / "bin" / name, f"/data/codex/bin/{name}", "755")
         self.upload_bytes(PAYLOAD / "scripts" / "dropbear", "/usr/sbin/dropbear", "755")
         self.upload_bytes(PAYLOAD / "scripts" / "dropbearkey", "/usr/sbin/dropbearkey", "755")
 
@@ -345,13 +359,12 @@ echo "$B"
         self.upload_text(self.build_mqtt_config(), "/data/codexmqtt/config.json", "600")
 
         step("Post-install permissions and startup")
+        bin_chmod = " ".join(f"/data/codex/bin/{n}" for n in bin_names)
         post = (
             "mkdir -p /data/codex/bin /etc/dropbear /home/root/.ssh /data/codexmqtt /pkg/codexactivity /pkg/codexmqtt; "
             "ln -sf dropbearmulti /data/codex/bin/dropbear; "
             "ln -sf dropbearmulti /data/codex/bin/dropbearkey; "
-            "chmod 755 /data/codex/bin/dropbearmulti /data/codex/bin/codex_dhcpd /data/codex/bin/codex_hbus "
-            "/data/codex/bin/codex_hal_ltcp /data/codex/bin/codex_bthid_keyboard /data/codex/bin/codex_portal "
-            "/data/codex/bin/codex_webui /data/codex/init.sh /data/codex/offline_egress_guard.sh "
+            f"chmod 755 {bin_chmod} /data/codex/init.sh /data/codex/offline_egress_guard.sh "
             "/data/codex/recovery_ap.sh /usr/sbin/dropbear "
             "/usr/sbin/dropbearkey /etc/init.d/rcS.local; "
             "chmod 600 /data/codexmqtt/config.json 2>/dev/null || true; "
@@ -377,13 +390,8 @@ echo "$B"
 
         step("Verifying binary checksums")
         expected = {
-            "/data/codex/bin/dropbearmulti": local_md5(PAYLOAD / "bin" / "dropbearmulti"),
-            "/data/codex/bin/codex_dhcpd": local_md5(PAYLOAD / "bin" / "codex_dhcpd"),
-            "/data/codex/bin/codex_hbus": local_md5(PAYLOAD / "bin" / "codex_hbus"),
-            "/data/codex/bin/codex_hal_ltcp": local_md5(PAYLOAD / "bin" / "codex_hal_ltcp"),
-            "/data/codex/bin/codex_bthid_keyboard": local_md5(PAYLOAD / "bin" / "codex_bthid_keyboard"),
-            "/data/codex/bin/codex_portal": local_md5(PAYLOAD / "bin" / "codex_portal"),
-            "/data/codex/bin/codex_webui": local_md5(PAYLOAD / "bin" / "codex_webui"),
+            f"/data/codex/bin/{name}": local_md5(PAYLOAD / "bin" / name)
+            for name in bin_names
         }
         paths = " ".join(remote_quote(p) for p in expected)
         verify = self.run_remote(f"md5sum {paths}", timeout=45)

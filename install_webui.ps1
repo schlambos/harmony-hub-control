@@ -318,13 +318,19 @@ $backupDir = (Invoke-Remote $backupCmd $null 30000).Trim()
 Info "backup=$backupDir"
 
 Step "Uploading binaries"
-Upload-Bytes (Join-Path $Payload "bin\dropbearmulti") "/data/codex/bin/dropbearmulti" "755"
-Upload-Bytes (Join-Path $Payload "bin\codex_dhcpd") "/data/codex/bin/codex_dhcpd" "755"
-Upload-Bytes (Join-Path $Payload "bin\codex_hbus") "/data/codex/bin/codex_hbus" "755"
-Upload-Bytes (Join-Path $Payload "bin\codex_hal_ltcp") "/data/codex/bin/codex_hal_ltcp" "755"
-Upload-Bytes (Join-Path $Payload "bin\codex_bthid_keyboard") "/data/codex/bin/codex_bthid_keyboard" "755"
-Upload-Bytes (Join-Path $Payload "bin\codex_portal") "/data/codex/bin/codex_portal" "755"
-Upload-Bytes (Join-Path $Payload "bin\codex_webui") "/data/codex/bin/codex_webui" "755"
+# Canonical install list: payload/bin/MANIFEST.txt (same source as tools/payload_bin_inventory.mjs).
+$manifestPath = Join-Path $Payload "bin\MANIFEST.txt"
+$binNames = @()
+Get-Content -LiteralPath $manifestPath | ForEach-Object {
+    if ($_ -match '^([0-9a-fA-F]{32})\s+(\S+)\s*$') { $binNames += $Matches[2] }
+}
+if ($binNames.Count -eq 0) { throw "no binaries listed in $manifestPath" }
+Info ("from MANIFEST.txt: " + ($binNames -join ", "))
+foreach ($name in $binNames) {
+    $localBin = Join-Path $Payload "bin\$name"
+    if (-not (Test-Path -LiteralPath $localBin)) { throw "MANIFEST lists $name but $localBin is missing" }
+    Upload-Bytes $localBin "/data/codex/bin/$name" "755"
+}
 Upload-Bytes (Join-Path $Payload "scripts\dropbear") "/usr/sbin/dropbear" "755"
 Upload-Bytes (Join-Path $Payload "scripts\dropbearkey") "/usr/sbin/dropbearkey" "755"
 
@@ -354,10 +360,11 @@ Upload-Text "{""plugin"":""codexmqtt""}`n" "/pkg/codexmqtt/manifest.json" "644"
 Upload-Text (Build-MqttConfig) "/data/codexmqtt/config.json" "600"
 
 Step "Post-install permissions and startup"
+$binChmod = ($binNames | ForEach-Object { "/data/codex/bin/$_" }) -join " "
 $post = "mkdir -p /data/codex/bin /etc/dropbear /home/root/.ssh /data/codexmqtt /pkg/codexactivity /pkg/codexmqtt; " +
         "ln -sf dropbearmulti /data/codex/bin/dropbear; " +
         "ln -sf dropbearmulti /data/codex/bin/dropbearkey; " +
-        "chmod 755 /data/codex/bin/dropbearmulti /data/codex/bin/codex_dhcpd /data/codex/bin/codex_hbus /data/codex/bin/codex_hal_ltcp /data/codex/bin/codex_bthid_keyboard /data/codex/bin/codex_portal /data/codex/bin/codex_webui /data/codex/init.sh /data/codex/offline_egress_guard.sh /data/codex/recovery_ap.sh /usr/sbin/dropbear /usr/sbin/dropbearkey /etc/init.d/rcS.local; " +
+        "chmod 755 $binChmod /data/codex/init.sh /data/codex/offline_egress_guard.sh /data/codex/recovery_ap.sh /usr/sbin/dropbear /usr/sbin/dropbearkey /etc/init.d/rcS.local; " +
         "chmod 600 /data/codexmqtt/config.json 2>/dev/null || true; " +
         "/bin/busybox sync 2>/dev/null || true"
 Invoke-Remote $post $null 60000 | Out-Null
@@ -376,14 +383,9 @@ $running = Invoke-Remote $start $null 90000
 Write-Host $running.Trim()
 
 Step "Verifying binary checksums"
-$expected = [ordered]@{
-    "/data/codex/bin/dropbearmulti" = (Get-FileHash -Algorithm MD5 -LiteralPath (Join-Path $Payload "bin\dropbearmulti")).Hash.ToLowerInvariant()
-    "/data/codex/bin/codex_dhcpd" = (Get-FileHash -Algorithm MD5 -LiteralPath (Join-Path $Payload "bin\codex_dhcpd")).Hash.ToLowerInvariant()
-    "/data/codex/bin/codex_hbus" = (Get-FileHash -Algorithm MD5 -LiteralPath (Join-Path $Payload "bin\codex_hbus")).Hash.ToLowerInvariant()
-    "/data/codex/bin/codex_hal_ltcp" = (Get-FileHash -Algorithm MD5 -LiteralPath (Join-Path $Payload "bin\codex_hal_ltcp")).Hash.ToLowerInvariant()
-    "/data/codex/bin/codex_bthid_keyboard" = (Get-FileHash -Algorithm MD5 -LiteralPath (Join-Path $Payload "bin\codex_bthid_keyboard")).Hash.ToLowerInvariant()
-    "/data/codex/bin/codex_portal" = (Get-FileHash -Algorithm MD5 -LiteralPath (Join-Path $Payload "bin\codex_portal")).Hash.ToLowerInvariant()
-    "/data/codex/bin/codex_webui" = (Get-FileHash -Algorithm MD5 -LiteralPath (Join-Path $Payload "bin\codex_webui")).Hash.ToLowerInvariant()
+$expected = [ordered]@{}
+foreach ($name in $binNames) {
+    $expected["/data/codex/bin/$name"] = (Get-FileHash -Algorithm MD5 -LiteralPath (Join-Path $Payload "bin\$name")).Hash.ToLowerInvariant()
 }
 $paths = ($expected.Keys | ForEach-Object { Remote-Quote $_ }) -join " "
 $verify = Invoke-Remote "md5sum $paths" $null 45000
