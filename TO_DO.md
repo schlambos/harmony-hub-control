@@ -139,29 +139,28 @@ source failures surface in the UI. Manual paste and RemoteCentral kept.
 (403 package-size, same class as Flipper). Flipper path there uses GitHub trees
 (CLI-only, token-friendly). Track separately from the UI.
 
-### B7. Dead ends without remediation  ☐
+### B7. Dead ends without remediation  ☑
 
-BT "Text helper · missing" and update binaries "not present" state facts but
-never say what to do about it (the pair-agent installer omission makes this
-state real for actual users). Add one remediation sentence + doc link each.
+BT text-helper and missing update binaries now include concrete remedies
+(reboot/reinstall for `codex_bthid_keyboard`; host installer + MANIFEST for
+missing `/data/codex/bin` files).
 
-- Where: `views/bluetooth.js`, `views/system.js`.
+- Where: `bluetooth-model.js` / `bluetooth.js`, `system-model.js` / `system.js`.
 
-### B8. Remote skin's power key is a dead spot  ☐
+### B8. Remote skin's power key is a dead spot  ☑
 
-The photo's power button is "not mapped — disabled" even while an activity
-runs; Power off exists only as a separate UI button. Users tap the picture's
-power key first. Consider mapping it to power-off-with-confirm during a
-running activity.
+Skin power is a UI affordance only (not saved to ButtonMaps): Activities mode
+mirrors toolbar Power off while running; Devices mode sends the device's power
+command when aliases resolve. DESIGN.md updated.
 
-- Where: `views/control.js` hotspot handling.
+- Where: `control.js`, `control-power.js`, `DESIGN.md`.
 
-### B9. Sends while everything is off give no context  ☐
+### B9. Sends while everything is off give no context  ☑
 
-Pressing a mapped key with no activity running reports "sent" with no hint
-that nothing is on. Add a nudge: "Nothing is running — start NVIDIA Shield?"
+Successful Activity-mode sends while PowerOff still dispatch, and the status
+line adds “nothing is running — start &lt;activity&gt;?”.
 
-- Where: `views/control.js` status line.
+- Where: `control.js` / `control-power.js` (`offStateSendNote`).
 
 ---
 
