@@ -186,6 +186,35 @@ export function parseTextStatus(json) {
   };
 }
 
+/**
+ * Remedy when the FIFO text helper is not live.
+ * Derived from codex_webui.c (bt-text-status / FIFO write) and init.sh:
+ * exact typing needs codex_bthid_keyboard writing /tmp/bthid_status; init
+ * starts it at boot when /data/codex/bin/codex_bthid_keyboard is present.
+ */
+export function textHelperRemedy(status) {
+  const s = status && typeof status === "object" ? status : {};
+  if (s.live) return "";
+  const state = String(s.state ?? "");
+  const err = String(s.error ?? "");
+  if (/stale/i.test(state) || /stale|restart bthid/i.test(err)) {
+    return (
+      "The typing helper left a stale status file. Reboot the hub so init.sh " +
+      "restarts codex_bthid_keyboard (or reinstall if that binary is missing under /data/codex/bin)."
+    );
+  }
+  if (/no_target|waiting for a paired target/i.test(state) || /no live Bluetooth HID|paired target/i.test(err)) {
+    return (
+      "The helper is up but has no authenticated HID target. Connect the paired device " +
+      "(Check link above), then try again."
+    );
+  }
+  return (
+    "Exact typing needs the codex_bthid_keyboard runtime on the hub. " +
+    "Reboot so init.sh starts it, or re-run the host installer if /data/codex/bin/codex_bthid_keyboard is missing."
+  );
+}
+
 /* -- On-screen keys ------------------------------------------------------ */
 
 /** Explicit, user-triggered key buttons. Every code is accepted by the hub's

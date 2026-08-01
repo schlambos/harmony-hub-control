@@ -29,6 +29,7 @@ import {
   parseBtInventory,
   normalizeBtCall,
   parseTextStatus,
+  textHelperRemedy,
 } from "./bluetooth-model.js";
 
 let fieldSeq = 0;
@@ -491,10 +492,15 @@ export function createBluetoothView(section) {
         if (s.error && !s.live) {
           rtKvSlot.appendChild(notice("info", s.error));
         }
+        if (!s.live) {
+          const remedy = textHelperRemedy(s);
+          if (remedy) rtKvSlot.appendChild(notice("warn", remedy));
+        }
       } catch (err) {
         setBadge(rtBadge, false, "Text helper · unknown");
         clear(rtKvSlot);
         rtKvSlot.appendChild(notice("error", errMsg(err)));
+        rtKvSlot.appendChild(notice("warn", textHelperRemedy({ state: "unknown", error: errMsg(err) })));
       }
     });
   }
