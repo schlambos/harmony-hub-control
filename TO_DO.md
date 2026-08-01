@@ -84,26 +84,41 @@ all (fresh installs lack pairing until manually fixed).
 
 ---
 
+### Hygiene. No personal fixture IDs in shipped copy  ☑
+
+Backup warnings no longer name household device IDs. Gate:
+`node tools/shipped_copy_hygiene.mjs --check` derives forbidden tokens from
+fixtures/seeds and scans shipped paths (including embedded shell header).
+
+---
+
 ## B — Ease and discoverability
 
-### B4. Button mapping is one-key-at-a-time  ☐
+### B4. Button mapping starts populated from roles  ☑
 
-New activities start 0/35 mapped and every key is a pick-device/pick-command
-loop. Logitech's cloud auto-mapped defaults; this is the highest-leverage
-ease win.
+New activities used to open step 3 with 0/35 keys mapped. Defaults are now
+the arrival state (not a one-click “apply” action): transport → player role,
+volume/mute → volume role, channel/digits → channel role when present,
+d-pad/OK/menu/back → player chain — matching the advanced editor’s
+`preferredButtonDeviceId` routing. Only real device commands are used; empty
+keys stay unmapped. Draft `source` tags (`default` / `user` / `existing`)
+show on the remote and in labels; step-2 role changes re-derive defaults
+without clobbering user or existing mappings; reset-all / per-key revert
+are offered instead of apply.
 
-- Fix: one-click "Map standard keys automatically" from the primary device's
-  matching commands (transport keys → player device, volume → volume role,
-  d-pad/OK → picture or player device), then let users refine.
-- Where: `tools/webui-sim/public/js/views/wizard.js` + `wizard-model.js`.
+- Where: `tools/webui-sim/public/js/wizard-model.js` (derive/reconcile),
+  `views/wizard.js`, `css/wizard.css`; tests in
+  `tools/webui-sim/test/wizard-button-defaults.test.mjs`.
 
-### B5. Full command list hides behind "Inspector"  ☐
+### B5. Full command list hides behind "Inspector"  ☑
 
-Off-skin commands (F1–F12, Sleep, etc.) ARE directly sendable, but only
-inside a collapsed disclosure named "Inspector" — a debug word users won't
-open. Rename/promote ("All commands"), especially in Devices mode.
+Off-skin commands are now under **All commands** (not a debug label). Devices
+mode opens the panel by default; Activities stays collapsed unless the user
+chose otherwise (`hhc.commands`, with one-time migrate from `hhc.inspector=open`).
+Send log is a separate collapsed panel. Rows still send immediately; copy says so.
 
-- Where: `tools/webui-sim/public/js/views/control.js`.
+- Where: `tools/webui-sim/public/js/views/control.js`, `control-panel-state.js`,
+  `css/remote.css`, `DESIGN.md`.
 
 ### B6. IR onboarding assumes you arrive with codes  ☐
 
