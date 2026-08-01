@@ -1,453 +1,369 @@
 # Harmony Hub Control
 
-Local web UI and helper runtime for an already rooted Logitech Harmony Hub.
+**Own your Logitech Harmony Hub.** A local web remote, activity editor, and
+smart-home bridge that runs on the hub itself — no Logitech app, account, or
+cloud required.
 
-This repository is for post-root device ownership work: the web dashboard, IR
-database tooling, Bluetooth HID controls, MQTT/Home Assistant bridge, recovery
-AP helpers, and the installer that deploys those pieces over SSH.
+![The Control view: a photo-real virtual Harmony remote with live activity state, resolved button actions, and a send inspector](docs/screenshots/control.png)
 
-It does not contain rooting tools, device compromise notes, private keys, live
-MQTT credentials, firmware dumps, or personal backups.
+Logitech ended production of the Harmony line in 2021, leaving every hub
+dependent on a cloud service that can change or disappear. Harmony Hub Control
+replaces that dependency for an **already-rooted** Harmony Hub: it installs a
+self-contained web interface and helper runtime onto the hub over SSH, then
+lets you control activities, edit configurations, learn IR codes, pair
+Bluetooth devices, and integrate with Home Assistant — entirely from a browser
+on your local network.
 
-> **Docker / Unraid package:** this snapshot includes a one-time installer
-> container, persistent web proxy, Compose example, and Unraid XML template.
-> See [UNRAID.md](UNRAID.md) for the deployment procedure and safety notes.
+Everything lives on the hub. Your activities, device database, button maps,
+and settings are plain JSON files on the hub's own flash storage, editable and
+backed up from the web UI, with the Logitech cloud fully blocked by default.
 
-## Current Status
+> This project is for hubs that have already been rooted with
+> [harmony-hub-root](https://github.com/Ripthulhu/harmony-hub-root). It
+> contains no rooting tools, exploits, private keys, or personal backups.
 
-- Web UI runs on `http://<hub-ip>:8080/`.
-- HTTP authentication is intentionally disabled for LAN-only use.
-- Activities can be created, duplicated, reordered, edited, launched, and
-  published to the Hub's paired-remote configuration entirely offline from the
-  web UI. Device/input roles and press, long-press, and double-press button maps
-  are edited together. Activity control groups in `FunctionList.json` are
-  created, repaired, validated, and available in the full-fidelity JSON editor.
-- Activity button maps, device roles, selected inputs, power on/off ordering,
-  per device power on delays, and press/long press/double press maps are all
-  editable offline from the web UI.
-- Activity identities (button map IDs and physical button IDs) are allocated
-  locally. There is no cloud allocator in offline mode.
-- Offline mode makes the Hub LAN-only, serves paired-remote resource reads from
-  local storage, acknowledges remote resource writes without cloud mutation,
-  and prevents the handset's normal `setup.sync` flow from replacing locally
-  owned activity resources with an older Logitech configuration.
-- A paired physical Harmony remote can start and stop activities and control IR
-  and Bluetooth devices after an activity starts.
-- Bluetooth pairing is completed on the LAN with a local pairing agent,
-  including Secure Simple Pairing confirmation and local link key storage.
-  Pairing stays available for up to ten minutes or until a stable bond exists.
-- The hub can present itself as a Bluetooth HID keyboard to a target such as an
-  Android TV or NVIDIA SHIELD. IR and Bluetooth devices can be mixed in one
-  activity.
-- Direct Bluetooth HID report and connect calls are guarded so they refuse to
-  run unless the expected native target is connected. This prevents a firmware
-  HAL crash.
-- IR devices can be configured from database lookup or manual learning.
-- Database import supports IRDB, Flipper-IRDB, and RemoteCentral-style Pronto
-  sources.
-- Flipper parsed `RC5`, `RC6`, `SIRC`, `SIRC15`, and `SIRC20` entries are
-  converted to raw timing replays when possible.
-- The IR sweep page can stage large command sets in browser memory, import
-  selected commands to the hub, and send them in cancellable batches.
-- Bluetooth HID mode can expose the hub as a keyboard-class device and send
-  keystroke scripts through the auto-started hub-side FIFO runtime.
-- MQTT bridge publishes Home Assistant discovery and exposes hub/device state.
-- Recovery helpers can start a local AP workflow from the reset button path.
+## Why you might want this
 
-## Paired Remote Requirements
+- **Keep a discontinued product alive** — activities can be created, edited,
+  and synced to the paired physical remote with no cloud allocator at all.
+- **A real remote in your browser** — the actual Harmony remote skin with
+  live button hotspots, on your phone or laptop, for activities *and*
+  individual devices.
+- **Local ownership by default** — the installer blocks Logitech cloud
+  tasks, removes the hub's WAN route, and serves the paired remote's
+  configuration from local storage, so nothing phones home.
+- **Full IR toolbox** — learn codes from your original remotes, import from
+  IRDB / Flipper-IRDB / RemoteCentral, test in batches, and experiment safely
+  in a scratch "IR Lab" device.
+- **More than Logitech offered** — Bluetooth HID keyboard mode with saved
+  keystroke scripts, an MQTT bridge with Home Assistant discovery, Wi-Fi
+  recovery tooling, and one-click backups of every resource on the hub.
+- **Honest engineering** — the whole stack is open: a static C web server,
+  Lua firmware plugins, and a plain JavaScript front end, plus a simulator
+  and a QEMU emulator so you can try it without touching your hub.
 
-Hard requirements for a physical Harmony remote that starts activities and
-sends IR or Bluetooth commands. Fail any of these and the remote misbehaves
-even when every hub side check passes.
+## Feature tour
 
-### No action-less buttons in activity maps
+### Dashboard and browser remote
 
-Activity button maps must not contain action-less buttons. A button is
-action-less when its `ButtonAction`, `ButtonLongPressAction`, and
-`ButtonDoublePressAction` are all null.
+The **Home** view shows what is currently running and offers one-tap activity
+start and power-off. The **Control** view renders the genuine Harmony remote
+image; only keys the running activity actually maps respond, and an optional
+inspector shows exactly which device and command each press resolved to. The same handset drives **Devices** mode for direct,
+per-device control outside any activity.
 
-The hub tolerates action-less buttons and silently drops them, so every hub
-side check still passes. The paired remote does not. Starting an activity whose
-map contains one makes the remote briefly show "starting activity", return to
-its home screen, and stop responding to every button until it is power cycled.
+### Activities: wizard, advanced editor, and remote sync
 
-Genuine Logitech configurations contain zero action-less buttons across all
-button maps. Their activity map button counts vary (15 to 54) because only
-buttons that can be driven are included. Maps are never padded to a fixed size.
+- A guided four-step **wizard** builds or reworks an activity: name it, pick
+  device roles and inputs, map remote buttons to commands, review, save, run.
+- The **advanced editor** exposes the full activity graph — roles, inputs,
+  power on/off ordering, per-device power-on delays, press / long-press /
+  double-press maps, and a full-fidelity JSON view — with a strict validator
+  and repair pass that enforces the invariants the physical remote requires.
+- The **Activities** roster runs, reorders, edits, and deletes activities;
+  saves are transactional on the hub (validate → back up → write → verify →
+  roll back on failure) and publish fresh configuration to the paired
+  physical remote, entirely offline.
 
-The editor now prunes action-less buttons and `validateGraph` rejects them.
-Pruning is scoped to activity maps. A root button map legitimately ships
-action-less shortcut buttons; activity selection and power off work through it.
+### Device and IR control
 
-### Bluetooth devices need `IsKeyboardAssociated` false
+Browse every device and command on the hub, send commands directly, and
+manage the IR database:
 
-A Bluetooth device controlled from the physical remote must have
-`IsKeyboardAssociated` set to false in `DeviceList.json`. With it true, the
-remote reports "you have to use the Harmony App to pair this device" and
-transmits nothing for that device.
+- **Learning** — capture codes from an original remote (15-second capture
+  window) with automatic classification, then test before saving.
+- **Importing** — pull codes from IRDB, Flipper-IRDB, LIRC-style sources, and
+  RemoteCentral Pronto pages; Flipper `RC5`/`RC6`/`SIRC` entries are converted
+  to raw timing replays when possible.
+- **Batch sweeps** — stage large candidate code sets in browser memory,
+  import selected commands, and fire them in cancellable batches with
+  configurable delays — the practical way to find codes for an unknown device.
+- **IR Lab** — a dedicated temporary test device that keeps experiments out
+  of your real configuration and can be cleared in one click.
 
-This is hub resource state, not repository state, so it is not carried by an
-install.
+### Bluetooth pairing and HID keyboard
 
-### Positive unique activity map identities
+The hub can pair with Bluetooth targets (Android TV, NVIDIA SHIELD, PCs) using
+a local pairing agent with Secure Simple Pairing and on-hub link-key storage —
+no Harmony app involved. Once paired, the hub presents itself as a Bluetooth
+keyboard: send text, named keys, or saved keystroke scripts from the web UI,
+and mix IR and Bluetooth devices freely in one activity. Direct HID calls are
+guarded so they refuse to run unless the expected target is connected and
+encrypted, which prevents a known firmware crash.
 
-Activity button maps require positive unique identities. Every activity button
-map needs a positive `ButtonMapId-` and every physical button a positive unique
-`ButtonId`, with `ButtonState` set to 1. Omitted or zero values are never
-allocated later in offline mode. The trailing dash in `ButtonMapId-` is part of
-the key name, matching the `Id-`, `ActivityId-`, and `DeviceId-` convention used
-throughout the Hub's resource JSON.
+### MQTT and Home Assistant
 
-### Slow devices need an explicit power on delay
+A hub-side Lua bridge publishes Home Assistant MQTT discovery, current
+activity state, and device availability, and accepts activity and IR commands
+over MQTT topics. Configure the broker, credentials, and topics from the web
+UI or at install time; passwords are kept server-side once set.
 
-Set `NextDevicePowerOnDelay` in milliseconds on the role for that device. The
-engine appends the delay immediately after that device's power on command and
-before the entire input phase, so a slow amplifier or soundbar is awake before
-its input command is sent.
+### Wi-Fi, recovery, and system tools
 
-Because input commands run in role order, placing the delay on the last powered
-device also makes that device's input the final command in the sequence, which
-overrides an HDMI CEC input change triggered by a display switching inputs
-earlier in the same sequence.
+- Edit the hub's Wi-Fi configuration from the browser (with an explicit,
+  owner-confirmed reboot to apply).
+- A recovery access point workflow can be triggered from the hub's reset
+  button path if the hub ever drops off the network.
+- The **System** page shows firmware/process status and logs, toggles the
+  cloud blocker, triggers LAN rediscovery or reboot, manages the optional
+  web sign-in, and checks for / applies payload updates from the browser.
 
-## Repository Layout
+### Backup, restore, and updates
 
-```text
-.
-  Install_Harmony_Control.cmd
-                           Double-click post-root installer for Windows
-  install_webui.ps1        Windows installer for rooted hubs with SSH
-  install_webui.py         Linux/macOS Python installer for rooted hubs
-  restore_backup.ps1       Restores the installer's hub-side backup
-  Dockerfile               One-time installer container image
-  compose.yaml             Compose example for installer and web proxy
-  .dockerignore            Docker build context exclusions
-  .env.example             Example environment variables for Compose
-  UNRAID.md                Unraid deployment procedure and safety notes
-  CONTRIBUTING.md          Contribution notes
-  UPSTREAM_REVISION        Tracked upstream revision marker
-  docker/
-    manager.py             Installer and proxy manager service
-    tests/test_manager.py  Manager unit tests
-  unraid/
-    harmony-hub-control.xml
-                           Unraid XML template
-  payload/
-    bin/
-      codex_webui          Embedded web UI binary
-      codex_bthid_keyboard Bluetooth HID keyboard runtime
-      codex_bt_pair_agent  Local Bluetooth pairing agent (SSP confirm, link key,
-                           full HID control report the stock handler truncates)
-      codex_hal_ltcp       HAL LTCP helper
-      codex_hbus           HBus helper
-      codex_portal         Portal helper
-      codex_dhcpd          DHCP helper for recovery AP
-      dropbearmulti        Dropbear multi-binary
-      FILES                Shipped binary file list
-      MANIFEST.txt         Binary checksum manifest
-    source/
-      codex_webui.c        Web UI C source
-      codex_bthid_keyboard.c
-                           Bluetooth HID keyboard C source
-      codex_bt_pair_agent.c
-                           Local Bluetooth pairing agent C source
-      codex_hal_ltcp.c     HAL LTCP C source
-      codex_hbus.c         HBus C source
-      codex_portal.c       Portal C source
-      codex_dhcpd.c        DHCP helper C source
-      activity_ui_assets.h Embedded activity UI assets header
-      remote_skin_jpg.h    Embedded remote skin JPEG header
-    scripts/
-      init.sh              Hub-side init entry
-      netservicestarter.lua
-                           Patched connect server task; serves paired remote
-                           resource reads locally and blocks cloud tasks
-      offline_egress_guard.sh
-                           Removes a WAN default route; keeps LAN and multicast
-      recovery_ap.sh       Recovery access point helper
-      rcS.local            Local rcS hook
-      dropbear             Dropbear wrapper
-      dropbearkey          Dropbear key wrapper
-    activity/
-      codexactivity.lua    Fail-closed offline activity resource writer
-    mqtt/
-      codexmqtt.lua        MQTT bridge Lua plugin
-    web/
-      activity-ui.css      Activity editor CSS source
-      activity-ui.js       Activity editor JavaScript source
-  tools/
-    embed_activity_ui.sh   Embeds web assets into the web UI binary
-    activity_graph_repair.mjs
-                           Dry run or apply repair across all activity graph
-                           resources (identity allocation, action-less pruning)
-    activity_ui_model_smoke.mjs
-                           Activity editor model tests
-    activity_json_semantic_smoke.sh
-                           Activity JSON semantic smoke check
-    activity_offline_guard.sh
-                           Offline guard smoke check
-    bluetooth_device_bridge.mjs
-                           Clones a working Bluetooth device profile and its
-                           maps onto a target address
-    bluetooth_hid_smoke.sh Bluetooth HID guard smoke check
-    ir_database_smoke_test.mjs
-                           IR database parser smoke test
-    chrome_ui_smoke.mjs    Chrome UI smoke test
-    hbus_notification_smoke.py
-                           HBus notification smoke test
-  build/
-    build_harmony_tools_kali.sh
-                           Linux toolchain path for the full binary set
-  docs/
-    AI_HANDOFF.md          AI handoff notes
-    API.md                 Script and integration API
-    BUILD.md               Build notes
-    GITHUB_SETUP.md        GitHub setup notes
-    SECURITY.md            Security notes before sharing the repository
-  examples/
-    mqtt-config.example.json
-                           Example MQTT bridge config
-```
+Ten one-click exports (devices, activities, button maps, functions,
+protocols, automation, MQTT, Wi-Fi, cloud, Bluetooth) plus a single
+owner-bundle download covering everything. Imports are preflighted and
+danger-confirmed, and the hub takes timestamped resource backups before any
+destructive write. The installer itself creates a hub-side backup first, and
+`restore_backup.ps1` can roll back to it.
+
+### Offline ownership
+
+Installed with defaults, the hub becomes a LAN-only appliance:
+
+- Logitech cloudapi, PubNub, and package-manager tasks are prevented from
+  starting.
+- The WAN default route is removed and monitored; LAN and multicast routes
+  are preserved, so local control, MQTT, and discovery keep working.
+- Paired-remote resource reads are served from local storage, and the
+  handset's normal `setup.sync` flow is answered locally so it can never
+  replace your configuration with an older cloud copy.
+- Activity writes are fail-closed: the hub refuses to save unless the cloud
+  blocker is active, so local edits can't race a cloud sync.
+
+## Screenshots
+
+Captured from the project's hub emulator — the real hub backend compiled for
+MIPS and running under QEMU with fixture data.
+
+| | |
+|---|---|
+| ![Home dashboard with the running activity, start tiles, and recent events](docs/screenshots/home.png) *Home — now playing and one-tap starts* | ![Activity roster with run, set up, reorder, and delete controls](docs/screenshots/activities.png) *Activities — run, rework, reorder, delete* |
+| ![Guided activity setup wizard, step one of four](docs/screenshots/wizard.png) *Activity wizard — guided four-step setup* | ![IR setup with device inventory, learning, and batch sweep tools](docs/screenshots/ir.png) *IR setup — inventory, learning, imports, sweeps* |
+| ![Bluetooth page showing an authenticated HID link and pairing controls](docs/screenshots/bluetooth.png) *Bluetooth — pairing and HID keyboard control* | ![MQTT broker and Home Assistant discovery configuration](docs/screenshots/mqtt.png) *MQTT — broker setup and HA discovery* |
+| ![Backup page with individual exports and the full owner bundle](docs/screenshots/backup.png) *Backup — ten exports plus a full bundle* | ![System page with status, cloud blocker, sign-in, and updates](docs/screenshots/system.png) *System — status, cloud policy, sign-in, updates* |
+
+## Requirements
+
+| Requirement | Details |
+|---|---|
+| Harmony Hub | Already **rooted** with [harmony-hub-root](https://github.com/Ripthulhu/harmony-hub-root). This project does not root hubs. |
+| SSH key | The private key produced by the root tool, named `harmony_owner_*`, in `~/.ssh` (or `%USERPROFILE%\.ssh`). |
+| Hub ID | The exact numeric Hub ID printed by the root tool. **Do not guess it** — IR, capture, MQTT, and dashboard calls depend on the real value. |
+| Install machine | Windows (PowerShell), or Linux/macOS (Python 3), or a Docker/Unraid host. Only plain `ssh` is used — no `scp`/`sftp` needed. |
+| Network | A trusted local network. The web UI is plain HTTP with optional sign-in; never expose it to the internet. |
+| Browser | Any modern browser, phone or desktop. The UI is served entirely by the hub. |
 
 The shipped binaries target the Harmony Hub's MIPS big-endian Linux userspace.
-No build server is required to install the current payload.
+No build step is required to install the current payload.
 
-## Activity Graph Maintenance
+## Quick start
 
-`tools/activity_graph_repair.mjs` repairs activity graph resources on a live
-hub. Without `--apply` it is read only and prints the proposed repair.
+Run after the hub has been rooted. The installer finds your
+`harmony_owner_*` key automatically; if you rooted with `harmony-hub-root`,
+the Hub ID is read from its handoff file, otherwise pass it explicitly.
 
-It reports allocated map IDs, allocated button IDs, `ButtonState` corrections,
-normalized sequences, and pruned action-less buttons, both per map and as
-totals. The tool is idempotent: a second run against its own output reports
-zero changes.
-
-Read only:
-
-```bash
-node ./tools/activity_graph_repair.mjs --base-url http://<hub-ip>:8080
-```
-
-It can write proposed `MapList` and `FunctionList` to files with `--output-map`
-and `--output-functions` for review before applying.
-
-## Quick Install
-
-Run after the hub has just been rooted with the LAN root tool. The installer
-uses your Harmony SSH key. It looks in `.ssh` for a private key whose filename
-starts with `harmony_owner_`:
-
-```text
-%USERPROFILE%\.ssh\harmony_owner_*
-~/.ssh/harmony_owner_*
-```
-
-The installer also needs the real numeric Harmony Hub ID for local HBus
-commands. If you rooted the hub with `harmony-hub-root`, this is read
-automatically from the handoff file under `.harmony-hub`. If the handoff file is
-missing, pass the exact value printed by the root tool as `hub_id=...`:
-
-```powershell
-.\install_webui.ps1 -HubHost <hub-ip> -HubId <numeric-id>
-```
-
-```bash
-python3 install_webui.py --hub-host <hub-ip> --hub-id <numeric-id>
-```
-
-Do not use a guessed Hub ID; IR, capture, MQTT, and dashboard HBus calls depend
-on the real value. The installer does not prompt for a Hub ID interactively,
-because guessed numeric values are accepted by the shell but fail against the
-hub.
-
-### Windows
-
-Double-click:
+**Windows** — double-click:
 
 ```text
 Install_Harmony_Control.cmd
 ```
 
-Enter the hub IP address when prompted. The installer also prompts for MQTT
-broker settings; leave the broker blank to install the UI with MQTT disabled for
-now.
-
-The installer uses only plain `ssh` and remote `cat` over stdin to copy files.
-It does not require `scp`, `sftp`, or `tftp`, which are not available in the
-minimal Dropbear SSH environment installed by the root tool.
-
-PowerShell can also be run directly:
+or run PowerShell directly:
 
 ```powershell
-.\install_webui.ps1 -HubHost <hub-ip>
+.\install_webui.ps1 -HubHost <hub-ip> -HubId <numeric-id>
 ```
 
-### Linux/macOS
-
-Use the Python 3 installer from the repository root:
+**Linux/macOS:**
 
 ```bash
-python3 install_webui.py --hub-host <hub-ip>
+python3 install_webui.py --hub-host <hub-ip> --hub-id <numeric-id>
 ```
 
-For a non-interactive install with MQTT disabled:
+Non-interactive, with MQTT disabled:
 
 ```bash
 python3 install_webui.py --hub-host <hub-ip> --key-path ~/.ssh/harmony_owner_<key-name> --mqtt-disabled --no-prompt
 ```
 
-The installer will prompt for missing values, create a backup on the hub, upload
-the runtime, start Dropbear if needed, start the web UI, and write MQTT config
-if provided.
+The installer creates a backup on the hub, uploads the runtime, starts the
+web UI, and writes MQTT config if provided. By default it enables strict
+offline ownership (cloud tasks blocked, WAN route removed, local-only remote
+sync) and reboots the hub once so the guarded handlers load. To stage the
+cloud setting without the install-time reboot, add `-NoApplyCloudRestart`
+(PowerShell) or `--no-apply-cloud-restart` (Python).
 
-By default the installer enables strict offline ownership. It keeps Logitech
-cloudapi, PubNub, and package-manager background tasks from starting, removes
-the Hub's WAN default route, retains LAN and multicast routes, and replaces the
-paired remote's cloud-capable resource/sync handlers with local-only handlers.
-Local web, MQTT, Bluetooth, Wi-Fi recovery, discovery, and SSH control continue
-to work. Fresh installs reboot once so the guarded handlers are loaded before
-handoff. The **System > Cloud blocker** setting changes the egress route
-immediately; **Save and reboot** also reloads the handler and task policy.
-
-To stage the setting without the install-time reboot:
-
-```powershell
-.\install_webui.ps1 -HubHost <hub-ip> -NoApplyCloudRestart
-```
-
-```bash
-python3 install_webui.py --hub-host <hub-ip> --no-apply-cloud-restart
-```
-
-Open the UI afterward:
+Then open:
 
 ```text
 http://<hub-ip>:8080/
 ```
 
-## Rollback
+**Docker / Unraid** — a one-time installer container plus a persistent web
+proxy, with a Compose example and an Unraid XML template. See
+[UNRAID.md](UNRAID.md) for the full procedure and safety notes.
 
-Restore the newest backup created by the installer:
+**Rollback** — restore the newest hub-side backup created by the installer:
 
 ```powershell
 .\restore_backup.ps1 -HubHost <hub-ip> -KeyPath "$env:USERPROFILE\.ssh\<root-key-file>"
 ```
 
-## Development Workflow
+## How it works
 
-Keep changes scoped and reviewable:
-
-1. Edit `payload/source/codex_webui.c` or the relevant payload script/plugin.
-2. Rebuild MIPS binaries only when native source changes. MIPS binaries are
-   built with Zig as a cross compiler. Web UI assets are embedded into
-   `codex_webui`, so any change to `payload/web/activity-ui.js` requires
-   regenerating the embedded header and rebuilding the binary:
-
-   ```bash
-   sh tools/embed_activity_ui.sh
-   zig cc -target mips-linux-musleabi -Os -static -s -I payload/source -o payload/bin/codex_webui payload/source/codex_webui.c
-   ```
-
-   The result must be `ELF 32-bit MSB executable, MIPS, MIPS32 rel2, statically
-   linked, stripped`. `build/build_harmony_tools_kali.sh` is the Linux toolchain
-   path for the full binary set.
-3. Replace the corresponding file under `payload/bin/`.
-4. Update `payload/bin/MANIFEST.txt`.
-5. Install to a test hub with `install_webui.ps1` on Windows or `install_webui.py` on Linux/macOS.
-6. Verify the dashboard, IR import, Bluetooth HID, MQTT, and rollback paths.
-
-Do not commit local secrets, hub backups, firmware dumps, root tooling, or
-credentials. See `docs/SECURITY.md` before sharing the repository.
-
-For script and integration control, see `docs/API.md`.
-
-## Useful Checks
-
-Page check:
-
-```powershell
-Invoke-WebRequest -Uri "http://<hub-ip>:8080/" -UseBasicParsing
-```
-
-Process and checksum check:
-
-```powershell
-ssh -i "$env:USERPROFILE\.ssh\<root-key-file>" root@<hub-ip> "ps | grep '[c]odex_webui'; ps | grep '[c]odex_bthid_keyboard'; ps | grep '[d]ropbear'; md5sum /data/codex/bin/codex_webui"
-```
-
-Logs:
-
-```powershell
-ssh -i "$env:USERPROFILE\.ssh\<root-key-file>" root@<hub-ip> "tail -80 /cache/codex-init.log; tail -80 /data/codex/ir-events.log 2>/dev/null"
-```
-
-IR database parser smoke test:
-
-```powershell
-node .\tools\ir_database_smoke_test.mjs --sample=24 --per-device=10 --source=all --dry-run
-```
-
-Linux/macOS:
-
-```bash
-node ./tools/ir_database_smoke_test.mjs --sample=24 --per-device=10 --source=all --dry-run
-```
-
-To create test devices and import supported commands without sending IR:
-
-```powershell
-node .\tools\ir_database_smoke_test.mjs --sample=8 --per-device=8 --source=all --configure --hub=http://<hub-ip>:8080
-```
-
-Activity editor model tests:
-
-```bash
-node ./tools/activity_ui_model_smoke.mjs
-```
-
-Offline guard check:
-
-```bash
-sh tools/activity_offline_guard.sh
-```
-
-Activity JSON semantic check:
-
-```bash
-sh tools/activity_json_semantic_smoke.sh
-```
-
-Bluetooth HID guard check:
-
-```bash
-sh tools/bluetooth_hid_smoke.sh
-```
-
-Action-less button audit. Fetch the live activity config and confirm no activity
-button map contains a button whose `ButtonAction`, `ButtonLongPressAction`, and
-`ButtonDoublePressAction` are all null:
-
-```bash
-curl -s "http://<hub-ip>:8080/api/activity-config" | node -e '
-let d=""; process.stdin.on("data",c=>d+=c); process.stdin.on("end",()=>{
-  const j=JSON.parse(d);
-  const maps=(j.mapList && j.mapList.ButtonMaps) || [];
-  let bad=0;
-  for (const m of maps) {
-    if (!String(m.__type||"").includes("ActivityButtonMap")) continue;
-    for (const b of (m.Buttons||[])) {
-      if (!b.ButtonAction && !b.ButtonLongPressAction && !b.ButtonDoublePressAction) bad++;
-    }
-  }
-  console.log(bad===0 ? "ok: no action-less activity buttons" : "fail: "+bad+" action-less activity buttons");
-  process.exit(bad===0?0:1);
-});
-'
-```
-
-The check is scoped to `ActivityButtonMap` on purpose. A root button map ships
-action-less shortcut buttons and must not be reported as a failure.
+There is no web framework and no cloud service. The entire product is a small
+set of purpose-built pieces that run on the hub's ~62 MB MIPS Linux system:
 
 ```text
-ok: no action-less activity buttons
+Your browser (LAN)
+  └─ http://<hub-ip>:8080 — codex_webui: a single static C binary
+       ├─ embedded single-page web app (no CDN, no external fonts)
+       ├─ HBus WebSocket client → the hub's Harmony activity engine
+       │    (start/stop activities, IR send, IR capture)
+       ├─ HAL helper + keyboard daemon → Bluetooth HID radio
+       ├─ Lua plugins → firmware resource manager (transactional
+       │    activity saves) and the MQTT / Home Assistant bridge
+       └─ JSON resources and settings on the hub's flash (/data)
 ```
+
+- **Frontend** — a dependency-free JavaScript app (hash-routed views, no
+  framework) developed in `tools/webui-sim/`, then minified and embedded
+  into the server binary as C headers. The virtual remote reuses the hub's
+  own remote-skin image and button geometry.
+- **Backend** — `payload/source/codex_webui.c`, compiled with Zig as a
+  static, stripped MIPS32 binary (~0.9 MB). It serves the app and a JSON API,
+  and forks per request.
+- **Firmware boundaries** — activity saves go through a fail-closed Lua
+  writer that validates the full activity graph against the live device list,
+  backs up all three resource files, writes, verifies, and rolls back on any
+  failure. Engine commands cross a loopback WebSocket (HBus); Bluetooth HID
+  traffic crosses a local HAL socket with its own connection guards.
+- **Persistence** — everything is plain JSON under `/data` on the hub,
+  which is exactly what the backup exports download.
+- **Development doubles** — `tools/webui-sim/` is a zero-dependency Node
+  mock of the API for UI work, and `tools/hub-emu/` runs the *actual*
+  compiled MIPS backend under QEMU in Docker, so HTTP contracts are tested
+  against the real code without a hub.
+
+## Safety and limitations
+
+This is owner-operated software for a rooted device on a trusted network.
+Read this section before installing.
+
+- **Trusted LAN only.** The UI is plain HTTP, sign-in is optional Basic
+  auth (off by default), and the server does not yet enforce cross-origin
+  protections. Never port-forward or expose the hub to the internet.
+- **Backups and exports contain secrets.** The Wi-Fi, MQTT, and full-bundle
+  exports include your Wi-Fi password and MQTT credentials so restores are
+  complete. Store downloaded backups accordingly.
+- **The browser updater is a convenience, not a secure channel.** Payload
+  updates fetched from the System page are not cryptographically signed.
+  Apply updates deliberately, on a trusted network, with a backup in hand.
+- **Some operations disrupt the household.** Wi-Fi changes, reboots, cloud
+  toggles, imports, and updates can interrupt TV time or briefly take the
+  hub offline. The UI confirmation-gates them; run them when you're present.
+- **The hub is a small embedded device.** Data partitions are a few
+  megabytes and RAM is limited. The installer and updater stage and verify
+  writes, but keep backups before big imports.
+- **Cloud blocking is the supported mode.** Mixing local editing with the
+  Logitech app or cloud sync is not supported and can overwrite local work.
+
+### Rules the paired physical remote enforces
+
+The hub tolerates configurations that the physical Harmony remote does not.
+The advanced editor's validator and the repair tool enforce these for you,
+but they matter when importing or hand-editing JSON:
+
+- **No action-less buttons in activity button maps.** A single button whose
+  press, long-press, and double-press actions are all null makes the remote
+  freeze after starting that activity until it is power-cycled.
+- **Bluetooth devices driven by the remote need `IsKeyboardAssociated:
+  false`** in the device list, or the remote refuses to transmit for them.
+- **Activity button maps need positive, unique identities**
+  (`ButtonMapId-`, `ButtonId`, `ButtonState: 1`). Offline mode never
+  allocates missing identities later.
+- **Slow devices need an explicit `NextDevicePowerOnDelay`** on their role
+  so their input is selected only after they have powered on.
+
+`tools/activity_graph_repair.mjs` audits and repairs all of this against a
+live hub (read-only by default):
+
+```bash
+node ./tools/activity_graph_repair.mjs --base-url http://<hub-ip>:8080
+```
+
+## Development and testing
+
+You do not need a hub to work on the UI or verify most behavior.
+
+**UI simulator** (zero dependencies, in-memory mock API, binds loopback only):
+
+```bash
+node tools/webui-sim/server.mjs
+# open http://127.0.0.1:8787/#control
+```
+
+**Hub emulator** (the real MIPS backend under QEMU, in Docker):
+
+```bash
+tools/hub-emu/run.sh               # seed → build → container
+node tools/hub-emu/dev-proxy.mjs   # UI + API proxy on :8787
+```
+
+**Test suites** (all runnable on a host machine):
+
+```bash
+node --test tools/webui-sim/test/*.test.mjs   # UI/model unit tests
+node tools/activity_ui_model_smoke.mjs        # activity editor model
+sh tools/activity_json_semantic_smoke.sh      # save-path JSON semantics
+sh tools/activity_offline_guard.sh            # offline guard packaging
+sh tools/bluetooth_hid_smoke.sh               # Bluetooth HID guards
+node tools/ir_database_smoke_test.mjs --sample=24 --per-device=10 --source=all --dry-run
+python3 docker/tests/test_manager.py          # Docker manager
+node tools/hub-emu/qa.mjs                     # contract QA vs real backend
+```
+
+**Rebuilding the web UI binary** (only when native source or embedded assets
+change):
+
+```bash
+sh tools/package_harmony_shell.sh   # bundle the shell UI into a C header
+sh tools/embed_activity_ui.sh       # embed the advanced editor assets
+zig cc -target mips-linux-musleabi -Os -static -s -I payload/source -o payload/bin/codex_webui payload/source/codex_webui.c
+```
+
+The result must be `ELF 32-bit MSB executable, MIPS, MIPS32 rel2, statically
+linked, stripped`. Update `payload/bin/MANIFEST.txt` after replacing
+binaries, deploy to a test hub, and verify the dashboard, IR import,
+Bluetooth HID, MQTT, and rollback paths. See [docs/BUILD.md](docs/BUILD.md)
+for the full Linux toolchain path.
+
+## Documentation
+
+| Document | Contents |
+|---|---|
+| [UNRAID.md](UNRAID.md) | Docker / Unraid deployment procedure and safety notes |
+| [docs/API.md](docs/API.md) | HTTP API for scripts and integrations |
+| [docs/BUILD.md](docs/BUILD.md) | Rebuilding the MIPS binaries |
+| [docs/SECURITY.md](docs/SECURITY.md) | Security policy and pre-sharing checklist |
+| [docs/FULL_FEATURE_ANALYSIS.md](docs/FULL_FEATURE_ANALYSIS.md) | In-depth, evidence-graded feature and architecture analysis |
+| [DESIGN.md](DESIGN.md) | Web UI design system |
+| [tools/webui-sim/README.md](tools/webui-sim/README.md) | UI simulator and production shell packaging |
+| [tools/hub-emu/README.md](tools/hub-emu/README.md) | QEMU hub emulator |
+| [CONTRIBUTING.md](CONTRIBUTING.md) | Contribution guidelines |
+
+## Contributing, security, and credits
+
+Contributions are welcome — keep changes scoped, prefer small pull requests
+with a short test note, and never commit SSH keys, MQTT passwords, tokens,
+hub backups, firmware dumps, or rooting tools. See
+[CONTRIBUTING.md](CONTRIBUTING.md) and [docs/SECURITY.md](docs/SECURITY.md)
+before sharing changes.
+
+- Hub rooting: [harmony-hub-root](https://github.com/Ripthulhu/harmony-hub-root)
+- Upstream project: [Ripthulhu/harmony-hub-control](https://github.com/Ripthulhu/harmony-hub-control)
+
+**License:** this repository does not currently include a license file, so
+default copyright applies. Confirm redistribution rights with the author
+before republishing binaries or images built from it.
