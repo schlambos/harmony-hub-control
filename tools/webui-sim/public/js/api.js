@@ -104,8 +104,10 @@ async function fetchSafe(path, options) {
   }
 }
 
-export async function getJson(path) {
-  const response = await fetchSafe(path, { method: "GET", cache: "no-store" });
+export async function getJson(path, { authorization } = {}) {
+  const headers = {};
+  if (authorization) headers.Authorization = authorization;
+  const response = await fetchSafe(path, { method: "GET", cache: "no-store", headers });
   const raw = await response.text();
   if (!response.ok) {
     let message = `HTTP ${response.status}`;
@@ -122,8 +124,10 @@ export async function getJson(path) {
   }
 }
 
-export async function getText(path) {
-  const response = await fetchSafe(path, { method: "GET", cache: "no-store" });
+export async function getText(path, { authorization } = {}) {
+  const headers = {};
+  if (authorization) headers.Authorization = authorization;
+  const response = await fetchSafe(path, { method: "GET", cache: "no-store", headers });
   const text = await response.text();
   if (!response.ok) {
     throw new ApiError(text.slice(0, 120) || `HTTP ${response.status}`, response.status);
@@ -131,11 +135,13 @@ export async function getText(path) {
   return text;
 }
 
-export async function postApiForm(path, fields) {
+export async function postApiForm(path, fields, { authorization } = {}) {
+  const headers = { "Content-Type": "application/x-www-form-urlencoded" };
+  if (authorization) headers.Authorization = authorization;
   const response = await fetchSafe(path, {
     method: "POST",
     cache: "no-store",
-    headers: { "Content-Type": "application/x-www-form-urlencoded" },
+    headers,
     body: serializeForm(fields).toString(),
   });
   const raw = await response.text();
@@ -153,12 +159,16 @@ export async function postApiForm(path, fields) {
 /** POST form-urlencoded to a legacy hub HTML page (e.g. /system, /mqtt).
     Only response.ok (HTTP 2xx) counts as success; the legacy
     <div class='msg'> is extracted for the caller. Errors are honest —
-    never "sim offline" for an HTTP failure. */
-export async function postHubForm(path, fields) {
+    never "sim offline" for an HTTP failure.
+    Optional authorization is for post-enable probes / disable-after-lock
+    (explicit Basic header — never the browser's credential cache). */
+export async function postHubForm(path, fields, { authorization } = {}) {
+  const headers = { "Content-Type": "application/x-www-form-urlencoded" };
+  if (authorization) headers.Authorization = authorization;
   const response = await fetchSafe(path, {
     method: "POST",
     cache: "no-store",
-    headers: { "Content-Type": "application/x-www-form-urlencoded" },
+    headers,
     body: serializeForm(fields).toString(),
   });
   const html = await response.text();
@@ -167,4 +177,16 @@ export async function postHubForm(path, fields) {
     throw new ApiError(msg || `HTTP ${response.status}`, response.status);
   }
   return { ok: true, html, msg: extractMsgDiv(html) };
+}
+
+/** GET probe with an explicit Basic Authorization header.
+    Used only to verify credentials just written — never stores them. */
+export async function probeBasicAuth(path, authorization) {
+  const response = await fetchSafe(path, {
+    method: "GET",
+    cache: "no-store",
+    headers: authorization ? { Authorization: authorization } : {},
+  });
+  const text = await response.text();
+  return { ok: response.ok, status: response.status, text };
 }

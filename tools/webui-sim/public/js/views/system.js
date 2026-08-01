@@ -15,12 +15,20 @@
      fetches from GitHub/the WAN and never stages anything.
    - the single amber primary on the whole page is "Refresh status". */
 
-import { postHubForm, postApiForm, getJson, getText } from "../api.js";
+import { postHubForm, postApiForm, getJson, getText, probeBasicAuth } from "../api.js";
 import { parseSystemHtml, parseCloudFlag } from "../setup-parsers.js";
 import { viewHead, notice, el, clear, dangerGuard } from "../setup-kit.js";
 import {
   cloudPanelState,
   authFormError,
+  authIsEnabled,
+  authEnableConsequence,
+  AUTH_ENABLE_WARNING,
+  basicAuthorizationHeader,
+  shouldProbeAuthCredentials,
+  authProbeSuccessMessage,
+  authProbeFailureMessage,
+  authDisabledMessage,
   formatBytes,
   updateCheckSummary,
 } from "./system-model.js";
@@ -124,22 +132,96 @@ export function createSystemView(section) {
     }
   }
 
+  function clearPasswordFields() {
+    if (els.passwordInput) els.passwordInput.value = "";
+    if (els.confirmInput) els.confirmInput.value = "";
+  }
+
+  function showAuthProbeFailure(username, password) {
+    clear(els.authResult);
+    els.authResult.appendChild(notice("error", authProbeFailureMessage()));
+    const recoveryActions = el("div", { className: "setup-actions" });
+    const disableNow = el("button", {
+      className: "btn btn-danger",
+      text: "Disable sign-in now",
+      attrs: { type: "button" },
+    });
+    disableNow.addEventListener("click", async () => {
+      disableNow.disabled = true;
+      try {
+        const authorization = password
+          ? basicAuthorizationHeader(username, password)
+          : undefined;
+        await postHubForm("/system", { action: "auth" }, { authorization });
+        setResult(els.authResult, "ok", authDisabledMessage());
+        clearPasswordFields();
+        lastAuthCredentials = null;
+        await loadProbe();
+      } catch (error) {
+        setResult(
+          els.authResult,
+          "error",
+          `Could not disable sign-in from this page (${error.message}). ` +
+            "Use SSH: delete or edit /data/codex/webui_auth.conf, then restart codex_webui.",
+        );
+      } finally {
+        disableNow.disabled = false;
+      }
+    });
+    recoveryActions.appendChild(disableNow);
+    els.authResult.appendChild(recoveryActions);
+  }
+
+  /* Last credentials used for a successful enable (in-memory only, cleared on
+     disable / hide / successful probe cleanup). Never written to storage. */
+  let lastAuthCredentials = null;
+
   async function setAuth(enabling, username, password) {
     try {
-      // The password is placed straight into the form body and never echoed.
       const fields = enabling
-        ? { action: "auth", authEnabled: true, authUsername: username, authPassword: password }
-        : { action: "auth" }; // omitting authEnabled disables; stored creds are kept
-      const res = await postHubForm("/system", fields);
-      // Deliberately NOT re-reading status here: enabling sign-in makes the
-      // next fetch return 401 until the browser supplies credentials. The
-      // hub's own reply is the honest result.
-      setResult(
-        els.authResult,
-        "ok",
-        res.msg || (enabling ? "Web UI sign-in enabled." : "Web UI sign-in disabled."),
-      );
-      if (enabling) els.passwordInput.value = ""; // never keep the secret in the DOM
+        ? {
+            action: "auth",
+            authEnabled: true,
+            authUsername: username,
+            ...(password ? { authPassword: password } : {}),
+          }
+        : { action: "auth" };
+      const authorization = !enabling && lastAuthCredentials
+        ? basicAuthorizationHeader(lastAuthCredentials.username, lastAuthCredentials.password)
+        : undefined;
+      const res = await postHubForm("/system", fields, { authorization });
+
+      if (!enabling) {
+        lastAuthCredentials = null;
+        clearPasswordFields();
+        setResult(els.authResult, "ok", res.msg || authDisabledMessage());
+        await loadProbe();
+        return;
+      }
+
+      /* Post-enable verification with an explicit Authorization header — never
+         rely on the browser Basic prompt/cache (codex_webui.c webui_auth_ok). */
+      if (shouldProbeAuthCredentials(password)) {
+        const header = basicAuthorizationHeader(username, password);
+        const probe = await probeBasicAuth("/", header);
+        if (probe.ok) {
+          lastAuthCredentials = { username, password };
+          setResult(els.authResult, "ok", authProbeSuccessMessage(username));
+          clearPasswordFields();
+        } else {
+          lastAuthCredentials = { username, password };
+          showAuthProbeFailure(username, password);
+          clearPasswordFields();
+        }
+      } else {
+        /* Blank password keep-current: hub kept the stored secret; we cannot probe it. */
+        setResult(
+          els.authResult,
+          "ok",
+          res.msg || "Web UI sign-in setting saved (current password kept; not re-verified).",
+        );
+        clearPasswordFields();
+      }
     } catch (error) {
       setResult(
         els.authResult,
@@ -318,6 +400,7 @@ export function createSystemView(section) {
   els.authModeLine = el("p", { className: "mini", text: "Current mode: reading…" });
   els.usernameInput = el("input", { attrs: { id: "sys-auth-username", type: "text", autocomplete: "username", placeholder: "admin" } });
   els.passwordInput = el("input", { attrs: { id: "sys-auth-password", type: "password", autocomplete: "new-password", placeholder: "Leave blank to keep current" } });
+  els.confirmInput = el("input", { attrs: { id: "sys-auth-confirm", type: "password", autocomplete: "new-password", placeholder: "Re-enter password" } });
   els.authResult = el("div", { className: "setup-status" });
   els.enableBtn = el("button", { className: "btn btn-secondary", text: "Require sign-in", attrs: { type: "button" } });
   els.disableBtn = el("button", { className: "btn btn-danger", text: "Disable sign-in", attrs: { type: "button" } });
@@ -338,10 +421,17 @@ export function createSystemView(section) {
       enableConsequence = null;
     }
   }
+  function readAuthForm() {
+    return {
+      username: els.usernameInput.value.trim(),
+      password: els.passwordInput.value,
+      passwordConfirm: els.confirmInput.value,
+      authAlreadyEnabled: authIsEnabled(probe?.authMode),
+    };
+  }
   els.enableBtn.addEventListener("click", () => {
-    const username = els.usernameInput.value.trim();
-    const password = els.passwordInput.value;
-    const error = authFormError({ enabling: true, username, password });
+    const form = readAuthForm();
+    const error = authFormError({ enabling: true, ...form });
     if (!enableArmed) {
       if (error) {
         setResult(els.authResult, "error", error);
@@ -352,10 +442,7 @@ export function createSystemView(section) {
       els.enableBtn.classList.add("danger-guard-armed");
       enableConsequence = el("p", {
         className: "danger-guard-consequence",
-        text:
-          `Enabling sign-in as "${username}". After this, every request — including this page's own ` +
-          "refresh — returns 401 until the browser supplies these credentials. This shell stores no " +
-          "credentials, so a wrong password can lock you out until the emulator is reset.",
+        text: authEnableConsequence(form.username),
       });
       enableConsequence.id = "sys-auth-enable-consequence";
       els.enableBtn.setAttribute("aria-describedby", enableConsequence.id);
@@ -368,7 +455,7 @@ export function createSystemView(section) {
       return;
     }
     disarmEnable();
-    setAuth(true, username, password);
+    setAuth(true, form.username, form.password);
   });
   els.enableBtn.addEventListener("keydown", (e) => {
     if (e.key === "Escape" && enableArmed) {
@@ -392,10 +479,15 @@ export function createSystemView(section) {
       els.usernameInput,
       el("label", { text: "New password", attrs: { for: "sys-auth-password" } }),
       els.passwordInput,
-      el("p", { className: "setup-field-hint", text: "The password goes straight into the request body. It is never displayed, logged, or stored by this shell." }),
+      el("label", { text: "Confirm password", attrs: { for: "sys-auth-confirm" } }),
+      els.confirmInput,
+      el("p", {
+        className: "setup-field-hint",
+        text: "Enter the password twice when enabling. Leave both blank only when sign-in is already on and you want to keep the current password. The password goes straight into the request body — never displayed, logged, or stored by this shell.",
+      }),
       el("div", { className: "setup-actions", children: [els.enableBtn, els.disableBtn] }),
       els.authResult,
-      notice("warn", "Enabling sign-in makes every request return 401 until the browser supplies credentials. This simulator stores none, so you can be locked out until it is reset."),
+      notice("warn", AUTH_ENABLE_WARNING),
     ]),
   );
 
@@ -423,11 +515,23 @@ export function createSystemView(section) {
   );
   section.appendChild(
     panel("Software update", null, [
-      notice("info", "Checking for updates needs outbound internet access, which this hub does not use from here. This shows the last saved check state and the binaries currently installed. Nothing is downloaded or staged by this page."),
+      notice(
+        "info",
+        "This page never downloads binaries and never points at a public GitHub owner. " +
+          "Browser self-update against a hardcoded repository is disabled until release signing exists " +
+          "(see payload/bin/MANIFEST.txt as the install/update inventory). " +
+          "Only an already-staged update on the hub can be applied here.",
+      ),
       els.checkSummary,
       els.binList,
       el("div", { className: "setup-actions", children: [els.applyBtn, els.applyRestartBtn] }),
-      el("p", { className: "setup-field-hint", text: "Apply acts only on an update that is already staged on the hub. If nothing is staged, the hub says so. Apply keeps services running; the restart variant also restarts the web UI." }),
+      el("p", {
+        className: "setup-field-hint",
+        text:
+          "Apply acts only on files already staged under /tmp/codex_update (allow-listed names from MANIFEST). " +
+          "If nothing is staged, the hub says so. Apply keeps services running; the restart variant restarts " +
+          "codex_webui, codex_bthid_keyboard, and codex_bt_pair_agent (same as init.sh).",
+      }),
       els.updateResult,
     ]),
   );
@@ -472,6 +576,8 @@ export function createSystemView(section) {
     onHide() {
       for (const disarm of disarms) disarm();
       disarmEnable();
+      lastAuthCredentials = null;
+      clearPasswordFields();
     },
   };
 }

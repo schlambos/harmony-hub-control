@@ -5,6 +5,14 @@ import {
   usernameError,
   passwordError,
   authFormError,
+  authIsEnabled,
+  authEnableConsequence,
+  AUTH_ENABLE_WARNING,
+  basicAuthorizationHeader,
+  shouldProbeAuthCredentials,
+  authProbeSuccessMessage,
+  authProbeFailureMessage,
+  authDisabledMessage,
   formatBytes,
   formatCheckedAt,
   updateCheckSummary,
@@ -57,10 +65,65 @@ describe("passwordError", () => {
 });
 
 describe("authFormError", () => {
-  it("requires username and password when enabling", () => {
+  it("requires username and password when enabling the first time", () => {
     assert.equal(authFormError({ enabling: true, username: "", password: "" }), "Username is required.");
-    assert.equal(authFormError({ enabling: true, username: "admin", password: "" }), "Enter a password before enabling web UI sign-in.");
-    assert.equal(authFormError({ enabling: true, username: "admin", password: "secret" }), null);
+    assert.equal(
+      authFormError({ enabling: true, username: "admin", password: "", passwordConfirm: "" }),
+      "Enter a password before enabling web UI sign-in.",
+    );
+    assert.equal(
+      authFormError({
+        enabling: true,
+        username: "admin",
+        password: "secret",
+        passwordConfirm: "secret",
+      }),
+      null,
+    );
+  });
+
+  it("rejects password / confirm mismatch", () => {
+    assert.equal(
+      authFormError({
+        enabling: true,
+        username: "admin",
+        password: "secret",
+        passwordConfirm: "secrat",
+      }),
+      "Password and confirmation do not match.",
+    );
+    assert.equal(
+      authFormError({
+        enabling: true,
+        username: "admin",
+        password: "secret",
+        passwordConfirm: "",
+      }),
+      "Password and confirmation do not match.",
+    );
+  });
+
+  it("allows blank password keep-current when auth is already enabled", () => {
+    assert.equal(
+      authFormError({
+        enabling: true,
+        username: "admin",
+        password: "",
+        passwordConfirm: "",
+        authAlreadyEnabled: true,
+      }),
+      null,
+    );
+    assert.equal(
+      authFormError({
+        enabling: true,
+        username: "admin",
+        password: "",
+        passwordConfirm: "nope",
+        authAlreadyEnabled: true,
+      }),
+      "Leave confirm blank when keeping the current password, or enter the new password in both fields.",
+    );
   });
 
   it("only checks password control chars when disabling", () => {
@@ -70,9 +133,67 @@ describe("authFormError", () => {
 
   it("surfaces username errors before password errors when enabling", () => {
     assert.equal(
-      authFormError({ enabling: true, username: "a:b", password: "a\u0001" }),
+      authFormError({ enabling: true, username: "a:b", password: "a\u0001", passwordConfirm: "a\u0001" }),
       "Username cannot contain a colon.",
     );
+  });
+});
+
+describe("authIsEnabled", () => {
+  it("detects hub probe modes", () => {
+    assert.equal(authIsEnabled("sign-in required"), true);
+    assert.equal(authIsEnabled("open on local network"), false);
+    assert.equal(authIsEnabled(""), false);
+    assert.equal(authIsEnabled(null), false);
+  });
+});
+
+describe("basicAuthorizationHeader / probe helpers", () => {
+  it("builds a Basic Authorization header without storing secrets", () => {
+    const header = basicAuthorizationHeader("admin", "s3cret");
+    assert.match(header, /^Basic /);
+    const b64 = header.slice("Basic ".length);
+    const decoded = Buffer.from(b64, "base64").toString("binary");
+    assert.equal(decoded, "admin:s3cret");
+  });
+
+  it("probes only when a new password was supplied", () => {
+    assert.equal(shouldProbeAuthCredentials("secret"), true);
+    assert.equal(shouldProbeAuthCredentials(""), false);
+    assert.equal(shouldProbeAuthCredentials(null), false);
+  });
+
+  it("probe-success copy names the user and confirms verification", () => {
+    const msg = authProbeSuccessMessage("owner");
+    assert.ok(msg.includes("verified"));
+    assert.ok(msg.includes("owner"));
+    assert.ok(!/s3cret|password=/i.test(msg));
+  });
+
+  it("probe-failure copy surfaces SSH recovery path and disable offer", () => {
+    const msg = authProbeFailureMessage();
+    assert.ok(msg.includes("/data/codex/webui_auth.conf"));
+    assert.ok(/ssh/i.test(msg));
+    assert.ok(/Disable sign-in/i.test(msg));
+    assert.ok(msg.includes("verification probe failed"));
+  });
+
+  it("standing warning mentions 401, browser cache, and SSH recovery", () => {
+    assert.ok(/401/.test(AUTH_ENABLE_WARNING));
+    assert.ok(/cache/i.test(AUTH_ENABLE_WARNING));
+    assert.ok(/webui_auth\.conf/.test(AUTH_ENABLE_WARNING));
+    assert.ok(/SSH/i.test(AUTH_ENABLE_WARNING));
+  });
+
+  it("enable consequence names username only", () => {
+    const text = authEnableConsequence("admin");
+    assert.ok(text.includes('"admin"'));
+    assert.ok(!/password/i.test(text) || /credentials/i.test(text));
+    assert.ok(text.includes("webui_auth.conf"));
+  });
+
+  it("disabled message is plain", () => {
+    assert.ok(authDisabledMessage().includes("disabled"));
   });
 });
 
