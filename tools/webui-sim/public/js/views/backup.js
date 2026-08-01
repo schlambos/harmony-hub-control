@@ -3,10 +3,12 @@
    Exports are direct same-origin anchors (the hub streams the files).
    Restores POST form-urlencoded through postHubForm — never JSON — and
    every target passes a two-step dangerGuard; DeviceList.json and the
-   full bundle additionally demand a typed phrase, because both are
-   writers of DeviceList.json — the file that keeps SHIELD 66690268
-   paired-remote state alive. The bundle also writes every other resource
-   and setting, so it carries the same device-list risk plus more.
+   full bundle additionally demand a typed phrase, because both write
+   DeviceList.json — the file that carries IsKeyboardAssociated and other
+   paired-remote Bluetooth flags. A foreign list can reset those flags and
+   stop the handset from transmitting for keyboard devices. The bundle also
+   writes every other resource and setting, so it carries the same
+   device-list risk plus more.
    Safe DOM only: dynamic values go through textContent / el(). */
 
 import { postHubForm, getText } from "../api.js";
@@ -29,14 +31,14 @@ const MANIFEST_ITEM_STYLE = "display:flex;align-items:center;gap:var(--space-2);
 
 const DEVICES_PHRASE = "replace devices";
 
-/* The bundle writes DeviceList.json (same SHIELD 66690268 risk as the
+/* The bundle writes DeviceList.json (same paired-remote flag risk as the
    devices target) plus every other resource and setting, so it requires
    the same typed confirmation as devices. */
 const BUNDLE_PHRASE = "replace everything";
 
 const TARGET_HINTS = {
   bundle: "Replaces every resource and setting file on the hub, including Wi-Fi and the cloud blocker flag. A bundle that embeds a cloud-blocker.conf disable value (0/off/false/disabled) is rejected before upload.",
-  devices: "This import is the hub's only writer of DeviceList.json. A foreign list can clobber SHIELD 66690268 IsKeyboardAssociated=false and re-break the paired remote.",
+  devices: "This import is the hub's only writer of DeviceList.json. A foreign list can reset Bluetooth IsKeyboardAssociated flags and stop the paired remote from transmitting for those devices.",
   wifi: "Saved immediately; the new network only takes effect after a reboot.",
   cloud: "Only values that enable the blocker (1, on, true, enabled) are accepted here — this page never sends 0/off.",
 };
@@ -58,7 +60,7 @@ const PLACEHOLDERS = {
 function consequenceFor(target) {
   switch (target) {
     case "devices":
-      return "Replaces DeviceList.json — the hub's only writer of that file. A wrong list can clobber SHIELD 66690268 IsKeyboardAssociated=false and re-break the paired remote. An automatic backup of the current list is kept on the hub's 5 MiB flash first.";
+      return "Replaces DeviceList.json — the hub's only writer of that file. A wrong list can reset Bluetooth IsKeyboardAssociated flags and stop the paired remote from transmitting for those devices. An automatic backup of the current list is kept on the hub's 5 MiB flash first.";
     case "bundle":
       return "Overwrites every resource and setting on the hub: devices, functions, protocols, activities, maps, automation, MQTT, Wi-Fi, Bluetooth, and the cloud blocker flag. A bundle that tries to disable the cloud blocker is rejected before upload. Wi-Fi changes apply on reboot.";
     case "wifi":
