@@ -7,6 +7,7 @@ import {
   commandKey,
   matchCommand,
 } from "../remote-layout.js";
+import { commandsPanelShouldOpen } from "./control-panel-state.js";
 
 const HOLD_MS = 550;
 const LOG_MAX = 14;
@@ -61,19 +62,25 @@ const TEMPLATE = `
       </div>
     </div>
     <div class="control-side">
+      <details class="panel commands-panel" id="commandsPanel">
+        <summary>
+          <span class="commands-title">All commands</span>
+          <span class="mono muted" id="resolveMeta"></span>
+        </summary>
+        <div class="commands-body">
+          <p class="mini muted" id="commandsHint">Each row sends immediately to the hub (IR or Bluetooth) — not a preview.</p>
+          <div id="resolveList" class="resolve-list"></div>
+        </div>
+      </details>
       <details class="panel inspector" id="inspector">
         <summary>
-          <span class="inspector-title">Inspector</span>
-          <span class="mono muted" id="resolveMeta"></span>
+          <span class="inspector-title">Send log</span>
         </summary>
         <div class="inspector-body">
           <div class="inspector-actions">
             <button type="button" class="btn btn-quiet btn-sm" data-act="refresh">Refresh state</button>
             <button type="button" class="btn btn-quiet btn-sm" data-act="clearlog">Clear log</button>
           </div>
-          <h4 class="inspector-h">Resolved actions</h4>
-          <div id="resolveList" class="resolve-list"></div>
-          <h4 class="inspector-h">Send log</h4>
           <ol id="sendLog" class="send-log"><li class="send-hint">Press a key — sends appear here.</li></ol>
         </div>
       </details>
@@ -114,18 +121,34 @@ export function createControlView(section) {
       statusNote: section.querySelector("#statusNote"),
       resolveList: section.querySelector("#resolveList"),
       resolveMeta: section.querySelector("#resolveMeta"),
+      commandsHint: section.querySelector("#commandsHint"),
       log: section.querySelector("#sendLog"),
       segmented: section.querySelector(".segmented"),
+      commandsPanel: section.querySelector("#commandsPanel"),
       inspector: section.querySelector("#inspector"),
     };
-    if (localStorage.getItem("hhc.inspector") === "open") els.inspector.open = true;
+    applyCommandsPanelOpen();
+    els.commandsPanel.addEventListener("toggle", () => {
+      localStorage.setItem("hhc.commands", els.commandsPanel.open ? "open" : "closed");
+      /* Finish migration off the old Inspector key once the user chooses. */
+      localStorage.removeItem("hhc.inspector");
+    });
+    if (localStorage.getItem("hhc.sendlog") === "open") els.inspector.open = true;
     els.inspector.addEventListener("toggle", () => {
-      localStorage.setItem("hhc.inspector", els.inspector.open ? "open" : "closed");
+      localStorage.setItem("hhc.sendlog", els.inspector.open ? "open" : "closed");
     });
     buildKeys();
     wire();
     hub.subscribe(renderAll);
     renderAll();
+  }
+
+  function applyCommandsPanelOpen() {
+    els.commandsPanel.open = commandsPanelShouldOpen({
+      mode,
+      commandsPref: localStorage.getItem("hhc.commands"),
+      legacyInspectorPref: localStorage.getItem("hhc.inspector"),
+    });
   }
 
   function buildKeys() {
@@ -380,10 +403,10 @@ export function createControlView(section) {
         .map((cmd, i) => {
           const keyIndex = REMOTE_BUTTONS.findIndex((b) =>
             aliasMatch(commandKey(cmd.name), b.aliases));
-          const target = keyIndex !== -1 ? `on remote: ${REMOTE_BUTTONS[keyIndex].label}` : "not on remote";
-          return `<button type="button" class="resolve-row" data-command="${i}">
+          const target = keyIndex !== -1 ? `on remote: ${REMOTE_BUTTONS[keyIndex].label}` : "not on remote skin";
+          return `<button type="button" class="resolve-row" data-command="${i}" title="Send ${escapeHtml(cmd.name)} now">
             <span class="resolve-key">${escapeHtml(cmd.name)}</span>
-            <span class="resolve-target">${escapeHtml(target)} · send direct</span>
+            <span class="resolve-target">${escapeHtml(target)} · tap to send</span>
           </button>`;
         })
         .join("");
@@ -592,6 +615,13 @@ export function createControlView(section) {
     mode = next;
     els.segmented.querySelectorAll("[data-mode]").forEach((b) =>
       b.setAttribute("aria-pressed", String(b.dataset.mode === mode)));
+    applyCommandsPanelOpen();
+    if (els.commandsHint) {
+      els.commandsHint.textContent =
+        mode === "devices"
+          ? "Every command on this device. Each row sends immediately (IR or Bluetooth) — not a preview."
+          : "Mapped remote keys for this activity. Each row sends immediately — not a preview.";
+    }
     renderAll();
   }
 

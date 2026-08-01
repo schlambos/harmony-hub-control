@@ -148,8 +148,13 @@ teal reserved for “live / on air” status only.
 - Status line sits **above** the remote, pinned under the now-strip:
   last command + device target in mono — feedback must be visible without scrolling
 - Soft buttons (MenuItem, no hard ButtonKey): chip row under the skin, not invented keys
-- Resolved-actions list and send log live in a single **Inspector** panel,
-  collapsed by default (persisted) — debug truth available, never in the way
+- **All commands** panel lists every sendable command (full device list in
+  Devices mode; mapped keys in Activities). Opens by default in Devices mode
+  (the list is the main event there); stays collapsed by default in Activities.
+  Preference is persisted as `hhc.commands`. Each row sends immediately — copy
+  must say so. Legacy `hhc.inspector=open` migrates to open once.
+- **Send log** is a separate, collapsed-by-default panel (`hhc.sendlog`) for the
+  recent-send trail and refresh controls — debug truth, never in the way
 
 ### Activity hero (“now running”)
 - Full-width panel, inset surface, live dot + display name + Power off

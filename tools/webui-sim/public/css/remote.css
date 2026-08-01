@@ -308,12 +308,20 @@
   color: var(--status-error);
 }
 
-/* -- Inspector: debug truth, collapsed by default ------------------------- */
+/* -- All commands + Send log side panels ----------------------------------
+   Commands: primary sendable list (Devices often open; Activities collapsed).
+   Send log: secondary debug trail, collapsed by default. */
 
+.commands-panel,
 .inspector {
   padding: 0;
 }
 
+.commands-panel {
+  margin-bottom: var(--space-3);
+}
+
+.commands-panel summary,
 .inspector summary {
   display: flex;
   align-items: center;
@@ -326,10 +334,12 @@
   font-weight: 600;
 }
 
+.commands-panel summary::-webkit-details-marker,
 .inspector summary::-webkit-details-marker {
   display: none;
 }
 
+.commands-panel summary::before,
 .inspector summary::before {
   content: "";
   width: 7px;
@@ -341,21 +351,33 @@
   transition: transform var(--dur-fast) var(--ease-out);
 }
 
+.commands-panel[open] summary::before,
 .inspector[open] summary::before {
   transform: rotate(45deg);
 }
 
+.commands-panel summary:hover,
 .inspector summary:hover {
   color: var(--text-primary);
 }
 
+.commands-title {
+  color: var(--text-primary);
+}
+
+.commands-panel summary .mono,
 .inspector summary .mono {
   margin-left: auto;
   font-weight: 450;
 }
 
+.commands-body,
 .inspector-body {
   padding: 0 var(--space-5) var(--space-5);
+}
+
+.commands-body .mini {
+  margin: 0 0 var(--space-3);
 }
 
 .inspector-actions {
