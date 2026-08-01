@@ -2,7 +2,14 @@
    activity resources (Activity, ActivityButtonMap, ActivityFunctionMap) and
    saves the whole graph through /api/activity-save.
    Shapes mirror the vendored editor (payload/web/activity-ui.js) and the
-   genuine Logitech fixture — same floors, same __type names, same fields. */
+   genuine Logitech fixture — same floors, same __type names, same fields.
+
+   Ownership rule: the wizard may only create/replace the 16414Activity<ID>
+   map for the activity being saved. Every other ButtonMap (second surfaces,
+   conditional 16420 keyboard HID maps, root/device maps, other activities)
+   is preserved byte-for-byte. When a KeyboardTextEntryActivityRole is present
+   the wizard also ensures exactly one 16420Activity<ID> map exists, matching
+   the advanced editor's reconcile/validate contract. */
 
 import * as api from "./api.js";
 
@@ -12,6 +19,15 @@ const MAP_ID_FLOOR = 52944089;
 const BUTTON_ID_FLOOR = 1878029713;
 const ID_CEILING = 2147483000;
 const IDENTITY_KEYS = new Set(["Id", "Id-", "ButtonId", "ButtonMapId", "ButtonMapId-"]);
+
+/* HID keys the firmware's 16420 keyboard map understands — mirrored from
+   payload/web/activity-ui.js composeKeyboardHidMap / hidButtonKey. */
+const HID_DIRECT_COMMANDS = new Set([
+  "Back", "DirectionDown", "DirectionLeft", "DirectionRight", "DirectionUp",
+  "F1", "F2", "F3", "F4", "F5", "F6", "F7", "F8", "F9", "F10", "F11", "F12",
+  "FastForward", "Info", "Menu", "Pause", "Play", "Rewind", "Stop",
+  "VolumeDown", "VolumeUp",
+]);
 
 export const ACTIVITY_TYPES = [
   { value: 1, label: "Watch TV" },
@@ -78,9 +94,9 @@ function commandAction(deviceId, command, eventType) {
   return {
     "DeviceId-": Number(deviceId),
     __type: "ButtonCommandAction",
-    "FunctionId-": Number(command.functionId ?? 0),
+    "FunctionId-": Number(command.functionId ?? command["FunctionId-"] ?? command.FunctionId ?? command["Id-"] ?? command.Id ?? 0),
     Order: 0,
-    CommandName: String(command.name ?? command.command),
+    CommandName: String(command.name ?? command.Name ?? command.CommandName ?? command.command),
     EventType: eventType,
     Id: 0,
   };
@@ -154,9 +170,91 @@ function surfaceTemplate(config) {
   };
 }
 
-function composeButtonMap(draft, activityId, config, alloc) {
+function wizardMapIdentifier(activityId) {
+  return `16414Activity${activityId}`;
+}
+
+function hidMapIdentifier(activityId) {
+  return `16420Activity${activityId}`;
+}
+
+export function isWizardOwnedActivityMap(map, activityId) {
+  return String(map?.ButtonMapIdentifier ?? "") === wizardMapIdentifier(activityId);
+}
+
+export function isKeyboardHidActivityMap(map) {
+  return /^16420Activity-?\d+$/.test(String(map?.ButtonMapIdentifier ?? ""));
+}
+
+function keyboardDeviceIdsFromRoles(roles) {
+  return (Array.isArray(roles) ? roles : [])
+    .filter((role) => String(role?.__type ?? "").includes("KeyboardTextEntryActivityRole"))
+    .map((role) => role?.["DeviceId-"])
+    .filter((id) => id != null && id !== "");
+}
+
+function hidButtonKey(commandName) {
+  const name = String(commandName ?? "");
+  if (/^[0-9]$/.test(name)) return `Number${name}`;
+  if (name === "Mute") return "VolumeMute";
+  if (name === "Select") return "Enter";
+  return HID_DIRECT_COMMANDS.has(name) ? name : "";
+}
+
+function deviceEntryFromConfig(config, deviceId) {
+  const entries = config?.deviceList?.DevicesWithFeatures ?? [];
+  return entries.find((entry) => {
+    const device = entry?.Device ?? entry;
+    const id = device?.["Id-"] ?? device?.Id ?? device?.id ?? entry?.id;
+    return String(id) === String(deviceId);
+  }) ?? null;
+}
+
+/* Mirror of payload/web/activity-ui.js composeKeyboardHidMap. Builds the
+   conditional 16420Activity<ID> Bluetooth HID map the advanced editor's
+   validator requires whenever a KeyboardTextEntryActivityRole is present. */
+export function composeKeyboardHidMap({ activityId, deviceId, config, sourceMap, alloc }) {
+  const entry = deviceEntryFromConfig(config, deviceId);
+  if (!entry) return null;
+  const device = entry.Device ?? entry;
+  const deviceIdValue = Number(device["Id-"] ?? device.Id ?? deviceId);
+  const commands = Array.isArray(entry.Commands) ? entry.Commands : [];
   const buttons = [];
-  for (const [buttonKey, mapping] of Object.entries(draft.buttons)) {
+  const seen = new Set();
+  for (const command of commands) {
+    const commandName = String(command?.Name ?? command?.CommandName ?? command?.name ?? "");
+    const key = hidButtonKey(commandName);
+    if (!key || seen.has(key.toLowerCase())) continue;
+    seen.add(key.toLowerCase());
+    buttons.push({
+      ButtonId: alloc.id(),
+      __type: "HardRemoteButton",
+      ButtonAction: commandAction(deviceIdValue, command, 1),
+      ButtonDoublePressAction: null,
+      FunctionGroupType: /^Number[0-9]$/.test(key) ? 2 : 0,
+      ButtonState: 1,
+      ButtonKey: key,
+      ButtonLongPressAction: null,
+    });
+  }
+  const surface = sourceMap ?? surfaceTemplate(config);
+  return {
+    "ButtonMapId-": alloc.mapId(),
+    "ActivityId-": Number(activityId),
+    Buttons: buttons,
+    "ButtonMapSurfaceId-": surface["ButtonMapSurfaceId-"] ?? surface.ButtonMapSurfaceId ?? null,
+    "RemoteId-": surface["RemoteId-"] ?? surface.RemoteId ?? null,
+    __type: "ActivityButtonMap",
+    ButtonMapIdentifier: hidMapIdentifier(activityId),
+    DateModified: harmonyDate(),
+    Sequences: [],
+    "SurfaceId-": surface["SurfaceId-"] ?? surface.SurfaceId ?? null,
+  };
+}
+
+function composeButtonMap(draft, activityId, config, alloc, existing) {
+  const buttons = [];
+  for (const [buttonKey, mapping] of Object.entries(draft.buttons ?? {})) {
     if (!mapping?.command) continue;
     buttons.push({
       ButtonId: alloc.id(),
@@ -171,16 +269,32 @@ function composeButtonMap(draft, activityId, config, alloc) {
         : null,
     });
   }
-  return {
-    "ButtonMapId-": alloc.mapId(),
-    "ActivityId-": Number(activityId),
-    Buttons: buttons,
-    ...surfaceTemplate(config),
-    __type: "ActivityButtonMap",
-    ButtonMapIdentifier: `16414Activity${activityId}`,
-    DateModified: harmonyDate(),
-    Sequences: [],
-  };
+
+  /* Reuse the existing wizard-owned map shell so unknown per-map fields
+     round-trip; only Buttons / DateModified / identity fields are rewritten. */
+  const map = existing && typeof existing === "object"
+    ? existing
+    : {
+        "ButtonMapId-": alloc.mapId(),
+        ...surfaceTemplate(config),
+        __type: "ActivityButtonMap",
+        Sequences: [],
+      };
+
+  if (!Number.isFinite(Number(map["ButtonMapId-"])) || Number(map["ButtonMapId-"]) <= 0) {
+    map["ButtonMapId-"] = alloc.mapId();
+  }
+  const surf = surfaceTemplate(config);
+  for (const key of ["ButtonMapSurfaceId-", "RemoteId-", "SurfaceId-"]) {
+    if (map[key] == null && surf[key] != null) map[key] = surf[key];
+  }
+  map["ActivityId-"] = Number(activityId);
+  map.Buttons = buttons;
+  map.__type = "ActivityButtonMap";
+  map.ButtonMapIdentifier = wizardMapIdentifier(activityId);
+  map.DateModified = harmonyDate();
+  if (!Array.isArray(map.Sequences)) map.Sequences = [];
+  return map;
 }
 
 function composeFunctionMap(activityId) {
@@ -192,15 +306,172 @@ function composeFunctionMap(activityId) {
   };
 }
 
-/* Build the three replacement resources for the draft and POST them.
-   editId: when set, that activity (and its maps) is replaced in place;
-   otherwise a new activity is appended at the end of the order. */
-export async function saveDraft({ config, revision, draft, editId }) {
+function isActivityFunctionMap(map, activityId) {
+  return String(map?.__type ?? "").includes("ActivityFunctionMap")
+    && String(map?.["ActivityId-"]) === String(activityId);
+}
+
+/* Surface key used by the advanced editor for remote-surface totality.
+   HID maps use a virtual key and are excluded from surface templates. */
+function activityMapSurfaceKey(map) {
+  if (!map || typeof map !== "object") return "";
+  if (isKeyboardHidActivityMap(map)) return "virtual|16420|ActivityButtonMap";
+  const surface = map["SurfaceId-"] ?? map.SurfaceId;
+  const buttonSurface = map["ButtonMapSurfaceId-"] ?? map.ButtonMapSurfaceId;
+  if (surface == null && buttonSurface == null) return "";
+  return [
+    map["RemoteId-"] ?? map.RemoteId,
+    surface,
+    buttonSurface,
+    map.__type,
+  ].map((v) => String(v ?? "")).join("|");
+}
+
+function rewriteIdentifierForActivity(identifier, activityId) {
+  const text = String(identifier ?? "");
+  if (/Activity-?\d+$/.test(text)) {
+    return text.replace(/Activity-?\d+$/, `Activity${activityId}`);
+  }
+  return text || `Activity${activityId}`;
+}
+
+/* Clone a non-HID activity surface template for a new/missing surface.
+   Empty Buttons (no action-less entries) so the paired remote stays safe;
+   the advanced editor can route actions later without a repair warning for
+   missing surfaces. Mirrors activity-ui cloneMapForActivity(keepActions=false)
+   after prune. */
+function cloneEmptySurfaceMap(template, activityId, alloc) {
+  const map = structuredClone(template);
+  delete map.ButtonMapId;
+  delete map["Id-"];
+  delete map.Id;
+  map["ButtonMapId-"] = alloc.mapId();
+  map["ActivityId-"] = Number(activityId);
+  map.ButtonMapIdentifier = rewriteIdentifierForActivity(map.ButtonMapIdentifier, activityId);
+  map.Buttons = [];
+  map.Sequences = [];
+  if (Object.prototype.hasOwnProperty.call(map, "DateModified")) {
+    map.DateModified = harmonyDate();
+  }
+  map.__type = map.__type || "ActivityButtonMap";
+  return map;
+}
+
+/* Hub-wide non-HID activity surfaces that every activity must carry (editor
+   surface-totality rule). HID / root / device maps are not templates. */
+function collectSurfaceTemplates(buttonMaps) {
+  const templates = new Map();
+  for (const map of buttonMaps) {
+    const activityId = map?.["ActivityId-"];
+    if (activityId == null || String(activityId) === "-1") continue;
+    if (isKeyboardHidActivityMap(map)) continue;
+    if (!String(map?.__type ?? "").includes("ActivityButtonMap")) continue;
+    const key = activityMapSurfaceKey(map);
+    if (!key) continue;
+    if (!templates.has(key)) templates.set(key, map);
+  }
+  return templates;
+}
+
+/* Merge the wizard-owned 16414 map (and optional 16420 HID map) into the
+   existing ButtonMaps list without touching anything the wizard does not own.
+   Also fills any hub-wide remote surfaces the activity is missing so the
+   advanced editor's surface-totality check needs zero repairs. */
+function mergeActivityButtonMaps({
+  buttonMaps,
+  activityId,
+  wizardMap,
+  keyboardDeviceIds,
+  config,
+  alloc,
+}) {
+  const needsHid = keyboardDeviceIds.length > 0;
+  let existingHid = null;
+  let wizardPlaced = false;
+  let hidPlaced = false;
+  const result = [];
+
+  for (const map of buttonMaps) {
+    if (String(map?.["ActivityId-"]) !== String(activityId)) {
+      result.push(map);
+      continue;
+    }
+    if (isWizardOwnedActivityMap(map, activityId)) {
+      if (!wizardPlaced) {
+        result.push(wizardMap);
+        wizardPlaced = true;
+      }
+      continue;
+    }
+    if (isKeyboardHidActivityMap(map)) {
+      if (needsHid && !hidPlaced) {
+        existingHid = map;
+        result.push(map);
+        hidPlaced = true;
+      }
+      /* Drop stale HID maps when the keyboard role is gone (editor rule). */
+      continue;
+    }
+    /* Second-surface / unknown activity maps — preserve untouched. */
+    result.push(map);
+  }
+
+  if (!wizardPlaced) result.push(wizardMap);
+
+  /* Surface totality: every activity needs one map per hub remote surface. */
+  const templates = collectSurfaceTemplates(buttonMaps);
+  /* Prefer the just-built wizard map as the 16414 template for this activity. */
+  const wizardKey = activityMapSurfaceKey(wizardMap);
+  if (wizardKey) templates.set(wizardKey, wizardMap);
+
+  const presentKeys = new Set(
+    result
+      .filter((m) => String(m?.["ActivityId-"]) === String(activityId) && !isKeyboardHidActivityMap(m))
+      .map(activityMapSurfaceKey)
+      .filter(Boolean),
+  );
+  for (const [key, template] of templates) {
+    if (presentKeys.has(key)) continue;
+    if (isKeyboardHidActivityMap(template)) continue;
+    if (isWizardOwnedActivityMap(template, template["ActivityId-"]) ||
+        /^16414Activity/.test(String(template?.ButtonMapIdentifier ?? ""))) {
+      /* Never duplicate the wizard-owned surface via a second 16414 clone. */
+      if (wizardKey && key === wizardKey) continue;
+    }
+    const cloned = cloneEmptySurfaceMap(template, activityId, alloc);
+    result.push(cloned);
+    presentKeys.add(key);
+  }
+
+  if (needsHid && !hidPlaced) {
+    const created = composeKeyboardHidMap({
+      activityId,
+      deviceId: keyboardDeviceIds[0],
+      config,
+      sourceMap: wizardMap,
+      alloc,
+    });
+    if (created) result.push(created);
+  }
+
+  return { buttonMaps: result, preservedHid: existingHid };
+}
+
+/* Pure graph builder used by saveDraft and unit tests. Does not touch the network. */
+export function buildActivityGraph({ config, draft, editId }) {
   const alloc = createAllocator(config);
 
-  const activities = structuredClone(config.activityList?.Activities ?? []);
-  const buttonMaps = structuredClone(config.mapList?.ButtonMaps ?? []);
-  const functionMaps = (config.functionList?.FunctionMaps ?? []).map((m) => structuredClone(m));
+  const activityList = structuredClone(config?.activityList ?? { Activities: [] });
+  if (!Array.isArray(activityList.Activities)) activityList.Activities = [];
+  const activities = activityList.Activities;
+
+  const mapList = structuredClone(config?.mapList ?? { ButtonMaps: [] });
+  if (!Array.isArray(mapList.ButtonMaps)) mapList.ButtonMaps = [];
+  const buttonMaps = mapList.ButtonMaps;
+
+  const functionList = structuredClone(config?.functionList ?? { FunctionMaps: [] });
+  if (!Array.isArray(functionList.FunctionMaps)) functionList.FunctionMaps = [];
+  const functionMaps = functionList.FunctionMaps;
 
   let activity;
   if (editId) {
@@ -213,59 +484,91 @@ export async function saveDraft({ config, revision, draft, editId }) {
     activities.push(activity);
   }
 
-  activity.Name = draft.name.trim();
+  /* Mutate the cloned activity in place so unknown top-level activity keys
+     round-trip instead of being rebuilt from a fixed template. */
+  activity.Name = String(draft.name ?? "").trim();
   activity.ActivityDisplayName = activity.Name;
   activity.Type = Number(draft.type);
   activity.DateModified = harmonyDate();
   activity.Roles = composeRoles(draft, alloc);
 
   const activityId = activity["Id-"];
-  const map = composeButtonMap(draft, activityId, config, alloc);
-  const functionMap = composeFunctionMap(activityId);
+  const existingWizardMap = buttonMaps.find((m) => isWizardOwnedActivityMap(m, activityId));
+  const wizardMap = composeButtonMap(draft, activityId, config, alloc, existingWizardMap);
+  const keyboardDeviceIds = keyboardDeviceIdsFromRoles(activity.Roles);
 
-  const keptMaps = buttonMaps.filter((m) => String(m?.["ActivityId-"]) !== String(activityId));
-  keptMaps.push(map);
-  const keptFunctions = functionMaps.filter((m) =>
-    !(String(m?.__type ?? "").includes("ActivityFunctionMap") && String(m?.["ActivityId-"]) === String(activityId)));
-  keptFunctions.push(functionMap);
+  const { buttonMaps: mergedMaps } = mergeActivityButtonMaps({
+    buttonMaps,
+    activityId,
+    wizardMap,
+    keyboardDeviceIds,
+    config,
+    alloc,
+  });
+  mapList.ButtonMaps = mergedMaps;
 
+  const existingFunction = functionMaps.find((m) => isActivityFunctionMap(m, activityId));
+  if (!existingFunction) {
+    functionMaps.push(composeFunctionMap(activityId));
+  }
+  /* Existing ActivityFunctionMap is left untouched (wizard does not own its groups). */
+
+  return {
+    activityId: String(activityId),
+    name: activity.Name,
+    activityList,
+    mapList,
+    functionList,
+  };
+}
+
+/* Build the three replacement resources for the draft and POST them.
+   editId: when set, that activity is updated in place and only its wizard-owned
+   16414 map is replaced; otherwise a new activity is appended. */
+export async function saveDraft({ config, revision, draft, editId }) {
+  const graph = buildActivityGraph({ config, draft, editId });
   const payload = {
     baseRevision: revision,
-    activityList: { Activities: activities },
-    mapList: { ButtonMaps: keptMaps },
-    functionList: { FunctionMaps: keptFunctions },
+    activityList: graph.activityList,
+    mapList: graph.mapList,
+    functionList: graph.functionList,
   };
   const result = await api.saveActivity(payload);
-  return { result, activityId: String(activityId), name: activity.Name };
+  return { result, activityId: graph.activityId, name: graph.name };
 }
 
 export async function deleteActivityGraph({ config, revision, id }) {
-  const activities = (config.activityList?.Activities ?? []).filter(
+  const activityList = structuredClone(config.activityList ?? { Activities: [] });
+  activityList.Activities = (activityList.Activities ?? []).filter(
     (a) => String(a["Id-"]) !== String(id));
-  const keptMaps = (config.mapList?.ButtonMaps ?? []).filter(
+  const mapList = structuredClone(config.mapList ?? { ButtonMaps: [] });
+  mapList.ButtonMaps = (mapList.ButtonMaps ?? []).filter(
     (m) => String(m?.["ActivityId-"]) !== String(id));
-  const keptFunctions = (config.functionList?.FunctionMaps ?? []).filter((m) =>
+  const functionList = structuredClone(config.functionList ?? { FunctionMaps: [] });
+  functionList.FunctionMaps = (functionList.FunctionMaps ?? []).filter((m) =>
     !(String(m?.__type ?? "").includes("ActivityFunctionMap") && String(m?.["ActivityId-"]) === String(id)));
   const result = await api.saveActivity({
     baseRevision: revision,
-    activityList: { Activities: activities },
-    mapList: { ButtonMaps: keptMaps },
-    functionList: { FunctionMaps: keptFunctions },
+    activityList,
+    mapList,
+    functionList,
   });
   return { result };
 }
 
 export async function reorderActivityGraph({ config, revision, id, direction }) {
-  const activities = structuredClone(config.activityList?.Activities ?? []);
+  const activityList = structuredClone(config.activityList ?? { Activities: [] });
+  const activities = activityList.Activities ?? [];
   const ordered = [...activities].sort((a, b) => (a.ActivityOrder ?? 0) - (b.ActivityOrder ?? 0));
   const index = ordered.findIndex((a) => String(a["Id-"]) === String(id));
   const target = index + Number(direction);
   if (index < 0 || target < 0 || target >= ordered.length) return { result: null, moved: false };
   [ordered[index], ordered[target]] = [ordered[target], ordered[index]];
   ordered.forEach((a, i) => { a.ActivityOrder = i; });
+  /* Reorder only touches ActivityOrder; maps and functions pass through intact. */
   const result = await api.saveActivity({
     baseRevision: revision,
-    activityList: { Activities: activities },
+    activityList,
     mapList: structuredClone(config.mapList ?? { ButtonMaps: [] }),
     functionList: structuredClone(config.functionList ?? { FunctionMaps: [] }),
   });
