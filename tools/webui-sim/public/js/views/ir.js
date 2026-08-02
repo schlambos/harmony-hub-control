@@ -217,21 +217,22 @@ export function createIrView(section) {
 
   function deviceRow(device) {
     const meta = [device.manufacturer, device.model].filter(Boolean).join(" · ") || "no manufacturer / model";
-    const status = el("span", {
-      className: "pill",
-      text: `${device.commands.length} cmd${device.commands.length === 1 ? "" : "s"}`,
-    });
+    const n = device.commands.length;
     const row = el("div", {
       className: "act-card",
+      attrs: { title: `Device id ${device.id}` },
       children: [
         el("div", {
           className: "act-main",
           children: [
-            el("span", { className: "act-name", text: device.name || device.id }),
-            el("span", { className: "act-meta", text: `${meta} · ${device.type || "device"} · #${device.id}` }),
+            el("span", { className: "act-name", text: device.name || "Unnamed device" }),
+            el("span", {
+              className: "act-meta",
+              text: `${meta} · ${device.type || "device"} · ${n} command${n === 1 ? "" : "s"}`,
+            }),
           ],
         }),
-        el("div", { className: "act-side", children: [status] }),
+        el("div", { className: "act-side" }),
       ],
     });
     const side = row.querySelector(".act-side");
