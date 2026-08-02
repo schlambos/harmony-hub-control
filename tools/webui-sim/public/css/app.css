@@ -233,7 +233,15 @@ ol {
 }
 
 .pill-max {
-  max-width: 220px;
+  max-width: min(14rem, 46vw);
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.pill-max #topLiveName {
+  min-width: 0;
   overflow: hidden;
   text-overflow: ellipsis;
 }
@@ -816,6 +824,37 @@ select {
   text-align: center;
 }
 
+.hub-details {
+  margin-top: var(--space-4);
+  text-align: center;
+}
+
+.hub-details > summary.sim-line {
+  margin-top: 0;
+  cursor: pointer;
+  list-style: none;
+}
+
+.hub-details > summary.sim-line::-webkit-details-marker {
+  display: none;
+}
+
+.hub-details > summary.sim-line::after {
+  content: " · details";
+  color: var(--text-tertiary);
+  opacity: 0.75;
+}
+
+.hub-details[open] > summary.sim-line::after {
+  content: " · hide";
+}
+
+.hub-details #hubDetailsBody {
+  margin: var(--space-2) auto 0;
+  max-width: 40rem;
+  text-align: center;
+}
+
 .tile-name {
   display: block;
   font-size: var(--text-h3);
@@ -1324,8 +1363,12 @@ select {
     padding: 3px var(--space-2);
   }
 
+  .brand-sub {
+    display: none;
+  }
+
   .pill-max {
-    max-width: 96px;
+    max-width: min(11.5rem, 48vw);
   }
 
   .view-actions {

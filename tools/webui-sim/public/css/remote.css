@@ -58,6 +58,11 @@
     opacity var(--dur-fast) var(--ease-out);
 }
 
+button.src-row {
+  grid-template-columns: minmax(0, 1fr);
+  width: 100%;
+}
+
 .src-row:hover {
   transform: translateY(-1px);
   border-color: var(--border-strong);
