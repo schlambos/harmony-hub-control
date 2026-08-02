@@ -325,11 +325,41 @@ export function formatSourceErrors(sourceErrors) {
   );
 }
 
+/* Allowlist, not sanitiser: index rows are attacker-influenced, so one bad
+   segment drops the row. The first char excludes "." (which rejects "." and
+   "..") but allows "-", because IRDB really publishes -1,-1.csv sentinels and a
+   dash has no traversal meaning. "%", ":", "\", "?", "#", control bytes and
+   empty segments stay unspellable — encoded separators, NULs and bad escapes
+   cannot get through. */
+const IRDB_SAFE_SEGMENT = /^[A-Za-z0-9_-][A-Za-z0-9 ()+,&'!~=@$_.-]*$/;
+
+/**
+ * Resolve an IRDB index path against the one approved base.
+ * @returns {string} exactly `LIBRARY_SOURCES.irdb.fileBase + path` for a safe
+ * relative .csv path, or "" when the path is unsafe or not a code file.
+ */
+export function irdbFileUrl(path) {
+  if (typeof path !== "string" || !path.endsWith(".csv")) return "";
+  for (const segment of path.split("/")) {
+    if (!IRDB_SAFE_SEGMENT.test(segment)) return "";
+  }
+  const url = LIBRARY_SOURCES.irdb.fileBase + path;
+  /* Belt and braces: whatever the allowlist passed must still normalise back
+     under the exact /codes/ prefix. */
+  try {
+    if (!new URL(url).href.startsWith(LIBRARY_SOURCES.irdb.fileBase)) return "";
+  } catch {
+    return "";
+  }
+  return url;
+}
+
 let cachedIndex = null;
 
 /**
- * Load searchable indexes.
- * @returns {Promise<{ entries: object[], errors: string[], loaded: string[] }>}
+ * Load searchable indexes. `skipped` counts index rows refused by the path
+ * boundary — an index note, not a source failure, so it stays out of `errors`.
+ * @returns {Promise<{ entries: object[], errors: string[], loaded: string[], skipped: number }>}
  */
 export async function loadLibraryIndex({ sources = ["irdb"], fetchImpl = fetch } = {}) {
   const wanted = (sources || []).filter((s) => s === "irdb");
@@ -339,12 +369,14 @@ export async function loadLibraryIndex({ sources = ["irdb"], fetchImpl = fetch }
       entries: cachedIndex.entries,
       errors: cachedIndex.errors.slice(),
       loaded: cachedIndex.loaded.slice(),
+      skipped: cachedIndex.skipped,
     };
   }
 
   const entries = [];
   const errors = [];
   const loaded = [];
+  let skipped = 0;
 
   if (wanted.includes("irdb")) {
     try {
@@ -354,12 +386,22 @@ export async function loadLibraryIndex({ sources = ["irdb"], fetchImpl = fetch }
       let n = 0;
       for (const line of text.replace(/\r/g, "").split("\n")) {
         const path = line.trim();
-        if (path.endsWith(".csv")) {
-          entries.push({ source: "irdb", path, url: LIBRARY_SOURCES.irdb.fileBase + path });
-          n += 1;
+        if (!path) continue;
+        const url = irdbFileUrl(path);
+        if (!url) {
+          skipped += 1;
+          continue;
         }
+        entries.push({ source: "irdb", path, url });
+        n += 1;
       }
-      if (!n) throw new Error("index was empty");
+      if (!n) {
+        throw new Error(
+          skipped
+            ? `no usable code files in the index (${skipped} skipped by the path safety check)`
+            : "index was empty",
+        );
+      }
       loaded.push("irdb");
     } catch (e) {
       errors.push(`IRDB: ${e.message || e}`);
@@ -383,14 +425,25 @@ export async function loadLibraryIndex({ sources = ["irdb"], fetchImpl = fetch }
     );
   }
 
-  cachedIndex = { key, entries, errors: errors.slice(), loaded: loaded.slice() };
-  return { entries, errors, loaded };
+  cachedIndex = { key, entries, errors: errors.slice(), loaded: loaded.slice(), skipped };
+  return { entries, errors, loaded, skipped };
 }
 
+/** Fetch a library file, from the approved IRDB base only — never from a URL
+    the entry carries, which a forged index row could have chosen. */
 export async function fetchLibraryFile(entry, { fetchImpl = fetch } = {}) {
-  const url = entry.url || entry.path;
+  if (entry?.source !== "irdb") {
+    throw new Error("Refusing to fetch: only IRDB entries can be fetched from the browser.");
+  }
+  const path = typeof entry.path === "string" ? entry.path : "";
+  if (!path) throw new Error("Refusing to fetch: library entry has no path.");
+  const url = irdbFileUrl(path);
+  if (!url) throw new Error(`Refusing to fetch unsafe library path: ${safeName(path)}`);
+  if (entry.url !== undefined && entry.url !== url) {
+    throw new Error(`Refusing to fetch: entry URL does not match its path (${safeName(path)}).`);
+  }
   const r = await fetchImpl(url, { cache: "no-store" });
-  if (!r.ok) throw new Error(`Fetch failed HTTP ${r.status} for ${entry.path || url}`);
+  if (!r.ok) throw new Error(`Fetch failed HTTP ${r.status} for ${path}`);
   return r.text();
 }
 

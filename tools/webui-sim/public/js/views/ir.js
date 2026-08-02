@@ -960,16 +960,21 @@ export function createIrView(section) {
     renderFindResults();
     renderFindPreview();
     try {
-      const { entries, errors } = await loadLibraryIndex({ sources: ["irdb"] });
+      const { entries, errors, skipped } = await loadLibraryIndex({ sources: ["irdb"] });
       findState.sourceErrors = errors;
       const { matches, message } = filterLibraryIndex(entries, q, { sourceErrors: errors });
       findState.matches = matches;
+      /* Skipped rows describe the index, not a failed source, so they only add a
+         note — severity still follows matches and errors. */
+      const statusText = skipped
+        ? `${message} Skipped ${skipped} index entr${skipped === 1 ? "y" : "ies"} with unusable file names.`
+        : message;
       if (!matches.length) {
-        setNotice(refs.findStatus, "warn", message);
+        setNotice(refs.findStatus, "warn", statusText);
       } else if (errors.length) {
-        setNotice(refs.findStatus, "warn", message);
+        setNotice(refs.findStatus, "warn", statusText);
       } else {
-        setNotice(refs.findStatus, "ok", message);
+        setNotice(refs.findStatus, "ok", statusText);
       }
       renderFindResults();
     } catch (error) {
