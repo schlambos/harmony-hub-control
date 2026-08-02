@@ -5,6 +5,7 @@ import { fileURLToPath } from "node:url";
 import { dirname, join } from "node:path";
 import {
   buildActivityGraph,
+  cloneJsonResource,
   composeKeyboardHidMap,
   createAllocator,
   isKeyboardHidActivityMap,
@@ -475,5 +476,224 @@ describe("composeKeyboardHidMap", () => {
     assert.ok(keys.has("Enter"));
     assert.ok(keys.has("DirectionUp"));
     assert.equal(keys.has("PowerOn") || keys.has("PowerToggle"), false);
+  });
+});
+
+function withStructuredCloneGlobal(install, run) {
+  const original = Object.getOwnPropertyDescriptor(globalThis, "structuredClone");
+  try {
+    install();
+    return run();
+  } finally {
+    if (original === undefined) {
+      delete globalThis.structuredClone;
+    } else {
+      Object.defineProperty(globalThis, "structuredClone", original);
+    }
+  }
+}
+
+describe("cloneJsonResource — structured-clone seam", () => {
+  it("uses an injectable native clone implementation when provided", () => {
+    const source = {
+      ExtraActivityListKey: { nested: true, leaf: "keep" },
+      Activities: [{ "Id-": 1, CustomField: "x" }],
+    };
+    let saw = null;
+    const injected = (value) => {
+      saw = value;
+      return {
+        ExtraActivityListKey: {
+          nested: value.ExtraActivityListKey.nested,
+          leaf: value.ExtraActivityListKey.leaf,
+        },
+        Activities: value.Activities.map((a) => ({ ...a })),
+      };
+    };
+
+    const cloned = cloneJsonResource(source, injected);
+    assert.equal(saw, source);
+    assert.deepEqual(cloned, source);
+    assert.notEqual(cloned, source);
+    assert.notEqual(cloned.ExtraActivityListKey, source.ExtraActivityListKey);
+    assert.notEqual(cloned.Activities, source.Activities);
+    assert.notEqual(cloned.Activities[0], source.Activities[0]);
+  });
+
+  it("resolves globalThis.structuredClone when called with no second argument", () => {
+    const source = {
+      ExtraActivityListKey: { nested: true, leaf: "keep" },
+      Activities: [{ "Id-": 1, CustomField: "x" }],
+    };
+    const calls = [];
+    const spy = (value) => {
+      calls.push(value);
+      return {
+        ExtraActivityListKey: {
+          nested: value.ExtraActivityListKey.nested,
+          leaf: value.ExtraActivityListKey.leaf,
+        },
+        Activities: value.Activities.map((a) => ({ ...a })),
+      };
+    };
+
+    const cloned = withStructuredCloneGlobal(() => {
+      Object.defineProperty(globalThis, "structuredClone", {
+        configurable: true,
+        enumerable: true,
+        writable: true,
+        value: spy,
+      });
+    }, () => cloneJsonResource(source));
+
+    assert.equal(calls.length, 1);
+    assert.equal(calls[0], source);
+    assert.deepEqual(cloned, source);
+    assert.notEqual(cloned, source);
+    assert.notEqual(cloned.ExtraActivityListKey, source.ExtraActivityListKey);
+    assert.notEqual(cloned.Activities, source.Activities);
+    assert.notEqual(cloned.Activities[0], source.Activities[0]);
+  });
+
+  it("propagates errors from a present native clone implementation", () => {
+    assert.throws(
+      () =>
+        cloneJsonResource({ ok: true }, () => {
+          throw new TypeError("native clone refused");
+        }),
+      { name: "TypeError", message: "native clone refused" },
+    );
+  });
+
+  it("falls back to JSON round-trip when global structuredClone is absent", () => {
+    const source = {
+      ExtraMapListKey: "keep",
+      nested: { deep: { k: 1 } },
+      ButtonMaps: [
+        {
+          ButtonMapIdentifier: "16499CustomActivity1",
+          CustomMapField: "round-trip-map",
+          Buttons: [{ ExtraButtonField: "keep-me", ButtonKey: "Play" }],
+        },
+      ],
+    };
+
+    const cloned = withStructuredCloneGlobal(() => {
+      Object.defineProperty(globalThis, "structuredClone", {
+        configurable: true,
+        enumerable: true,
+        writable: true,
+        value: undefined,
+      });
+    }, () => cloneJsonResource(source));
+
+    assert.deepEqual(cloned, source);
+    assert.notEqual(cloned, source);
+    assert.notEqual(cloned.nested, source.nested);
+    assert.notEqual(cloned.nested.deep, source.nested.deep);
+    assert.notEqual(cloned.ButtonMaps, source.ButtonMaps);
+    assert.notEqual(cloned.ButtonMaps[0], source.ButtonMaps[0]);
+    assert.equal(cloned.ButtonMaps[0].CustomMapField, "round-trip-map");
+    assert.equal(cloned.ButtonMaps[0].Buttons[0].ExtraButtonField, "keep-me");
+    cloned.nested.deep.k = 99;
+    assert.equal(source.nested.deep.k, 1);
+  });
+
+  it("forced fallback through buildActivityGraph preserves unknown keys and non-owned maps", () => {
+    const activityId = "48113644";
+    const { config, extraSurface, hid } = injectHidAndExtraSurface(FIXTURE, activityId);
+    config.activityList.ExtraActivityListKey = { nested: true, deep: { k: 1 } };
+    config.mapList.ExtraMapListKey = "keep";
+    config.functionList = {
+      FunctionMaps: [
+        {
+          UIModeName: `Functions.UserConfigurator.${activityId}`,
+          __type: "ActivityFunctionMap",
+          "ActivityId-": Number(activityId),
+          FunctionGroups: [
+            {
+              Name: "Volume",
+              Functions: [
+                {
+                  "DeviceId-": 78760839,
+                  __type: "FunctionAction",
+                  Name: "VolumeUp",
+                  CommandName: "VolumeUp",
+                  "FunctionId-": 1,
+                },
+              ],
+            },
+          ],
+          CustomFnField: "fn-keep",
+        },
+      ],
+      ExtraFunctionListKey: 42,
+    };
+
+    const draft = draftFromActivity(config, activityId);
+    draft.buttons.VolumeUp = {
+      deviceId: "78760839",
+      command: { name: "VolumeUp", functionId: 1 },
+      hold: null,
+    };
+
+    const beforeOther = structuredClone(
+      (config.mapList.ButtonMaps ?? []).filter(
+        (m) => String(m?.["ActivityId-"]) !== String(activityId),
+      ),
+    );
+
+    withStructuredCloneGlobal(() => {
+      delete globalThis.structuredClone;
+      assert.equal(typeof globalThis.structuredClone, "undefined");
+    }, () => {
+      const graph = buildActivityGraph({ config, draft, editId: activityId });
+      const after = graph.mapList.ButtonMaps;
+      const mine = mapsForActivity(after, activityId);
+
+      assert.deepEqual(graph.activityList.ExtraActivityListKey, {
+        nested: true,
+        deep: { k: 1 },
+      });
+      assert.equal(graph.mapList.ExtraMapListKey, "keep");
+      assert.equal(graph.functionList.ExtraFunctionListKey, 42);
+
+      const hidAfter = mine.find(isKeyboardHidActivityMap);
+      assert.ok(hidAfter, "16420 HID map survives edit under JSON fallback");
+      assert.equal(hidAfter.CustomHidField, "round-trip-hid");
+      assert.deepEqual(hidAfter.Buttons, hid.Buttons);
+      assert.equal(hidAfter["ButtonMapId-"], hid["ButtonMapId-"]);
+
+      const extraAfter = mine.find(
+        (m) => m.ButtonMapIdentifier === extraSurface.ButtonMapIdentifier,
+      );
+      assert.ok(extraAfter, "second surface map survives edit under JSON fallback");
+      assert.equal(extraAfter.CustomMapField, "round-trip-map");
+      assert.equal(extraAfter.Buttons[0].ExtraButtonField, "keep-me");
+      assert.deepEqual(extraAfter, extraSurface);
+
+      const fn = graph.functionList.FunctionMaps.find(
+        (m) =>
+          String(m.__type).includes("ActivityFunctionMap") &&
+          String(m["ActivityId-"]) === String(activityId),
+      );
+      assert.equal(fn.CustomFnField, "fn-keep");
+      assert.equal(fn.FunctionGroups[0].Name, "Volume");
+
+      const wizardAfter = mine.find((m) => isWizardOwnedActivityMap(m, activityId));
+      assert.ok(wizardAfter);
+      assert.ok(
+        wizardAfter.Buttons.some((b) => b.ButtonKey === "VolumeUp"),
+        "wizard-owned 16414 map reflects the edit under JSON fallback",
+      );
+
+      const afterOther = after.filter(
+        (m) => String(m?.["ActivityId-"]) !== String(activityId),
+      );
+      assert.deepEqual(afterOther, beforeOther, "other activities' maps untouched under fallback");
+
+      graph.activityList.ExtraActivityListKey.deep.k = 99;
+      assert.equal(config.activityList.ExtraActivityListKey.deep.k, 1);
+    });
   });
 });

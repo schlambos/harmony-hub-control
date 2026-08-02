@@ -18,6 +18,18 @@ import {
   matchCommand,
 } from "./remote-layout.js";
 
+/* Clone a JSON-representable Harmony resource tree.
+   Prefers native structuredClone (resolved at call time so tests can remove
+   it). Falls back to JSON round-trip only when no clone function is available.
+   Native clone errors propagate — never silently switch to JSON.
+   Optional second arg injects a clone implementation for unit tests. */
+export function cloneJsonResource(value, cloneImpl = globalThis.structuredClone) {
+  if (typeof cloneImpl === "function") {
+    return cloneImpl(value);
+  }
+  return JSON.parse(JSON.stringify(value));
+}
+
 /* Highest identities Logitech ever issued for this hub; local allocation
    starts above them so it can never reuse a cloud-issued value. */
 const MAP_ID_FLOOR = 52944089;
@@ -505,7 +517,7 @@ function rewriteIdentifierForActivity(identifier, activityId) {
    missing surfaces. Mirrors activity-ui cloneMapForActivity(keepActions=false)
    after prune. */
 function cloneEmptySurfaceMap(template, activityId, alloc) {
-  const map = structuredClone(template);
+  const map = cloneJsonResource(template);
   delete map.ButtonMapId;
   delete map["Id-"];
   delete map.Id;
@@ -625,15 +637,15 @@ function mergeActivityButtonMaps({
 export function buildActivityGraph({ config, draft, editId }) {
   const alloc = createAllocator(config);
 
-  const activityList = structuredClone(config?.activityList ?? { Activities: [] });
+  const activityList = cloneJsonResource(config?.activityList ?? { Activities: [] });
   if (!Array.isArray(activityList.Activities)) activityList.Activities = [];
   const activities = activityList.Activities;
 
-  const mapList = structuredClone(config?.mapList ?? { ButtonMaps: [] });
+  const mapList = cloneJsonResource(config?.mapList ?? { ButtonMaps: [] });
   if (!Array.isArray(mapList.ButtonMaps)) mapList.ButtonMaps = [];
   const buttonMaps = mapList.ButtonMaps;
 
-  const functionList = structuredClone(config?.functionList ?? { FunctionMaps: [] });
+  const functionList = cloneJsonResource(config?.functionList ?? { FunctionMaps: [] });
   if (!Array.isArray(functionList.FunctionMaps)) functionList.FunctionMaps = [];
   const functionMaps = functionList.FunctionMaps;
 
@@ -702,13 +714,13 @@ export async function saveDraft({ config, revision, draft, editId }) {
 }
 
 export async function deleteActivityGraph({ config, revision, id }) {
-  const activityList = structuredClone(config.activityList ?? { Activities: [] });
+  const activityList = cloneJsonResource(config.activityList ?? { Activities: [] });
   activityList.Activities = (activityList.Activities ?? []).filter(
     (a) => String(a["Id-"]) !== String(id));
-  const mapList = structuredClone(config.mapList ?? { ButtonMaps: [] });
+  const mapList = cloneJsonResource(config.mapList ?? { ButtonMaps: [] });
   mapList.ButtonMaps = (mapList.ButtonMaps ?? []).filter(
     (m) => String(m?.["ActivityId-"]) !== String(id));
-  const functionList = structuredClone(config.functionList ?? { FunctionMaps: [] });
+  const functionList = cloneJsonResource(config.functionList ?? { FunctionMaps: [] });
   functionList.FunctionMaps = (functionList.FunctionMaps ?? []).filter((m) =>
     !(String(m?.__type ?? "").includes("ActivityFunctionMap") && String(m?.["ActivityId-"]) === String(id)));
   const result = await api.saveActivity({
@@ -721,7 +733,7 @@ export async function deleteActivityGraph({ config, revision, id }) {
 }
 
 export async function reorderActivityGraph({ config, revision, id, direction }) {
-  const activityList = structuredClone(config.activityList ?? { Activities: [] });
+  const activityList = cloneJsonResource(config.activityList ?? { Activities: [] });
   const activities = activityList.Activities ?? [];
   const ordered = [...activities].sort((a, b) => (a.ActivityOrder ?? 0) - (b.ActivityOrder ?? 0));
   const index = ordered.findIndex((a) => String(a["Id-"]) === String(id));
@@ -733,8 +745,8 @@ export async function reorderActivityGraph({ config, revision, id, direction }) 
   const result = await api.saveActivity({
     baseRevision: revision,
     activityList,
-    mapList: structuredClone(config.mapList ?? { ButtonMaps: [] }),
-    functionList: structuredClone(config.functionList ?? { FunctionMaps: [] }),
+    mapList: cloneJsonResource(config.mapList ?? { ButtonMaps: [] }),
+    functionList: cloneJsonResource(config.functionList ?? { FunctionMaps: [] }),
   });
   return { result, moved: true };
 }
