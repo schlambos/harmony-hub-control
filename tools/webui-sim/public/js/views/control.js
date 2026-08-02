@@ -549,10 +549,10 @@ export function createControlView(section) {
           const live = s.currentId === id;
           const selected = selectedActivityId === id;
           return `<div class="src-row${selected ? " is-selected" : ""}${live ? " is-live" : ""}">
-            <span class="src-order mono">${String(a.ActivityOrder ?? 0).padStart(2, "0")}</span>
-            <button type="button" class="src-main" data-select="${escapeHtml(id)}" title="${escapeHtml(`${hub.activityName(a)} · ${hub.activityTypeLabel(a)} · ${id}`)}">
+            <span class="src-order mono" title="Activity order">${String(a.ActivityOrder ?? 0).padStart(2, "0")}</span>
+            <button type="button" class="src-main" data-select="${escapeHtml(id)}" title="${escapeHtml(`${hub.activityName(a)} · ${hub.activityTypeLabel(a)} · id ${id}`)}">
               <span class="src-name">${escapeHtml(hub.activityName(a))}</span>
-              <span class="src-meta mono">${escapeHtml(`${hub.activityTypeLabel(a)} · ${id}`)}</span>
+              <span class="src-meta">${escapeHtml(hub.activityTypeLabel(a))}</span>
             </button>
             <span class="src-side">${
               live
@@ -573,11 +573,10 @@ export function createControlView(section) {
     }
     els.srcList.innerHTML = devs
       .map((d) =>
-        `<button type="button" class="src-row${selectedDeviceId === d.id ? " is-selected" : ""}" data-select="${escapeHtml(d.id)}" aria-pressed="${selectedDeviceId === d.id}">
-          <span class="src-order mono">${d.commands.length}</span>
+        `<button type="button" class="src-row${selectedDeviceId === d.id ? " is-selected" : ""}" data-select="${escapeHtml(d.id)}" aria-pressed="${selectedDeviceId === d.id}" title="${escapeHtml(`Device id ${d.id}`)}">
           <span class="src-main">
             <span class="src-name">${escapeHtml(d.name)}</span>
-            <span class="src-meta mono">${escapeHtml(`${d.manufacturer || "Unknown"} · ${d.commands.length} commands`)}</span>
+            <span class="src-meta">${escapeHtml(`${d.manufacturer || "Unknown"} · ${d.commands.length} command${d.commands.length === 1 ? "" : "s"}`)}</span>
           </span>
         </button>`)
       .join("");
@@ -742,7 +741,8 @@ export function createControlView(section) {
     const activity = hub.activityById(id);
     els.nowEyebrow.textContent = "Now running";
     els.nowName.textContent = hub.activityName(activity);
-    els.nowMeta.textContent = `${hub.activityTypeLabel(activity)} · ${id}`;
+    els.nowMeta.textContent = hub.activityTypeLabel(activity);
+    els.nowMeta.title = `Activity id ${id}`;
     els.nowStrip?.classList.add("is-live");
     els.nowStrip?.classList.remove("is-off");
   }

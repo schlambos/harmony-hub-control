@@ -43,7 +43,10 @@ const TEMPLATE = `
       </section>
     </div>
   </div>
-  <p class="sim-line mono" id="simLine"></p>`;
+  <details class="hub-details" id="hubDetails">
+    <summary class="sim-line mono" id="simLine">local hub</summary>
+    <p class="mini muted mono" id="hubDetailsBody"></p>
+  </details>`;
 
 function eventTypeClass(kind) {
   const k = String(kind ?? "").toLowerCase();
@@ -97,6 +100,7 @@ export function createDashboardView(section) {
       count: section.querySelector("#dashCount"),
       tiles: section.querySelector("#dashTiles"),
       simLine: section.querySelector("#simLine"),
+      hubDetailsBody: section.querySelector("#hubDetailsBody"),
       events: section.querySelector("#dashEvents"),
     };
 
@@ -134,10 +138,9 @@ export function createDashboardView(section) {
     els.strip.classList.toggle("is-off", !running);
     if (running) {
       els.eyebrow.textContent = "Now running";
-      els.name.textContent = activity ? hub.activityName(activity) : `Activity ${s.currentId}`;
-      els.meta.textContent = activity
-        ? `${hub.activityTypeLabel(activity)} · activity ${s.currentId}`
-        : `activity ${s.currentId}`;
+      els.name.textContent = activity ? hub.activityName(activity) : "Running activity";
+      els.meta.textContent = activity ? hub.activityTypeLabel(activity) : "";
+      if (els.meta) els.meta.title = `Activity id ${s.currentId}`;
       els.powerOff.disabled = false;
     } else if (s.currentId === "-1") {
       els.eyebrow.textContent = "Now running";
@@ -182,12 +185,12 @@ export function createDashboardView(section) {
         return `<div class="tile${live ? " is-live" : ""}" style="--i:${i}">
           <span class="tile-main">
             <span class="tile-name">${escapeHtml(hub.activityName(a))}</span>
-            <span class="tile-meta mono">${escapeHtml(`${hub.activityTypeLabel(a)} · id ${id}`)}</span>
+            <span class="tile-meta">${escapeHtml(hub.activityTypeLabel(a))}</span>
           </span>
           ${
             live
               ? `<span class="pill pill-live"><span class="live-dot" aria-hidden="true"></span>On air</span>`
-              : `<button type="button" class="btn btn-quiet btn-sm" data-run="${escapeHtml(id)}">Start</button>`
+              : `<button type="button" class="btn btn-quiet btn-sm" data-run="${escapeHtml(id)}" title="${escapeHtml(`Start · id ${id}`)}">Start</button>`
           }
         </div>`;
       })
@@ -198,10 +201,16 @@ export function createDashboardView(section) {
     const mode = SIM ? "sim" : "local hub";
     if (!s.configLoaded || s.configError) {
       els.simLine.textContent = `${mode} · config unavailable`;
+      if (els.hubDetailsBody) els.hubDetailsBody.textContent = s.configError?.message || "Config not loaded.";
       return;
     }
     const c = hub.counts();
-    els.simLine.textContent = `${mode} · ${c.activities} activities · ${c.devices} devices · ${c.buttonMaps} button maps · rev ${c.revision}`;
+    els.simLine.textContent = `${mode} · ${c.activities} activities · ${c.devices} devices`;
+    if (els.hubDetailsBody) {
+      els.hubDetailsBody.textContent =
+        `${c.buttonMaps} button maps · revision ${c.revision || "—"}` +
+        (s.currentId ? ` · current activity id ${s.currentId}` : "");
+    }
   }
 
   function eventsPanel() {
