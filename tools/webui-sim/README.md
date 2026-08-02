@@ -71,7 +71,7 @@ sh tools/embed_activity_ui.sh            # also regenerates the shell embed
 node tools/harmony_shell_smoke.mjs       # packaging + contract assertions
 ```
 
-What it produces (DEDUP_MIN footprint class, ~0.81 MB `codex_webui`):
+What it produces (DEDUP_MIN footprint class, ~0.90 MiB / 942,552 bytes `codex_webui`):
 
 - **one** minified shell JS (`/assets/harmony-shell.js`, classic + `defer`)
 - **one** minified shell CSS (`/assets/harmony-shell.css`, with
@@ -81,7 +81,11 @@ What it produces (DEDUP_MIN footprint class, ~0.81 MB `codex_webui`):
   embedded or served a second time.
 - The advanced editor lazy-loads the **existing** `/assets/activity-ui.*`
   vendor routes — it is never copied into the shell bundle.
-- No Google Fonts (system fallbacks), no `/sim/` requests, no external URLs.
+- No Google Fonts (system fallbacks), no `/sim/` requests, no automatically
+  loaded external assets. Browser-side data fetches in the redesigned shell
+  are limited to IRDB Search and Preview after an explicit click. Clicked
+  documentation links and legacy owner-triggered import/update surfaces can
+  also navigate to or contact their named sources.
 
 `tools/hub-emu/run.sh` runs `embed_activity_ui.sh` before every MIPS compile
 so generation always precedes compilation. The sim/dev-proxy map

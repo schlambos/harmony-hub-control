@@ -75,7 +75,7 @@ teal reserved for “live / on air” status only.
 ### Font Stack
 - Primary: `"IBM Plex Sans", "Segoe UI", system-ui, sans-serif`
 - Mono: `"IBM Plex Mono", ui-monospace, "SF Mono", Menlo, monospace`
-- Load via Google Fonts (sim only) or system fallbacks on hub.
+- Load via system fallbacks only — no Google Fonts in sim or hub.
 
 ### Rules
 - Sentence case everywhere. No Title Case Headers.

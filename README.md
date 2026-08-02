@@ -31,7 +31,11 @@ backed up from the web UI, with the Logitech cloud fully blocked by default.
   individual devices.
 - **Local ownership by default** — the installer blocks Logitech cloud
   tasks, removes the hub's WAN route, and serves the paired remote's
-  configuration from local storage, so nothing phones home.
+  configuration from local storage. Normal operation does not initiate
+  outbound requests; explicit owner actions that may contact external
+  services include browser-side IRDB Search and Preview, hub-side
+  RemoteCentral Fetch, clicked documentation links, and legacy
+  owner-triggered import/update surfaces (see Browser egress policy).
 - **Full IR toolbox** — learn codes from your original remotes, import from
   IRDB / Flipper-IRDB / RemoteCentral, test in batches, and experiment safely
   in a scratch "IR Lab" device.
@@ -72,9 +76,18 @@ manage the IR database:
 
 - **Learning** — capture codes from an original remote (15-second capture
   window) with automatic classification, then test before saving.
-- **Importing** — pull codes from IRDB, Flipper-IRDB, LIRC-style sources, and
-  RemoteCentral Pronto pages; Flipper `RC5`/`RC6`/`SIRC` entries are converted
-  to raw timing replays when possible.
+- **Importing** — search IR codes from IRDB via browser-side Search/Preview
+  (fetches index and code files from public CDN resources only after you
+  click Search or Preview). Flipper-IRDB, LIRC-style, and SmartIR data are
+  imported from user-provided files dropped into the browser. RemoteCentral
+  Pronto hex is fetched after an explicit Fetch click: the redesigned shell
+  validates the path stays under `/cgi-bin/codes/`, calls
+  `GET /api/remotecentral-fetch?path=...` on the hub (the route accepts GET
+  or POST), and on failure warns that nothing was imported with no further
+  browser egress. (The legacy form-response activity editor additionally
+  falls back to a reader service at `https://r.jina.ai/` with a 9-second
+  timeout and a 2-minute cooldown after HTTP 429.) Flipper `RC5`/`RC6`/`SIRC` entries are
+  converted to raw timing replays when possible.
 - **Batch sweeps** — stage large candidate code sets in browser memory,
   import selected commands, and fire them in cancellable batches with
   configurable delays — the practical way to find codes for an unknown device.
@@ -130,6 +143,38 @@ Installed with defaults, the hub becomes a LAN-only appliance:
   replace your configuration with an older cloud copy.
 - Activity writes are fail-closed: the hub refuses to save unless the cloud
   blocker is active, so local edits can't race a cloud sync.
+
+### Browser egress policy
+
+Loading the redesigned web UI and navigating between its views makes no
+automatic public-Internet requests. All UI assets (HTML, CSS, JavaScript,
+remote-skin image) are served from the hub itself — no external fonts, no
+CDN-hosted scripts, no analytics beacons. The JavaScript may declare IRDB
+endpoint URLs for Search and Preview, but those are used only after an
+explicit user click.
+
+Browser-side egress after explicit owner action:
+
+- **IRDB Search and Preview** — after you click Search or Preview, the
+  browser fetches an IRDB index and individual code files from public CDN
+  resources.
+- **Clicked documentation links** — GitHub and other documentation URLs
+  open in the browser when you follow them.
+- **Legacy import/update surfaces** — the System page's update check and
+  certain import flows may contact their named sources after you trigger
+  them; they do not run automatically. The legacy form-response activity
+  editor also falls back to `https://r.jina.ai/http://www.remotecentral.com<path>`
+  after an explicit Fetch click when the hub request fails or redirects,
+  with a 9-second timeout and a 2-minute cooldown after HTTP 429.
+
+Hub-side egress after explicit owner action:
+
+- **RemoteCentral Fetch** — the hub fetches a RemoteCentral Pronto hex page
+  only after you click Fetch in the IR import view
+  (`GET /api/remotecentral-fetch?path=...`; the route accepts GET or POST).
+
+Normal hub control, configuration, and locally available IR data work
+without any Internet connection.
 
 ## Screenshots
 
@@ -212,13 +257,17 @@ proxy, with a Compose example and an Unraid XML template. See
 
 ## How it works
 
-There is no web framework and no cloud service. The entire product is a small
-set of purpose-built pieces that run on the hub's ~62 MB MIPS Linux system:
+There is no web framework and the hub backend has no cloud service
+dependency. The entire product is a small set of purpose-built pieces that run
+on the hub's ~62 MB MIPS Linux system:
 
 ```text
 Your browser (LAN)
   └─ http://<hub-ip>:8080 — codex_webui: a single static C binary
-       ├─ embedded single-page web app (no CDN, no external fonts)
+       ├─ embedded single-page web app (all assets served from hub — no
+       │    external fonts, no CDN scripts; JS may declare IRDB endpoint
+        │    URLs used only after explicit Search/Preview clicks; hub
+        │    backend may fetch RemoteCentral after explicit Fetch)
        ├─ HBus WebSocket client → the hub's Harmony activity engine
        │    (start/stop activities, IR send, IR capture)
        ├─ HAL helper + keyboard daemon → Bluetooth HID radio
