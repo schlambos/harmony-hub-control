@@ -166,25 +166,30 @@ line adds “nothing is running — start &lt;activity&gt;?”.
 
 ## C — Polish
 
-### C10. Raw IDs in consumer-facing surfaces  ☐
+### C10. Raw IDs in consumer-facing surfaces  ☑
 
-Activity tiles show "id 48113644"; the footer shows the revision hash. Move
-behind the Inspector/details affordances.
+Activity tiles and Control source rows no longer show raw activity ids on the
+primary line. Home footer keeps a friendly summary; revision + map counts +
+current activity id sit under a one-click “details” disclosure. Ids remain on
+`title` tooltips for troubleshooting.
 
-### C11. Redundant count chips on device rows  ☐
+### C11. Redundant count chips on device rows  ☑
 
-Device list rows show a bare "44" chip next to "44 commands" text — reads as
-a mystery number. Drop the chip or make it meaningful.
+Control Devices source list: removed leading count chip (kept “N commands” in
+meta). IR device list: removed “N cmds” pill (count folded into meta text).
+Activity order indices `00/01/02` in Control Activities left intact.
 
 ### C12. Advanced editor greets users with a scary repair banner  ☐
 
 Graphs that merely need normalization open with a prominent recovery warning
 and UNSAVED state before the user touches anything. Soften to "Repairs
 suggested (view diff)" with an explicit apply.
+**Deferred:** fix would reach into vendored `payload/web/activity-ui.js`.
 
-### C13. Header activity chip truncates on mobile  ☐
+### C13. Header activity chip truncates on mobile  ☑
 
-"NVIDIA Shiel…" at 390px. Acceptable; consider text-fit or shorter chip.
+Raised mobile `pill-max` and hide brand subtitle under 560px so the running
+name keeps more characters at 390px.
 
 ---
 
