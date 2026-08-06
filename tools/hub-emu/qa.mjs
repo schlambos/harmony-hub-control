@@ -30,7 +30,7 @@ async function req(base, path, options = {}) {
   } catch {
     /* non-JSON responses are asserted via text */
   }
-  return { status: response.status, text, json };
+  return { status: response.status, headers: Object.fromEntries(response.headers), text, json };
 }
 
 const form = (data) => ({
@@ -44,6 +44,47 @@ const jsonBody = (data) => ({
   headers: { "Content-Type": "application/json" },
   body: JSON.stringify(data),
 });
+
+const POST_RESULT_MAX_BYTES = 4096;
+const SYSTEM_STATUS_MAX_BYTES = 65536;
+const FULL_APPLICATION_MARKERS = [
+  "<section id='view-overview'",
+  "<section id='view-activities'",
+  "<section id='view-ir'",
+  "<section id='view-bluetooth'",
+  "<section id='view-backup'",
+  "<section id='view-system'",
+  "/assets/activity-ui.js",
+  "/assets/harmony-shell.js",
+  "REMOTE_SKIN_SRC=",
+  "data:image/jpeg;base64,",
+];
+
+function checkCompactPost(name, result, expectedMessage) {
+  const bytes = Buffer.byteLength(result.text);
+  const leakedMarker = FULL_APPLICATION_MARKERS.find((marker) => result.text.includes(marker));
+  check(
+    `${name} returns bounded compact result HTML`,
+    result.status === 200 &&
+      result.headers["content-type"]?.startsWith("text/html") &&
+      result.headers["cache-control"] === "no-store" &&
+      result.headers.connection?.toLowerCase() === "close" &&
+      result.text.startsWith("<!doctype html>") &&
+      result.text.includes("<div class='msg'>") &&
+      result.text.includes(expectedMessage) &&
+      result.text.includes("<a href='/'>") &&
+      result.text.endsWith("</html>") &&
+      bytes < POST_RESULT_MAX_BYTES &&
+      !leakedMarker,
+    `status=${result.status} bytes=${bytes} leaked=${leakedMarker ?? "none"}`,
+  );
+}
+
+const authorizedForm = (data, authorization) => {
+  const options = form(data);
+  options.headers.Authorization = authorization;
+  return options;
+};
 
 // Start from pristine state.
 await req(CTRL, "/reset", { method: "POST" });
@@ -179,12 +220,50 @@ const stateReset = await req(API, "/api/activity-state");
 const replyReset = stateReset.json?.reply ? JSON.parse(stateReset.json.reply) : null;
 check("reset returned engine to PowerOff (-1)", replyReset?.data?.result === "-1");
 
-console.log("\n== setup pages: seeded fake-only settings ==");
-const dashProbe = await req(API, "/system", form({}));
+console.log("\n== compact read-only System status ==");
+const systemStatus = await req(API, "/api/system-status");
+const expectedSystemKeys = [
+  "authMode", "firmware", "logs", "memTotal", "memory",
+  "mounts", "ok", "processes", "uname", "uptime",
+];
 check(
-  "legacy dashboard firmware stat reads the seeded /etc/version",
-  dashProbe.status === 200 && dashProbe.text.includes("4.15.600")
+  "GET /api/system-status -> 200 no-store JSON with the complete shape",
+  systemStatus.status === 200 &&
+    systemStatus.headers["content-type"]?.startsWith("application/json") &&
+    systemStatus.headers["cache-control"] === "no-store" &&
+    systemStatus.headers.connection?.toLowerCase() === "close" &&
+    systemStatus.json?.ok === true &&
+    JSON.stringify(Object.keys(systemStatus.json ?? {}).sort()) === JSON.stringify(expectedSystemKeys),
+  systemStatus.text.slice(0, 200),
 );
+const displayedMemTotal = systemStatus.json?.memory?.match(/^MemTotal:\s*([^\n]+)/m)?.[1]?.trim();
+check(
+  "System status uses the seeded firmware and existing bounded read-only sources",
+  systemStatus.json?.firmware === "4.15.600" &&
+    /^(?:\d+d )?\d+h \d+m$/.test(systemStatus.json?.uptime ?? "") &&
+    systemStatus.json?.memTotal === displayedMemTotal &&
+    systemStatus.json?.uname?.includes("Linux") &&
+    systemStatus.json?.mounts?.includes(" on / ") &&
+    systemStatus.json?.processes?.includes("qemu-mips /opt/hub/bin/codex_webui.mips 8080") &&
+    systemStatus.json?.logs?.includes("--- startup log ---") &&
+    systemStatus.json?.logs?.includes("--- recovery log ---") &&
+    systemStatus.json?.logs?.includes("--- local service syslog ---") &&
+    systemStatus.json?.authMode === "open on local network",
+  systemStatus.text.slice(0, 300),
+);
+const systemStatusBytes = Buffer.byteLength(systemStatus.text);
+const systemStatusLeak = FULL_APPLICATION_MARKERS.find((marker) => systemStatus.text.includes(marker));
+check(
+  "System status stays below 64 KiB without application HTML, IR data, or fixture secrets",
+  systemStatusBytes < SYSTEM_STATUS_MAX_BYTES &&
+    !systemStatusLeak &&
+    !systemStatus.text.includes("DeviceList.json") &&
+    !systemStatus.text.includes("hub-emu-fake-password") &&
+    !systemStatus.text.includes("hub-emu-fake-passphrase"),
+  `bytes=${systemStatusBytes} leaked=${systemStatusLeak ?? "none"}`,
+);
+
+console.log("\n== setup pages: seeded fake-only settings ==");
 const expMqtt = await req(API, "/export/mqtt");
 check(
   "GET /export/mqtt -> seeded fake broker config (disabled, .invalid host)",
@@ -207,12 +286,14 @@ check(
   wifiJson.status === 200 && wifiJson.text.includes("Wi-Fi SSID is required."),
   wifiJson.text.slice(0, 120)
 );
+checkCompactPost("POST /wifi JSON validation", wifiJson, "Wi-Fi SSID is required.");
 const systemJson = await req(API, "/system", jsonBody({ action: "reboot" }));
 check(
   "POST /system with JSON body -> 200 HTML 'Unknown system action.' (non-mutating probe)",
   systemJson.status === 200 && systemJson.text.includes("Unknown system action."),
   systemJson.text.slice(0, 120)
 );
+checkCompactPost("POST /system JSON validation", systemJson, "Unknown system action.");
 const getSystem = await req(API, "/system");
 check("GET /system -> 404 (the box only has POST /system)", getSystem.status === 404, `got ${getSystem.status}`);
 const importJson = await req(API, "/import", jsonBody({ target: "mqtt", payload: "{}" }));
@@ -221,10 +302,11 @@ check(
   importJson.status === 200 && importJson.text.includes("Unknown import target."),
   importJson.text.slice(0, 120)
 );
+checkCompactPost("POST /import JSON validation", importJson, "Unknown import target.");
 const wifiAfterJson = await req(API, "/export/wifi");
 check("JSON probes mutated nothing (wpa_supplicant.conf still seeded)", wifiAfterJson.text.includes("HUB-EMU-FAKE-SSID"));
 
-console.log("\n== setup pages: form posts mutate settings and answer full HTML ==");
+console.log("\n== setup pages: form posts mutate settings and answer compact result HTML ==");
 const mqttForm = await req(API, "/mqtt", form({
   host: "mqtt-qa.hub-emu.invalid",
   port: "1884",
@@ -242,6 +324,7 @@ check(
   mqttForm.status === 200 && mqttForm.text.includes("MQTT settings saved"),
   mqttForm.text.slice(0, 160)
 );
+checkCompactPost("POST /mqtt form", mqttForm, "MQTT settings saved. The bridge will reconnect when it notices the config change.");
 const expMqtt2 = await req(API, "/export/mqtt");
 check(
   "MQTT save persisted to /data/codexmqtt/config.json (bridge stays disabled)",
@@ -255,6 +338,7 @@ check(
   wifiForm.status === 200 && wifiForm.text.includes("Wi-Fi settings saved. Reboot when ready"),
   wifiForm.text.slice(0, 160)
 );
+checkCompactPost("POST /wifi form", wifiForm, "Wi-Fi settings saved. Reboot when ready to use them.");
 const expWifi2 = await req(API, "/export/wifi");
 check(
   "Wi-Fi save persisted to /etc/wpa_supplicant.conf",
@@ -266,6 +350,7 @@ check(
   cloudForm.status === 200 && cloudForm.text.includes("Cloud blocker enabled"),
   cloudForm.text.slice(0, 160)
 );
+checkCompactPost("POST /system action=cloud", cloudForm, "Cloud blocker enabled and LAN-only egress applied.");
 const expCloud2 = await req(API, "/export/cloud");
 check("no cloud disable values are ever posted (blocker still 1)", expCloud2.text.trim() === "1");
 const seedMqtt = JSON.stringify({
@@ -285,18 +370,21 @@ check(
   importForm.status === 200 && importForm.text.includes("MQTT settings imported"),
   importForm.text.slice(0, 160)
 );
+checkCompactPost("POST /import target=mqtt", importForm, "MQTT settings imported. The bridge will reconnect when it notices the config change.");
 const expMqtt3 = await req(API, "/export/mqtt");
 check("import restored the seeded fake MQTT config", expMqtt3.json?.broker?.host === "mqtt.hub-emu.invalid");
-const btDeviceForm = await req(API, "/bt/device", form({ name: "QA Emu Keyboard", type: "btkeyboard", bdaddr: "02:00:00:00:00:01" }));
+const btQaName = "QA <Emu> & Keyboard";
+const btDeviceForm = await req(API, "/bt/device", form({ name: btQaName, type: "btkeyboard", bdaddr: "02:00:00:00:00:01" }));
 check(
-  "POST /bt/device form -> 200 HTML 'Saved Bluetooth device' (obviously fake MAC)",
-  btDeviceForm.status === 200 && btDeviceForm.text.includes("Saved Bluetooth device QA Emu Keyboard."),
-  btDeviceForm.text.slice(0, 160)
+  "POST /bt/device form -> 200 HTML with the escaped exact dynamic message",
+  btDeviceForm.status === 200 && btDeviceForm.text.includes("Saved Bluetooth device QA &lt;Emu&gt; &amp; Keyboard."),
+  btDeviceForm.text.slice(0, 320)
 );
+checkCompactPost("POST /bt/device form", btDeviceForm, "Saved Bluetooth device QA &lt;Emu&gt; &amp; Keyboard.");
 const expBt2 = await req(API, "/export/bluetooth");
 check(
   "Bluetooth save persisted to /data/codex/bt-devices.json",
-  expBt2.text.includes("QA Emu Keyboard") && expBt2.text.includes("02:00:00:00:00:01")
+  expBt2.text.includes(btQaName) && expBt2.text.includes("02:00:00:00:00:01")
 );
 const irLegacy = await req(API, "/ir/send", form({ deviceId: String(irDevice.Device["Id-"]), command: irCommand }));
 check(
@@ -304,6 +392,7 @@ check(
   irLegacy.status === 200 && irLegacy.text.includes("Sent ") && irLegacy.text.includes(" to "),
   irLegacy.text.slice(0, 160)
 );
+checkCompactPost("POST /ir/send form", irLegacy, "Sent ");
 
 console.log("\n== reboot: observable, harmless, never auto-fired ==");
 const statusBefore = await req(CTRL, "/status");
@@ -318,6 +407,7 @@ check(
   rebootForm.status === 200 && rebootForm.text.includes("Rebooting now."),
   rebootForm.text.slice(0, 160)
 );
+checkCompactPost("POST /system action=reboot", rebootForm, "Rebooting now.");
 const aliveAfterReboot = await req(API, "/api/activity-state");
 check(
   "container survived the reboot request (stub never signals PID 1)",
@@ -331,6 +421,7 @@ check(
   cloudRebootForm.status === 200 && cloudRebootForm.text.includes("Cloud blocker enabled. Rebooting now."),
   cloudRebootForm.text.slice(0, 160)
 );
+checkCompactPost("POST /system action=cloud_reboot", cloudRebootForm, "Cloud blocker enabled. Rebooting now.");
 const expCloud3 = await req(API, "/export/cloud");
 check("cloud_reboot kept the blocker at 1", expCloud3.text.trim() === "1");
 const statusAfter2 = await req(CTRL, "/status");
@@ -365,12 +456,42 @@ check(
   authForm.status === 200 && authForm.text.includes("Web UI sign-in enabled"),
   authForm.text.slice(0, 160)
 );
+checkCompactPost("POST /system action=auth enable", authForm, "Web UI sign-in enabled.");
 const locked = await req(API, "/api/activity-state");
 check("auth now gates the whole API (401 without credentials)", locked.status === 401, `got ${locked.status}`);
 const authed = await req(API, "/api/activity-state", {
   headers: { Authorization: `Basic ${Buffer.from("hub-emu-fake-admin:hub-emu-fake-secret").toString("base64")}` },
 });
 check("the fake credentials authenticate", authed.status === 200 && authed.json?.ok === true, `got ${authed.status}`);
+const fakeAuthorization = `Basic ${Buffer.from("hub-emu-fake-admin:hub-emu-fake-secret").toString("base64")}`;
+const lockedSystemStatus = await req(API, "/api/system-status");
+check("auth gates GET /api/system-status (401 without credentials)", lockedSystemStatus.status === 401, `got ${lockedSystemStatus.status}`);
+const authedSystemStatus = await req(API, "/api/system-status", {
+  headers: { Authorization: fakeAuthorization },
+});
+check(
+  "authenticated System status remains complete and reports sign-in required",
+  authedSystemStatus.status === 200 &&
+    authedSystemStatus.json?.ok === true &&
+    authedSystemStatus.json?.authMode === "sign-in required",
+  authedSystemStatus.text.slice(0, 200),
+);
+const disableAuthForm = await req(API, "/system", authorizedForm({
+  action: "auth",
+  authUsername: "hub-emu-fake-admin",
+}, fakeAuthorization));
+check(
+  "POST /system action=auth disables sign-in with the existing credentials",
+  disableAuthForm.status === 200 && disableAuthForm.text.includes("Web UI sign-in disabled."),
+  disableAuthForm.text.slice(0, 200),
+);
+checkCompactPost("POST /system action=auth disable", disableAuthForm, "Web UI sign-in disabled.");
+const statusAfterAuthDisable = await req(API, "/api/system-status");
+check(
+  "disabled auth reopens System status and reports local-network mode",
+  statusAfterAuthDisable.status === 200 && statusAfterAuthDisable.json?.authMode === "open on local network",
+  statusAfterAuthDisable.text.slice(0, 200),
+);
 const reset2 = await req(CTRL, "/reset", { method: "POST" });
 check("POST /reset -> 200", reset2.status === 200 && reset2.json?.ok === true);
 const unlocked = await req(API, "/api/activity-state");

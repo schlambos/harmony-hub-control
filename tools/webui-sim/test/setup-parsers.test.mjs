@@ -7,7 +7,6 @@ import {
   parseMqttConfig,
   parseWpaSupplicant,
   parseCloudFlag,
-  parseSystemHtml,
 } from "../public/js/setup-parsers.js";
 
 describe("serializeForm", () => {
@@ -152,77 +151,5 @@ describe("parseCloudFlag", () => {
     assert.equal(parseCloudFlag("0"), false);
     assert.equal(parseCloudFlag(""), false);
     assert.equal(parseCloudFlag("off"), false);
-  });
-});
-
-describe("parseSystemHtml", () => {
-  // Minimal fake mirroring the real POST /system render_page() output:
-  // firmware/uptime stat cards + System information and Logs <details>.
-  const html = [
-    "<div class='msg'>Saved.</div>",
-    "<section id='view-overview'>",
-    "<div class='cards dashboard-cards'>",
-    "<div class='stat'><div class='label'>Firmware</div><div class='value'>1.9.4-hub</div></div>",
-    "<div class='stat'><div class='label'>Uptime</div><div class='value'>3d 2h 14m</div></div>",
-    "</div></section>",
-    "<section id='view-system' class='section'><div class='grid'>",
-    "<details><summary>System information</summary><pre>--- uname ---",
-    "Linux harmony 3.10.107 #1 SMP armv7l GNU/Linux",
-    "",
-    "--- memory ---",
-    "MemTotal:         511840 kB",
-    "MemFree:          102400 kB",
-    "",
-    "--- mounts ---",
-    "/dev/root on / type squashfs (ro,relatime)",
-    "",
-    "--- processes ---",
-    "  PID USER   COMMAND",
-    "    1 root   /sbin/init</pre></details>",
-    "<details><summary>Logs</summary><pre>--- startup log ---",
-    "codex: boot ok",
-    "",
-    "--- local service syslog ---",
-    "Jan  1 00:00:01 hub codex: ready</pre></details>",
-    "</div>",
-    "<div class='panel'><h3>Web UI sign-in</h3>",
-    "<div class='help'>Current mode: <strong>open on local network</strong>.</div></div>",
-    "</section>",
-  ].join("\n");
-
-  it("parses uname and MemTotal from the System information pre", () => {
-    const result = parseSystemHtml(html);
-    assert.equal(result.uname, "Linux harmony 3.10.107 #1 SMP armv7l GNU/Linux");
-    assert.equal(result.memTotal, "511840 kB");
-  });
-
-  it("captures mounts and processes sections", () => {
-    const result = parseSystemHtml(html);
-    assert.ok(result.mounts.includes("/dev/root on / type squashfs"));
-    assert.ok(result.processes.includes("/sbin/init"));
-  });
-
-  it("parses firmware and uptime from stat cards", () => {
-    const result = parseSystemHtml(html);
-    assert.equal(result.firmware, "1.9.4-hub");
-    assert.equal(result.uptime, "3d 2h 14m");
-  });
-
-  it("parses auth mode from the sign-in panel", () => {
-    assert.equal(parseSystemHtml(html).authMode, "open on local network");
-  });
-
-  it("parses the Logs details separately, not the first pre", () => {
-    const result = parseSystemHtml(html);
-    assert.ok(result.logs.includes("codex: boot ok"));
-    assert.ok(result.logs.includes("codex: ready"));
-    assert.ok(!result.logs.includes("MemTotal"));
-  });
-
-  it("returns empty strings when sections are absent", () => {
-    const result = parseSystemHtml("<p>nothing here</p>");
-    assert.equal(result.uname, "");
-    assert.equal(result.firmware, "");
-    assert.equal(result.logs, "");
   });
 });

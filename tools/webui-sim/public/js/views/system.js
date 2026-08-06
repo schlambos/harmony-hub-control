@@ -1,6 +1,5 @@
-/* System view: one non-mutating probe of POST /system (empty action reaches
-   the hub's unknown-action branch and writes nothing) is parsed for firmware,
-   uptime, memory, uname, logs, and the sign-in mode. Cloud egress, updates,
+/* System view: GET /api/system-status provides bounded read-only firmware,
+   uptime, memory, uname, logs, and sign-in status. Cloud egress, updates,
    discovery, and reboot use only endpoints the hub already serves.
 
    Safety shape, per the binding review:
@@ -16,7 +15,7 @@
    - the single amber primary on the whole page is "Refresh status". */
 
 import { postHubForm, postApiForm, getJson, getText, probeBasicAuth } from "../api.js";
-import { parseSystemHtml, parseCloudFlag } from "../setup-parsers.js";
+import { parseCloudFlag } from "../setup-parsers.js";
 import { viewHead, notice, el, clear, dangerGuard } from "../setup-kit.js";
 import {
   cloudPanelState,
@@ -36,7 +35,7 @@ import {
 
 export function createSystemView(section) {
   /* ---- state ---------------------------------------------------------- */
-  let probe = null; // last parsed POST /system probe
+  let probe = null; // last GET /api/system-status response
   let probeError = null;
   let probeInflight = null; // dedup so one route entry = one probe
   let cloudOn = null; // boolean | null unknown
@@ -72,16 +71,14 @@ export function createSystemView(section) {
     if (text) node.appendChild(notice(kind, text));
   }
 
-  /* ---- status probe (the one expensive read) -------------------------- */
+  /* ---- bounded status probe -------------------------------------------- */
 
   function loadProbe() {
     if (probeInflight) return probeInflight;
     probeInflight = (async () => {
       probeError = null;
       try {
-        // Empty action hits the hub's unknown-action branch: full page, no writes.
-        const res = await postHubForm("/system", { action: "" });
-        probe = parseSystemHtml(res.html);
+        probe = await getJson("/api/system-status");
       } catch (error) {
         probeError = error;
       }

@@ -57,10 +57,12 @@ Open http://127.0.0.1:8787/#control
 | 8788 | real `codex_webui` | the 1:1 hub API — point curl/tests here |
 | 8789 | engine-emu control | `POST /reset` · `GET /events` · `GET /status` (with `rebootCount`) |
 
-The proxy byte-forwards the legacy setup-page POST routes (`/system`, `/mqtt`,
+The proxy byte-forwards the legacy setup POST routes (`/system`, `/mqtt`,
 `/wifi`, `/import`, `/ir/*`, `/bt/*`) to the real binary, so the redesigned
-front-end can drive the form-encoded handlers that answer full HTML pages.
-Nothing else leaves the static UI.
+front-end can drive the form-encoded handlers and extract their compact result
+HTML. `GET /api/system-status` is forwarded by the normal `/api/*` path and
+never invokes the legacy application renderer. Nothing else leaves the static
+UI.
 
 The proxy also maps `/sim/reset`, `/sim/events`, `/sim/status` → control
 plane. These are deliberately **outside** `/api/` so the emulated surface
@@ -85,7 +87,7 @@ secrets only:
 | `wpa_supplicant.conf` | `/etc/wpa_supplicant.conf` | `POST /wifi` · `GET /export/wifi` |
 | `bt-devices.json` | `/data/codex/bt-devices.json` | `POST /bt/*` · `GET /export/bluetooth` |
 | `cloud_blocker.conf` | `/data/codex/cloud_blocker.conf` | `POST /system action=cloud*` · `GET /export/cloud` (always `1`) |
-| `version` | `/etc/version` | firmware stat on the legacy dashboard |
+| `version` | `/etc/version` | `GET /api/system-status` firmware |
 
 `/sbin/reboot` is a record-only stub: it appends to
 `/var/volatile/reboot-requests.log` and exits 0 — it never signals PID 1 (that
@@ -98,15 +100,15 @@ staging, the reboot log, backups, events, and returns the engine to PowerOff.
 
 ## Contract QA
 
-`node tools/hub-emu/qa.mjs` — 65 assertions covering: config/state envelopes,
+`node tools/hub-emu/qa.mjs` — 84 assertions covering: config/state envelopes,
 form-vs-JSON body parsing on `activity-run`/`ir-send`, Bluetooth (Transport 32)
 send path, 404s for endpoints the box lacks (`/api/control-button`,
 `/api/sim/events`), full save/409/revision flow through the writer daemon, the
-1 MiB `MAX_REQUEST_BODY` 413, the six setup-page contracts (seeded exports,
-JSON-body rejection on the legacy form parsers, form posts with full-HTML
-replies, import restore), reboot observability/harmlessness via `rebootCount`,
-auth/update-state set-and-clear, and full settings restoration on reset. All
-green as of this handoff.
+1 MiB `MAX_REQUEST_BODY` 413, bounded `GET /api/system-status` data and auth,
+the six setup-page contracts (seeded exports, JSON-body rejection on the legacy
+form parsers, compact result HTML with escaped messages, import restore),
+reboot observability/harmlessness via `rebootCount`, auth enable/disable,
+update-state set-and-clear, and full settings restoration on reset.
 
 ## What is genuinely real vs emulated
 
@@ -119,7 +121,7 @@ the decompiled firmware): `harmony.engine?getCurrentActivity` (genuine nested
 exists, tracks current), `holdaction` (logs device/command — this is where IR/BT
 photons would leave the box), `ir.cap` (empty capture), the offline activity
 writer, `hcitool`/HAL steady-state replies (authenticated BT link, matching the
-live hub).
+live hub), and a deterministic `ps` snapshot for System-status process output.
 
 Not emulated, by design: the physical remote (hub-tolerates/remote-rejects
 asymmetry is un-emulatable — validate graphs via the wizard contract + vendored

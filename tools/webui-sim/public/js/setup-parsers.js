@@ -23,9 +23,6 @@ function stripTags(html) {
   return String(html).replace(/<[^>]*>/g, "");
 }
 
-function escapeRegExp(value) {
-  return String(value).replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
-}
 
 /** First <div class='msg'> / <div class="msg"> body from legacy hub HTML. */
 export function extractMsgDiv(html) {
@@ -86,56 +83,4 @@ export function parseWpaSupplicant(text) {
 export function parseCloudFlag(text) {
   const trimmed = String(text).trim().toLowerCase();
   return trimmed === "1" || trimmed === "true" || trimmed === "on";
-}
-
-/** <pre> body of the <details> block whose <summary> matches summaryText. */
-function detailsPre(src, summaryText) {
-  const re = new RegExp(
-    `<details[^>]*>\\s*<summary[^>]*>\\s*${escapeRegExp(summaryText)}\\s*</summary>\\s*<pre[^>]*>([\\s\\S]*?)</pre>`,
-    "i",
-  );
-  const m = src.match(re);
-  return m ? decodeHtmlEntities(stripTags(m[1])).trim() : "";
-}
-
-/** Split "--- uname ---" style section markers into { name: body }. */
-function splitSections(preText) {
-  const sections = {};
-  const parts = String(preText).split(/^---\s*(.+?)\s*---\s*$/m);
-  for (let i = 1; i < parts.length; i += 2) {
-    const name = parts[i].trim().toLowerCase().replace(/\s+/g, " ");
-    sections[name] = (parts[i + 1] ?? "").trim();
-  }
-  return sections;
-}
-
-/** <div class='stat'><div class='label'>L</div><div class='value'>V</div> */
-function statValue(src, label) {
-  const re = new RegExp(
-    `<div class=['"]label['"]>\\s*${escapeRegExp(label)}\\s*</div>\\s*<div class=['"]value['"]>([\\s\\S]*?)</div>`,
-    "i",
-  );
-  const m = src.match(re);
-  return m ? decodeHtmlEntities(stripTags(m[1])).trim() : "";
-}
-
-/** POST /system action= returns the full rendered page. System information
-    and Logs each live in their own <details><pre>; firmware/uptime are stat
-    cards and auth mode is the "Current mode:" line in the sign-in panel. */
-export function parseSystemHtml(html) {
-  const src = String(html);
-  const sections = splitSections(detailsPre(src, "System information"));
-  const memMatch = (sections.memory ?? "").match(/MemTotal:\s*([^\n]+)/);
-  const authMatch = src.match(/Current mode:\s*<strong>([\s\S]*?)<\/strong>/i);
-  return {
-    uname: sections.uname ?? "",
-    memTotal: memMatch ? memMatch[1].trim() : "",
-    memory: sections.memory ?? "",
-    mounts: sections.mounts ?? "",
-    processes: sections.processes ?? "",
-    firmware: statValue(src, "Firmware"),
-    uptime: statValue(src, "Uptime"),
-    authMode: authMatch ? decodeHtmlEntities(stripTags(authMatch[1])).trim() : "",
-    logs: detailsPre(src, "Logs"),
-  };
 }

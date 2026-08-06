@@ -1,7 +1,8 @@
 # Local Control API
 
-The web UI intentionally has no HTTP authentication. Run it only on a trusted
-LAN or behind your own access controls.
+HTTP Basic authentication is optional. When enabled from the System view, the
+same global check protects every page, API route, and export; otherwise the
+interface is open on the local network.
 
 Most write endpoints accept `application/x-www-form-urlencoded` bodies. The
 transactional activity save endpoint accepts `application/json`. JSON responses
@@ -396,6 +397,36 @@ Invoke-RestMethod "http://<hub-ip>:8080/api/bt-call" -Method Post -Body @{
   gapMs  = "35"
 }
 ```
+
+## System Status
+
+Read the bounded, non-mutating data shown by the modern System view:
+
+```text
+GET /api/system-status
+```
+
+```json
+{
+  "ok": true,
+  "firmware": "4.15.600",
+  "uptime": "1d 2h 3m",
+  "memTotal": "62524 kB",
+  "memory": "MemTotal: 62524 kB\n...",
+  "uname": "Linux ...",
+  "mounts": "...",
+  "processes": "...",
+  "logs": "--- startup log ---\n...",
+  "authMode": "open on local network"
+}
+```
+
+`firmware` comes from `/etc/version`; `uptime` uses the dashboard's human-readable
+format. The remaining detail fields use the same local read-only sources as the
+legacy System panel and are captured in fixed buffers. The response contains no
+configuration files or credentials, performs no WAN request, and remains below
+64 KiB. When Basic authentication is enabled, this route returns `401` without
+valid credentials.
 
 ## Exports
 

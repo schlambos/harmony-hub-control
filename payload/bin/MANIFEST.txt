@@ -4,7 +4,7 @@
 -rwxr-xr-x 1 codex codex  76772 Jul 28 18:02 codex_hal_ltcp
 -rwxr-xr-x 1 codex codex  74660 Jul 26 18:00 codex_hbus
 -rwxrwxr-x 1 codex codex 109548 Jun  9 06:18 codex_portal
--rwxr-xr-x 1 codex codex 942552 Aug  2 01:49 codex_webui
+-rwxr-xr-x 1 codex codex 731320 Aug  4 21:25 codex_webui
 -rwxrwxr-x 1 codex codex 577296 Jun  9 06:18 dropbearmulti
 2f0a6fc6303743eeccc77d1b93e7253f  codex_dhcpd
 bd1a7e51f476ea3a680741ca9b321b14  codex_portal
@@ -12,5 +12,5 @@ bd1a7e51f476ea3a680741ca9b321b14  codex_portal
 282c60662ef6374fe0eefa1971e32361  codex_hal_ltcp
 f55eaefedb72ed2f0360d090674cd7d6  codex_bthid_keyboard
 5f08bbc830acc8039eeeaae84f5bad10  codex_bt_pair_agent
-979f0fb3adc65667a1729898f3ae7d51  codex_webui
+314a3c8dcd57e3261bdd7a2f20645cd1  codex_webui
 3733327fd04bca282dbf06f33da0bf6c  dropbearmulti

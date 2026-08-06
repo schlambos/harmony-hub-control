@@ -40,6 +40,7 @@ printf '15390924\n' > /data/codex/hub_id
 install -m 0755 /opt/hub/stubs/hcitool /usr/local/bin/hcitool
 install -m 0755 /opt/hub/stubs/hciconfig /usr/local/bin/hciconfig
 install -m 0755 /opt/hub/stubs/logread /usr/local/bin/logread
+install -m 0755 /opt/hub/stubs/ps /usr/local/bin/ps
 install -m 0755 /opt/hub/stubs/reboot /sbin/reboot
 install -m 0755 /opt/hub/stubs/codex_hal_ltcp /data/codex/bin/codex_hal_ltcp
 install -m 0755 /opt/hub/stubs/codex_hbus /data/codex/bin/codex_hbus

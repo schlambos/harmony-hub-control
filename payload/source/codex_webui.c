@@ -4612,8 +4612,21 @@ static void page_end(FILE *f) {
     fputs("<script src='/assets/activity-ui.js'></script></div></main></body></html>", f);
 }
 
+static void load_uptime_label(char *out, size_t outlen) {
+    char uptime[128];
+    long seconds, days, hours, minutes;
+    read_text("/proc/uptime", uptime, sizeof(uptime));
+    chomp(uptime);
+    seconds = atol(uptime);
+    days = seconds / 86400;
+    hours = (seconds % 86400) / 3600;
+    minutes = (seconds % 3600) / 60;
+    if (days > 0) snprintf(out, outlen, "%ldd %ldh %ldm", days, hours, minutes);
+    else snprintf(out, outlen, "%ldh %ldm", hours, minutes);
+}
+
 static void status_panel(FILE *f, const struct mqtt_config *mqtt) {
-    char uptime[128], version[128], ifconfig[2048], activity[1024];
+    char version[128], ifconfig[2048], activity[1024];
     char uptime_label[80], inventory_label[80];
     char update_badge[48], update_detail[224], update_age[64];
     char hub_id[64];
@@ -4624,18 +4637,9 @@ static void status_panel(FILE *f, const struct mqtt_config *mqtt) {
     int device_count = -1, command_count = 0;
     int cloud_blocked = load_cloud_blocker();
     long now = time(NULL), age;
-    read_text("/proc/uptime", uptime, sizeof(uptime));
     read_text("/etc/version", version, sizeof(version));
-    chomp(uptime);
     chomp(version);
-    {
-        long seconds = atol(uptime);
-        long days = seconds / 86400;
-        long hours = (seconds % 86400) / 3600;
-        long minutes = (seconds % 3600) / 60;
-        if (days > 0) snprintf(uptime_label, sizeof(uptime_label), "%ldd %ldh %ldm", days, hours, minutes);
-        else snprintf(uptime_label, sizeof(uptime_label), "%ldh %ldm", hours, minutes);
-    }
+    load_uptime_label(uptime_label, sizeof(uptime_label));
     hub_id_ok = load_hub_id(hub_id, sizeof(hub_id));
     run_cmd("ifconfig ath0 2>/dev/null", ifconfig, sizeof(ifconfig));
     if (scan_ir_resource_stats(&device_count, &command_count, NULL, NULL) != 0) {
@@ -5863,6 +5867,71 @@ static void system_panel(FILE *f) {
     fprintf(f, "<div class='panel' style='margin-top:12px'><h3>Software update</h3><div class='help'>Browser self-update has no default public repository (unsigned fetches can replace this install with a different lineage). Leave the mirror blank to refuse check/install, stage binaries out-of-band, or set an explicit mirror URL you control. Apply still verifies MD5 against the staged MANIFEST and restarts local services including the Bluetooth pair agent.</div><form id='updateForm' autocomplete='off' onsubmit='return false'><div class='grid two'><div><label for='updateRepo'>Update mirror URL (optional, no default)</label><input id='updateRepo' autocomplete='url' value='' placeholder='https://example.invalid/your-mirror/payload/bin/'></div><div><label for='updateToken'>GitHub token (only if your mirror needs it)</label><input id='updateToken' type='password' autocomplete='new-password' placeholder='optional; used only by this browser'></div></div><div class='actions'><button id='updateCheck' type='button' class='secondary'>Check for updates</button><button id='updateInstall' type='button'>Install update</button><button id='updateRefresh' type='button' class='secondary'>Show installed versions</button></div></form><pre id='updateLog' class='mini'>Ready. No default update source is configured.</pre></div><div class='panel' style='margin-top:12px'><div class='help'>Refresh Home Assistant discovery if new devices or commands do not appear after changes.</div><form method='post' action='/system#system'><div class='actions'><button name='action' value='rediscover' type='submit'>Refresh Home Assistant discovery</button><button name='action' value='reboot' type='submit' class='secondary'>Reboot hub</button></div></form></div></section>");
 }
 
+static void mem_total_value(const char *memory, char *out, size_t outlen) {
+    const char *start = strstr(memory, "MemTotal:");
+    const char *end;
+    size_t len;
+    if (!outlen) return;
+    out[0] = 0;
+    if (!start) return;
+    start += strlen("MemTotal:");
+    while (*start == ' ' || *start == '\t') start++;
+    end = strchr(start, '\n');
+    if (!end) end = start + strlen(start);
+    while (end > start && isspace((unsigned char)end[-1])) end--;
+    len = (size_t)(end - start);
+    if (len >= outlen) len = outlen - 1;
+    memcpy(out, start, len);
+    out[len] = 0;
+}
+
+static void render_system_status_json(int fd) {
+    enum {
+        SYSTEM_MEMORY_BYTES = 4096,
+        SYSTEM_DETAIL_BYTES = 6144,
+        SYSTEM_LOG_BYTES = 8192
+    };
+    char firmware[128], uptime[80], mem_total[80], uname_text[512];
+    char memory[SYSTEM_MEMORY_BYTES], mounts[SYSTEM_DETAIL_BYTES];
+    char processes[SYSTEM_DETAIL_BYTES], logs[SYSTEM_LOG_BYTES];
+    struct webui_auth_config auth;
+    FILE *f;
+
+    read_text("/etc/version", firmware, sizeof(firmware));
+    chomp(firmware);
+    load_uptime_label(uptime, sizeof(uptime));
+    run_cmd("uname -a", uname_text, sizeof(uname_text));
+    run_cmd("cat /proc/meminfo", memory, sizeof(memory));
+    run_cmd("mount", mounts, sizeof(mounts));
+    run_cmd("ps", processes, sizeof(processes));
+    run_cmd("echo '--- startup log ---'; cat /cache/codex-init.log 2>/dev/null; echo; echo '--- recovery log ---'; cat /cache/codex-recovery.log 2>/dev/null; echo; echo '--- local service syslog ---'; logread 2>/dev/null | grep -i 'codex\\|mqtt' 2>/dev/null", logs, sizeof(logs));
+    chomp(uname_text);
+    chomp(memory);
+    chomp(mounts);
+    chomp(processes);
+    chomp(logs);
+    if (!logs[0]) snprintf(logs, sizeof(logs), "no matching logs");
+    mem_total_value(memory, mem_total, sizeof(mem_total));
+    load_webui_auth(&auth);
+
+    f = send_json_start(fd, "200 OK");
+    if (!f) return;
+    fputs("{\"ok\":true,\"firmware\":", f);
+    json_write_string(f, firmware[0] ? firmware : "unknown");
+    fputs(",\"uptime\":", f); json_write_string(f, uptime);
+    fputs(",\"memTotal\":", f); json_write_string(f, mem_total);
+    fputs(",\"memory\":", f); json_write_string(f, memory);
+    fputs(",\"uname\":", f); json_write_string(f, uname_text);
+    fputs(",\"mounts\":", f); json_write_string(f, mounts);
+    fputs(",\"processes\":", f); json_write_string(f, processes);
+    fputs(",\"logs\":", f); json_write_string(f, logs);
+    fputs(",\"authMode\":", f);
+    json_write_string(f, auth.enabled ? "sign-in required" : "open on local network");
+    fputs("}\n", f);
+    fclose(f);
+}
+
+
 /* Production shell: tools/package_harmony_shell.sh splits the generated
  * index.html at the base64 seam; REMOTE_SKIN_JPG_B64 (already embedded for
  * the legacy page) is injected between the halves at request time, so the
@@ -5878,34 +5947,32 @@ static void render_harmony_shell(int fd) {
     fclose(f);
 }
 
-static void render_page(int fd, const char *message) {
-    struct mqtt_config mqtt;
-    struct wifi_config wifi;
+#define POST_RESULT_RESPONSE_BUDGET 4096
+
+static const char post_result_head[] =
+    "<!doctype html><html lang='en'><head><meta charset='utf-8'>"
+    "<meta name='viewport' content='width=device-width,initial-scale=1'>"
+    "<title>Harmony Hub Control</title></head><body><main>"
+    "<h1>Harmony Hub Control</h1>";
+static const char post_result_tail[] =
+    "<p><a href='/'>Back to Harmony Hub Control</a></p></main></body></html>";
+
+typedef char post_result_fixed_shell_must_fit_budget[
+    sizeof(post_result_head) + sizeof(post_result_tail) < POST_RESULT_RESPONSE_BUDGET ? 1 : -1
+];
+
+static void render_post_result(int fd, const char *message) {
     FILE *f = fdopen(dup(fd), "w");
     if (!f) return;
-    load_mqtt(&mqtt);
-    load_wifi(&wifi);
-    page_head(f, "Harmony Hub Control");
+    fputs("HTTP/1.1 200 OK\r\nContent-Type: text/html; charset=utf-8\r\n"
+          "Cache-Control: no-store\r\nConnection: close\r\n\r\n", f);
+    fputs(post_result_head, f);
     if (message && message[0]) {
-        fprintf(f, "<div class='msg'>");
+        fputs("<div class='msg'>", f);
         html(f, message);
-        fprintf(f, "</div>");
+        fputs("</div>", f);
     }
-    status_panel(f, &mqtt);
-    activity_panel(f);
-    fprintf(f, "<section id='view-mqtt' data-view='mqtt' class='section'><div class='section-head'><div><h2>MQTT</h2><div class='section-lead'>Connect the hub to Home Assistant through MQTT. The hub can publish its state and listen for activity or IR commands.</div></div></div><div class='grid'>");
-    mqtt_form(f, &mqtt);
-    fprintf(f, "</div></section>");
-    fprintf(f, "<section id='view-wifi' data-view='wifi' class='section'><div class='section-head'><div><h2>Wi-Fi</h2><div class='section-lead'>Change the network the hub joins. If the saved Wi-Fi stops working, hold the reset button to start the recovery access point.</div></div></div><div class='grid'>");
-    wifi_form(f, &wifi);
-    fprintf(f, "</div></section>");
-    ir_control_panel(f);
-    ir_panel(f);
-    ir_lab_panel(f);
-    bluetooth_panel(f);
-    backup_panel(f);
-    system_panel(f);
-    page_end(f);
+    fputs(post_result_tail, f);
     fclose(f);
 }
 
@@ -5938,9 +6005,9 @@ static void handle_mqtt(int fd, const struct request *req) {
     }
     if (save_mqtt(&cfg) == 0) {
         trigger_mqtt_discover();
-        render_page(fd, "MQTT settings saved. The bridge will reconnect when it notices the config change.");
+        render_post_result(fd, "MQTT settings saved. The bridge will reconnect when it notices the config change.");
     } else {
-        render_page(fd, "Failed to save MQTT settings.");
+        render_post_result(fd, "Failed to save MQTT settings.");
     }
 }
 
@@ -5958,24 +6025,24 @@ static void handle_wifi(int fd, const struct request *req) {
         cfg.psk[sizeof(cfg.psk) - 1] = 0;
     }
     if (!cfg.ssid[0]) {
-        render_page(fd, "Wi-Fi SSID is required.");
+        render_post_result(fd, "Wi-Fi SSID is required.");
         return;
     }
     if (!cfg.open && !cfg.psk[0]) {
-        render_page(fd, "Wi-Fi password is required unless Open network is checked.");
+        render_post_result(fd, "Wi-Fi password is required unless Open network is checked.");
         return;
     }
     if (save_wifi(&cfg) != 0) {
-        render_page(fd, "Failed to save Wi-Fi settings.");
+        render_post_result(fd, "Failed to save Wi-Fi settings.");
         return;
     }
     form_value(req->body, "apply", apply, sizeof(apply));
     if (strcmp(apply, "reboot") == 0) {
-        render_page(fd, "Wi-Fi settings saved. Rebooting now.");
+        render_post_result(fd, "Wi-Fi settings saved. Rebooting now.");
         sync();
         system("/sbin/reboot >/dev/null 2>&1 &");
     } else {
-        render_page(fd, "Wi-Fi settings saved. Reboot when ready to use them.");
+        render_post_result(fd, "Wi-Fi settings saved. Reboot when ready to use them.");
     }
 }
 
@@ -5983,21 +6050,21 @@ static void handle_system(int fd, const struct request *req) {
     char action[64];
     form_value(req->body, "action", action, sizeof(action));
     if (strcmp(action, "reboot") == 0) {
-        render_page(fd, "Rebooting now.");
+        render_post_result(fd, "Rebooting now.");
         sync();
         system("/sbin/reboot >/dev/null 2>&1 &");
     } else if (strcmp(action, "cloud") == 0 || strcmp(action, "cloud_reboot") == 0) {
         int enabled = form_checked(req->body, "cloudBlocker");
         if (save_cloud_blocker(enabled) != 0) {
-            render_page(fd, "Failed to save cloud blocker setting.");
+            render_post_result(fd, "Failed to save cloud blocker setting.");
             return;
         }
         if (strcmp(action, "cloud_reboot") == 0) {
-            render_page(fd, enabled ? "Cloud blocker enabled. Rebooting now." : "Cloud blocker disabled. Rebooting now.");
+            render_post_result(fd, enabled ? "Cloud blocker enabled. Rebooting now." : "Cloud blocker disabled. Rebooting now.");
             sync();
             system("/sbin/reboot >/dev/null 2>&1 &");
         } else {
-            render_page(fd, enabled ? "Cloud blocker enabled and LAN-only egress applied." : "Cloud blocker disabled and the saved WAN route restored.");
+            render_post_result(fd, enabled ? "Cloud blocker enabled and LAN-only egress applied." : "Cloud blocker disabled and the saved WAN route restored.");
         }
     } else if (strcmp(action, "auth") == 0) {
         struct webui_auth_config old, cfg;
@@ -6010,27 +6077,27 @@ static void handle_system(int fd, const struct request *req) {
         if (username[0]) snprintf(cfg.username, sizeof(cfg.username), "%s", username);
         if (password[0]) snprintf(cfg.password, sizeof(cfg.password), "%s", password);
         if (!safe_auth_field(cfg.username, 0)) {
-            render_page(fd, "Username is required and cannot contain a colon.");
+            render_post_result(fd, "Username is required and cannot contain a colon.");
             return;
         }
         if (cfg.enabled && !cfg.password[0]) {
-            render_page(fd, "Enter a password before enabling web UI sign-in.");
+            render_post_result(fd, "Enter a password before enabling web UI sign-in.");
             return;
         }
         if (cfg.password[0] && !safe_auth_field(cfg.password, 1)) {
-            render_page(fd, "Password cannot contain control characters.");
+            render_post_result(fd, "Password cannot contain control characters.");
             return;
         }
         if (save_webui_auth(&cfg) != 0) {
-            render_page(fd, "Failed to save web UI sign-in setting.");
+            render_post_result(fd, "Failed to save web UI sign-in setting.");
             return;
         }
-        render_page(fd, cfg.enabled ? "Web UI sign-in enabled. Your browser may ask you to sign in again on the next page load." : "Web UI sign-in disabled.");
+        render_post_result(fd, cfg.enabled ? "Web UI sign-in enabled. Your browser may ask you to sign in again on the next page load." : "Web UI sign-in disabled.");
     } else if (strcmp(action, "rediscover") == 0) {
         trigger_mqtt_discover();
-        render_page(fd, "MQTT discovery reload requested.");
+        render_post_result(fd, "MQTT discovery reload requested.");
     } else {
-        render_page(fd, "Unknown system action.");
+        render_post_result(fd, "Unknown system action.");
     }
 }
 
@@ -6234,7 +6301,7 @@ static void handle_import_bundle(int fd, const char *payload) {
     snprintf(msg, sizeof(msg), "Backup bundle imported. Reboot when ready if Wi-Fi settings changed.");
 
 done:
-    render_page(fd, msg[0] ? msg : "Bundle import failed.");
+    render_post_result(fd, msg[0] ? msg : "Bundle import failed.");
     free(devices); free(functions); free(protocols);
     free(activities); free(maps); free(automation);
     free(mqtt); free(wifi); free(bluetooth);
@@ -6246,24 +6313,24 @@ static void handle_import(int fd, const struct request *req) {
     const char *path;
     size_t len;
     if (req->body_truncated) {
-        render_page(fd, "Import payload was too large for this device-side form. Use a smaller file or import one resource at a time.");
+        render_post_result(fd, "Import payload was too large for this device-side form. Use a smaller file or import one resource at a time.");
         return;
     }
     form_value(req->body, "target", target, sizeof(target));
     path = import_path_for_target(target);
     if (!path && strcmp(target, "bundle") != 0) {
-        render_page(fd, "Unknown import target.");
+        render_post_result(fd, "Unknown import target.");
         return;
     }
     payload_buf = (char *)malloc(MAX_REQUEST_BODY);
     if (!payload_buf) {
-        render_page(fd, "Not enough memory to receive import payload.");
+        render_post_result(fd, "Not enough memory to receive import payload.");
         return;
     }
     form_value(req->body, "payload", payload_buf, MAX_REQUEST_BODY);
     payload = trim_payload(payload_buf);
     if (validate_import_payload(target, payload, msg, sizeof(msg)) != 0) {
-        render_page(fd, msg);
+        render_post_result(fd, msg);
         free(payload_buf);
         return;
     }
@@ -6282,26 +6349,26 @@ static void handle_import(int fd, const struct request *req) {
     }
     if (write_file_atomic(path, payload, len) != 0) {
         snprintf(msg, sizeof(msg), "Failed to import %s.", import_label_for_target(target));
-        render_page(fd, msg);
+        render_post_result(fd, msg);
         free(payload_buf);
         return;
     }
     if (strcmp(target, "mqtt") == 0) {
         chmod(MQTT_CONFIG, 0600);
         trigger_mqtt_discover();
-        render_page(fd, "MQTT settings imported. The bridge will reconnect when it notices the config change.");
+        render_post_result(fd, "MQTT settings imported. The bridge will reconnect when it notices the config change.");
     } else if (strcmp(target, "wifi") == 0) {
         chmod(WPA_CONFIG, 0600);
-        render_page(fd, "Wi-Fi settings imported. Reboot when ready to use them.");
+        render_post_result(fd, "Wi-Fi settings imported. Reboot when ready to use them.");
     } else if (strcmp(target, "cloud") == 0) {
         if (save_cloud_blocker(cloud_value_enabled(payload)) != 0) {
-            render_page(fd, "Failed to import cloud blocker setting.");
+            render_post_result(fd, "Failed to import cloud blocker setting.");
         } else {
-            render_page(fd, "Cloud blocker setting imported and its egress mode applied.");
+            render_post_result(fd, "Cloud blocker setting imported and its egress mode applied.");
         }
     } else if (strcmp(target, "bluetooth") == 0) {
         chmod(BT_DEVICE_STORE, 0644);
-        render_page(fd, "Bluetooth devices imported.");
+        render_post_result(fd, "Bluetooth devices imported.");
     } else {
         if (strcmp(target, "activities") == 0 || strcmp(target, "maps") == 0 ||
             strcmp(target, "automation") == 0) {
@@ -6310,7 +6377,7 @@ static void handle_import(int fd, const struct request *req) {
             request_resource_reload();
         }
         snprintf(msg, sizeof(msg), "Imported %s and requested a Harmony resource reload.", import_label_for_target(target));
-        render_page(fd, msg);
+        render_post_result(fd, msg);
     }
     free(payload_buf);
 }
@@ -6320,13 +6387,13 @@ static void handle_ir_send(int fd, const struct request *req) {
     form_value(req->body, "deviceId", device_id, sizeof(device_id));
     form_value(req->body, "command", command, sizeof(command));
     if (!safe_label(device_id) || !safe_label(command)) {
-        render_page(fd, "Invalid IR command request.");
+        render_post_result(fd, "Invalid IR command request.");
         return;
     }
     repair_known_protocols_for_current_commands();
     send_ir_command_action(device_id, command, reply, sizeof(reply));
     snprintf(message, sizeof(message), "Sent %s to %s. Reply: %s", command, device_id, reply[0] ? reply : "no response");
-    render_page(fd, message);
+    render_post_result(fd, message);
 }
 
 static void render_ir_send_json(int fd, const struct request *req) {
@@ -8224,7 +8291,7 @@ static void handle_ir_device(int fd, const struct request *req) {
     form_value(req->body, "model", model, sizeof(model));
     form_value(req->body, "type", type, sizeof(type));
     update_ir_device(device_id, name, manufacturer, model, type, msg, sizeof(msg));
-    render_page(fd, msg);
+    render_post_result(fd, msg);
 }
 
 static void handle_ir_new_device(int fd, const struct request *req) {
@@ -8234,7 +8301,7 @@ static void handle_ir_new_device(int fd, const struct request *req) {
     form_value(req->body, "model", model, sizeof(model));
     form_value(req->body, "type", type, sizeof(type));
     create_ir_device(name, manufacturer, model, type, msg, sizeof(msg));
-    render_page(fd, msg);
+    render_post_result(fd, msg);
 }
 
 static void handle_ir_command(int fd, const struct request *req) {
@@ -8248,7 +8315,7 @@ static void handle_ir_command(int fd, const struct request *req) {
     form_value(req->body, "raw", raw, sizeof(raw));
     if (!mode[0]) strcpy(mode, "auto");
     add_ir_command(device_id, name, mode, protocol, nec, keycode, raw, msg, sizeof(msg));
-    render_page(fd, msg);
+    render_post_result(fd, msg);
 }
 
 static void handle_ir_update_command(int fd, const struct request *req) {
@@ -8263,27 +8330,27 @@ static void handle_ir_update_command(int fd, const struct request *req) {
     form_value(req->body, "raw", raw, sizeof(raw));
     if (!mode[0]) strcpy(mode, "keycode");
     update_ir_command(device_id, old_name, name, mode, protocol, nec, keycode, raw, msg, sizeof(msg));
-    render_page(fd, msg);
+    render_post_result(fd, msg);
 }
 
 static void handle_irdb_import(int fd, const struct request *req) {
     char device_id[64], msg[512];
     char *payload;
     if (req->body_truncated) {
-        render_page(fd, "IRDB import payload was too large.");
+        render_post_result(fd, "IRDB import payload was too large.");
         return;
     }
     form_value(req->body, "deviceId", device_id, sizeof(device_id));
     payload = (char *)malloc(MAX_REQUEST_BODY);
     if (!payload) {
-        render_page(fd, "Not enough memory to receive IRDB import.");
+        render_post_result(fd, "Not enough memory to receive IRDB import.");
         return;
     }
     form_value(req->body, "payload", payload, MAX_REQUEST_BODY);
     if (bulk_import_irdb_commands(device_id, payload, msg, sizeof(msg)) != 0) {
-        render_page(fd, msg);
+        render_post_result(fd, msg);
     } else {
-        render_page(fd, msg);
+        render_post_result(fd, msg);
     }
     free(payload);
 }
@@ -8330,14 +8397,14 @@ static void handle_ir_capture(int fd, const struct request *req) {
     (void)req;
     capture_ir_command_action(reply, sizeof(reply));
     snprintf(msg, sizeof(msg), "Capture result: %s", reply);
-    render_page(fd, msg);
+    render_post_result(fd, msg);
 }
 
 static void handle_ir_delete_device(int fd, const struct request *req) {
     char device_id[64], msg[512];
     form_value(req->body, "deviceId", device_id, sizeof(device_id));
     delete_ir_device(device_id, msg, sizeof(msg));
-    render_page(fd, msg);
+    render_post_result(fd, msg);
 }
 
 static void handle_ir_delete_command(int fd, const struct request *req) {
@@ -8345,7 +8412,7 @@ static void handle_ir_delete_command(int fd, const struct request *req) {
     form_value(req->body, "deviceId", device_id, sizeof(device_id));
     form_value(req->body, "command", command, sizeof(command));
     delete_ir_command(device_id, command, msg, sizeof(msg));
-    render_page(fd, msg);
+    render_post_result(fd, msg);
 }
 
 static void handle_bt_device(int fd, const struct request *req) {
@@ -8356,14 +8423,14 @@ static void handle_bt_device(int fd, const struct request *req) {
     form_value(req->body, "bdaddr", bdaddr, sizeof(bdaddr));
     if (!type[0]) strcpy(type, "btkeyboard");
     upsert_bt_device(device_id, name, type, bdaddr, msg, sizeof(msg));
-    render_page(fd, msg);
+    render_post_result(fd, msg);
 }
 
 static void handle_bt_delete_device(int fd, const struct request *req) {
     char device_id[64], msg[512];
     form_value(req->body, "deviceId", device_id, sizeof(device_id));
     delete_bt_device(device_id, msg, sizeof(msg));
-    render_page(fd, msg);
+    render_post_result(fd, msg);
 }
 
 static void handle_bt_command(int fd, const struct request *req) {
@@ -8371,7 +8438,7 @@ static void handle_bt_command(int fd, const struct request *req) {
     char *script;
     int delay_ms;
     if (req->body_truncated) {
-        render_page(fd, "Bluetooth script was too large.");
+        render_post_result(fd, "Bluetooth script was too large.");
         return;
     }
     form_value(req->body, "deviceId", device_id, sizeof(device_id));
@@ -8380,13 +8447,13 @@ static void handle_bt_command(int fd, const struct request *req) {
     form_value(req->body, "delayMs", delay_text, sizeof(delay_text));
     script = (char *)malloc(MAX_BT_SCRIPT_LEN);
     if (!script) {
-        render_page(fd, "Not enough memory to save Bluetooth command.");
+        render_post_result(fd, "Not enough memory to save Bluetooth command.");
         return;
     }
     form_value(req->body, "script", script, MAX_BT_SCRIPT_LEN);
     delay_ms = atoi(delay_text);
     upsert_bt_command(device_id, old_name, name, script, delay_ms, msg, sizeof(msg));
-    render_page(fd, msg);
+    render_post_result(fd, msg);
     free(script);
 }
 
@@ -8395,7 +8462,7 @@ static void handle_bt_delete_command(int fd, const struct request *req) {
     form_value(req->body, "deviceId", device_id, sizeof(device_id));
     form_value(req->body, "command", command, sizeof(command));
     delete_bt_command(device_id, command, msg, sizeof(msg));
-    render_page(fd, msg);
+    render_post_result(fd, msg);
 }
 
 static void handle_bt_send_command(int fd, const struct request *req) {
@@ -8403,7 +8470,7 @@ static void handle_bt_send_command(int fd, const struct request *req) {
     form_value(req->body, "deviceId", device_id, sizeof(device_id));
     form_value(req->body, "command", command, sizeof(command));
     send_bt_saved_command(device_id, command, msg, sizeof(msg));
-    render_page(fd, msg);
+    render_post_result(fd, msg);
 }
 
 static void render_bt_saved_command_json(int fd, const struct request *req) {
@@ -8577,6 +8644,8 @@ static void handle_client(int client) {
         render_bluetooth_text_json(client, &req);
     } else if (strcmp(req.method, "POST") == 0 && strcmp(req.path, "/api/bt-saved-command") == 0) {
         render_bt_saved_command_json(client, &req);
+    } else if (strcmp(req.method, "GET") == 0 && strcmp(req.path, "/api/system-status") == 0) {
+        render_system_status_json(client);
     } else if (strcmp(req.method, "GET") == 0 && strcmp(req.path, "/api/update-status") == 0) {
         render_update_status_json(client);
     } else if (strcmp(req.method, "GET") == 0 && strcmp(req.path, "/api/update-check-state") == 0) {

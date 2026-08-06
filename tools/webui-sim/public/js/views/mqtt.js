@@ -1,8 +1,8 @@
 /* MQTT setup: broker connection, Home Assistant discovery, and the live
    topic map the bridge publishes. Settings round-trip through the legacy
-   hub pages: GET /export/mqtt for the readback, POST /mqtt (form-encoded,
-   full-page HTML reply) to save, POST /system action=rediscover to
-   re-publish discovery.
+   hub routes: GET /export/mqtt for the readback, POST /mqtt (form-encoded,
+   compact result HTML) to save, POST /system action=rediscover to re-publish
+   discovery.
 
    The stored broker password is never rendered, logged, or pre-filled —
    the export only tells us whether one is set. */

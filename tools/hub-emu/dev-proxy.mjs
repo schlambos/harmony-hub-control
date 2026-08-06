@@ -33,9 +33,9 @@ const PORT = Number(process.env.PORT || 8787);
 const BACKEND_PORT = Number(process.env.BACKEND_PORT || 8788);
 const CONTROL_PORT = Number(process.env.CONTROL_PORT || 8789);
 
-// Legacy setup-page handlers on the box are POST-only form parsers answering
-// full HTML pages. Forward exactly these routes — nothing else leaves the
-// static UI.
+// Legacy setup handlers on the box are POST-only form parsers answering
+// compact result HTML. Forward exactly these routes — nothing else leaves
+// the static UI.
 const SETUP_POST_EXACT = new Set(["/system", "/mqtt", "/wifi", "/import"]);
 const SETUP_POST_PREFIXES = ["/ir/", "/bt/"];
 

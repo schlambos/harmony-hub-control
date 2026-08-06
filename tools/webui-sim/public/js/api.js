@@ -156,8 +156,8 @@ export async function postApiForm(path, fields, { authorization } = {}) {
   return json ?? { ok: true };
 }
 
-/** POST form-urlencoded to a legacy hub HTML page (e.g. /system, /mqtt).
-    Only response.ok (HTTP 2xx) counts as success; the legacy
+/** POST form-urlencoded to a legacy hub mutation route (e.g. /system, /mqtt).
+    Only response.ok (HTTP 2xx) counts as success; the compact result HTML's
     <div class='msg'> is extracted for the caller. Errors are honest —
     never "sim offline" for an HTTP failure.
     Optional authorization is for post-enable probes / disable-after-lock
