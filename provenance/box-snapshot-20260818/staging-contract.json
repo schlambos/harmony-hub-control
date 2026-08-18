@@ -84,8 +84,13 @@
     "policy": "a live binary is staged only when its build_status in reproducibility-status.json is EXACT_SOURCE_REPRODUCIBLE and a regular file named build_output_name in the caller-supplied build-output dir matches the live SHA-256 and size; this declared set must equal the live binary paths whose build_status is EXACT_SOURCE_REPRODUCIBLE",
     "derivation": "recomputed from reproducibility-status.json at every run; a disagreement is a contract failure, not a silent difference",
     "paths": [
+      "/data/codex/bin/codex_bt_pair_agent",
+      "/data/codex/bin/codex_bthid_keyboard",
       "/data/codex/bin/codex_dhcpd",
-      "/data/codex/bin/codex_portal"
+      "/data/codex/bin/codex_hal_ltcp",
+      "/data/codex/bin/codex_hbus",
+      "/data/codex/bin/codex_portal",
+      "/data/codex/bin/codex_webui"
     ]
   },
   "blockers": {
@@ -98,36 +103,6 @@
       "SOURCE_TEXT_MISMATCH": "the mapped repository text source is not byte-identical to the live entry"
     },
     "current_expected": [
-      {
-        "path": "/data/codex/bin/codex_bt_pair_agent",
-        "build_status": "RECIPE_UNPROVEN",
-        "source_provenance": "CANDIDATE_SOURCE_BINARY_MATCH_ONLY",
-        "reason_code": "UNRESOLVED_BINARY_REPRODUCIBILITY"
-      },
-      {
-        "path": "/data/codex/bin/codex_bthid_keyboard",
-        "build_status": "RECIPE_UNPROVEN",
-        "source_provenance": "CANDIDATE_SOURCE_BINARY_MATCH_ONLY",
-        "reason_code": "UNRESOLVED_BINARY_REPRODUCIBILITY"
-      },
-      {
-        "path": "/data/codex/bin/codex_hal_ltcp",
-        "build_status": "RECIPE_UNPROVEN",
-        "source_provenance": "CANDIDATE_SOURCE_BINARY_MATCH_ONLY",
-        "reason_code": "UNRESOLVED_BINARY_REPRODUCIBILITY"
-      },
-      {
-        "path": "/data/codex/bin/codex_hbus",
-        "build_status": "RECIPE_UNPROVEN",
-        "source_provenance": "CANDIDATE_SOURCE_NO_BINARY_MATCH",
-        "reason_code": "UNRESOLVED_BINARY_REPRODUCIBILITY"
-      },
-      {
-        "path": "/data/codex/bin/codex_webui",
-        "build_status": "HISTORICAL_BINARY_MATCH_ONLY",
-        "source_provenance": "CANDIDATE_SOURCE_BINARY_MATCH_ONLY",
-        "reason_code": "UNRESOLVED_BINARY_REPRODUCIBILITY"
-      },
       {
         "path": "/data/codex/bin/dropbearmulti",
         "build_status": "UNVERIFIED_THIRD_PARTY",

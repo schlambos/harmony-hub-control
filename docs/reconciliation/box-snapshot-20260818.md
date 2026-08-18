@@ -76,13 +76,13 @@ sources, and caller-supplied source-built binaries).
 | --- | --- | --- | --- | --- | --- | --- | --- |
 | /cache/bin/bthid_keyboard | symlink | 36 | SYMLINK_NO_CONTENT | n/a | — | — | — |
 | /data/codex/bin/MANIFEST.txt | file | 749 | GENERATED_DYNAMIC (stale/incoherent) | n/a | no | — | — |
-| /data/codex/bin/codex_bt_pair_agent | file | 111796 | CANDIDATE_SOURCE_BINARY_MATCH_ONLY | **RECIPE_UNPROVEN** (pilot) | yes | 54 | e512cd4641b6… |
-| /data/codex/bin/codex_bthid_keyboard | file | 116452 | CANDIDATE_SOURCE_BINARY_MATCH_ONLY | **RECIPE_UNPROVEN** (pilot) | yes | 54 | 47d0bd1eb7ff… |
+| /data/codex/bin/codex_bt_pair_agent | file | 111796 | **EXACT_SOURCE_REPRODUCIBLE** | **EXACT_SOURCE_REPRODUCIBLE** | yes | 54 | e512cd4641b6… |
+| /data/codex/bin/codex_bthid_keyboard | file | 116452 | **EXACT_SOURCE_REPRODUCIBLE** | **EXACT_SOURCE_REPRODUCIBLE** | yes | 54 | 47d0bd1eb7ff… |
 | /data/codex/bin/codex_dhcpd | file | 104168 | **EXACT_SOURCE_REPRODUCIBLE** | **EXACT_SOURCE_REPRODUCIBLE** | yes | 111 | 48070f511298… |
-| /data/codex/bin/codex_hal_ltcp | file | 76772 | CANDIDATE_SOURCE_BINARY_MATCH_ONLY | **RECIPE_UNPROVEN** (pilot) | yes | 54 | 119eeed9a122… |
-| /data/codex/bin/codex_hbus | file | 74660 | CANDIDATE_SOURCE_NO_BINARY_MATCH | **RECIPE_UNPROVEN** | no | — | — |
+| /data/codex/bin/codex_hal_ltcp | file | 76772 | **EXACT_SOURCE_REPRODUCIBLE** | **EXACT_SOURCE_REPRODUCIBLE** | yes | 54 | 119eeed9a122… |
+| /data/codex/bin/codex_hbus | file | 74660 | **EXACT_SOURCE_REPRODUCIBLE** | **EXACT_SOURCE_REPRODUCIBLE** | no | — | — |
 | /data/codex/bin/codex_portal | file | 109548 | **EXACT_SOURCE_REPRODUCIBLE** | **EXACT_SOURCE_REPRODUCIBLE** | yes | 111 | a745df84f2ca… |
-| /data/codex/bin/codex_webui | file | 906872 | CANDIDATE_SOURCE_BINARY_MATCH_ONLY | HISTORICAL_BINARY_MATCH_ONLY | yes | **32** | 25b395ac3aa1… |
+| /data/codex/bin/codex_webui | file | 906872 | **EXACT_SOURCE_REPRODUCIBLE** | **EXACT_SOURCE_REPRODUCIBLE** | yes | **32** | 25b395ac3aa1… |
 | /data/codex/bin/dropbear | symlink | 13 | SYMLINK_NO_CONTENT | n/a | — | — | — |
 | /data/codex/bin/dropbearkey | symlink | 13 | SYMLINK_NO_CONTENT | n/a | — | — | — |
 | /data/codex/bin/dropbearmulti | file | 577296 | THIRD_PARTY_BINARY | UNVERIFIED_THIRD_PARTY | yes | 111 | 7ea86221aa80… |
@@ -134,23 +134,26 @@ equals git blob `25b395ac3aa18e408e6aaaf49766256641df9b57` of
   webui binaries) — the hub runs the fork-branch build.
 - Within those 32 commits the candidate source `payload/source/codex_webui.c`
   appears as two distinct blobs (24 + 8 commits): the deployed binary
-  predates the final source revisions on that line — recorded, not asserted
-  as a reproduction.
+  predates the final source revisions on that line. To restore the exact
+  live-reproducing input tuple, this reconciliation deliberately replaces the
+  later worktree source blob `d379d1fe…` with introduction-line blob
+  `aa173f17…` and imports its three exact asset headers. The pinned webui pilot
+  proves that tuple reproduces the live binary byte-for-byte.
 
 The 32-commit list is independently re-derived by the test suite directly
 from the union of both repos' git histories before comparison.
 
-### codex_hbus — RECIPE_UNPROVEN
+### codex_hbus — EXACT_SOURCE_REPRODUCIBLE
 
-No committed blob matches the live binary. The bounded local-reproduction
-diagnostic (`evidence/.../diagnostics/hbus-repro/report.json`, verdict
-`RECIPE_UNPROVEN`, SHA-256-pinned in the ledger) is incorporated: the
-documented zig recipe is disproven as-written (ISA mismatch), the justified
-`-mcpu=mips32` variant reproduces ELF identity and size within 20 bytes
-byte-deterministically but reproduces **neither** reference binary. The live
-binary equals the known-good on-hub backup reference of 2026-07-30 (md5
-`e8e62d85…`), distinct from every committed build. **Build remains
-UNVERIFIED.**
+No committed binary blob matches the live binary. The earlier bounded
+`hbus-repro` diagnostic remains recorded as corroborating `RECIPE_UNPROVEN`
+evidence only; its nonexact recipe is superseded by the corrected Zig
+distribution sweep. Official Zig 0.16.0 with `-mcpu=mips32` builds source blob
+`d2bbcdef…` from commit `309cec3…` byte-for-byte to the live SHA-256
+`4be9e6ac…`, repeatedly and independently verified. This reconciliation
+therefore deliberately replaces the later worktree source blob `19f535cd…`
+with live-reproducing blob `d2bbcdef…`. The alternate `6ab8fb9…` source builds
+the distinct committed reference, not the live binary.
 
 ### netservicestarter.lua — DIAG patch, reconciliation-branch reconstruction
 
@@ -216,44 +219,67 @@ durable form in `public-safety-review.json`:
 
 ## Binary reproducibility pilot reports (Phase 2, integrity-pinned)
 
-Two local binary pilot reports are ingested with SHA-256 integrity pinning,
-and a reproduction claim propagates ONLY when the report's rebuilt digest
-equals the live digest (verdict + hash + integrity all checked in code):
+Five local binary reports are recorded with SHA-256 integrity pinning. Three
+exact-build reports may propagate reproduction claims; the two earlier
+nonexact reports remain corroborating only. A reproduction claim propagates
+ONLY when the report's rebuilt digest equals the live digest (verdict + hash +
+integrity all checked in code):
 
 | Report | SHA-256 | Verdict | Coverage |
 | --- | --- | --- | --- |
 | `binary-pilots/dhcpd-portal/report.json` | `25bd2435e36177ea3aed0d931e1a81a634508f7617b0f621a9967e6f6177eee4` | EXACT_SOURCE_REPRODUCIBLE | codex_dhcpd, codex_portal: two independent container builds from the exact candidate source with the pinned Bootlin mips32-uclibc toolchain (tarball SHA-256 verified) are byte-identical to each other AND to the live evidence digests |
-| `binary-pilots/bt-hal-hbus/report.json` | `68b353b647c462b23125c90407a11c6d2f7dafffbdf4a3a1d0509ae2a271ac68` | RECIPE_UNPROVEN | codex_bt_pair_agent, codex_bthid_keyboard, codex_hal_ltcp, codex_hbus: exact documented Bootlin recipe is deterministic but wrong ISA (mips32 r1 vs live r2); the single justified Zig follow-up reproduces exact ELF identity byte-deterministically with a uniform +20 B residual and no md5 match |
+| `binary-pilots/webui/report.json` | `656ef734931f7dbe374260ba5ddfda99e9b00961a7f5f440d55999476893f957` | EXACT_SOURCE_REPRODUCIBLE | codex_webui: exact T1 source tuple (aa173f17/5dad607f/ba6c4ce9/419611c5) built with Homebrew Zig 0.16.0 (clang/LLD 21.1.8) is byte-identical to the live digest |
+| `binary-pilots/zig-distribution-sweep/report.json` | `29c691aad47462d77740bccb45b4405588b3f5dea3846c0b57ee6a3196c54382` | EXACT_SOURCE_REPRODUCIBLE | codex_bt_pair_agent, codex_bthid_keyboard, codex_hal_ltcp, codex_hbus: Official Zig 0.16.0 (clang/LLD 21.1.0) reproduces all four byte-identically (HBus from 309cec3 source with -mcpu=mips32); official tarball index SHA verified, minisign NOT_VERIFIED |
+| `binary-pilots/bt-hal-hbus/report.json` | `68b353b647c462b23125c90407a11c6d2f7dafffbdf4a3a1d0509ae2a271ac68` | RECIPE_UNPROVEN | historical/corroborating only: the corrected Zig sweep supersedes its nonexact Bootlin recipe and the old +20 B observation |
 | `hbus-repro/report.json` (prior) | sha-pinned in ledger | RECIPE_UNPROVEN | corroborating prior evidence for codex_hbus |
 
-Resulting per-binary statuses: dhcpd/portal **EXACT_SOURCE_REPRODUCIBLE**
-(`build_verified_count = 2`); pair-agent/bthid/hal/hbus **RECIPE_UNPROVEN**;
-codex_webui **HISTORICAL_BINARY_MATCH_ONLY** (no pilot yet; lineage evidence
-only); dropbearmulti **UNVERIFIED_THIRD_PARTY**.
+Resulting per-binary statuses: dhcpd/portal/webui/pair-agent/bthid/hal/hbus
+**EXACT_SOURCE_REPRODUCIBLE** (`build_verified_count = 7`); dropbearmulti
+**UNVERIFIED_THIRD_PARTY** (version/license verified, build unverified).
 
 ## Reproducibility policy encoded in the outputs
 
 A historical binary blob match is **deployment-lineage evidence only** — it
 never claims the binary rebuilds from the candidate source.
 `EXACT_SOURCE_REPRODUCIBLE` is asserted only from integrity-pinned pilot
-reports whose rebuilt SHA-256 equals the live digest. Phase-2 uncommitted
-text/source work is NOT claimed as committed provenance anywhere in the
-generated outputs.
+reports whose rebuilt SHA-256 equals the live digest. The corrected Zig
+distribution sweep supersedes the earlier nonexact bt-hal-hbus recipes and
+the old +20 B observation. Current reconciliation work is never represented
+as a match in the pinned historical commit scan; branch-introduced source and
+historical provenance remain explicitly distinct.
 
 ## Blockers (machine-readable in `reproducibility-status.json`)
 
-1. `UNRESOLVED_BINARY_REPRODUCIBILITY` — 6 binaries lack proven exact source
-   reproduction (codex_bt_pair_agent, codex_bthid_keyboard, codex_hal_ltcp,
-   codex_hbus, codex_webui, dropbearmulti); dhcpd/portal are resolved.
+1. `UNRESOLVED_BINARY_REPRODUCIBILITY` — 1 binary lacks proven exact source
+   reproduction (dropbearmulti); the other seven are resolved.
 2. `LIVE_MANIFEST_STALE` — 4 hash/size mismatches, 1 omission.
 
 Resolved by earlier remediations: `HISTORY_GAP` (union baseline resolves
 `1a9e270…`); `PUBLIC_SAFETY_PENDING` (review completed → PUBLIC_SAFETY_PASS);
 `NO_BINARY_BUILD_REPRODUCIBILITY` (superseded by the accurate per-binary
-UNRESOLVED_BINARY_REPRODUCIBILITY blocker now that dhcpd/portal are
+UNRESOLVED_BINARY_REPRODUCIBILITY blocker now that seven binaries are
 reproduced exactly); `MANUAL_SOURCE_REQUIRED` ×2 (netservicestarter.lua DIAG
 variant and /usr/sbin/dropbear near-miss wrapper are now
 `RECONSTRUCTED_SOURCE_EXACT` from the reconciliation-branch working tree).
+
+## Dropbear 2025.89 version/license closure (build still blocked)
+
+The tag-pinned LICENSE is at `third_party/dropbear-2025.89/LICENSE` (content
+SHA-256 `a99ce657d790b761c132ee7e0de18edb437ae6361e536d991c6a12f36e770445`),
+fetched from the official `DROPBEAR_2025.89` tag. The machine-readable
+`third_party_provenance` block on the dropbearmulti entry records: binary
+SHA-256 `e2ea632a…`, size 577296, banner `SSH-2.0-dropbear_2025.89`, release
+2025-12-16, source URL, tarball SHA-256
+`0d1f7ca711cfc336dc8a85e672cab9cfd8223a02fe2da0a4a7aeb58c9e113634`, signature
+URL, signing key fingerprint, tag/commit `DROPBEAR_2025.89` /
+`179de98f7b9584a309ffc48e39c61da940760740`, and the observed GCC/Buildroot
+compiler string (compiler-identity evidence only). Classification is exactly
+`VERSION_LICENSE_VERIFIED / BINARY_BUILD_UNVERIFIED`; the build status remains
+`UNVERIFIED_THIRD_PARTY`. The missing vendor source/patch/config/localoptions/
+configure/make/CFLAGS/defconfig/rebuild closure is enumerated; no stock source
+build, exact source, or VERIFIED_THIRD_PARTY claim is made. Components include
+libcrux ML-KEM (MIT OR Apache-2.0) and sntrup761 (SUPERCOP public domain, with
+a provenance caveat).
 
 ## Regenerate / validate (offline)
 
@@ -273,6 +299,8 @@ HARMONY_PROVENANCE_SOURCE_REPO=/path/to/historical-clone \
 #     [--baseline-ref <full-public-base-SHA>]   # default: d87cebaf...6aa09 \
 #     [--pilot-dhcp-portal-report /path/to/report.json] \
 #     [--pilot-bt-hal-hbus-report /path/to/report.json] \
+#     [--pilot-webui-report /path/to/report.json] \
+#     [--pilot-zig-sweep-report /path/to/report.json] \
 #     [--out-dir provenance/box-snapshot-20260818]
 
 # provenance tests (fixture tests always run; real-evidence tests run only
@@ -292,14 +320,16 @@ Optional environment overrides: `HARMONY_PROVENANCE_SNAPSHOT_DIR`,
 `HARMONY_PROVENANCE_BASELINE_REF` (default pins the public base commit
 `d87cebafdee36ec33f1e4ea3055239dbfea6aa09`),
 `HARMONY_PROVENANCE_PILOT_DHCP_PORTAL_REPORT`,
-`HARMONY_PROVENANCE_PILOT_BT_HAL_HBUS_REPORT`.
+`HARMONY_PROVENANCE_PILOT_BT_HAL_HBUS_REPORT`,
+`HARMONY_PROVENANCE_PILOT_WEBUI_REPORT`,
+`HARMONY_PROVENANCE_PILOT_ZIG_SWEEP_REPORT`.
 Collector test constants use RFC 5737 TEST-NET examples (`192.0.2.123`,
 `testuser`); the production collector CLI remains fully configurable and the
 private collection evidence is unaltered. Generated artifacts embed sanitized
 labels and digests only, so they are byte-identical wherever the inputs live
 (pinned by the freshness test).
 
-The provenance suite (53 tests, ResourceWarning-clean under
+The provenance suite (54 tests, ResourceWarning-clean under
 `-W error::ResourceWarning`) covers: exact 23-entry coverage in all four
 artifacts; byte-determinism and committed-artifact freshness (outputs stay
 byte-identical wherever the env-identified inputs live); live fields equal to
@@ -308,18 +338,21 @@ alone shows the gap; primary+baseline resolves it, with a genuine
 shallow-clone fixture and an independent git re-derivation pinning the
 112-unique-commit expectation — 57 + 89 − 34 overlap — and `1a9e270…`
 presence); the webui 32-commit enumeration re-derived from the union;
-full-length SHA enforcement; hbus RECIPE_UNPROVEN with report-hash integrity;
-DIAG statuses (RECONSTRUCTED_SOURCE_EXACT + PUBLIC_SAFETY_PASS, with the
-reconciliation-source block and retained near-miss/backup-original evidence);
-reconciliation-source failure modes (missing/symlink/escape/size/hash all
-fail closed, no absolute local path in the block); safety-review
-record shape (no MAC values, no pending statuses, no reproducibility claims);
-staleness flags and mismatch set; sanitizer rules (no host/user/identity/
-local-path/MD5 leakage, no excluded config/resource/key paths — including
-assertions that neither scanned repo's absolute path appears anywhere);
-stale-value containment to explicit evidence contexts; the
-no-reproduction-claim-from-binary-match invariant (exact claims must carry
-an integrity-pinned pilot whose rebuilt SHA-256 equals the live digest);
+full-length SHA enforcement; hbus EXACT_SOURCE_REPRODUCIBLE with the corrected
+Zig sweep report (old hbus-repro retained as corroborating only); the webui
+and Zig-sweep report SHA-256 pins and strict field validation (fail closed on
+any mismatch); DIAG statuses (RECONSTRUCTED_SOURCE_EXACT + PUBLIC_SAFETY_PASS,
+with the reconciliation-source block and retained near-miss/backup-original
+evidence); reconciliation-source failure modes (missing/symlink/escape/size/
+hash all fail closed, no absolute local path in the block); Dropbear
+third-party provenance (banner/version/license/tag fields, license presence,
+no overclaim); safety-review record shape (no MAC values, no pending statuses,
+no reproducibility claims); staleness flags and mismatch set; sanitizer rules
+(no host/user/identity/local-path/MD5 leakage, no excluded config/resource/key
+paths — including assertions that neither scanned repo's absolute path appears
+anywhere); stale-value containment to explicit evidence contexts; the
+no-reproduction-claim-from-binary-match invariant (exact claims must carry an
+integrity-pinned pilot whose rebuilt SHA-256 equals the live digest);
 **reconciliation-ref immunity** (extra commits/refs created in the baseline
 repo leave all artifacts byte-identical and the count at 112, because only
 the pinned base ref is scanned); pilot-report hash/verdict pinning; and

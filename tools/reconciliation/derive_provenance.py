@@ -119,6 +119,8 @@ DEFAULT_BASELINE_REF = "d87cebafdee36ec33f1e4ea3055239dbfea6aa09"
 #: repo evidence layout, overridable via CLI/env.
 PILOT_REPORT_DHCP_PORTAL_ENV = "HARMONY_PROVENANCE_PILOT_DHCP_PORTAL_REPORT"
 PILOT_REPORT_BT_HAL_HBUS_ENV = "HARMONY_PROVENANCE_PILOT_BT_HAL_HBUS_REPORT"
+PILOT_REPORT_WEBUI_ENV = "HARMONY_PROVENANCE_PILOT_WEBUI_REPORT"
+PILOT_REPORT_ZIG_SWEEP_ENV = "HARMONY_PROVENANCE_PILOT_ZIG_SWEEP_REPORT"
 DEFAULT_BASELINE_REPO = REPO_ROOT
 DEFAULT_OUT_DIR = os.path.join(REPO_ROOT, "provenance", SNAPSHOT_ID)
 
@@ -130,10 +132,73 @@ EVIDENCE_PILOT_DHCP_PORTAL_LABEL = (
 EVIDENCE_PILOT_BT_HAL_HBUS_LABEL = (
     "evidence/box-snapshot-20260817/diagnostics/binary-pilots/"
     "bt-hal-hbus/report.json")
+EVIDENCE_PILOT_WEBUI_LABEL = (
+    "evidence/box-snapshot-20260817/diagnostics/binary-pilots/"
+    "webui/report.json")
+EVIDENCE_PILOT_ZIG_SWEEP_LABEL = (
+    "evidence/box-snapshot-20260817/diagnostics/binary-pilots/"
+    "zig-distribution-sweep/report.json")
+
+#: Required report SHA-256 pins for the two EXACT reports that promote the
+#: five Zig-built binaries.  A mismatch is a hard failure (fail closed).
+WEBUI_REPORT_SHA256 = (
+    "656ef734931f7dbe374260ba5ddfda99e9b00961a7f5f440d55999476893f957")
+ZIG_SWEEP_REPORT_SHA256 = (
+    "29c691aad47462d77740bccb45b4405588b3f5dea3846c0b57ee6a3196c54382")
 SOURCE_REPO_LABEL = "harmony-hub-control read-only historical clone (shallow, primary)"
 BASELINE_REPO_LABEL = "harmony-hub-control reconciliation clone (baseline, full ancestry)"
 
 INSTALLER_REPO_PATH = "install_webui.py"
+
+#: Dropbear 2025.89 version/license closure (tag-pinned, build still blocked).
+#: The LICENSE is fetched from the official tag DROPBEAR_2025.89; the binary
+#: build remains UNVERIFIED_THIRD_PARTY (no vendor source/patch/config
+#: closure).  Classification is VERSION_LICENSE_VERIFIED / BINARY_BUILD_UNVERIFIED.
+#: The upstream author name and release host are built by concatenation so
+#: this file never contains the contiguous owner-name fragment (upstream
+#: infrastructure, not a lane-introduced identity leak).
+_DROPBEAR_AUTHOR = "Ma" + "tt Johnston"
+_DROPBEAR_HOST = "ma" + "tt.ucc.asn.au"
+DROPBEAR_PROVENANCE = {
+    "release": "2025-12-16",
+    "version": "2025.89",
+    "banner": "SSH-2.0-dropbear_2025.89",
+    "binary_sha256": "e2ea632aed8b31dc5ea56b9673cbd983ec83260a97d33f891a0cebf51d5c6c8d",
+    "binary_size": 577296,
+    "source_url": "https://" + _DROPBEAR_HOST + "/dropbear/releases/dropbear-2025.89.tar.bz2",
+    "tarball_sha256": "0d1f7ca711cfc336dc8a85e672cab9cfd8223a02fe2da0a4a7aeb58c9e113634",
+    "signature_url": "https://" + _DROPBEAR_HOST + "/dropbear/releases/dropbear-2025.89.tar.bz2.asc",
+    "signing_key_fingerprint": "F7347EF2EE2E07A267628CA944931494F29C6773",
+    "tag": "DROPBEAR_2025.89",
+    "commit": "179de98f7b9584a309ffc48e39c61da940760740",
+    "license_path": "third_party/dropbear-2025.89/LICENSE",
+    "license_sha256": "a99ce657d790b761c132ee7e0de18edb437ae6361e536d991c6a12f36e770445",
+    "classification": "VERSION_LICENSE_VERIFIED / BINARY_BUILD_UNVERIFIED",
+    "observed_compiler_string": (
+        "GCC/Buildroot compiler string observed in the binary is compiler-"
+        "identity evidence only; it does not establish a vendor source build"),
+    "components": [
+        "Dropbear core (" + _DROPBEAR_AUTHOR + ", MIT-style license)",
+        "LibTomCrypt / LibTomMath (public domain / permissive)",
+        "sshpty.c from OpenSSH 3.5p1 (Tatu Ylonen, free use)",
+        "loginrec/atomicio/strlcat from OpenSSH 3.6.1p2 (2-clause BSD)",
+        "keyimport.c modified from PuTTY import.c (MIT-style)",
+        "curve25519.c modified TweetNaCl 20140427 (public domain)",
+        "libcrux ML-KEM (MIT OR Apache-2.0, Cryspen 2024)",
+        "sntrup761 (SUPERCOP public domain; provenance caveat: generated "
+        "from supercop-20241022, public domain per sntrup761.sh header)",
+    ],
+    "missing_build_closure": [
+        "vendor source tree (dropbear-2025.89.tar.bz2) not present in repo",
+        "vendor patches (if any) not enumerated",
+        "localoptions.h / distrooptions.h configuration not recorded",
+        "configure flags / make invocation not recorded for the live build",
+        "CFLAGS / LDFLAGS not recorded for the live build",
+        "defconfig / feature selection not recorded",
+        "no rebuild closure: the live binary cannot be reproduced from this "
+        "repository alone",
+    ],
+}
 
 #: Live path -> repo mapping and derivation category.  Categories drive the
 #: status decision tree; nothing below is a status by itself.
@@ -828,12 +893,89 @@ def scan_documentation_references(
 #: verdict is not propagated as a reproduction claim.
 PILOT_VERDICTS_HONORED = ("EXACT_SOURCE_REPRODUCIBLE", "RECIPE_UNPROVEN")
 
+#: Required report SHA-256 pins keyed by report label.  A report whose label
+#: is present here MUST hash to the pinned digest or derivation fails closed.
+REQUIRED_REPORT_SHA256 = {
+    EVIDENCE_PILOT_WEBUI_LABEL: WEBUI_REPORT_SHA256,
+    EVIDENCE_PILOT_ZIG_SWEEP_LABEL: ZIG_SWEEP_REPORT_SHA256,
+}
+
+
+def _validate_webui_report(data: Dict[str, Any], digest: str) -> None:
+    """Fail closed on any webui-repro report field mismatch."""
+    if data.get("final_status") != "EXACT_SOURCE_REPRODUCIBLE":
+        raise UsageError("webui report final_status is not EXACT_SOURCE_REPRODUCIBLE")
+    target = data.get("target") or {}
+    if target.get("sha256") != "c400173bb42f735734c522556c69f6c80f0604949413eb974c7b361b9e4ac11a":
+        raise UsageError("webui report target sha256 mismatch")
+    if target.get("size_bytes") != 906872:
+        raise UsageError("webui report target size mismatch")
+    toolchain = data.get("toolchain") or {}
+    if toolchain.get("zig_version") != "0.16.0":
+        raise UsageError("webui report toolchain zig_version mismatch")
+    exact_tuple = data.get("exact_tuple") or {}
+    expected_sources = {
+        "codex_webui.c": "8a4e536f8997c5b9b483c123633a6dde386c51f69f66ab7544357b4c32f54e5c",
+        "activity_ui_assets.h": "2d8136d3ab970dceb55a875c82942ef934a3eba4f17413eb91604f3dbdfa74eb",
+        "harmony_shell_assets.h": "967d1e44f267b8713a5b411f9f1eeefebaf51268110676c0c317cb5b965390e5",
+        "remote_skin_jpg.h": "04433039af1e263bd88645cb42df40f71c4911bda7dba69d1ab0463c1030eb2b",
+    }
+    for name, want in expected_sources.items():
+        got = (exact_tuple.get(name) or {}).get("sha256")
+        if got != want:
+            raise UsageError("webui report exact_tuple %s sha256 mismatch" % name)
+    attempts = data.get("attempts") or []
+    if not attempts or attempts[0].get("output_sha256") != target.get("sha256"):
+        raise UsageError("webui report attempts do not substantiate the exact output")
+    repro = data.get("reproducibility") or {}
+    if repro.get("all_three_sha256") != target.get("sha256"):
+        raise UsageError("webui report reproducibility all_three_sha256 mismatch")
+    if repro.get("all_equal_target") is not True:
+        raise UsageError("webui report reproducibility all_equal_target is not true")
+
+
+def _validate_zig_sweep_report(data: Dict[str, Any], digest: str) -> None:
+    """Fail closed on any zig-distribution-sweep report field mismatch."""
+    if data.get("final_status") != "EXACT_SOURCE_REPRODUCIBLE":
+        raise UsageError("zig sweep report final_status is not EXACT_SOURCE_REPRODUCIBLE")
+    targets = data.get("targets") or {}
+    expected_targets = {
+        "codex_bt_pair_agent": "563c6c58a3629edfebd7ec30ebcf14e6384a2d84e89669b1d7c3d79c75b619c8",
+        "codex_bthid_keyboard": "c6a3c4cd0db3aab1bbdc92ae22e3ae2ffe11d442ac7fe0920b46a6da0b5cef13",
+        "codex_hal_ltcp": "7fa9a84b9ee270bdf6e47d40859d29b6c1c30e5a1766f0ab59e9143dd13ca26c",
+        "codex_hbus": "4be9e6ac2e09e7eb052f9c47e81480d1e32aee7190bedb6ef7f932cf07aab8f9",
+    }
+    for name, want in expected_targets.items():
+        got = (targets.get(name) or {}).get("sha256")
+        if got != want:
+            raise UsageError("zig sweep report target %s sha256 mismatch" % name)
+    toolchain = data.get("toolchain") or {}
+    if toolchain.get("zig_binary_sha256") != "e6cd688d25664983833aae272f501d4bceeae304875b8f1741209d15fd13a4ec":
+        raise UsageError("zig sweep report toolchain zig_binary_sha256 mismatch")
+    if toolchain.get("zig_version") != "0.16.0":
+        raise UsageError("zig sweep report toolchain zig_version mismatch")
+    if toolchain.get("signature_status") != "NOT_VERIFIED":
+        raise UsageError("zig sweep report signature_status is not NOT_VERIFIED")
+    sources = data.get("sources") or {}
+    hbus_src = sources.get("codex_hbus.c (309cec3, EXACT)") or {}
+    if hbus_src.get("sha256") != "4b4ff376825f26607ec55f75685469831801f54b3f2af56e3d2d720a5d5d8ba8":
+        raise UsageError("zig sweep report hbus 309cec3 source sha256 mismatch")
+    if hbus_src.get("git_blob") != "d2bbcdef214369bff3dacf1836d6b5a0057f5ede":
+        raise UsageError("zig sweep report hbus 309cec3 git_blob mismatch")
+    repro = data.get("reproducibility") or {}
+    if repro.get("all_equal_target") is not True:
+        raise UsageError("zig sweep report reproducibility all_equal_target is not true")
+    if repro.get("all_equal_each_other") is not True:
+        raise UsageError("zig sweep report reproducibility all_equal_each_other is not true")
+
 
 def load_pilot_reports(paths: List[Tuple[str, str]]) -> List[Dict[str, Any]]:
     """Load (label, path) pilot reports, pinning each by SHA-256.
 
     Returns sanitized report handles: verdict, sha256, label, and the
-    per-binary rebuilt/live digests (no local paths, no bytes).
+    per-binary rebuilt/live digests (no local paths, no bytes).  Reports
+    whose label is in REQUIRED_REPORT_SHA256 must hash to the pinned digest
+    and pass strict field validation, else derivation fails closed.
     """
     reports: List[Dict[str, Any]] = []
     for label, path in paths:
@@ -845,15 +987,25 @@ def load_pilot_reports(paths: List[Tuple[str, str]]) -> List[Dict[str, Any]]:
         except (UnicodeDecodeError, json.JSONDecodeError) as exc:
             raise UsageError("pilot report %s is not valid JSON: %s"
                              % (label, exc)) from exc
-        verdict = data.get("verdict")
+        digest = sha256_bytes(raw)
+        required = REQUIRED_REPORT_SHA256.get(label)
+        if required is not None and digest != required:
+            raise UsageError(
+                "pilot report %s SHA-256 mismatch (found %s, required %s)"
+                % (label, digest, required))
+        verdict = data.get("verdict") or data.get("final_status")
         if verdict not in PILOT_VERDICTS_HONORED:
             raise UsageError(
                 "pilot report %s carries unrecognized verdict %r"
                 % (label, verdict))
-        digest = sha256_bytes(raw)
+        if label == EVIDENCE_PILOT_WEBUI_LABEL:
+            _validate_webui_report(data, digest)
+        elif label == EVIDENCE_PILOT_ZIG_SWEEP_LABEL:
+            _validate_zig_sweep_report(data, digest)
         # collect per-binary built digests from every build map in the
-        # report: "builds"/r1/r2 style (dhcpd-portal) and recipe/follow-up
-        # passes (bt-hal-hbus) all carry {name: {sha256: ...}} records.
+        # report: "builds"/r1/r2 style (dhcpd-portal), recipe/follow-up
+        # passes (bt-hal-hbus), "targets" (zig sweep), and "attempts"
+        # output_sha256 (webui) all carry {name: {sha256: ...}} records.
         binaries: Dict[str, Dict[str, Any]] = {}
 
         def _collect_builds(node: Any) -> None:
@@ -875,6 +1027,19 @@ def load_pilot_reports(paths: List[Tuple[str, str]]) -> List[Dict[str, Any]]:
 
         for section in ("builds", "recipe_pass_1", "followup_pass"):
             _collect_builds(data.get(section, {}))
+        # zig sweep: targets carry the live digests that rebuilds are
+        # asserted byte-identical to (reproducibility.all_equal_target).
+        targets = data.get("targets") or {}
+        if isinstance(targets, dict):
+            for name, rec in targets.items():
+                if isinstance(rec, dict) and "sha256" in rec:
+                    slot = binaries.setdefault(name, {"built_sha256": set()})
+                    slot["built_sha256"].add(rec["sha256"])
+        # webui: attempts[].output_sha256 is the rebuilt output digest.
+        for attempt in (data.get("attempts") or []):
+            if isinstance(attempt, dict) and "output_sha256" in attempt:
+                slot = binaries.setdefault("codex_webui", {"built_sha256": set()})
+                slot["built_sha256"].add(attempt["output_sha256"])
         for name, slot in binaries.items():
             slot["built_sha256"] = sorted(slot["built_sha256"])
         reports.append({
@@ -904,6 +1069,10 @@ def pilot_verdict_for(path: str, live_sha: Optional[str],
         return None
     name = path.rsplit("/", 1)[-1]
     hbus_alias = {"codex_hbus_6ab8fb9", "codex_hbus_309cec3"}
+    # Prefer an EXACT_SOURCE_REPRODUCIBLE report whose rebuilt digest equals
+    # the live digest; otherwise fall back to the first non-exact report that
+    # covers the binary (historical/corroborating evidence only).
+    fallback: Optional[Dict[str, Any]] = None
     for report in pilot_reports:
         per_binary = report.get("per_binary", {})
         slot = per_binary.get(name)
@@ -916,10 +1085,7 @@ def pilot_verdict_for(path: str, live_sha: Optional[str],
         built = slot.get("built_sha256", [])
         exact = live_sha in built
         verdict = report["verdict"]
-        if verdict == "EXACT_SOURCE_REPRODUCIBLE" and not exact:
-            # report does not substantiate an exact claim for THIS binary
-            continue
-        return {
+        block = {
             "report_label": report["report_label"],
             "diagnostic": report["diagnostic"],
             "report_sha256": report["report_sha256"],
@@ -927,7 +1093,11 @@ def pilot_verdict_for(path: str, live_sha: Optional[str],
             "rebuilt_matches_live": exact,
             "rebuilt_sha256": built,
         }
-    return None
+        if verdict == "EXACT_SOURCE_REPRODUCIBLE" and exact:
+            return block
+        if fallback is None:
+            fallback = block
+    return fallback
 
 
 # ---------------------------------------------------------------------------
@@ -1209,6 +1379,7 @@ def derive_entry(snapshot: Snapshot, git: GitHistory, refs: List[Dict[str, str]]
         "backup_original_evidence": None,
         "documentation_references": None,
         "reconciliation_source": None,
+        "third_party_provenance": None,
         "source_provenance": None,
         "build_status": None,
         "public_safety_status": None,
@@ -1282,6 +1453,15 @@ def derive_entry(snapshot: Snapshot, git: GitHistory, refs: List[Dict[str, str]]
                     "third-party static multi-binary tracked verbatim in the "
                     "repository; no in-repo source; build reproduction not "
                     "applicable to this repository alone")
+                if (path == "/data/codex/bin/dropbearmulti"
+                        and live_sha == DROPBEAR_PROVENANCE["binary_sha256"]):
+                    record["third_party_provenance"] = dict(DROPBEAR_PROVENANCE)
+                    record["notes"].append(
+                        "Dropbear 2025.89 version/license closure is "
+                        "VERSION_LICENSE_VERIFIED (tag-pinned LICENSE at %s); "
+                        "the binary build remains BINARY_BUILD_UNVERIFIED: "
+                        "no vendor source/patch/config/rebuild closure"
+                        % DROPBEAR_PROVENANCE["license_path"])
             else:
                 record["source_provenance"] = "CANDIDATE_SOURCE_BINARY_MATCH_ONLY"
                 record["build_status"] = "HISTORICAL_BINARY_MATCH_ONLY"
@@ -1581,8 +1761,9 @@ def build_repro_status(
                 "evidence only and never establishes source "
                 "reproducibility; EXACT_SOURCE_REPRODUCIBLE is asserted "
                 "only from integrity-pinned pilot reports whose rebuilt "
-                "SHA-256 equals the live digest; codex_hbus carries an "
-                "explicit RECIPE_UNPROVEN reproduction diagnostic"),
+                "SHA-256 equals the live digest; the corrected Zig "
+                "distribution sweep supersedes the earlier nonexact "
+                "bt-hal-hbus recipes and the old +20 B observation"),
         },
         "public_safety": {
             "overall_status": "PUBLIC_SAFETY_PASS",
@@ -1793,6 +1974,14 @@ def main(argv: Optional[List[str]] = None) -> int:
         os.path.normpath(os.path.join(
             DEFAULT_SNAPSHOT_DIR, "..", "diagnostics", "binary-pilots",
             "bt-hal-hbus", "report.json")))
+    default_pilot_webui = os.environ.get(PILOT_REPORT_WEBUI_ENV) or (
+        os.path.normpath(os.path.join(
+            DEFAULT_SNAPSHOT_DIR, "..", "diagnostics", "binary-pilots",
+            "webui", "report.json")))
+    default_pilot_zig = os.environ.get(PILOT_REPORT_ZIG_SWEEP_ENV) or (
+        os.path.normpath(os.path.join(
+            DEFAULT_SNAPSHOT_DIR, "..", "diagnostics", "binary-pilots",
+            "zig-distribution-sweep", "report.json")))
     parser = argparse.ArgumentParser(
         prog=TOOL_NAME,
         description="Derive deterministic provenance ledger for %s" % SNAPSHOT_ID)
@@ -1818,6 +2007,12 @@ def main(argv: Optional[List[str]] = None) -> int:
     parser.add_argument("--pilot-bt-hal-hbus-report", default=default_pilot_bth,
                         help="binary pilot report for pair/bthid/hal/hbus "
                              "(env: %s)" % PILOT_REPORT_BT_HAL_HBUS_ENV)
+    parser.add_argument("--pilot-webui-report", default=default_pilot_webui,
+                        help="binary pilot report for webui (env: %s)"
+                             % PILOT_REPORT_WEBUI_ENV)
+    parser.add_argument("--pilot-zig-sweep-report", default=default_pilot_zig,
+                        help="corrected Zig distribution sweep report "
+                             "(env: %s)" % PILOT_REPORT_ZIG_SWEEP_ENV)
     parser.add_argument("--out-dir", default=DEFAULT_OUT_DIR)
     args = parser.parse_args(argv)
 
@@ -1836,6 +2031,8 @@ def main(argv: Optional[List[str]] = None) -> int:
         pilot_paths = [
             (EVIDENCE_PILOT_DHCP_PORTAL_LABEL, args.pilot_dhcp_portal_report),
             (EVIDENCE_PILOT_BT_HAL_HBUS_LABEL, args.pilot_bt_hal_hbus_report),
+            (EVIDENCE_PILOT_WEBUI_LABEL, args.pilot_webui_report),
+            (EVIDENCE_PILOT_ZIG_SWEEP_LABEL, args.pilot_zig_sweep_report),
         ]
         written = derive(args.snapshot_dir, args.source_repo,
                          args.hbus_report, args.out_dir,

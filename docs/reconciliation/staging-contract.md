@@ -44,33 +44,37 @@ blocker. The closure is partitioned into four exact mappings:
 | `symlinks` | 3 | `/cache/bin/bthid_keyboard`, `/data/codex/bin/dropbear`, `/data/codex/bin/dropbearkey` |
 | `binaries` | 8 | the eight live binaries under `/data/codex/bin/` |
 
-## Allowed exact-build binaries (2)
+## Allowed exact-build binaries (7)
 
 A live binary is staged **only** when its `build_status` is
 `EXACT_SOURCE_REPRODUCIBLE` **and** a regular file named by the contract exists
 in `--build-output-dir` matching the live SHA-256 and size. Currently:
 
+- `/data/codex/bin/codex_bt_pair_agent` — `EXACT_SOURCE_REPRODUCIBLE`
+- `/data/codex/bin/codex_bthid_keyboard` — `EXACT_SOURCE_REPRODUCIBLE`
 - `/data/codex/bin/codex_dhcpd` — `EXACT_SOURCE_REPRODUCIBLE`
+- `/data/codex/bin/codex_hal_ltcp` — `EXACT_SOURCE_REPRODUCIBLE`
+- `/data/codex/bin/codex_hbus` — `EXACT_SOURCE_REPRODUCIBLE`
 - `/data/codex/bin/codex_portal` — `EXACT_SOURCE_REPRODUCIBLE`
+- `/data/codex/bin/codex_webui` — `EXACT_SOURCE_REPRODUCIBLE`
 
 This set is recomputed from `reproducibility-status.json` at every run; a
 disagreement with the contract's `allowed_exact_build_binaries.paths` is a
 contract failure (exit 2), never a silent difference.
 
-## Blockers (6, machine-readable in `blockers.json`)
+## Blockers (1, machine-readable in `blockers.json`)
 
 | Live path | build_status | source_provenance | reason_code |
 | --- | --- | --- | --- |
-| `/data/codex/bin/codex_bt_pair_agent` | RECIPE_UNPROVEN | CANDIDATE_SOURCE_BINARY_MATCH_ONLY | UNRESOLVED_BINARY_REPRODUCIBILITY |
-| `/data/codex/bin/codex_bthid_keyboard` | RECIPE_UNPROVEN | CANDIDATE_SOURCE_BINARY_MATCH_ONLY | UNRESOLVED_BINARY_REPRODUCIBILITY |
-| `/data/codex/bin/codex_hal_ltcp` | RECIPE_UNPROVEN | CANDIDATE_SOURCE_BINARY_MATCH_ONLY | UNRESOLVED_BINARY_REPRODUCIBILITY |
-| `/data/codex/bin/codex_hbus` | RECIPE_UNPROVEN | CANDIDATE_SOURCE_NO_BINARY_MATCH | UNRESOLVED_BINARY_REPRODUCIBILITY |
-| `/data/codex/bin/codex_webui` | HISTORICAL_BINARY_MATCH_ONLY | CANDIDATE_SOURCE_BINARY_MATCH_ONLY | UNRESOLVED_BINARY_REPRODUCIBILITY |
 | `/data/codex/bin/dropbearmulti` | UNVERIFIED_THIRD_PARTY | THIRD_PARTY_BINARY | UNRESOLVED_BINARY_REPRODUCIBILITY |
 
 Additional reason codes (used when a qualifying binary is expected but absent
 or mismatched): `NO_SOURCE_BUILD_OUTPUT`, `BUILD_OUTPUT_MISMATCH`,
 `SOURCE_TEXT_MISSING`, `SOURCE_TEXT_MISMATCH`.
+
+A combined explicit build-output dir containing all seven exact binaries
+stages **21/22** closure entries, blocking only dropbearmulti
+(`canonical=false`, `complete=false`, no legacy MANIFEST).
 
 ## No-fallback policy (enforced, not assumed)
 
@@ -152,8 +156,11 @@ Optional environment overrides: `HARMONY_STAGING_LIVE_MANIFEST`,
 python3 -W error::ResourceWarning -m unittest \
     tools.reconciliation.test_build_staging -v
 
-# real-evidence tests (run only when the source-built outputs are identified)
+# real-evidence tests: supply BOTH distinct fixtures for zero skips.
+# The first contains only the verified dhcpd/portal pair used by the partial
+# fixture class; the second contains the combined seven exact build outputs.
 HARMONY_SOURCE_BUILT_OUTPUT_DIR=/path/to/source-built/dhcpd-portal/verified \
+HARMONY_COMBINED_BUILD_OUTPUT_DIR=/path/to/source-built/all-seven/verified \
     python3 -W error::ResourceWarning -m unittest \
     tools.reconciliation.test_build_staging -v
 
@@ -162,6 +169,10 @@ python3 -m py_compile tools/reconciliation/build_staging.py \
     tools/reconciliation/test_build_staging.py
 ```
 
+Do not point both variables at the same directory: the partial fixture asserts
+the dhcpd/portal-only blocker set, while the combined fixture asserts 21/22
+staging with only dropbearmulti blocked.
+
 The test suite covers: source-built binary hashes, exact text-source hashes,
 installer literals, modes/symlinks, deterministic outputs, unresolved-binary
 omission, the no-payload/bin-fallback rule, path-traversal/out-dir safety, the
@@ -169,4 +180,4 @@ no-stale/legacy-MANIFEST-on-partial rule, fail-closed semantics, no
 subprocess/network, and publication hygiene. The real-evidence tests stage a
 real partial rootfs and verify its files/hashes/modes/symlinks and blockers.
 
-Validation owner: **security verifier + Oracle Gate 2**.
+Validation owner: **security verifier + Oracle Gate 3**.

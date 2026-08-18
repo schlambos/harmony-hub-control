@@ -89,18 +89,36 @@ PINNED_SOURCES = {
     ),
 }
 
-#: exact 09d build recipe lines this lane must reproduce
+#: exact 09d build recipe lines this lane must reproduce.  The corrected
+#: Zig distribution sweep superseded the old Bootlin GCC recipe: the
+#: deployed pair-agent/bthid/HAL binaries are mips32r2 built with the
+#: Official Zig 0.16.0 (clang/LLD 21.1.0), not the Bootlin GCC 5.4 toolchain.
 PAIR_AGENT_COMPILE_LINE = (
-    '"$CC" -Os -static -s -o "$OUT/codex_bt_pair_agent"'
-    ' "$SRC/codex_bt_pair_agent.c"'
+    '"$OFFICIAL_ZIG" cc -target mips-linux-musleabi -Os -static -s \\'
 )
 BTHID_COMPILE_LINE = (
-    '"$CC" -Os -static -s -o "$OUT/codex_bthid_keyboard"'
-    ' "$SRC/codex_bthid_keyboard.c"'
+    '"$OFFICIAL_ZIG" cc -target mips-linux-musleabi -Os -static -s \\'
 )
 HAL_COMPILE_LINE = (
-    '"$CC" -Os -static -s -o "$OUT/codex_hal_ltcp" "$SRC/codex_hal_ltcp.c"'
+    '"$OFFICIAL_ZIG" cc -target mips-linux-musleabi -Os -static -s \\'
 )
+#: exact official-Zig output targets (build/output, never payload/bin)
+PAIR_OUTPUT_LINE = "-o build/output/codex_bt_pair_agent"
+BTHID_OUTPUT_LINE = "-o build/output/codex_bthid_keyboard"
+HAL_OUTPUT_LINE = "-o build/output/codex_hal_ltcp"
+#: HBus exact source lineage (309cec3) and its official-Zig recipe
+HBUS_BLOB = "d2bbcdef214369bff3dacf1836d6b5a0057f5ede"
+HBUS_SHA256 = "4b4ff376825f26607ec55f75685469831801f54b3f2af56e3d2d720a5d5d8ba8"
+HBUS_COMMIT = "309cec3ab15d96780ce4b5b6f7032aea296f0996"
+HBUS_COMPILE_LINE = (
+    '"$OFFICIAL_ZIG" cc -target mips-linux-musleabi -mcpu=mips32 -Os -static -s \\'
+)
+HBUS_OUTPUT_LINE = "-o build/output/codex_hbus"
+#: dual-Zig non-interchangeability pins
+WEBUI_ZIG_SHA256 = (
+    "0bfa8cb6f5f64c6d645e1d5dfb5c6f62c2b79d7249c3f38a279e118cb49b02ae")
+OFFICIAL_ZIG_SHA256 = (
+    "e6cd688d25664983833aae272f501d4bceeae304875b8f1741209d15fd13a4ec")
 
 #: absolute-path and identity fragments that must never appear in the files
 #: this lane touches (built by concatenation so this file's own pattern
@@ -193,17 +211,37 @@ class OfflineLineageTests(unittest.TestCase):
         with open(BUILD_SCRIPT, "r", encoding="utf-8") as fh:
             return fh.read()
 
-    def test_build_script_compiles_pair_agent_with_09d_recipe(self):
+    def test_build_script_compiles_pair_agent_with_official_zig(self):
         script = self.setUp_build_script()
         self.assertIn(PAIR_AGENT_COMPILE_LINE, script,
-                      "pair-agent compile line must match the 09d recipe")
+                      "pair-agent compile line must use OFFICIAL_ZIG")
         self.assertIn(BTHID_COMPILE_LINE, script)
         self.assertIn(HAL_COMPILE_LINE, script)
-        # 09d ordering: pair agent compiles after bthid and before webui
-        self.assertLess(script.index(BTHID_COMPILE_LINE),
-                        script.index(PAIR_AGENT_COMPILE_LINE))
-        self.assertLess(script.index(PAIR_AGENT_COMPILE_LINE),
-                        script.index('"$OUT/codex_webui"'))
+        self.assertIn(PAIR_OUTPUT_LINE, script)
+        self.assertIn(BTHID_OUTPUT_LINE, script)
+        self.assertIn(HAL_OUTPUT_LINE, script)
+        # HBus exact source lineage + official-Zig recipe with -mcpu=mips32
+        self.assertIn(HBUS_COMPILE_LINE, script)
+        self.assertIn(HBUS_OUTPUT_LINE, script)
+        self.assertIn("payload/source/codex_hbus.c", script)
+
+    def test_build_script_dual_zig_non_interchangeable(self):
+        script = self.setUp_build_script()
+        self.assertIn(WEBUI_ZIG_SHA256, script)
+        self.assertIn(OFFICIAL_ZIG_SHA256, script)
+        self.assertIn("WEBUI_ZIG", script)
+        self.assertIn("OFFICIAL_ZIG", script)
+        # distinct fingerprints
+        self.assertIn("Homebrew clang version 21.1.8", script)
+        self.assertIn("clang version 21.1.0", script)
+
+    def test_hbus_source_lineage_pinned(self):
+        path = os.path.join(SOURCE_DIR, "codex_hbus.c")
+        data = read_bytes(path)
+        self.assertEqual(sha256_bytes(data), HBUS_SHA256,
+                         "codex_hbus.c: SHA-256 drift from pinned 309cec3 blob")
+        self.assertEqual(git_blob_id(data), HBUS_BLOB,
+                         "codex_hbus.c: git blob ID drift from pinned 309cec3 blob")
 
     def test_build_script_inventory_includes_pair_agent(self):
         script = self.setUp_build_script()
@@ -303,21 +341,26 @@ class RealEvidenceLineageTests(unittest.TestCase):
             ).stdout.decode().strip()
             self.assertEqual(resolved, blob)
 
-    def test_pair_agent_recipe_matches_09d_build_script(self):
-        historical = run_git(
+    def test_hbus_source_matches_309cec3(self):
+        shown = run_git(
             REAL_SOURCE_REPO, "show",
-            "%s:build/build_harmony_tools_kali.sh" % LINEAGE_COMMIT,
-        ).stdout.decode()
-        historical_pair_lines = [
-            ln for ln in historical.splitlines()
-            if "codex_bt_pair_agent" in ln and ln.startswith('"$CC"')
-        ]
+            "%s:payload/source/codex_hbus.c" % HBUS_COMMIT,
+        ).stdout
         self.assertEqual(
-            len(historical_pair_lines), 1,
-            "expected exactly one pair-agent compile line in the 09d recipe",
+            sha256_bytes(shown), HBUS_SHA256,
+            "historical repo 309cec3 hbus blob does not hash to the pinned "
+            "constant (pinned constants are stale?)",
         )
-        with open(BUILD_SCRIPT, "r", encoding="utf-8") as fh:
-            self.assertIn(historical_pair_lines[0], fh.read())
+        local = read_bytes(os.path.join(SOURCE_DIR, "codex_hbus.c"))
+        self.assertEqual(
+            local, shown,
+            "codex_hbus.c: worktree bytes differ from git show 309cec3",
+        )
+        resolved = run_git(
+            REAL_SOURCE_REPO, "rev-parse",
+            "%s:payload/source/codex_hbus.c" % HBUS_COMMIT,
+        ).stdout.decode().strip()
+        self.assertEqual(resolved, HBUS_BLOB)
 
 
 if __name__ == "__main__":

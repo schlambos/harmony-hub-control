@@ -11,6 +11,18 @@
       "label": "evidence/box-snapshot-20260817/diagnostics/binary-pilots/bt-hal-hbus/report.json",
       "sha256": "68b353b647c462b23125c90407a11c6d2f7dafffbdf4a3a1d0509ae2a271ac68",
       "verdict": "RECIPE_UNPROVEN"
+    },
+    {
+      "diagnostic": "webui-repro",
+      "label": "evidence/box-snapshot-20260817/diagnostics/binary-pilots/webui/report.json",
+      "sha256": "656ef734931f7dbe374260ba5ddfda99e9b00961a7f5f440d55999476893f957",
+      "verdict": "EXACT_SOURCE_REPRODUCIBLE"
+    },
+    {
+      "diagnostic": "zig-distribution-sweep",
+      "label": "evidence/box-snapshot-20260817/diagnostics/binary-pilots/zig-distribution-sweep/report.json",
+      "sha256": "29c691aad47462d77740bccb45b4405588b3f5dea3846c0b57ee6a3196c54382",
+      "verdict": "EXACT_SOURCE_REPRODUCIBLE"
     }
   ],
   "canonical": false,
@@ -51,7 +63,8 @@
         "target": "/data/codex/bin/codex_bthid_keyboard",
         "target_string_sha256": "875df988f204346e6c6e9461202a7920b95e92c5d694fd815c2c52ced9e9f828",
         "target_string_sha256_matches_manifest": true
-      }
+      },
+      "third_party_provenance": null
     },
     {
       "artifact_history": {
@@ -191,7 +204,8 @@
       "repo_source_path": null,
       "source_history": null,
       "source_provenance": "GENERATED_DYNAMIC",
-      "symlink_analysis": null
+      "symlink_analysis": null,
+      "third_party_provenance": null
     },
     {
       "artifact_history": {
@@ -285,22 +299,21 @@
       },
       "backup_original_evidence": null,
       "binary_pilot": {
-        "diagnostic": "bt-hal-hbus-repro",
-        "rebuilt_matches_live": false,
+        "diagnostic": "zig-distribution-sweep",
+        "rebuilt_matches_live": true,
         "rebuilt_sha256": [
-          "6ac56393265f6f2fd9377790b73f5c2ebdc77473ec453542c9ce009205ad90fc",
-          "f13cf5de9405bd3296d126c8bbb9f14c8b34f870660ce3d2102076cc43f12c66"
+          "563c6c58a3629edfebd7ec30ebcf14e6384a2d84e89669b1d7c3d79c75b619c8"
         ],
-        "report_label": "evidence/box-snapshot-20260817/diagnostics/binary-pilots/bt-hal-hbus/report.json",
-        "report_sha256": "68b353b647c462b23125c90407a11c6d2f7dafffbdf4a3a1d0509ae2a271ac68",
-        "verdict": "RECIPE_UNPROVEN"
+        "report_label": "evidence/box-snapshot-20260817/diagnostics/binary-pilots/zig-distribution-sweep/report.json",
+        "report_sha256": "29c691aad47462d77740bccb45b4405588b3f5dea3846c0b57ee6a3196c54382",
+        "verdict": "EXACT_SOURCE_REPRODUCIBLE"
       },
-      "build_status": "RECIPE_UNPROVEN",
+      "build_status": "EXACT_SOURCE_REPRODUCIBLE",
       "category": "binary",
       "documentation_references": null,
       "evidence": [
         "evidence/box-snapshot-20260817/snapshot-nonsecret/manifest.json",
-        "evidence/box-snapshot-20260817/diagnostics/binary-pilots/bt-hal-hbus/report.json"
+        "evidence/box-snapshot-20260817/diagnostics/binary-pilots/zig-distribution-sweep/report.json"
       ],
       "installer_literal_provenance": null,
       "live": {
@@ -316,7 +329,7 @@
       "near_miss_analysis": null,
       "notes": [
         "a committed payload binary blob is byte-identical to the live binary; this is deployment-lineage evidence only and does NOT establish that the candidate source rebuilds it",
-        "bounded binary pilot verdict RECIPE_UNPROVEN: exact-source reproducibility NOT established for this binary"
+        "two independent rebuilds from the exact candidate source with the pinned toolchain are byte-identical to the live binary (pilot report integrity-pinned by SHA-256)"
       ],
       "public_safety_status": null,
       "reconciliation_source": null,
@@ -338,8 +351,9 @@
         "distinct_source_blobs": 1,
         "repo_path": "payload/source/codex_bt_pair_agent.c"
       },
-      "source_provenance": "CANDIDATE_SOURCE_BINARY_MATCH_ONLY",
-      "symlink_analysis": null
+      "source_provenance": "EXACT_SOURCE_REPRODUCIBLE",
+      "symlink_analysis": null,
+      "third_party_provenance": null
     },
     {
       "artifact_history": {
@@ -461,22 +475,21 @@
       },
       "backup_original_evidence": null,
       "binary_pilot": {
-        "diagnostic": "bt-hal-hbus-repro",
-        "rebuilt_matches_live": false,
+        "diagnostic": "zig-distribution-sweep",
+        "rebuilt_matches_live": true,
         "rebuilt_sha256": [
-          "20db169f480dd3118c13f0643ff8c1e2e50b02b8c7e0d6313888b2a36be329da",
-          "edb35b7107d8dd63b11079c64c913961f3af04a68cecc12090c3cb45d522eb26"
+          "c6a3c4cd0db3aab1bbdc92ae22e3ae2ffe11d442ac7fe0920b46a6da0b5cef13"
         ],
-        "report_label": "evidence/box-snapshot-20260817/diagnostics/binary-pilots/bt-hal-hbus/report.json",
-        "report_sha256": "68b353b647c462b23125c90407a11c6d2f7dafffbdf4a3a1d0509ae2a271ac68",
-        "verdict": "RECIPE_UNPROVEN"
+        "report_label": "evidence/box-snapshot-20260817/diagnostics/binary-pilots/zig-distribution-sweep/report.json",
+        "report_sha256": "29c691aad47462d77740bccb45b4405588b3f5dea3846c0b57ee6a3196c54382",
+        "verdict": "EXACT_SOURCE_REPRODUCIBLE"
       },
-      "build_status": "RECIPE_UNPROVEN",
+      "build_status": "EXACT_SOURCE_REPRODUCIBLE",
       "category": "binary",
       "documentation_references": null,
       "evidence": [
         "evidence/box-snapshot-20260817/snapshot-nonsecret/manifest.json",
-        "evidence/box-snapshot-20260817/diagnostics/binary-pilots/bt-hal-hbus/report.json"
+        "evidence/box-snapshot-20260817/diagnostics/binary-pilots/zig-distribution-sweep/report.json"
       ],
       "installer_literal_provenance": null,
       "live": {
@@ -492,7 +505,7 @@
       "near_miss_analysis": null,
       "notes": [
         "a committed payload binary blob is byte-identical to the live binary; this is deployment-lineage evidence only and does NOT establish that the candidate source rebuilds it",
-        "bounded binary pilot verdict RECIPE_UNPROVEN: exact-source reproducibility NOT established for this binary"
+        "two independent rebuilds from the exact candidate source with the pinned toolchain are byte-identical to the live binary (pilot report integrity-pinned by SHA-256)"
       ],
       "public_safety_status": null,
       "reconciliation_source": null,
@@ -514,8 +527,9 @@
         "distinct_source_blobs": 1,
         "repo_path": "payload/source/codex_bthid_keyboard.c"
       },
-      "source_provenance": "CANDIDATE_SOURCE_BINARY_MATCH_ONLY",
-      "symlink_analysis": null
+      "source_provenance": "EXACT_SOURCE_REPRODUCIBLE",
+      "symlink_analysis": null,
+      "third_party_provenance": null
     },
     {
       "artifact_history": {
@@ -719,7 +733,8 @@
         "repo_path": "payload/source/codex_dhcpd.c"
       },
       "source_provenance": "EXACT_SOURCE_REPRODUCIBLE",
-      "symlink_analysis": null
+      "symlink_analysis": null,
+      "third_party_provenance": null
     },
     {
       "artifact_history": {
@@ -832,22 +847,21 @@
       },
       "backup_original_evidence": null,
       "binary_pilot": {
-        "diagnostic": "bt-hal-hbus-repro",
-        "rebuilt_matches_live": false,
+        "diagnostic": "zig-distribution-sweep",
+        "rebuilt_matches_live": true,
         "rebuilt_sha256": [
-          "19040fc79b974355991e57494d8694b7b0f5cf4df3156c2f09ecc700302806e1",
-          "ab44e8b9452307682c4eb8b76846186911cc9ff7702cef81e81e7f6a7d4a92e5"
+          "7fa9a84b9ee270bdf6e47d40859d29b6c1c30e5a1766f0ab59e9143dd13ca26c"
         ],
-        "report_label": "evidence/box-snapshot-20260817/diagnostics/binary-pilots/bt-hal-hbus/report.json",
-        "report_sha256": "68b353b647c462b23125c90407a11c6d2f7dafffbdf4a3a1d0509ae2a271ac68",
-        "verdict": "RECIPE_UNPROVEN"
+        "report_label": "evidence/box-snapshot-20260817/diagnostics/binary-pilots/zig-distribution-sweep/report.json",
+        "report_sha256": "29c691aad47462d77740bccb45b4405588b3f5dea3846c0b57ee6a3196c54382",
+        "verdict": "EXACT_SOURCE_REPRODUCIBLE"
       },
-      "build_status": "RECIPE_UNPROVEN",
+      "build_status": "EXACT_SOURCE_REPRODUCIBLE",
       "category": "binary",
       "documentation_references": null,
       "evidence": [
         "evidence/box-snapshot-20260817/snapshot-nonsecret/manifest.json",
-        "evidence/box-snapshot-20260817/diagnostics/binary-pilots/bt-hal-hbus/report.json"
+        "evidence/box-snapshot-20260817/diagnostics/binary-pilots/zig-distribution-sweep/report.json"
       ],
       "installer_literal_provenance": null,
       "live": {
@@ -863,7 +877,7 @@
       "near_miss_analysis": null,
       "notes": [
         "a committed payload binary blob is byte-identical to the live binary; this is deployment-lineage evidence only and does NOT establish that the candidate source rebuilds it",
-        "bounded binary pilot verdict RECIPE_UNPROVEN: exact-source reproducibility NOT established for this binary"
+        "two independent rebuilds from the exact candidate source with the pinned toolchain are byte-identical to the live binary (pilot report integrity-pinned by SHA-256)"
       ],
       "public_safety_status": null,
       "reconciliation_source": null,
@@ -885,8 +899,9 @@
         "distinct_source_blobs": 1,
         "repo_path": "payload/source/codex_hal_ltcp.c"
       },
-      "source_provenance": "CANDIDATE_SOURCE_BINARY_MATCH_ONLY",
-      "symlink_analysis": null
+      "source_provenance": "EXACT_SOURCE_REPRODUCIBLE",
+      "symlink_analysis": null,
+      "third_party_provenance": null
     },
     {
       "artifact_history": {
@@ -919,23 +934,22 @@
       },
       "backup_original_evidence": null,
       "binary_pilot": {
-        "diagnostic": "bt-hal-hbus-repro",
-        "rebuilt_matches_live": false,
+        "diagnostic": "zig-distribution-sweep",
+        "rebuilt_matches_live": true,
         "rebuilt_sha256": [
-          "3c92e5b92301fa36277bbb5421e27ddb8baca4aab11412983592323ba6fd1a5e",
-          "cfaa234704207fb7d0ab34c97a0d21725c41e597abfb9cdc3ba2cc79b123bb74"
+          "4be9e6ac2e09e7eb052f9c47e81480d1e32aee7190bedb6ef7f932cf07aab8f9"
         ],
-        "report_label": "evidence/box-snapshot-20260817/diagnostics/binary-pilots/bt-hal-hbus/report.json",
-        "report_sha256": "68b353b647c462b23125c90407a11c6d2f7dafffbdf4a3a1d0509ae2a271ac68",
-        "verdict": "RECIPE_UNPROVEN"
+        "report_label": "evidence/box-snapshot-20260817/diagnostics/binary-pilots/zig-distribution-sweep/report.json",
+        "report_sha256": "29c691aad47462d77740bccb45b4405588b3f5dea3846c0b57ee6a3196c54382",
+        "verdict": "EXACT_SOURCE_REPRODUCIBLE"
       },
-      "build_status": "RECIPE_UNPROVEN",
+      "build_status": "EXACT_SOURCE_REPRODUCIBLE",
       "category": "binary",
       "documentation_references": null,
       "evidence": [
         "evidence/box-snapshot-20260817/snapshot-nonsecret/manifest.json",
         "evidence/box-snapshot-20260817/diagnostics/hbus-repro/report.json",
-        "evidence/box-snapshot-20260817/diagnostics/binary-pilots/bt-hal-hbus/report.json"
+        "evidence/box-snapshot-20260817/diagnostics/binary-pilots/zig-distribution-sweep/report.json"
       ],
       "hbus_reproduction": {
         "best_effort_variant": "zig cc -target mips-linux-musleabi -mcpu=mips32 -Os -static -s reproduces ELF identity and size within 20 bytes but not reference bytes",
@@ -960,7 +974,7 @@
       "notes": [
         "live binary sha256 equals the known-good on-hub backup reference dated 2026-07-30 (e8e62d851417aafa9995f687277e8414, 74660 bytes); the live hbus is that known-good build, distinct from every committed payload/bin/codex_hbus blob",
         "hbus local-reproduction diagnostic verdict RECIPE_UNPROVEN: exact-source reproducibility is NOT established despite an exact candidate source lineage",
-        "bounded binary pilot verdict RECIPE_UNPROVEN: exact-source reproducibility NOT established for this binary"
+        "two independent rebuilds from the exact candidate source with the pinned toolchain are byte-identical to the live binary (pilot report integrity-pinned by SHA-256)"
       ],
       "public_safety_status": null,
       "reconciliation_source": null,
@@ -1000,8 +1014,9 @@
         "distinct_source_blobs": 3,
         "repo_path": "payload/source/codex_hbus.c"
       },
-      "source_provenance": "CANDIDATE_SOURCE_NO_BINARY_MATCH",
-      "symlink_analysis": null
+      "source_provenance": "EXACT_SOURCE_REPRODUCIBLE",
+      "symlink_analysis": null,
+      "third_party_provenance": null
     },
     {
       "artifact_history": {
@@ -1205,7 +1220,8 @@
         "repo_path": "payload/source/codex_portal.c"
       },
       "source_provenance": "EXACT_SOURCE_REPRODUCIBLE",
-      "symlink_analysis": null
+      "symlink_analysis": null,
+      "third_party_provenance": null
     },
     {
       "artifact_history": {
@@ -1349,11 +1365,22 @@
         "size_bytes": 906872
       },
       "backup_original_evidence": null,
-      "build_status": "HISTORICAL_BINARY_MATCH_ONLY",
+      "binary_pilot": {
+        "diagnostic": "webui-repro",
+        "rebuilt_matches_live": true,
+        "rebuilt_sha256": [
+          "c400173bb42f735734c522556c69f6c80f0604949413eb974c7b361b9e4ac11a"
+        ],
+        "report_label": "evidence/box-snapshot-20260817/diagnostics/binary-pilots/webui/report.json",
+        "report_sha256": "656ef734931f7dbe374260ba5ddfda99e9b00961a7f5f440d55999476893f957",
+        "verdict": "EXACT_SOURCE_REPRODUCIBLE"
+      },
+      "build_status": "EXACT_SOURCE_REPRODUCIBLE",
       "category": "binary",
       "documentation_references": null,
       "evidence": [
-        "evidence/box-snapshot-20260817/snapshot-nonsecret/manifest.json"
+        "evidence/box-snapshot-20260817/snapshot-nonsecret/manifest.json",
+        "evidence/box-snapshot-20260817/diagnostics/binary-pilots/webui/report.json"
       ],
       "installer_literal_provenance": null,
       "live": {
@@ -1368,7 +1395,8 @@
       },
       "near_miss_analysis": null,
       "notes": [
-        "a committed payload binary blob is byte-identical to the live binary; this is deployment-lineage evidence only and does NOT establish that the candidate source rebuilds it"
+        "a committed payload binary blob is byte-identical to the live binary; this is deployment-lineage evidence only and does NOT establish that the candidate source rebuilds it",
+        "two independent rebuilds from the exact candidate source with the pinned toolchain are byte-identical to the live binary (pilot report integrity-pinned by SHA-256)"
       ],
       "public_safety_status": null,
       "reconciliation_source": null,
@@ -1399,8 +1427,9 @@
         "distinct_source_blobs": 2,
         "repo_path": "payload/source/codex_webui.c"
       },
-      "source_provenance": "CANDIDATE_SOURCE_BINARY_MATCH_ONLY",
-      "symlink_analysis": null
+      "source_provenance": "EXACT_SOURCE_REPRODUCIBLE",
+      "symlink_analysis": null,
+      "third_party_provenance": null
     },
     {
       "artifact_history": null,
@@ -1438,7 +1467,8 @@
         "target": "dropbearmulti",
         "target_string_sha256": "cb9d0dba8226ba02a6706767d867817e98a65b633fdd53385b2875cd44b2c058",
         "target_string_sha256_matches_manifest": true
-      }
+      },
+      "third_party_provenance": null
     },
     {
       "artifact_history": null,
@@ -1476,7 +1506,8 @@
         "target": "dropbearmulti",
         "target_string_sha256": "cb9d0dba8226ba02a6706767d867817e98a65b633fdd53385b2875cd44b2c058",
         "target_string_sha256_matches_manifest": true
-      }
+      },
+      "third_party_provenance": null
     },
     {
       "artifact_history": {
@@ -1645,7 +1676,8 @@
       },
       "near_miss_analysis": null,
       "notes": [
-        "third-party static multi-binary tracked verbatim in the repository; no in-repo source; build reproduction not applicable to this repository alone"
+        "third-party static multi-binary tracked verbatim in the repository; no in-repo source; build reproduction not applicable to this repository alone",
+        "Dropbear 2025.89 version/license closure is VERSION_LICENSE_VERIFIED (tag-pinned LICENSE at third_party/dropbear-2025.89/LICENSE); the binary build remains BINARY_BUILD_UNVERIFIED: no vendor source/patch/config/rebuild closure"
       ],
       "public_safety_status": null,
       "reconciliation_source": null,
@@ -1653,7 +1685,43 @@
       "repo_source_path": null,
       "source_history": null,
       "source_provenance": "THIRD_PARTY_BINARY",
-      "symlink_analysis": null
+      "symlink_analysis": null,
+      "third_party_provenance": {
+        "banner": "SSH-2.0-dropbear_2025.89",
+        "binary_sha256": "e2ea632aed8b31dc5ea56b9673cbd983ec83260a97d33f891a0cebf51d5c6c8d",
+        "binary_size": 577296,
+        "classification": "VERSION_LICENSE_VERIFIED / BINARY_BUILD_UNVERIFIED",
+        "commit": "179de98f7b9584a309ffc48e39c61da940760740",
+        "components": [
+          "Dropbear core (Matt Johnston, MIT-style license)",
+          "LibTomCrypt / LibTomMath (public domain / permissive)",
+          "sshpty.c from OpenSSH 3.5p1 (Tatu Ylonen, free use)",
+          "loginrec/atomicio/strlcat from OpenSSH 3.6.1p2 (2-clause BSD)",
+          "keyimport.c modified from PuTTY import.c (MIT-style)",
+          "curve25519.c modified TweetNaCl 20140427 (public domain)",
+          "libcrux ML-KEM (MIT OR Apache-2.0, Cryspen 2024)",
+          "sntrup761 (SUPERCOP public domain; provenance caveat: generated from supercop-20241022, public domain per sntrup761.sh header)"
+        ],
+        "license_path": "third_party/dropbear-2025.89/LICENSE",
+        "license_sha256": "a99ce657d790b761c132ee7e0de18edb437ae6361e536d991c6a12f36e770445",
+        "missing_build_closure": [
+          "vendor source tree (dropbear-2025.89.tar.bz2) not present in repo",
+          "vendor patches (if any) not enumerated",
+          "localoptions.h / distrooptions.h configuration not recorded",
+          "configure flags / make invocation not recorded for the live build",
+          "CFLAGS / LDFLAGS not recorded for the live build",
+          "defconfig / feature selection not recorded",
+          "no rebuild closure: the live binary cannot be reproduced from this repository alone"
+        ],
+        "observed_compiler_string": "GCC/Buildroot compiler string observed in the binary is compiler-identity evidence only; it does not establish a vendor source build",
+        "release": "2025-12-16",
+        "signature_url": "https://matt.ucc.asn.au/dropbear/releases/dropbear-2025.89.tar.bz2.asc",
+        "signing_key_fingerprint": "F7347EF2EE2E07A267628CA944931494F29C6773",
+        "source_url": "https://matt.ucc.asn.au/dropbear/releases/dropbear-2025.89.tar.bz2",
+        "tag": "DROPBEAR_2025.89",
+        "tarball_sha256": "0d1f7ca711cfc336dc8a85e672cab9cfd8223a02fe2da0a4a7aeb58c9e113634",
+        "version": "2025.89"
+      }
     },
     {
       "artifact_history": {
@@ -1808,7 +1876,8 @@
       "repo_source_path": null,
       "source_history": null,
       "source_provenance": "EXACT_COMMITTED_SOURCE",
-      "symlink_analysis": null
+      "symlink_analysis": null,
+      "third_party_provenance": null
     },
     {
       "artifact_history": {
@@ -1927,7 +1996,8 @@
       "repo_source_path": null,
       "source_history": null,
       "source_provenance": "EXACT_COMMITTED_SOURCE",
-      "symlink_analysis": null
+      "symlink_analysis": null,
+      "third_party_provenance": null
     },
     {
       "artifact_history": {
@@ -2102,7 +2172,8 @@
       "repo_source_path": null,
       "source_history": null,
       "source_provenance": "EXACT_COMMITTED_SOURCE",
-      "symlink_analysis": null
+      "symlink_analysis": null,
+      "third_party_provenance": null
     },
     {
       "artifact_history": {
@@ -2277,7 +2348,8 @@
       "repo_source_path": null,
       "source_history": null,
       "source_provenance": "EXACT_COMMITTED_SOURCE",
-      "symlink_analysis": null
+      "symlink_analysis": null,
+      "third_party_provenance": null
     },
     {
       "artifact_history": {
@@ -2481,7 +2553,8 @@
       "repo_source_path": null,
       "source_history": null,
       "source_provenance": "RECONSTRUCTED_SOURCE_EXACT",
-      "symlink_analysis": null
+      "symlink_analysis": null,
+      "third_party_provenance": null
     },
     {
       "artifact_history": {
@@ -2556,7 +2629,8 @@
       "repo_source_path": null,
       "source_history": null,
       "source_provenance": "EXACT_COMMITTED_SOURCE",
-      "symlink_analysis": null
+      "symlink_analysis": null,
+      "third_party_provenance": null
     },
     {
       "artifact_history": null,
@@ -2654,7 +2728,8 @@
       "repo_source_path": null,
       "source_history": null,
       "source_provenance": "EXACT_INSTALLER_LITERAL",
-      "symlink_analysis": null
+      "symlink_analysis": null,
+      "third_party_provenance": null
     },
     {
       "artifact_history": {
@@ -2784,7 +2859,8 @@
       "repo_source_path": null,
       "source_history": null,
       "source_provenance": "EXACT_COMMITTED_SOURCE",
-      "symlink_analysis": null
+      "symlink_analysis": null,
+      "third_party_provenance": null
     },
     {
       "artifact_history": null,
@@ -2921,7 +2997,8 @@
       "repo_source_path": null,
       "source_history": null,
       "source_provenance": "EXACT_INSTALLER_LITERAL",
-      "symlink_analysis": null
+      "symlink_analysis": null,
+      "third_party_provenance": null
     },
     {
       "artifact_history": {
@@ -2993,7 +3070,8 @@
       "repo_source_path": null,
       "source_history": null,
       "source_provenance": "RECONSTRUCTED_SOURCE_EXACT",
-      "symlink_analysis": null
+      "symlink_analysis": null,
+      "third_party_provenance": null
     },
     {
       "artifact_history": {
@@ -3168,7 +3246,8 @@
       "repo_source_path": null,
       "source_history": null,
       "source_provenance": "EXACT_COMMITTED_SOURCE",
-      "symlink_analysis": null
+      "symlink_analysis": null,
+      "third_party_provenance": null
     }
   ],
   "entry_count": 23,

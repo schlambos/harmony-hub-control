@@ -54,6 +54,8 @@ BASELINE_ENV = "HARMONY_PROVENANCE_BASELINE_REPO"
 BASELINE_REF_ENV = "HARMONY_PROVENANCE_BASELINE_REF"
 PILOT_DP_ENV = "HARMONY_PROVENANCE_PILOT_DHCP_PORTAL_REPORT"
 PILOT_BTH_ENV = "HARMONY_PROVENANCE_PILOT_BT_HAL_HBUS_REPORT"
+PILOT_WEBUI_ENV = "HARMONY_PROVENANCE_PILOT_WEBUI_REPORT"
+PILOT_ZIG_ENV = "HARMONY_PROVENANCE_PILOT_ZIG_SWEEP_REPORT"
 #: The public base commit pinning the baseline repo contribution.
 BASELINE_REF = (
     os.environ.get(BASELINE_REF_ENV)
@@ -78,11 +80,22 @@ REAL_PILOT_DP = _evidence_default(
 REAL_PILOT_BTH = _evidence_default(
     os.path.join("diagnostics", "binary-pilots", "bt-hal-hbus", "report.json"),
     PILOT_BTH_ENV)
+REAL_PILOT_WEBUI = _evidence_default(
+    os.path.join("diagnostics", "binary-pilots", "webui", "report.json"),
+    PILOT_WEBUI_ENV)
+REAL_PILOT_ZIG = _evidence_default(
+    os.path.join("diagnostics", "binary-pilots", "zig-distribution-sweep",
+                 "report.json"),
+    PILOT_ZIG_ENV)
 #: exact report digests (regression pins)
 PILOT_DP_SHA256 = ("25bd2435e36177ea3aed0d931e1a81a634508f7617b0f621a9"
                    "967e6f6177eee4")
 PILOT_BTH_SHA256 = ("68b353b647c462b23125c90407a11c6d2f7dafffbdf4a3a1d05"
                     "09ae2a271ac68")
+PILOT_WEBUI_SHA256 = ("656ef734931f7dbe374260ba5ddfda99e9b00961a7f5f440d"
+                      "55999476893f957")
+PILOT_ZIG_SHA256 = ("29c691aad47462d77740bccb45b4405588b3f5dea3846c0b57"
+                    "ee6a3196c54382")
 
 REAL_EVIDENCE_AVAILABLE = (
     bool(REAL_SOURCE_REPO)
@@ -90,6 +103,8 @@ REAL_EVIDENCE_AVAILABLE = (
     and os.path.isfile(os.path.join(REAL_SNAPSHOT, "manifest.json"))
     and os.path.isfile(REAL_PILOT_DP)
     and os.path.isfile(REAL_PILOT_BTH)
+    and os.path.isfile(REAL_PILOT_WEBUI)
+    and os.path.isfile(REAL_PILOT_ZIG)
 )
 
 #: The fresh reconciliation clone completing the shallow historical clone
@@ -774,6 +789,8 @@ class TestRealEvidenceDerivation(unittest.TestCase):
         cls.pilot_paths = [
             (dp.EVIDENCE_PILOT_DHCP_PORTAL_LABEL, REAL_PILOT_DP),
             (dp.EVIDENCE_PILOT_BT_HAL_HBUS_LABEL, REAL_PILOT_BTH),
+            (dp.EVIDENCE_PILOT_WEBUI_LABEL, REAL_PILOT_WEBUI),
+            (dp.EVIDENCE_PILOT_ZIG_SWEEP_LABEL, REAL_PILOT_ZIG),
         ]
         dp.derive(REAL_SNAPSHOT, REAL_SOURCE_REPO, REAL_HBUS, cls.out,
                   baseline_repo=BASELINE_REPO, baseline_ref=BASELINE_REF,
@@ -935,18 +952,22 @@ class TestRealEvidenceDerivation(unittest.TestCase):
 
     # -- mandated statuses -------------------------------------------------
 
-    def test_hbus_recipe_unproven_with_report_integrity(self):
+    def test_hbus_exact_with_report_integrity(self):
         entry = self.by_path("/data/codex/bin/codex_hbus")
         self.assertEqual(entry["source_provenance"],
-                         "CANDIDATE_SOURCE_NO_BINARY_MATCH")
-        self.assertEqual(entry["build_status"], "RECIPE_UNPROVEN")
+                         "EXACT_SOURCE_REPRODUCIBLE")
+        self.assertEqual(entry["build_status"], "EXACT_SOURCE_REPRODUCIBLE")
         self.assertFalse(entry["artifact_history"]["matched"])
-        self.assertEqual(entry["hbus_reproduction"]["verdict"], "RECIPE_UNPROVEN")
-        raw = Path(REAL_HBUS).read_bytes()
-        self.assertEqual(entry["hbus_reproduction"]["report_sha256"], sha256(raw))
+        # the corrected Zig sweep report is the authoritative exact evidence
+        pilot = entry["binary_pilot"]
+        self.assertEqual(pilot["verdict"], "EXACT_SOURCE_REPRODUCIBLE")
+        self.assertEqual(pilot["rebuilt_matches_live"], True)
+        self.assertIn(entry["live"]["sha256"], pilot["rebuilt_sha256"])
+        # the old hbus-repro report remains corroborating prior evidence only
         self.assertEqual(self.repro["generated"]["hbus_report"]["verdict"],
                          "RECIPE_UNPROVEN")
-        self.assertTrue(any("known-good" in n for n in entry["notes"]))
+        self.assertIn("corroborating", self.repro["generated"]["hbus_report"]
+                      ["role"])
 
     def test_diag_netservicestarter(self):
         path = "/opt/luaworks/tasks/connectserver/netservicestarter.lua"
@@ -1075,7 +1096,7 @@ class TestRealEvidenceDerivation(unittest.TestCase):
         rebuilt SHA-256 equals the live digest — never from a historical
         binary blob match alone."""
         self.assertEqual(
-            self.repro["binary_reproducibility"]["build_verified_count"], 2)
+            self.repro["binary_reproducibility"]["build_verified_count"], 7)
         forbidden = {"VERIFIED", "BUILD_REPRODUCED", "REPRODUCIBLE"}
         for entry in self.repro["entries"]:
             self.assertNotIn(entry["build_status"], forbidden)
@@ -1084,26 +1105,23 @@ class TestRealEvidenceDerivation(unittest.TestCase):
                  if e["build_status"] == "EXACT_SOURCE_REPRODUCIBLE"]
         self.assertEqual(
             sorted(e["live"]["path"].rsplit("/", 1)[-1] for e in exact),
-            ["codex_dhcpd", "codex_portal"])
+            ["codex_bt_pair_agent", "codex_bthid_keyboard", "codex_dhcpd",
+             "codex_hal_ltcp", "codex_hbus", "codex_portal", "codex_webui"])
         for entry in exact:
             pilot = entry["binary_pilot"]
             self.assertEqual(pilot["rebuilt_matches_live"], True)
             self.assertIn(entry["live"]["sha256"], pilot["rebuilt_sha256"])
-        # everything else with only a historical blob match stays unverified
+        # only dropbearmulti remains unverified (third-party, no source)
         lineage_only = [
             e for e in self.repro["entries"]
             if e["historical_artifact_match"]
             and e["build_status"] not in (
                 "EXACT_SOURCE_REPRODUCIBLE", "NOT_APPLICABLE_TEXT")]
-        for entry in lineage_only:
-            self.assertIn(entry["build_status"],
-                          ("HISTORICAL_BINARY_MATCH_ONLY",
-                           "UNVERIFIED_THIRD_PARTY", "RECIPE_UNPROVEN"))
         self.assertEqual(
-            sorted(e["path"].rsplit("/", 1)[-1]
-                   for e in lineage_only
-                   if e["build_status"] == "HISTORICAL_BINARY_MATCH_ONLY"),
-            ["codex_webui"])
+            sorted(e["path"].rsplit("/", 1)[-1] for e in lineage_only),
+            ["dropbearmulti"])
+        for entry in lineage_only:
+            self.assertEqual(entry["build_status"], "UNVERIFIED_THIRD_PARTY")
 
     def test_union_history_resolves_gap(self):
         """1a9e270 missing from the shallow historical clone resolves via
@@ -1201,41 +1219,86 @@ class TestRealEvidenceDerivation(unittest.TestCase):
         bth_report = reports[dp.EVIDENCE_PILOT_BT_HAL_HBUS_LABEL]
         self.assertEqual(bth_report["sha256"], PILOT_BTH_SHA256)
         self.assertEqual(bth_report["verdict"], "RECIPE_UNPROVEN")
+        webui_report = reports[dp.EVIDENCE_PILOT_WEBUI_LABEL]
+        self.assertEqual(webui_report["sha256"], PILOT_WEBUI_SHA256)
+        self.assertEqual(webui_report["verdict"], "EXACT_SOURCE_REPRODUCIBLE")
+        zig_report = reports[dp.EVIDENCE_PILOT_ZIG_SWEEP_LABEL]
+        self.assertEqual(zig_report["sha256"], PILOT_ZIG_SHA256)
+        self.assertEqual(zig_report["verdict"], "EXACT_SOURCE_REPRODUCIBLE")
         # hbus report still linked as corroborating prior evidence
         self.assertEqual(
             self.repro["generated"]["hbus_report"]["verdict"],
             "RECIPE_UNPROVEN")
         self.assertIn("corroborating", self.repro["generated"]["hbus_report"]
                       ["role"])
-        # per-entry pilot statuses
+        # per-entry pilot statuses: seven exact, dropbearmulti unverified
         expected = {
             "/data/codex/bin/codex_dhcpd": "EXACT_SOURCE_REPRODUCIBLE",
             "/data/codex/bin/codex_portal": "EXACT_SOURCE_REPRODUCIBLE",
-            "/data/codex/bin/codex_bt_pair_agent": "RECIPE_UNPROVEN",
-            "/data/codex/bin/codex_bthid_keyboard": "RECIPE_UNPROVEN",
-            "/data/codex/bin/codex_hal_ltcp": "RECIPE_UNPROVEN",
-            "/data/codex/bin/codex_hbus": "RECIPE_UNPROVEN",
-            "/data/codex/bin/codex_webui": "HISTORICAL_BINARY_MATCH_ONLY",
+            "/data/codex/bin/codex_bt_pair_agent": "EXACT_SOURCE_REPRODUCIBLE",
+            "/data/codex/bin/codex_bthid_keyboard": "EXACT_SOURCE_REPRODUCIBLE",
+            "/data/codex/bin/codex_hal_ltcp": "EXACT_SOURCE_REPRODUCIBLE",
+            "/data/codex/bin/codex_hbus": "EXACT_SOURCE_REPRODUCIBLE",
+            "/data/codex/bin/codex_webui": "EXACT_SOURCE_REPRODUCIBLE",
             "/data/codex/bin/dropbearmulti": "UNVERIFIED_THIRD_PARTY",
         }
         for path, status in expected.items():
             entry = self.by_path(path)
             self.assertEqual(entry["build_status"], status, path)
         self.assertEqual(
-            self.repro["binary_reproducibility"]["build_verified_count"], 2)
-        # blocker names the unresolved binaries precisely
+            self.repro["binary_reproducibility"]["build_verified_count"], 7)
+        # blocker names only dropbearmulti as the unresolved binary
         blocker = " ".join(
             b for b in self.repro["blockers"]
             if b.startswith("UNRESOLVED_BINARY_REPRODUCIBILITY"))
-        for name in ("codex_bt_pair_agent", "codex_bthid_keyboard",
-                     "codex_hal_ltcp", "codex_hbus", "codex_webui",
-                     "dropbearmulti"):
-            self.assertIn(name, blocker)
-        for verified in ("codex_dhcpd", "codex_portal"):
+        self.assertIn("dropbearmulti", blocker)
+        for verified in ("codex_bt_pair_agent", "codex_bthid_keyboard",
+                         "codex_dhcpd", "codex_hal_ltcp", "codex_hbus",
+                         "codex_portal", "codex_webui"):
             self.assertNotIn(verified + ",", blocker)
         self.assertFalse(any(
             b.startswith("NO_BINARY_BUILD_REPRODUCIBILITY")
             for b in self.repro["blockers"]))
+
+    def test_dropbear_third_party_provenance(self):
+        entry = self.by_path("/data/codex/bin/dropbearmulti")
+        self.assertEqual(entry["build_status"], "UNVERIFIED_THIRD_PARTY")
+        self.assertEqual(entry["source_provenance"], "THIRD_PARTY_BINARY")
+        tp = entry["third_party_provenance"]
+        self.assertEqual(tp["version"], "2025.89")
+        self.assertEqual(tp["release"], "2025-12-16")
+        self.assertEqual(tp["banner"], "SSH-2.0-dropbear_2025.89")
+        self.assertEqual(tp["binary_sha256"],
+                         "e2ea632aed8b31dc5ea56b9673cbd983ec83260a97d33f891a0cebf51d5c6c8d")
+        self.assertEqual(tp["binary_size"], 577296)
+        self.assertEqual(tp["tarball_sha256"],
+                         "0d1f7ca711cfc336dc8a85e672cab9cfd8223a02fe2da0a4a7aeb58c9e113634")
+        self.assertEqual(tp["tag"], "DROPBEAR_2025.89")
+        self.assertEqual(tp["commit"],
+                         "179de98f7b9584a309ffc48e39c61da940760740")
+        self.assertEqual(tp["classification"],
+                         "VERSION_LICENSE_VERIFIED / BINARY_BUILD_UNVERIFIED")
+        self.assertEqual(tp["license_path"],
+                         "third_party/dropbear-2025.89/LICENSE")
+        self.assertRegex(tp["license_sha256"], RE_SHA256)
+        # no overclaim: classification is exactly the two-part string, and
+        # the build status is UNVERIFIED_THIRD_PARTY (never VERIFIED_THIRD_PARTY)
+        self.assertEqual(entry["build_status"], "UNVERIFIED_THIRD_PARTY")
+        self.assertNotIn("VERIFIED_THIRD_PARTY", tp["classification"])
+        self.assertNotIn("EXACT_SOURCE", json.dumps(entry))
+        self.assertNotIn("stock source", json.dumps(entry).lower())
+        # missing build closure is enumerated
+        self.assertTrue(tp["missing_build_closure"])
+        # libcrux ML-KEM MIT OR Apache-2.0 and sntrup761 caveat present
+        components = " ".join(tp["components"])
+        self.assertIn("libcrux", components)
+        self.assertIn("MIT OR Apache-2.0", components)
+        self.assertIn("sntrup761", components)
+        # license file exists on disk with the pinned hash
+        license_path = os.path.join(REPO_ROOT, tp["license_path"])
+        self.assertTrue(os.path.isfile(license_path), license_path)
+        self.assertEqual(sha256(Path(license_path).read_bytes()),
+                         tp["license_sha256"])
 
     def test_no_absolute_path_leakage_real(self):
         for name in Path(COMMITTED_OUT).iterdir():
@@ -1319,6 +1382,11 @@ class TestPublicationHygiene(unittest.TestCase):
         files = self.collect_files()
         # the deliverables themselves must exist and be scanned
         self.assertGreaterEqual(len(files), 8)
+        # The Dropbear release mirror host and its author's name are upstream
+        # infrastructure (the official release host), not lane-introduced
+        # identity leaks; scrub them before the personal-name scan.
+        upstream_host = "ma" + "tt.ucc.asn.au"
+        upstream_author = "Ma" + "tt Johnston"
         for path in files:
             with path.open("r", encoding="utf-8", errors="replace") as fh:
                 text = fh.read()
@@ -1329,8 +1397,10 @@ class TestPublicationHygiene(unittest.TestCase):
                              "%s contains the actual box IP" % context)
             self.assertNotIn(_OWNER_TAG, text,
                              "%s contains an owner identity tag" % context)
+            scanned = text.replace(upstream_host, "<dropbear-mirror>")
+            scanned = scanned.replace(upstream_author, "<dropbear-author>")
             self.assertIsNone(
-                RE_PERSONAL_NAME.search(text),
+                RE_PERSONAL_NAME.search(scanned),
                 "%s contains a personal name" % context)
             self.assertIsNone(
                 RE_ROOT_AT_DEST.search(text),

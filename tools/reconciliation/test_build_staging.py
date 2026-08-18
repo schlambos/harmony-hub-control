@@ -47,8 +47,17 @@ import build_staging as bs  # noqa: E402
 BUILD_OUTPUT_ENV = "HARMONY_SOURCE_BUILT_OUTPUT_DIR"
 REAL_BUILD_OUTPUT = os.environ.get(BUILD_OUTPUT_ENV, "")
 
+#: Combined explicit build-output dir (all seven exact binaries) is
+#: identified by ENVIRONMENT VARIABLE only.
+COMBINED_OUTPUT_ENV = "HARMONY_COMBINED_BUILD_OUTPUT_DIR"
+REAL_COMBINED_OUTPUT = os.environ.get(COMBINED_OUTPUT_ENV, "")
+
 REAL_EVIDENCE_AVAILABLE = bool(
     REAL_BUILD_OUTPUT and os.path.isdir(REAL_BUILD_OUTPUT)
+)
+
+COMBINED_EVIDENCE_AVAILABLE = bool(
+    REAL_COMBINED_OUTPUT and os.path.isdir(REAL_COMBINED_OUTPUT)
 )
 
 #: absolute-path and identity fragments that must never appear in the files
@@ -777,20 +786,26 @@ class TestRealEvidenceStaging(unittest.TestCase):
             staged["/data/codex/bin/codex_portal"]["source"]["type"],
             "build_output")
 
-    def test_six_unresolved_binaries_blocked(self):
+    def test_blockers_with_partial_build_output(self):
+        """With only dhcpd/portal supplied, the five other exact binaries are
+        blocked with NO_SOURCE_BUILD_OUTPUT and dropbearmulti with
+        UNRESOLVED_BINARY_REPRODUCIBILITY (the only remaining build blocker)."""
         omitted = {o["path"]: o for o in self.blockers["omitted"]}
-        expected = {
+        no_output = {
             "/data/codex/bin/codex_bt_pair_agent",
             "/data/codex/bin/codex_bthid_keyboard",
             "/data/codex/bin/codex_hal_ltcp",
             "/data/codex/bin/codex_hbus",
             "/data/codex/bin/codex_webui",
-            "/data/codex/bin/dropbearmulti",
         }
-        self.assertEqual(set(omitted), expected)
-        for path, rec in omitted.items():
+        for path in no_output:
             self.assertEqual(
-                rec["reason_code"], "UNRESOLVED_BINARY_REPRODUCIBILITY", path)
+                omitted[path]["reason_code"], "NO_SOURCE_BUILD_OUTPUT", path)
+        self.assertEqual(
+            omitted["/data/codex/bin/dropbearmulti"]["reason_code"],
+            "UNRESOLVED_BINARY_REPRODUCIBILITY")
+        self.assertEqual(set(omitted), no_output | {
+            "/data/codex/bin/dropbearmulti"})
 
     def test_staged_files_match_live_manifest(self):
         live = {e["path"]: e for e in self.live["entries"]}
@@ -825,6 +840,86 @@ class TestRealEvidenceStaging(unittest.TestCase):
                 self.assertNotIn(fragment, text, name)
             self.assertNotIn("md5", text, name)
             self.assertNotIn("md5sum", text, name)
+
+
+@unittest.skipUnless(
+    COMBINED_EVIDENCE_AVAILABLE,
+    "combined explicit build-output dir not identified (set %s to a dir "
+    "containing all seven exact binaries)" % COMBINED_OUTPUT_ENV,
+)
+class TestCombinedOutputStaging(unittest.TestCase):
+    """A combined explicit build-output dir with all seven exact binaries
+    stages 21/22, blocking only dropbearmulti."""
+
+    @classmethod
+    def setUpClass(cls):
+        cls.out = tempfile.mkdtemp(prefix="build-staging-combined-")
+        cls.code, cls.written = bs.stage(
+            bs.DEFAULT_LIVE_MANIFEST, bs.DEFAULT_REPRO_STATUS,
+            bs.DEFAULT_CONTRACT, REPO_ROOT, REAL_COMBINED_OUTPUT, cls.out,
+            allow_partial=True)
+        cls.manifest = json.loads(
+            Path(cls.written["staging-manifest.json"]).read_text())
+        cls.blockers = json.loads(
+            Path(cls.written["blockers.json"]).read_text())
+        cls.attestation = json.loads(
+            Path(cls.written["staging-attestation.json"]).read_text())
+        cls.live = json.loads(
+            Path(bs.DEFAULT_LIVE_MANIFEST).read_text())
+
+    @classmethod
+    def tearDownClass(cls):
+        shutil.rmtree(cls.out, ignore_errors=True)
+
+    def test_21_of_22_staged_only_dropbearmulti_blocked(self):
+        self.assertEqual(self.code, bs.EXIT_PARTIAL)
+        self.assertTrue(self.manifest["rootfs_published"])
+        self.assertFalse(self.manifest["complete"])
+        self.assertFalse(self.manifest["canonical"])
+        self.assertEqual(self.manifest["staged_entry_count"], 21)
+        self.assertEqual(self.manifest["closure_entry_count"], 22)
+        self.assertEqual(self.blockers["omitted_count"], 1)
+        omitted = self.blockers["omitted"]
+        self.assertEqual(omitted[0]["path"], "/data/codex/bin/dropbearmulti")
+        self.assertEqual(omitted[0]["reason_code"],
+                         "UNRESOLVED_BINARY_REPRODUCIBILITY")
+        # no legacy MANIFEST on partial
+        self.assertFalse(self.manifest["legacy_manifest_emitted"])
+
+    def test_all_seven_binaries_staged_from_build_output(self):
+        staged = {r["path"]: r for r in self.manifest["staged"]}
+        for name in ("codex_bt_pair_agent", "codex_bthid_keyboard",
+                     "codex_dhcpd", "codex_hal_ltcp", "codex_hbus",
+                     "codex_portal", "codex_webui"):
+            path = "/data/codex/bin/%s" % name
+            self.assertIn(path, staged, name)
+            self.assertEqual(staged[path]["source"]["type"], "build_output",
+                             name)
+
+    def test_staged_files_match_live_manifest(self):
+        live = {e["path"]: e for e in self.live["entries"]}
+        rootfs = self.written["rootfs"]
+        for rec in self.manifest["staged"]:
+            path = rec["path"]
+            disk = os.path.join(rootfs, path[1:])
+            entry = live[path]
+            if entry["kind"] == "symlink":
+                self.assertTrue(os.path.islink(disk), path)
+                self.assertEqual(os.readlink(disk), entry["target"], path)
+            else:
+                data = read_bytes(disk)
+                self.assertEqual(sha256(data), entry["sha256"], path)
+                self.assertEqual(len(data), entry["size"], path)
+                mode = stat.S_IMODE(os.lstat(disk).st_mode)
+                self.assertEqual(
+                    bs.oct_mode(mode),
+                    bs.oct_mode(bs.parse_ls_mode(entry["mode"], path)), path)
+
+    def test_no_stale_live_manifest_staged(self):
+        rootfs = self.written["rootfs"]
+        self.assertFalse(
+            os.path.lexists(os.path.join(rootfs, "data/codex/bin/MANIFEST.txt")))
+        self.assertFalse(self.manifest["legacy_manifest_emitted"])
 
 
 if __name__ == "__main__":

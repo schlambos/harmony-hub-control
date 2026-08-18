@@ -1,10 +1,10 @@
 {
   "binary_reproducibility": {
-    "build_verified_count": 2,
-    "policy": "a historical binary blob match is deployment-lineage evidence only and never establishes source reproducibility; EXACT_SOURCE_REPRODUCIBLE is asserted only from integrity-pinned pilot reports whose rebuilt SHA-256 equals the live digest; codex_hbus carries an explicit RECIPE_UNPROVEN reproduction diagnostic"
+    "build_verified_count": 7,
+    "policy": "a historical binary blob match is deployment-lineage evidence only and never establishes source reproducibility; EXACT_SOURCE_REPRODUCIBLE is asserted only from integrity-pinned pilot reports whose rebuilt SHA-256 equals the live digest; the corrected Zig distribution sweep supersedes the earlier nonexact bt-hal-hbus recipes and the old +20 B observation"
   },
   "blockers": [
-    "UNRESOLVED_BINARY_REPRODUCIBILITY: 6 live payload binary(ies) lack proven exact source reproduction (codex_bt_pair_agent, codex_bthid_keyboard, codex_hal_ltcp, codex_hbus, codex_webui, dropbearmulti); historical binary matches are lineage evidence only",
+    "UNRESOLVED_BINARY_REPRODUCIBILITY: 1 live payload binary(ies) lack proven exact source reproduction (dropbearmulti); historical binary matches are lineage evidence only",
     "LIVE_MANIFEST_STALE: /data/codex/bin/MANIFEST.txt disagrees with the actual live files (4 hash/size mismatches, 1 live binaries missing from the listing)"
   ],
   "entries": [
@@ -21,7 +21,7 @@
       "source_provenance": "GENERATED_DYNAMIC"
     },
     {
-      "build_status": "RECIPE_UNPROVEN",
+      "build_status": "EXACT_SOURCE_REPRODUCIBLE",
       "commit_count": 54,
       "earliest_commit": {
         "committer_date_utc": "2026-07-29T22:17:55Z",
@@ -36,10 +36,10 @@
         "sha": "0828c08a61afd07d60b0504281e58423e186e81d"
       },
       "path": "/data/codex/bin/codex_bt_pair_agent",
-      "source_provenance": "CANDIDATE_SOURCE_BINARY_MATCH_ONLY"
+      "source_provenance": "EXACT_SOURCE_REPRODUCIBLE"
     },
     {
-      "build_status": "RECIPE_UNPROVEN",
+      "build_status": "EXACT_SOURCE_REPRODUCIBLE",
       "commit_count": 54,
       "earliest_commit": {
         "committer_date_utc": "2026-07-29T22:17:55Z",
@@ -54,7 +54,7 @@
         "sha": "0828c08a61afd07d60b0504281e58423e186e81d"
       },
       "path": "/data/codex/bin/codex_bthid_keyboard",
-      "source_provenance": "CANDIDATE_SOURCE_BINARY_MATCH_ONLY"
+      "source_provenance": "EXACT_SOURCE_REPRODUCIBLE"
     },
     {
       "build_status": "EXACT_SOURCE_REPRODUCIBLE",
@@ -75,7 +75,7 @@
       "source_provenance": "EXACT_SOURCE_REPRODUCIBLE"
     },
     {
-      "build_status": "RECIPE_UNPROVEN",
+      "build_status": "EXACT_SOURCE_REPRODUCIBLE",
       "commit_count": 54,
       "earliest_commit": {
         "committer_date_utc": "2026-07-29T22:17:55Z",
@@ -90,13 +90,13 @@
         "sha": "0828c08a61afd07d60b0504281e58423e186e81d"
       },
       "path": "/data/codex/bin/codex_hal_ltcp",
-      "source_provenance": "CANDIDATE_SOURCE_BINARY_MATCH_ONLY"
+      "source_provenance": "EXACT_SOURCE_REPRODUCIBLE"
     },
     {
-      "build_status": "RECIPE_UNPROVEN",
+      "build_status": "EXACT_SOURCE_REPRODUCIBLE",
       "historical_artifact_match": false,
       "path": "/data/codex/bin/codex_hbus",
-      "source_provenance": "CANDIDATE_SOURCE_NO_BINARY_MATCH"
+      "source_provenance": "EXACT_SOURCE_REPRODUCIBLE"
     },
     {
       "build_status": "EXACT_SOURCE_REPRODUCIBLE",
@@ -117,7 +117,7 @@
       "source_provenance": "EXACT_SOURCE_REPRODUCIBLE"
     },
     {
-      "build_status": "HISTORICAL_BINARY_MATCH_ONLY",
+      "build_status": "EXACT_SOURCE_REPRODUCIBLE",
       "commit_count": 32,
       "earliest_commit": {
         "committer_date_utc": "2026-07-31T18:54:29Z",
@@ -132,7 +132,7 @@
         "sha": "93d1d7f91e82bced7b996a2bd51454b1774b16e9"
       },
       "path": "/data/codex/bin/codex_webui",
-      "source_provenance": "CANDIDATE_SOURCE_BINARY_MATCH_ONLY"
+      "source_provenance": "EXACT_SOURCE_REPRODUCIBLE"
     },
     {
       "build_status": "NOT_APPLICABLE_SYMLINK",
@@ -330,6 +330,18 @@
         "label": "evidence/box-snapshot-20260817/diagnostics/binary-pilots/bt-hal-hbus/report.json",
         "sha256": "68b353b647c462b23125c90407a11c6d2f7dafffbdf4a3a1d0509ae2a271ac68",
         "verdict": "RECIPE_UNPROVEN"
+      },
+      {
+        "diagnostic": "webui-repro",
+        "label": "evidence/box-snapshot-20260817/diagnostics/binary-pilots/webui/report.json",
+        "sha256": "656ef734931f7dbe374260ba5ddfda99e9b00961a7f5f440d55999476893f957",
+        "verdict": "EXACT_SOURCE_REPRODUCIBLE"
+      },
+      {
+        "diagnostic": "zig-distribution-sweep",
+        "label": "evidence/box-snapshot-20260817/diagnostics/binary-pilots/zig-distribution-sweep/report.json",
+        "sha256": "29c691aad47462d77740bccb45b4405588b3f5dea3846c0b57ee6a3196c54382",
+        "verdict": "EXACT_SOURCE_REPRODUCIBLE"
       }
     ],
     "generated_from_evidence_utc": "2026-08-18T02:27:38Z",
@@ -436,19 +448,15 @@
   "snapshot_id": "box-snapshot-20260818",
   "status_counts": {
     "build_status": {
-      "EXACT_SOURCE_REPRODUCIBLE": 2,
-      "HISTORICAL_BINARY_MATCH_ONLY": 1,
+      "EXACT_SOURCE_REPRODUCIBLE": 7,
       "NOT_APPLICABLE_SYMLINK": 3,
       "NOT_APPLICABLE_TEXT": 12,
-      "RECIPE_UNPROVEN": 4,
       "UNVERIFIED_THIRD_PARTY": 1
     },
     "source_provenance": {
-      "CANDIDATE_SOURCE_BINARY_MATCH_ONLY": 4,
-      "CANDIDATE_SOURCE_NO_BINARY_MATCH": 1,
       "EXACT_COMMITTED_SOURCE": 7,
       "EXACT_INSTALLER_LITERAL": 2,
-      "EXACT_SOURCE_REPRODUCIBLE": 2,
+      "EXACT_SOURCE_REPRODUCIBLE": 7,
       "GENERATED_DYNAMIC": 1,
       "RECONSTRUCTED_SOURCE_EXACT": 2,
       "SYMLINK_NO_CONTENT": 3,
