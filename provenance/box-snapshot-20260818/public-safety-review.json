@@ -76,7 +76,7 @@
     },
     {
       "path": "/opt/luaworks/tasks/connectserver/netservicestarter.lua",
-      "scope": "live DIAG-variant source bytes reviewed; classified safe for publication; source provenance remains MANUAL_SOURCE_REQUIRED and is tracked separately",
+      "scope": "live DIAG-variant source bytes reviewed; classified safe for publication; source provenance is RECONSTRUCTED_SOURCE_EXACT (reconciliation-branch working tree) and is tracked separately from the safety verdict",
       "verdict": "PUBLIC_SOURCE_SAFE"
     },
     {

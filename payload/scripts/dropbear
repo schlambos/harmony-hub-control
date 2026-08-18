@@ -1,2 +1,2 @@
 #!/bin/sh
-exec /data/codex/bin/dropbear -s -g -K 300 "$@"
+exec /data/codex/bin/dropbear -K 300 "$@"

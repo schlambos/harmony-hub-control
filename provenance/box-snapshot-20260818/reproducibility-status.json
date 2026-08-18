@@ -1,12 +1,10 @@
 {
   "binary_reproducibility": {
-    "build_verified_count": 0,
-    "policy": "a historical binary blob match is deployment-lineage evidence only and never establishes source reproducibility; codex_hbus additionally carries an explicit RECIPE_UNPROVEN reproduction diagnostic"
+    "build_verified_count": 2,
+    "policy": "a historical binary blob match is deployment-lineage evidence only and never establishes source reproducibility; EXACT_SOURCE_REPRODUCIBLE is asserted only from integrity-pinned pilot reports whose rebuilt SHA-256 equals the live digest; codex_hbus carries an explicit RECIPE_UNPROVEN reproduction diagnostic"
   },
   "blockers": [
-    "MANUAL_SOURCE_REQUIRED: /opt/luaworks/tasks/connectserver/netservicestarter.lua has no exact committed source",
-    "MANUAL_SOURCE_REQUIRED: /usr/sbin/dropbear has no exact committed source",
-    "NO_BINARY_BUILD_REPRODUCIBILITY: no live payload binary has proven exact build reproduction from source; historical binary matches are lineage evidence only",
+    "UNRESOLVED_BINARY_REPRODUCIBILITY: 6 live payload binary(ies) lack proven exact source reproduction (codex_bt_pair_agent, codex_bthid_keyboard, codex_hal_ltcp, codex_hbus, codex_webui, dropbearmulti); historical binary matches are lineage evidence only",
     "LIVE_MANIFEST_STALE: /data/codex/bin/MANIFEST.txt disagrees with the actual live files (4 hash/size mismatches, 1 live binaries missing from the listing)"
   ],
   "entries": [
@@ -23,7 +21,7 @@
       "source_provenance": "GENERATED_DYNAMIC"
     },
     {
-      "build_status": "HISTORICAL_BINARY_MATCH_ONLY",
+      "build_status": "RECIPE_UNPROVEN",
       "commit_count": 54,
       "earliest_commit": {
         "committer_date_utc": "2026-07-29T22:17:55Z",
@@ -41,7 +39,7 @@
       "source_provenance": "CANDIDATE_SOURCE_BINARY_MATCH_ONLY"
     },
     {
-      "build_status": "HISTORICAL_BINARY_MATCH_ONLY",
+      "build_status": "RECIPE_UNPROVEN",
       "commit_count": 54,
       "earliest_commit": {
         "committer_date_utc": "2026-07-29T22:17:55Z",
@@ -59,7 +57,7 @@
       "source_provenance": "CANDIDATE_SOURCE_BINARY_MATCH_ONLY"
     },
     {
-      "build_status": "HISTORICAL_BINARY_MATCH_ONLY",
+      "build_status": "EXACT_SOURCE_REPRODUCIBLE",
       "commit_count": 111,
       "earliest_commit": {
         "committer_date_utc": "2026-06-01T23:42:35Z",
@@ -74,10 +72,10 @@
         "sha": "0828c08a61afd07d60b0504281e58423e186e81d"
       },
       "path": "/data/codex/bin/codex_dhcpd",
-      "source_provenance": "CANDIDATE_SOURCE_BINARY_MATCH_ONLY"
+      "source_provenance": "EXACT_SOURCE_REPRODUCIBLE"
     },
     {
-      "build_status": "HISTORICAL_BINARY_MATCH_ONLY",
+      "build_status": "RECIPE_UNPROVEN",
       "commit_count": 54,
       "earliest_commit": {
         "committer_date_utc": "2026-07-29T22:17:55Z",
@@ -101,7 +99,7 @@
       "source_provenance": "CANDIDATE_SOURCE_NO_BINARY_MATCH"
     },
     {
-      "build_status": "HISTORICAL_BINARY_MATCH_ONLY",
+      "build_status": "EXACT_SOURCE_REPRODUCIBLE",
       "commit_count": 111,
       "earliest_commit": {
         "committer_date_utc": "2026-06-01T23:42:35Z",
@@ -116,7 +114,7 @@
         "sha": "0828c08a61afd07d60b0504281e58423e186e81d"
       },
       "path": "/data/codex/bin/codex_portal",
-      "source_provenance": "CANDIDATE_SOURCE_BINARY_MATCH_ONLY"
+      "source_provenance": "EXACT_SOURCE_REPRODUCIBLE"
     },
     {
       "build_status": "HISTORICAL_BINARY_MATCH_ONLY",
@@ -243,7 +241,7 @@
       "historical_artifact_match": false,
       "path": "/opt/luaworks/tasks/connectserver/netservicestarter.lua",
       "public_safety_status": "PUBLIC_SAFETY_PASS",
-      "source_provenance": "MANUAL_SOURCE_REQUIRED"
+      "source_provenance": "RECONSTRUCTED_SOURCE_EXACT"
     },
     {
       "build_status": "NOT_APPLICABLE_TEXT",
@@ -297,7 +295,7 @@
       "build_status": "NOT_APPLICABLE_TEXT",
       "historical_artifact_match": false,
       "path": "/usr/sbin/dropbear",
-      "source_provenance": "MANUAL_SOURCE_REQUIRED"
+      "source_provenance": "RECONSTRUCTED_SOURCE_EXACT"
     },
     {
       "build_status": "NOT_APPLICABLE_TEXT",
@@ -320,15 +318,32 @@
   ],
   "entry_count": 23,
   "generated": {
+    "binary_pilot_reports": [
+      {
+        "diagnostic": "dhcpd-portal-repro",
+        "label": "evidence/box-snapshot-20260817/diagnostics/binary-pilots/dhcpd-portal/report.json",
+        "sha256": "25bd2435e36177ea3aed0d931e1a81a634508f7617b0f621a9967e6f6177eee4",
+        "verdict": "EXACT_SOURCE_REPRODUCIBLE"
+      },
+      {
+        "diagnostic": "bt-hal-hbus-repro",
+        "label": "evidence/box-snapshot-20260817/diagnostics/binary-pilots/bt-hal-hbus/report.json",
+        "sha256": "68b353b647c462b23125c90407a11c6d2f7dafffbdf4a3a1d0509ae2a271ac68",
+        "verdict": "RECIPE_UNPROVEN"
+      }
+    ],
     "generated_from_evidence_utc": "2026-08-18T02:27:38Z",
     "hbus_report": {
       "label": "evidence/box-snapshot-20260817/diagnostics/hbus-repro/report.json",
+      "role": "corroborating prior evidence for codex_hbus",
       "sha256": "0fba15562270cfdfebec92a9f099bb8729372c6c70ed863866203eb05bfac75d",
       "verdict": "RECIPE_UNPROVEN"
     }
   },
   "history": {
-    "gap_policy": "a parent missing from every scanned repo is a gap; parents resolvable in any one repo are not",
+    "baseline_pin_policy": "baseline repo contributes only the pinned ref and its ancestry; the live reconciliation branch is never scanned",
+    "commit_order": "committer epoch, then sha",
+    "gap_policy": "a parent missing from every scanned repo is a gap; parents resolvable in any one repo (baseline completing the shallow historical clone) are not",
     "history_gaps": [],
     "refs": [
       {
@@ -336,7 +351,7 @@
         "tip": "0828c08a61afd07d60b0504281e58423e186e81d"
       },
       {
-        "name": "HEAD",
+        "name": "pinned:d87cebafdee36ec33f1e4ea3055239dbfea6aa09",
         "tip": "d87cebafdee36ec33f1e4ea3055239dbfea6aa09"
       },
       {
@@ -345,10 +360,6 @@
       },
       {
         "name": "refs/heads/main",
-        "tip": "d87cebafdee36ec33f1e4ea3055239dbfea6aa09"
-      },
-      {
-        "name": "refs/heads/reconcile/box-snapshot-20260818",
         "tip": "d87cebafdee36ec33f1e4ea3055239dbfea6aa09"
       },
       {
@@ -368,10 +379,6 @@
         "tip": "d87cebafdee36ec33f1e4ea3055239dbfea6aa09"
       },
       {
-        "name": "refs/remotes/origin/agent/activity-webgui",
-        "tip": "41236d8ae8eeca8f3d54bbdc50c86db6ebcb570b"
-      },
-      {
         "name": "refs/remotes/origin/main",
         "tip": "d87cebafdee36ec33f1e4ea3055239dbfea6aa09"
       }
@@ -379,11 +386,23 @@
     "repos_scanned": [
       {
         "label": "harmony-hub-control read-only historical clone (shallow, primary)",
-        "role": "primary"
+        "refs": [
+          "refs/heads/agent/activity-webgui",
+          "refs/heads/main",
+          "refs/remotes/fork/HEAD",
+          "refs/remotes/fork/agent/activity-webgui",
+          "refs/remotes/fork/main",
+          "refs/remotes/origin/HEAD",
+          "refs/remotes/origin/main"
+        ]
       },
       {
         "label": "harmony-hub-control reconciliation clone (baseline, full ancestry)",
-        "role": "baseline"
+        "pinned_ref": "d87cebafdee36ec33f1e4ea3055239dbfea6aa09",
+        "pinned_tip": "d87cebafdee36ec33f1e4ea3055239dbfea6aa09",
+        "scanned_refs": [
+          "d87cebafdee36ec33f1e4ea3055239dbfea6aa09"
+        ]
       }
     ],
     "scanned_commit_count": 112
@@ -417,19 +436,21 @@
   "snapshot_id": "box-snapshot-20260818",
   "status_counts": {
     "build_status": {
-      "HISTORICAL_BINARY_MATCH_ONLY": 6,
+      "EXACT_SOURCE_REPRODUCIBLE": 2,
+      "HISTORICAL_BINARY_MATCH_ONLY": 1,
       "NOT_APPLICABLE_SYMLINK": 3,
       "NOT_APPLICABLE_TEXT": 12,
-      "RECIPE_UNPROVEN": 1,
+      "RECIPE_UNPROVEN": 4,
       "UNVERIFIED_THIRD_PARTY": 1
     },
     "source_provenance": {
-      "CANDIDATE_SOURCE_BINARY_MATCH_ONLY": 6,
+      "CANDIDATE_SOURCE_BINARY_MATCH_ONLY": 4,
       "CANDIDATE_SOURCE_NO_BINARY_MATCH": 1,
       "EXACT_COMMITTED_SOURCE": 7,
       "EXACT_INSTALLER_LITERAL": 2,
+      "EXACT_SOURCE_REPRODUCIBLE": 2,
       "GENERATED_DYNAMIC": 1,
-      "MANUAL_SOURCE_REQUIRED": 2,
+      "RECONSTRUCTED_SOURCE_EXACT": 2,
       "SYMLINK_NO_CONTENT": 3,
       "THIRD_PARTY_BINARY": 1
     }

@@ -51,6 +51,13 @@ SOURCE_REPO_ENV = "HARMONY_PROVENANCE_SOURCE_REPO"
 SNAPSHOT_ENV = "HARMONY_PROVENANCE_SNAPSHOT_DIR"
 HBUS_ENV = "HARMONY_PROVENANCE_HBUS_REPORT"
 BASELINE_ENV = "HARMONY_PROVENANCE_BASELINE_REPO"
+BASELINE_REF_ENV = "HARMONY_PROVENANCE_BASELINE_REF"
+PILOT_DP_ENV = "HARMONY_PROVENANCE_PILOT_DHCP_PORTAL_REPORT"
+PILOT_BTH_ENV = "HARMONY_PROVENANCE_PILOT_BT_HAL_HBUS_REPORT"
+#: The public base commit pinning the baseline repo contribution.
+BASELINE_REF = (
+    os.environ.get(BASELINE_REF_ENV)
+    or "d87cebafdee36ec33f1e4ea3055239dbfea6aa09")
 
 REAL_SOURCE_REPO = os.environ.get(SOURCE_REPO_ENV, "")
 REAL_SNAPSHOT = (
@@ -61,10 +68,28 @@ REAL_HBUS = (
     or os.path.join(EVIDENCE_ROOT, "diagnostics", "hbus-repro", "report.json"))
 COMMITTED_OUT = os.path.join(REPO_ROOT, "provenance", "box-snapshot-20260818")
 
+def _evidence_default(rel: str, env: str):
+    return (os.environ.get(env)
+            or os.path.join(EVIDENCE_ROOT, rel))
+
+REAL_PILOT_DP = _evidence_default(
+    os.path.join("diagnostics", "binary-pilots", "dhcpd-portal", "report.json"),
+    PILOT_DP_ENV)
+REAL_PILOT_BTH = _evidence_default(
+    os.path.join("diagnostics", "binary-pilots", "bt-hal-hbus", "report.json"),
+    PILOT_BTH_ENV)
+#: exact report digests (regression pins)
+PILOT_DP_SHA256 = ("25bd2435e36177ea3aed0d931e1a81a634508f7617b0f621a9"
+                   "967e6f6177eee4")
+PILOT_BTH_SHA256 = ("68b353b647c462b23125c90407a11c6d2f7dafffbdf4a3a1d05"
+                    "09ae2a271ac68")
+
 REAL_EVIDENCE_AVAILABLE = (
     bool(REAL_SOURCE_REPO)
     and os.path.isdir(os.path.join(REAL_SOURCE_REPO, ".git"))
     and os.path.isfile(os.path.join(REAL_SNAPSHOT, "manifest.json"))
+    and os.path.isfile(REAL_PILOT_DP)
+    and os.path.isfile(REAL_PILOT_BTH)
 )
 
 #: The fresh reconciliation clone completing the shallow historical clone
@@ -220,6 +245,13 @@ def build_fixture(base: str) -> dict:
     write(os.path.join(repo, "payload/bin/codex_hbus"), hbus_repo_bin + b"x")
     commit("c3 side branch hbus rebuild", "1785000200")
     run_git(repo, "checkout", "-q", "main")
+
+    # reconciliation-branch working-tree reconstruction: the live DIAG
+    # netservicestarter and the live dropbear wrapper are carried as
+    # UNCOMMITTED working-tree bytes (absent from the committed union scan),
+    # exactly as the real reconciliation branch does.
+    write(os.path.join(repo, "payload/scripts/netservicestarter.lua"), nss_diag)
+    write(os.path.join(repo, "payload/scripts/dropbear"), dropbear_live)
 
     fixture = {
         "repo": repo,
@@ -412,24 +444,49 @@ class TestFixtureDerivation(unittest.TestCase):
         self.assertEqual(entry["source_provenance"], "THIRD_PARTY_BINARY")
         self.assertEqual(entry["build_status"], "UNVERIFIED_THIRD_PARTY")
 
-    def test_near_miss_wrapper_manual(self):
+    def test_near_miss_wrapper_reconstructed(self):
         entry = self.by_path("/usr/sbin/dropbear")
-        self.assertEqual(entry["source_provenance"], "MANUAL_SOURCE_REQUIRED")
+        self.assertEqual(entry["source_provenance"],
+                         "RECONSTRUCTED_SOURCE_EXACT")
+        self.assertEqual(entry["build_status"], "NOT_APPLICABLE_TEXT")
+        self.assertFalse(entry["artifact_history"]["matched"])
         near = entry["near_miss_analysis"]
         self.assertEqual(near["tokens_only_in_repo"], ["-g", "-s"])
         self.assertEqual(near["tokens_only_in_live"], [])
-        self.assertIn("MANUAL_SOURCE_REQUIRED: /usr/sbin/dropbear",
-                      " ".join(self.repro["blockers"]))
+        self.assertNotIn("MANUAL_SOURCE_REQUIRED: /usr/sbin/dropbear",
+                         " ".join(self.repro["blockers"]))
+        rs = entry["reconciliation_source"]
+        self.assertEqual(rs["repo_path"], "payload/scripts/dropbear")
+        self.assertTrue(rs["exact"])
+        self.assertEqual(rs["sha256"], sha256(self.fixture["dropbear_live"]))
+        self.assertEqual(rs["size"], len(self.fixture["dropbear_live"]))
+        self.assertEqual(rs["introduced_by"], "reconciliation branch")
+        self.assertEqual(rs["historical_provenance"],
+                         "absent from pinned 112-commit union scan")
 
-    def test_diag_manual_source_and_safety_pass(self):
+    def test_diag_reconstructed_and_safety_pass(self):
         entry = self.by_path(
             "/opt/luaworks/tasks/connectserver/netservicestarter.lua")
-        self.assertEqual(entry["source_provenance"], "MANUAL_SOURCE_REQUIRED")
+        self.assertEqual(entry["source_provenance"],
+                         "RECONSTRUCTED_SOURCE_EXACT")
+        self.assertEqual(entry["build_status"], "NOT_APPLICABLE_TEXT")
+        self.assertFalse(entry["artifact_history"]["matched"])
         self.assertEqual(entry["public_safety_status"], "PUBLIC_SAFETY_PASS")
         self.assertNotIn("PUBLIC_SAFETY_PENDING", json.dumps(self.repro))
         self.assertNotIn("PUBLIC_SAFETY_PENDING", json.dumps(self.safety))
         docs = entry["documentation_references"]
         self.assertTrue(docs and docs[0]["repo_path"] == "docs/SESSION_HANDOFF.md")
+        rs = entry["reconciliation_source"]
+        self.assertEqual(rs["repo_path"], "payload/scripts/netservicestarter.lua")
+        self.assertTrue(rs["exact"])
+        self.assertEqual(rs["sha256"], sha256(self.fixture["nss_diag"]))
+        self.assertEqual(rs["size"], len(self.fixture["nss_diag"]))
+        # historical evidence retained: near-miss + backup-original lineage
+        self.assertIsNotNone(entry["near_miss_analysis"])
+        self.assertIsNotNone(entry["backup_original_evidence"])
+        self.assertEqual(
+            entry["backup_original_evidence"]["repo_path"],
+            "payload/scripts/netservicestarter.lua")
 
     def test_safety_review_record_sanitized(self):
         self.assertEqual(self.safety["overall_status"], "PUBLIC_SAFETY_PASS")
@@ -540,6 +597,86 @@ class TestFixtureDerivation(unittest.TestCase):
 
 
 # ---------------------------------------------------------------------------
+# Reconciliation-source failure modes: the reader must fail closed on a
+# missing / symlink / escape / size-hash mismatch, never emit a partial
+# status, and never leak an absolute local path.
+# ---------------------------------------------------------------------------
+
+class TestReconciliationSourceFailures(unittest.TestCase):
+    """The reconciliation-source reader fails closed (UsageError)."""
+
+    @classmethod
+    def setUpClass(cls):
+        cls.base = tempfile.mkdtemp(prefix="derive-prov-rsfail-")
+        cls.fixture = build_fixture(cls.base)
+        cls.repo = cls.fixture["repo"]
+        cls.live_sha = sha256(cls.fixture["nss_diag"])
+        cls.live_size = len(cls.fixture["nss_diag"])
+        cls.nss_path = os.path.join(
+            cls.repo, "payload/scripts/netservicestarter.lua")
+
+    @classmethod
+    def tearDownClass(cls):
+        shutil.rmtree(cls.base, ignore_errors=True)
+
+    def setUp(self):
+        # restore the reconciliation source to its exact live bytes before
+        # each test (tests mutate it independently)
+        write(self.nss_path, self.fixture["nss_diag"])
+
+    def test_missing_source_fails_closed(self):
+        os.unlink(self.nss_path)
+        with self.assertRaises(dp.UsageError):
+            dp.read_reconciliation_source(
+                self.repo, "payload/scripts/netservicestarter.lua",
+                self.live_sha, self.live_size)
+
+    def test_symlink_source_fails_closed(self):
+        os.unlink(self.nss_path)
+        os.symlink("/etc/hosts", self.nss_path)
+        with self.assertRaises(dp.UsageError):
+            dp.read_reconciliation_source(
+                self.repo, "payload/scripts/netservicestarter.lua",
+                self.live_sha, self.live_size)
+
+    def test_escape_path_fails_closed(self):
+        for bad in ("../payload/scripts/netservicestarter.lua",
+                    "payload/scripts/../../etc/passwd",
+                    "/etc/passwd",
+                    "payload/scripts/../scripts/netservicestarter.lua"):
+            with self.assertRaises(dp.UsageError):
+                dp.read_reconciliation_source(
+                    self.repo, bad, self.live_sha, self.live_size)
+
+    def test_size_mismatch_fails_closed(self):
+        with self.assertRaises(dp.UsageError):
+            dp.read_reconciliation_source(
+                self.repo, "payload/scripts/netservicestarter.lua",
+                self.live_sha, self.live_size + 1)
+
+    def test_hash_mismatch_fails_closed(self):
+        with self.assertRaises(dp.UsageError):
+            dp.read_reconciliation_source(
+                self.repo, "payload/scripts/netservicestarter.lua",
+                "0" * 64, self.live_size)
+
+    def test_success_block_has_no_absolute_path(self):
+        block = dp.read_reconciliation_source(
+            self.repo, "payload/scripts/netservicestarter.lua",
+            self.live_sha, self.live_size)
+        self.assertEqual(block["repo_path"],
+                         "payload/scripts/netservicestarter.lua")
+        self.assertTrue(block["exact"])
+        self.assertEqual(block["sha256"], self.live_sha)
+        self.assertEqual(block["size"], self.live_size)
+        self.assertEqual(block["introduced_by"], "reconciliation branch")
+        self.assertEqual(block["historical_provenance"],
+                         "absent from pinned 112-commit union scan")
+        for pattern in PATH_LEAK_PATTERNS:
+            self.assertNotIn(pattern, json.dumps(block))
+
+
+# ---------------------------------------------------------------------------
 # Union-history tests (shallow primary completed by a baseline repo)
 # ---------------------------------------------------------------------------
 
@@ -634,8 +771,13 @@ class TestRealEvidenceDerivation(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
         cls.out = tempfile.mkdtemp(prefix="derive-prov-real-")
+        cls.pilot_paths = [
+            (dp.EVIDENCE_PILOT_DHCP_PORTAL_LABEL, REAL_PILOT_DP),
+            (dp.EVIDENCE_PILOT_BT_HAL_HBUS_LABEL, REAL_PILOT_BTH),
+        ]
         dp.derive(REAL_SNAPSHOT, REAL_SOURCE_REPO, REAL_HBUS, cls.out,
-                  baseline_repo=BASELINE_REPO)
+                  baseline_repo=BASELINE_REPO, baseline_ref=BASELINE_REF,
+                  pilot_report_paths=cls.pilot_paths)
         cls.artifact_map = json.loads(Path(cls.out, "artifact-map.json").read_text())
         cls.repro = json.loads(
             Path(cls.out, "reproducibility-status.json").read_text())
@@ -716,10 +858,15 @@ class TestRealEvidenceDerivation(unittest.TestCase):
         return proc.stdout
 
     def _union_commits(self):
-        """Independent union of rev-list --all across both repos."""
+        """Independent union mirroring the tool's pin policy: every ref of
+        the historical clone plus ONLY the pinned baseline ref's ancestry
+        in the baseline repo."""
         union = set()
-        for repo in (REAL_SOURCE_REPO, BASELINE_REPO):
-            union.update(self._git(repo, "rev-list", "--all").decode().split())
+        union.update(
+            self._git(REAL_SOURCE_REPO, "rev-list", "--all").decode().split())
+        # pinned baseline ref with FULL ancestry (mirrors the tool's walk)
+        union.update(self._git(
+            BASELINE_REPO, "rev-list", BASELINE_REF).decode().split())
         return union
 
     def _git_soft(self, repo, *args):
@@ -804,9 +951,19 @@ class TestRealEvidenceDerivation(unittest.TestCase):
     def test_diag_netservicestarter(self):
         path = "/opt/luaworks/tasks/connectserver/netservicestarter.lua"
         entry = self.by_path(path)
-        self.assertEqual(entry["source_provenance"], "MANUAL_SOURCE_REQUIRED")
+        self.assertEqual(entry["source_provenance"],
+                         "RECONSTRUCTED_SOURCE_EXACT")
+        self.assertEqual(entry["build_status"], "NOT_APPLICABLE_TEXT")
         self.assertEqual(entry["public_safety_status"], "PUBLIC_SAFETY_PASS")
         self.assertFalse(entry["artifact_history"]["matched"])
+        rs = entry["reconciliation_source"]
+        self.assertEqual(rs["repo_path"], "payload/scripts/netservicestarter.lua")
+        self.assertTrue(rs["exact"])
+        self.assertEqual(rs["sha256"], entry["live"]["sha256"])
+        self.assertEqual(rs["size"], entry["live"]["size"])
+        self.assertEqual(rs["introduced_by"], "reconciliation branch")
+        self.assertEqual(rs["historical_provenance"],
+                         "absent from pinned 112-commit union scan")
         # the documented backed-up clean original is the committed blob lineage
         backup = entry["backup_original_evidence"]["committed_variants"]
         clean = [v for v in backup if v["content_md5"]
@@ -890,9 +1047,20 @@ class TestRealEvidenceDerivation(unittest.TestCase):
         # carries the same 48-byte wrapper)
         self.assertEqual(exact["artifact_history"]["commit_count"], 111)
         near = self.by_path("/usr/sbin/dropbear")
-        self.assertEqual(near["source_provenance"], "MANUAL_SOURCE_REQUIRED")
+        self.assertEqual(near["source_provenance"],
+                         "RECONSTRUCTED_SOURCE_EXACT")
+        self.assertEqual(near["build_status"], "NOT_APPLICABLE_TEXT")
+        self.assertFalse(near["artifact_history"]["matched"])
         self.assertEqual(near["near_miss_analysis"]["tokens_only_in_repo"],
                          ["-g", "-s"])
+        rs = near["reconciliation_source"]
+        self.assertEqual(rs["repo_path"], "payload/scripts/dropbear")
+        self.assertTrue(rs["exact"])
+        self.assertEqual(rs["sha256"], near["live"]["sha256"])
+        self.assertEqual(rs["size"], near["live"]["size"])
+        self.assertEqual(rs["introduced_by"], "reconciliation branch")
+        self.assertEqual(rs["historical_provenance"],
+                         "absent from pinned 112-commit union scan")
 
     def test_codexactivity_single_commit_lineage(self):
         entry = self.by_path("/pkg/codexactivity/codexactivity.lua")
@@ -903,21 +1071,39 @@ class TestRealEvidenceDerivation(unittest.TestCase):
                          len(history["commits"]))
 
     def test_no_source_reproducibility_claim_from_binary_match(self):
+        """Reproduction claims come ONLY from integrity-pinned pilots whose
+        rebuilt SHA-256 equals the live digest — never from a historical
+        binary blob match alone."""
         self.assertEqual(
-            self.repro["binary_reproducibility"]["build_verified_count"], 0)
+            self.repro["binary_reproducibility"]["build_verified_count"], 2)
         forbidden = {"VERIFIED", "BUILD_REPRODUCED", "REPRODUCIBLE"}
         for entry in self.repro["entries"]:
             self.assertNotIn(entry["build_status"], forbidden)
-        binaries = [
+        # exact claims must each carry a pilot block with a hash match
+        exact = [e for e in self.artifact_map["entries"]
+                 if e["build_status"] == "EXACT_SOURCE_REPRODUCIBLE"]
+        self.assertEqual(
+            sorted(e["live"]["path"].rsplit("/", 1)[-1] for e in exact),
+            ["codex_dhcpd", "codex_portal"])
+        for entry in exact:
+            pilot = entry["binary_pilot"]
+            self.assertEqual(pilot["rebuilt_matches_live"], True)
+            self.assertIn(entry["live"]["sha256"], pilot["rebuilt_sha256"])
+        # everything else with only a historical blob match stays unverified
+        lineage_only = [
             e for e in self.repro["entries"]
             if e["historical_artifact_match"]
-            and e["source_provenance"] in (
-                "CANDIDATE_SOURCE_BINARY_MATCH_ONLY", "THIRD_PARTY_BINARY")]
-        self.assertGreaterEqual(len(binaries), 7)
-        for entry in binaries:
+            and e["build_status"] not in (
+                "EXACT_SOURCE_REPRODUCIBLE", "NOT_APPLICABLE_TEXT")]
+        for entry in lineage_only:
             self.assertIn(entry["build_status"],
                           ("HISTORICAL_BINARY_MATCH_ONLY",
-                           "UNVERIFIED_THIRD_PARTY"))
+                           "UNVERIFIED_THIRD_PARTY", "RECIPE_UNPROVEN"))
+        self.assertEqual(
+            sorted(e["path"].rsplit("/", 1)[-1]
+                   for e in lineage_only
+                   if e["build_status"] == "HISTORICAL_BINARY_MATCH_ONLY"),
+            ["codex_webui"])
 
     def test_union_history_resolves_gap(self):
         """1a9e270 missing from the shallow historical clone resolves via
@@ -932,9 +1118,124 @@ class TestRealEvidenceDerivation(unittest.TestCase):
         self.assertIn(GAP_PARENT, independent_union)
         self.assertEqual(history["scanned_commit_count"],
                          EXPECTED_UNIQUE_COMMITS)
-        roles = {r["label"]: r["role"] for r in history["repos_scanned"]}
+        repos = {r["label"]: r for r in history["repos_scanned"]}
+        baseline = repos[dp.BASELINE_REPO_LABEL]
+        self.assertEqual(baseline["pinned_ref"], BASELINE_REF)
+        self.assertEqual(baseline["pinned_tip"], BASELINE_REF)
+        self.assertEqual(baseline["scanned_refs"], [BASELINE_REF])
+        # the live reconciliation branch is never among scanned refs
+        self.assertNotIn("refs/heads/reconcile/box-snapshot-20260818",
+                         baseline.get("refs", []))
+
+    def test_reconciliation_ref_immunity(self):
+        """Extra commits/refs in the baseline repo must not change outputs:
+        the baseline is pinned to the public base commit, so new
+        reconciliation commits/refs leave every generated artifact
+        byte-identical and the unique commit count at 112."""
+        # record pre-state
+        before = {
+            name: Path(self.out, name).read_bytes()
+            for name in ("artifact-map.json", "reproducibility-status.json",
+                         "public-payload-manifest.json",
+                         "public-safety-review.json")
+        }
+        repo = Path(BASELINE_REPO, ".git")
+        self.assertTrue(repo.is_dir())
+        # create extra commits + refs directly in the baseline repo's
+        # object store without touching any worktree file: use commit-tree
+        # on the pinned tip's tree with a synthetic parent chain.
+        def git(*args, inp=None, env=None):
+            proc = subprocess.run(
+                ["git", "--no-optional-locks", "-C", str(BASELINE_REPO)]
+                + list(args), capture_output=True, input=inp, env=env)
+            assert proc.returncode == 0, proc.stderr.decode()[:300]
+            return proc.stdout.decode().strip()
+        tree = git("rev-parse", "%s^{tree}" % BASELINE_REF)
+        env_stamp = b"1755500000 +0000"
+        commit = BASELINE_REF
+        for i in range(3):
+            blob = git("hash-object", "-w", "--stdin",
+                       inp=("immunity probe %d\n" % i).encode())
+            new_tree = git("mktree", inp=(
+                "100644 blob %s\timmunity-probe-%d.txt" % (blob, i)
+            ).encode())
+            commit = git(
+                "commit-tree", new_tree, "-p", commit, "-m",
+                "immunity probe %d" % i,
+                env=dict(os.environ,
+                         GIT_AUTHOR_NAME="Probe",
+                         GIT_AUTHOR_EMAIL="probe@example.invalid",
+                         GIT_AUTHOR_DATE=env_stamp.decode(),
+                         GIT_COMMITTER_NAME="Probe",
+                         GIT_COMMITTER_EMAIL="probe@example.invalid",
+                         GIT_COMMITTER_DATE=env_stamp.decode()))
+        git("update-ref", "refs/heads/reconcile/immunity-probe", commit)
+        git("update-ref", "refs/tags/immunity-probe-tag", commit)
+        third = tempfile.mkdtemp(prefix="derive-prov-immune-")
+        try:
+            dp.derive(REAL_SNAPSHOT, REAL_SOURCE_REPO, REAL_HBUS, third,
+                      baseline_repo=BASELINE_REPO, baseline_ref=BASELINE_REF,
+                      pilot_report_paths=self.pilot_paths)
+            for name, data in before.items():
+                self.assertEqual(
+                    Path(third, name).read_bytes(), data,
+                    "%s changed after new baseline commits/refs" % name)
+            repro = json.loads(
+                Path(third, "reproducibility-status.json").read_text())
+            self.assertEqual(
+                repro["history"]["scanned_commit_count"],
+                EXPECTED_UNIQUE_COMMITS)
+        finally:
+            git("update-ref", "-d", "refs/heads/reconcile/immunity-probe")
+            git("update-ref", "-d", "refs/tags/immunity-probe-tag")
+            shutil.rmtree(third, ignore_errors=True)
+
+    def test_pilot_reports_pinned(self):
+        reports = {
+            r["label"]: r for r in
+            self.repro["generated"]["binary_pilot_reports"]
+        }
+        dp_report = reports[dp.EVIDENCE_PILOT_DHCP_PORTAL_LABEL]
+        self.assertEqual(dp_report["sha256"], PILOT_DP_SHA256)
+        self.assertEqual(dp_report["verdict"], "EXACT_SOURCE_REPRODUCIBLE")
+        bth_report = reports[dp.EVIDENCE_PILOT_BT_HAL_HBUS_LABEL]
+        self.assertEqual(bth_report["sha256"], PILOT_BTH_SHA256)
+        self.assertEqual(bth_report["verdict"], "RECIPE_UNPROVEN")
+        # hbus report still linked as corroborating prior evidence
         self.assertEqual(
-            sorted(roles.values()), ["baseline", "primary"])
+            self.repro["generated"]["hbus_report"]["verdict"],
+            "RECIPE_UNPROVEN")
+        self.assertIn("corroborating", self.repro["generated"]["hbus_report"]
+                      ["role"])
+        # per-entry pilot statuses
+        expected = {
+            "/data/codex/bin/codex_dhcpd": "EXACT_SOURCE_REPRODUCIBLE",
+            "/data/codex/bin/codex_portal": "EXACT_SOURCE_REPRODUCIBLE",
+            "/data/codex/bin/codex_bt_pair_agent": "RECIPE_UNPROVEN",
+            "/data/codex/bin/codex_bthid_keyboard": "RECIPE_UNPROVEN",
+            "/data/codex/bin/codex_hal_ltcp": "RECIPE_UNPROVEN",
+            "/data/codex/bin/codex_hbus": "RECIPE_UNPROVEN",
+            "/data/codex/bin/codex_webui": "HISTORICAL_BINARY_MATCH_ONLY",
+            "/data/codex/bin/dropbearmulti": "UNVERIFIED_THIRD_PARTY",
+        }
+        for path, status in expected.items():
+            entry = self.by_path(path)
+            self.assertEqual(entry["build_status"], status, path)
+        self.assertEqual(
+            self.repro["binary_reproducibility"]["build_verified_count"], 2)
+        # blocker names the unresolved binaries precisely
+        blocker = " ".join(
+            b for b in self.repro["blockers"]
+            if b.startswith("UNRESOLVED_BINARY_REPRODUCIBILITY"))
+        for name in ("codex_bt_pair_agent", "codex_bthid_keyboard",
+                     "codex_hal_ltcp", "codex_hbus", "codex_webui",
+                     "dropbearmulti"):
+            self.assertIn(name, blocker)
+        for verified in ("codex_dhcpd", "codex_portal"):
+            self.assertNotIn(verified + ",", blocker)
+        self.assertFalse(any(
+            b.startswith("NO_BINARY_BUILD_REPRODUCIBILITY")
+            for b in self.repro["blockers"]))
 
     def test_no_absolute_path_leakage_real(self):
         for name in Path(COMMITTED_OUT).iterdir():
@@ -961,7 +1262,8 @@ class TestRealEvidenceDerivation(unittest.TestCase):
         second = tempfile.mkdtemp(prefix="derive-prov-real2-")
         try:
             dp.derive(REAL_SNAPSHOT, REAL_SOURCE_REPO, REAL_HBUS, second,
-                      baseline_repo=BASELINE_REPO)
+                      baseline_repo=BASELINE_REPO, baseline_ref=BASELINE_REF,
+                      pilot_report_paths=self.pilot_paths)
             for name in ("artifact-map.json", "reproducibility-status.json",
                          "public-payload-manifest.json",
                          "public-safety-review.json"):

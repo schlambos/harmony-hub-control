@@ -264,6 +264,40 @@ function Build-MqttConfig() {
 $ScriptRoot = Split-Path -Parent $MyInvocation.MyCommand.Path
 $Payload = Join-Path $ScriptRoot "payload"
 
+# Binary started by /data/codex/init.sh as the Bluetooth HID control daemon
+# (btkeyboard ... --hid-control-daemon). It must be deployed for the runtime
+# closure to match init.sh; it is NOT yet rebuilt from source in this tree,
+# so installation fails closed with an explicit source-build blocker instead
+# of silently omitting it (see Ensure-PairAgentDeployable below).
+$PairAgentName = "codex_bt_pair_agent"
+$PairAgentLocal = Join-Path $Payload ("bin\" + $PairAgentName)
+$PairAgentRemote = "/data/codex/bin/$PairAgentName"
+
+# Browser/update binary-manifest contract: the full /data/codex/bin set the
+# deployed runtime expects (init.sh startup + web UI updater listing).
+# codex_bt_pair_agent is included BY CONTRACT; payload/bin/MANIFEST.txt is
+# deliberately NOT regenerated here (that happens with a staged build).
+$BrowserUpdateManifestBinaries = @(
+    "codex_bt_pair_agent",
+    "codex_bthid_keyboard",
+    "codex_dhcpd",
+    "codex_hal_ltcp",
+    "codex_hbus",
+    "codex_portal",
+    "codex_webui",
+    "dropbearmulti"
+)
+
+function Ensure-PairAgentDeployable() {
+    # Fail closed (before any hub contact) when the pair agent is missing:
+    # init.sh starts it at boot and the browser/update manifest contract
+    # lists it, so silently omitting it would deploy a degraded runtime.
+    # The live evidence binary must NOT be copied into payload/.
+    if (-not (Test-Path -LiteralPath $PairAgentLocal -PathType Leaf)) {
+        throw "source-build blocker: $PairAgentRemote is required by /data/codex/init.sh (Bluetooth HID control daemon) and listed in the browser/update binary manifest contract, but $PairAgentLocal is not built from source yet. Build it from payload/source/codex_bt_pair_agent.c (provenance: HISTORICAL_BINARY_MATCH_ONLY, see docs/reconciliation/box-snapshot-20260818.md). Do not copy the live evidence binary into payload/."
+    }
+}
+
 $HubHost = Prompt-IfMissing $HubHost "Harmony hub IP address" -Required
 $defaultKeyPath = Resolve-DefaultKeyPath
 if (-not $KeyPath -and $defaultKeyPath -and (Test-Path -LiteralPath $defaultKeyPath)) {
@@ -282,6 +316,8 @@ if (-not $NoPrompt -and $MqttBroker) {
     if (-not $MqttUser) { $MqttUser = Read-Host "MQTT username (blank if none)" }
     if (-not $MqttPassword) { $MqttPassword = Read-Host "MQTT password (blank if none)" }
 }
+
+Ensure-PairAgentDeployable
 
 Step "Checking SSH"
 $identity = Invoke-Remote "id; uname -a" $null 30000
@@ -313,7 +349,7 @@ if (-not $HubId) {
 Info "using hub id $HubId"
 
 Step "Creating remote backup"
-$backupCmd = 'STAMP=$(date +%Y%m%d-%H%M%S); B=/data/codex-backups/webui-handoff-$STAMP; mkdir -p "$B"; for f in /etc/init.d/rcS.local /opt/luaworks/tasks/connectserver/netservicestarter.lua /usr/sbin/dropbear /usr/sbin/dropbearkey /data/codex/hub_id /data/codex/cloud_blocker.conf /data/codexmqtt/config.json; do if [ -e "$f" ]; then n=$(echo "$f" | sed ''s#/#_#g''); cp -p "$f" "$B/$n"; fi; done; echo "$B"'
+$backupCmd = 'STAMP=$(date +%Y%m%d-%H%M%S); B=/data/codex-backups/webui-handoff-$STAMP; mkdir -p "$B"; for f in /etc/init.d/rcS.local /opt/luaworks/tasks/connectserver/netservicestarter.lua /usr/sbin/dropbear /usr/sbin/dropbearkey /data/codex/hub_id /data/codex/cloud_blocker.conf /data/codex/offline_egress_guard.sh /data/codexmqtt/config.json /pkg/codexactivity/codexactivity.lua /pkg/codexactivity/manifest.json; do if [ -e "$f" ]; then n=$(echo "$f" | sed ''s#/#_#g''); cp -p "$f" "$B/$n"; fi; done; echo "$B"'
 $backupDir = (Invoke-Remote $backupCmd $null 30000).Trim()
 Info "backup=$backupDir"
 
@@ -323,6 +359,7 @@ Upload-Bytes (Join-Path $Payload "bin\codex_dhcpd") "/data/codex/bin/codex_dhcpd
 Upload-Bytes (Join-Path $Payload "bin\codex_hbus") "/data/codex/bin/codex_hbus" "755"
 Upload-Bytes (Join-Path $Payload "bin\codex_hal_ltcp") "/data/codex/bin/codex_hal_ltcp" "755"
 Upload-Bytes (Join-Path $Payload "bin\codex_bthid_keyboard") "/data/codex/bin/codex_bthid_keyboard" "755"
+Upload-Bytes $PairAgentLocal $PairAgentRemote "755"
 Upload-Bytes (Join-Path $Payload "bin\codex_portal") "/data/codex/bin/codex_portal" "755"
 Upload-Bytes (Join-Path $Payload "bin\codex_webui") "/data/codex/bin/codex_webui" "755"
 Upload-Bytes (Join-Path $Payload "scripts\dropbear") "/usr/sbin/dropbear" "755"
@@ -330,6 +367,7 @@ Upload-Bytes (Join-Path $Payload "scripts\dropbearkey") "/usr/sbin/dropbearkey" 
 
 Step "Uploading runtime files"
 Upload-Bytes (Join-Path $Payload "scripts\init.sh") "/data/codex/init.sh" "755"
+Upload-Bytes (Join-Path $Payload "scripts\offline_egress_guard.sh") "/data/codex/offline_egress_guard.sh" "755"
 Upload-Bytes (Join-Path $Payload "scripts\recovery_ap.sh") "/data/codex/recovery_ap.sh" "755"
 Upload-Bytes (Join-Path $Payload "scripts\rcS.local") "/etc/init.d/rcS.local" "755"
 if (-not $SkipCloudSuppression) {
@@ -337,6 +375,7 @@ if (-not $SkipCloudSuppression) {
 } else {
     Info "skipped netservicestarter.lua cloud-suppression patch"
 }
+Upload-Bytes (Join-Path $Payload "activity\codexactivity.lua") "/pkg/codexactivity/codexactivity.lua" "644"
 Upload-Bytes (Join-Path $Payload "mqtt\codexmqtt.lua") "/pkg/codexmqtt/codexmqtt.lua" "644"
 
 Step "Uploading configuration"
@@ -347,24 +386,27 @@ if ($SkipCloudSuppression) {
     Upload-Text "1`n" "/data/codex/cloud_blocker.conf" "644"
 }
 Upload-Text "1`n" "/etc/tdeenable" "644"
+Upload-Text "{""plugin"":""codexactivity""}`n" "/pkg/codexactivity/manifest.json" "644"
 Upload-Text "{""plugin"":""codexmqtt""}`n" "/pkg/codexmqtt/manifest.json" "644"
 Upload-Text (Build-MqttConfig) "/data/codexmqtt/config.json" "600"
 
 Step "Post-install permissions and startup"
-$post = "mkdir -p /data/codex/bin /etc/dropbear /home/root/.ssh /data/codexmqtt /pkg/codexmqtt; " +
+$post = "mkdir -p /data/codex/bin /etc/dropbear /home/root/.ssh /data/codexmqtt /pkg/codexactivity /pkg/codexmqtt; " +
         "ln -sf dropbearmulti /data/codex/bin/dropbear; " +
         "ln -sf dropbearmulti /data/codex/bin/dropbearkey; " +
-        "chmod 755 /data/codex/bin/dropbearmulti /data/codex/bin/codex_dhcpd /data/codex/bin/codex_hbus /data/codex/bin/codex_hal_ltcp /data/codex/bin/codex_bthid_keyboard /data/codex/bin/codex_portal /data/codex/bin/codex_webui /data/codex/init.sh /data/codex/recovery_ap.sh /usr/sbin/dropbear /usr/sbin/dropbearkey /etc/init.d/rcS.local; " +
+        "chmod 755 /data/codex/bin/dropbearmulti /data/codex/bin/codex_dhcpd /data/codex/bin/codex_hbus /data/codex/bin/codex_hal_ltcp /data/codex/bin/codex_bthid_keyboard $PairAgentRemote /data/codex/bin/codex_portal /data/codex/bin/codex_webui /data/codex/init.sh /data/codex/offline_egress_guard.sh /data/codex/recovery_ap.sh /usr/sbin/dropbear /usr/sbin/dropbearkey /etc/init.d/rcS.local; " +
         "chmod 600 /data/codexmqtt/config.json 2>/dev/null || true; " +
         "/bin/busybox sync 2>/dev/null || true"
 Invoke-Remote $post $null 60000 | Out-Null
 
 $start = "killall codex_webui 2>/dev/null || true; killall codex_bthid_keyboard 2>/dev/null || true; " +
+         "if ! ps | grep '[o]ffline_egress_guard' >/dev/null 2>&1; then /data/codex/offline_egress_guard.sh monitor >> /cache/codex-init.log 2>&1 & fi; " +
          "if ! ps | grep '[d]ropbear' >/dev/null 2>&1; then /usr/sbin/dropbear -R -p 22; fi; " +
          "mkdir -p /cache/bin; ln -sf /data/codex/bin/codex_bthid_keyboard /cache/bin/bthid_keyboard; " +
          "/data/codex/bin/codex_webui 8080 >> /cache/codex-init.log 2>&1 & " +
          "/data/codex/bin/codex_bthid_keyboard >> /cache/codex-init.log 2>&1 & " +
          "sleep 1; " +
+         "/data/codex/bin/codex_hbus $(Remote-Quote $HubId) harmony.automation?discover '{""gatewayType"":""codexactivity""}' >> /cache/codex-init.log 2>&1 || true; " +
          "/data/codex/bin/codex_hbus $(Remote-Quote $HubId) harmony.automation?discover '{""gatewayType"":""codexmqtt""}' >> /cache/codex-init.log 2>&1 || true; " +
          "ps | grep '[c]odex_webui' || true; ps | grep '[c]odex_bthid_keyboard' || true; ps | grep '[d]ropbear' || true"
 $running = Invoke-Remote $start $null 90000
@@ -377,6 +419,7 @@ $expected = [ordered]@{
     "/data/codex/bin/codex_hbus" = (Get-FileHash -Algorithm MD5 -LiteralPath (Join-Path $Payload "bin\codex_hbus")).Hash.ToLowerInvariant()
     "/data/codex/bin/codex_hal_ltcp" = (Get-FileHash -Algorithm MD5 -LiteralPath (Join-Path $Payload "bin\codex_hal_ltcp")).Hash.ToLowerInvariant()
     "/data/codex/bin/codex_bthid_keyboard" = (Get-FileHash -Algorithm MD5 -LiteralPath (Join-Path $Payload "bin\codex_bthid_keyboard")).Hash.ToLowerInvariant()
+    "/data/codex/bin/codex_bt_pair_agent" = (Get-FileHash -Algorithm MD5 -LiteralPath $PairAgentLocal).Hash.ToLowerInvariant()
     "/data/codex/bin/codex_portal" = (Get-FileHash -Algorithm MD5 -LiteralPath (Join-Path $Payload "bin\codex_portal")).Hash.ToLowerInvariant()
     "/data/codex/bin/codex_webui" = (Get-FileHash -Algorithm MD5 -LiteralPath (Join-Path $Payload "bin\codex_webui")).Hash.ToLowerInvariant()
 }

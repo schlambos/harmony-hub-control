@@ -25,6 +25,12 @@ Provenance policy (encoded in the statuses this tool emits):
   * A historical git blob whose bytes equal a live *text* artifact
     (scripts/Lua/wrappers/installer-generated manifests) establishes exact
     source provenance for that text.
+  * A live text artifact whose exact bytes are carried by the current
+    reconciliation-branch working tree (absent from the pinned union scan)
+    is recorded as ``RECONSTRUCTED_SOURCE_EXACT`` with a public
+    ``reconciliation_source`` block (repo-relative path, exact SHA-256,
+    size, ``exact: true``, historical provenance, introduced-by).  The
+    reader fails closed on a missing/symlink/escape/size/hash problem.
   * A historical git blob whose bytes equal a live *binary* establishes
     deployment-lineage evidence ONLY.  It never establishes that the binary
     can be rebuilt from the candidate source: ``build_status`` for such
@@ -101,11 +107,29 @@ SOURCE_REPO_ENV = "HARMONY_PROVENANCE_SOURCE_REPO"
 #: tool lives in (derived from __file__, never a hardcoded local path);
 #: override with --baseline-repo or HARMONY_PROVENANCE_BASELINE_REPO.
 BASELINE_REPO_ENV = "HARMONY_PROVENANCE_BASELINE_REPO"
+#: Baseline ref pin ( REQUIRED for deterministic derivation): the baseline
+#: repo contributes ONLY this ref's commit and its ancestry, so a moving
+#: reconciliation branch can never change generated outputs.  Public base
+#: commit recorded in outputs is the resolved full SHA.
+BASELINE_REF_ENV = "HARMONY_PROVENANCE_BASELINE_REF"
+DEFAULT_BASELINE_REF = "d87cebafdee36ec33f1e4ea3055239dbfea6aa09"
+#: Binary pilot reports (integrity-pinned by SHA-256 at load time):
+#: dhcpd/portal EXACT_SOURCE_REPRODUCIBLE; bt/bthid/hal/hbus
+#: RECIPE_UNPROVEN.  Paths are generic; defaults resolve relative to the
+#: repo evidence layout, overridable via CLI/env.
+PILOT_REPORT_DHCP_PORTAL_ENV = "HARMONY_PROVENANCE_PILOT_DHCP_PORTAL_REPORT"
+PILOT_REPORT_BT_HAL_HBUS_ENV = "HARMONY_PROVENANCE_PILOT_BT_HAL_HBUS_REPORT"
 DEFAULT_BASELINE_REPO = REPO_ROOT
 DEFAULT_OUT_DIR = os.path.join(REPO_ROOT, "provenance", SNAPSHOT_ID)
 
 EVIDENCE_MANIFEST_LABEL = "evidence/box-snapshot-20260817/snapshot-nonsecret/manifest.json"
 EVIDENCE_HBUS_LABEL = "evidence/box-snapshot-20260817/diagnostics/hbus-repro/report.json"
+EVIDENCE_PILOT_DHCP_PORTAL_LABEL = (
+    "evidence/box-snapshot-20260817/diagnostics/binary-pilots/"
+    "dhcpd-portal/report.json")
+EVIDENCE_PILOT_BT_HAL_HBUS_LABEL = (
+    "evidence/box-snapshot-20260817/diagnostics/binary-pilots/"
+    "bt-hal-hbus/report.json")
 SOURCE_REPO_LABEL = "harmony-hub-control read-only historical clone (shallow, primary)"
 BASELINE_REPO_LABEL = "harmony-hub-control reconciliation clone (baseline, full ancestry)"
 
@@ -170,7 +194,7 @@ MAPPING: Dict[str, Dict[str, Any]] = {
     "/opt/luaworks/tasks/connectserver/netservicestarter.lua": {
         "category": "script", "safety_reviewed": True,
         "repo_artifact": "payload/scripts/netservicestarter.lua",
-        "repo_source": None},
+        "repo_source": None, "reconciliation_source": True},
     "/pkg/codexactivity/codexactivity.lua": {
         "category": "script",
         "repo_artifact": "payload/activity/codexactivity.lua", "repo_source": None},
@@ -185,7 +209,8 @@ MAPPING: Dict[str, Dict[str, Any]] = {
         "repo_source": None, "installer_literal": '{"plugin":"codexmqtt"}\n'},
     "/usr/sbin/dropbear": {
         "category": "script",
-        "repo_artifact": "payload/scripts/dropbear", "repo_source": None},
+        "repo_artifact": "payload/scripts/dropbear", "repo_source": None,
+        "reconciliation_source": True},
     "/usr/sbin/dropbearkey": {
         "category": "script",
         "repo_artifact": "payload/scripts/dropbearkey", "repo_source": None},
@@ -200,6 +225,15 @@ RE_SHA256 = re.compile(r"\A[0-9a-f]{64}\Z")
 RE_MD5 = re.compile(r"\A[0-9a-f]{32}\Z")
 
 MAX_OTHER_VARIANTS = 8
+
+#: Source provenance for a live text artifact whose exact bytes are carried
+#: by the current reconciliation-branch working tree (absent from the pinned
+#: union scan).  Distinct from EXACT_COMMITTED_SOURCE: the bytes are exact
+#: but were introduced by the reconciliation branch, not committed history.
+STATUS_RECONSTRUCTED = "RECONSTRUCTED_SOURCE_EXACT"
+RECONSTRUCTED_INTRODUCED_BY = "reconciliation branch"
+RECONSTRUCTED_HISTORICAL_PROVENANCE = (
+    "absent from pinned 112-commit union scan")
 
 
 class UsageError(Exception):
@@ -274,8 +308,22 @@ class GitHistory:
     #: in the reconciliation repos)
     REF_PREFIXES = ("refs/heads/", "refs/remotes/", "refs/tags/")
 
-    def __init__(self, repos: List[Tuple[str, str]]) -> None:
-        self.repos: List[Tuple[str, str]] = list(repos)
+    def __init__(self, repos: List[Tuple[str, Any]]) -> None:
+        """repos: (label, repo_path) or (label, repo_path, pinned_ref).
+
+        A `pinned_ref` restricts that repo's contribution to the single
+        named ref (resolved to a commit) and its ancestry — its other
+        refs/branches are NEVER scanned.  This pins determinism when the
+        baseline repo is a live working clone whose reconciliation branch
+        advances.
+        """
+        self.repos: List[Tuple[str, str]] = []
+        self.pinned_refs: Dict[str, str] = {}  # repo_path -> ref name
+        for entry in repos:
+            label, repo_path = entry[0], entry[1]
+            self.repos.append((label, repo_path))
+            if len(entry) >= 3 and entry[2]:
+                self.pinned_refs[repo_path] = entry[2]
         self._commits: Dict[str, Optional[Dict[str, Any]]] = {}
         self._commit_repo: Dict[str, str] = {}
         self._trees: Dict[str, Dict[str, str]] = {}
@@ -315,11 +363,27 @@ class GitHistory:
     # -- refs -------------------------------------------------------------
 
     def refs(self) -> List[Dict[str, str]]:
-        """Union of branch/remote/tag refs plus HEAD across all repos."""
+        """Union of branch/remote/tag refs plus HEAD across all repos.
+
+        Repos with a pinned ref contribute ONLY that ref (resolved to its
+        commit tip); their other refs — including any live reconciliation
+        branch — are never scanned.
+        """
         if self._refs is not None:
             return self._refs
         union: Dict[Tuple[str, str], None] = {}
         for _, repo_path in self.repos:
+            pinned = self.pinned_refs.get(repo_path)
+            if pinned is not None:
+                proc = self._run_in(repo_path, "rev-parse",
+                                    "%s^{commit}" % pinned)
+                tip = proc.stdout.decode().strip()
+                if proc.returncode != 0 or not RE_COMMIT.match(tip):
+                    raise UsageError(
+                        "pinned baseline ref %r not resolvable in its repo"
+                        % (pinned,))
+                union[("pinned:" + pinned, tip)] = None
+                continue
             proc = self._run_in(repo_path, "for-each-ref",
                                 "--format=%(objectname) %(refname)")
             if proc.returncode != 0:
@@ -347,6 +411,18 @@ class GitHistory:
         """Per-repo ref names (labels only; never absolute paths)."""
         out: List[Dict[str, Any]] = []
         for label, repo_path in self.repos:
+            pinned = self.pinned_refs.get(repo_path)
+            if pinned is not None:
+                tip = self._run_in(repo_path, "rev-parse",
+                                   "%s^{commit}" % pinned)
+                tip_sha = tip.stdout.decode().strip()
+                out.append({
+                    "label": label,
+                    "pinned_ref": pinned,
+                    "pinned_tip": tip_sha if RE_COMMIT.match(tip_sha) else None,
+                    "scanned_refs": [pinned],
+                })
+                continue
             proc = self._run_in(repo_path, "for-each-ref",
                                 "--format=%(refname)")
             names = [n for n in proc.stdout.decode("ascii", "replace").splitlines()
@@ -742,6 +818,119 @@ def scan_documentation_references(
 
 
 # ---------------------------------------------------------------------------
+# Binary pilot reports (integrity-pinned ingestion)
+# ---------------------------------------------------------------------------
+
+#: Allowed pilot verdicts and their evidence requirements.  An
+#: EXACT_SOURCE_REPRODUCIBLE verdict is honored ONLY when the report's
+#: builds actually contain the live SHA-256 (checked against the snapshot
+#: entry at derivation time); otherwise the report is recorded but the
+#: verdict is not propagated as a reproduction claim.
+PILOT_VERDICTS_HONORED = ("EXACT_SOURCE_REPRODUCIBLE", "RECIPE_UNPROVEN")
+
+
+def load_pilot_reports(paths: List[Tuple[str, str]]) -> List[Dict[str, Any]]:
+    """Load (label, path) pilot reports, pinning each by SHA-256.
+
+    Returns sanitized report handles: verdict, sha256, label, and the
+    per-binary rebuilt/live digests (no local paths, no bytes).
+    """
+    reports: List[Dict[str, Any]] = []
+    for label, path in paths:
+        if not path or not os.path.isfile(path):
+            continue
+        raw = Path(path).read_bytes()
+        try:
+            data = json.loads(raw.decode("utf-8"))
+        except (UnicodeDecodeError, json.JSONDecodeError) as exc:
+            raise UsageError("pilot report %s is not valid JSON: %s"
+                             % (label, exc)) from exc
+        verdict = data.get("verdict")
+        if verdict not in PILOT_VERDICTS_HONORED:
+            raise UsageError(
+                "pilot report %s carries unrecognized verdict %r"
+                % (label, verdict))
+        digest = sha256_bytes(raw)
+        # collect per-binary built digests from every build map in the
+        # report: "builds"/r1/r2 style (dhcpd-portal) and recipe/follow-up
+        # passes (bt-hal-hbus) all carry {name: {sha256: ...}} records.
+        binaries: Dict[str, Dict[str, Any]] = {}
+
+        def _collect_builds(node: Any) -> None:
+            if isinstance(node, dict):
+                for key, value in node.items():
+                    if (key in ("r1", "r2") and isinstance(value, dict)
+                            and value
+                            and all(isinstance(v, dict) for v in value.values())):
+                        for name, rec in value.items():
+                            if isinstance(rec, dict) and "sha256" in rec:
+                                slot = binaries.setdefault(
+                                    name, {"built_sha256": set()})
+                                slot["built_sha256"].add(rec["sha256"])
+                    else:
+                        _collect_builds(value)
+            elif isinstance(node, list):
+                for item in node:
+                    _collect_builds(item)
+
+        for section in ("builds", "recipe_pass_1", "followup_pass"):
+            _collect_builds(data.get(section, {}))
+        for name, slot in binaries.items():
+            slot["built_sha256"] = sorted(slot["built_sha256"])
+        reports.append({
+            "report_label": label,
+            "diagnostic": data.get("diagnostic"),
+            "verdict": verdict,
+            "report_sha256": digest,
+            "per_binary": {
+                name: {"built_sha256": slot["built_sha256"]}
+                for name, slot in sorted(binaries.items())
+            },
+        })
+    return reports
+
+
+def pilot_verdict_for(path: str, live_sha: Optional[str],
+                      pilot_reports: Optional[List[Dict[str, Any]]]
+                      ) -> Optional[Dict[str, Any]]:
+    """Pilot verdict block for one live binary path, if a report covers it.
+
+    Mapping from live path to the pilot binary name; the report must have
+    actually built that binary and, for EXACT_SOURCE_REPRODUCIBLE, its
+    rebuilt SHA-256 must equal the live digest (integrity + hash + verdict
+    all checked before any reproduction claim propagates).
+    """
+    if not pilot_reports or live_sha is None:
+        return None
+    name = path.rsplit("/", 1)[-1]
+    hbus_alias = {"codex_hbus_6ab8fb9", "codex_hbus_309cec3"}
+    for report in pilot_reports:
+        per_binary = report.get("per_binary", {})
+        slot = per_binary.get(name)
+        if slot is None and name == "codex_hbus":
+            slot = next(
+                (per_binary[alias] for alias in sorted(hbus_alias)
+                 if alias in per_binary), None)
+        if slot is None:
+            continue
+        built = slot.get("built_sha256", [])
+        exact = live_sha in built
+        verdict = report["verdict"]
+        if verdict == "EXACT_SOURCE_REPRODUCIBLE" and not exact:
+            # report does not substantiate an exact claim for THIS binary
+            continue
+        return {
+            "report_label": report["report_label"],
+            "diagnostic": report["diagnostic"],
+            "report_sha256": report["report_sha256"],
+            "verdict": verdict,
+            "rebuilt_matches_live": exact,
+            "rebuilt_sha256": built,
+        }
+    return None
+
+
+# ---------------------------------------------------------------------------
 # Per-entry derivation
 # ---------------------------------------------------------------------------
 
@@ -867,6 +1056,85 @@ def installer_literal_block(
     }
 
 
+def read_reconciliation_source(
+        repo_root: str, repo_path: str,
+        live_sha: str, live_size: int) -> Dict[str, Any]:
+    """Read a reconciliation-branch working-tree source and verify it is
+    byte-identical to the live entry.
+
+    Fails closed (UsageError) on: an unsafe/unnormalized repo_path, a path
+    that escapes the repository (lexically or through symlinks), a missing
+    or non-regular (symlink) file, or a size/SHA-256 mismatch.  The returned
+    block carries only public repo-relative fields — never an absolute path.
+    """
+    if (not isinstance(repo_path, str) or not repo_path
+            or repo_path.startswith("/") or "\x00" in repo_path):
+        raise UsageError(
+            "reconciliation source path is unsafe: %r" % (repo_path,))
+    if (os.path.normpath(repo_path) != repo_path
+            or any(part in ("", ".", "..") for part in repo_path.split("/"))):
+        raise UsageError(
+            "reconciliation source path is not normalized: %r" % (repo_path,))
+    root_lex = os.path.normpath(os.path.abspath(repo_root))
+    root_real = os.path.realpath(root_lex)
+    source_lex = os.path.normpath(os.path.join(root_lex, repo_path))
+    source_real = os.path.realpath(source_lex)
+    # lexical containment (against the lexical root) and resolved containment
+    # (against the symlink-resolved root) must BOTH hold.
+    if not (source_lex == root_lex
+            or source_lex.startswith(root_lex + os.sep)):
+        raise UsageError(
+            "reconciliation source escapes the repository: %r" % (repo_path,))
+    if not (source_real == root_real
+            or source_real.startswith(root_real + os.sep)):
+        raise UsageError(
+            "reconciliation source resolves outside the repository: %r"
+            % (repo_path,))
+    if os.path.islink(source_lex) or not os.path.isfile(source_lex):
+        raise UsageError(
+            "reconciliation source is missing or not a regular file: %r"
+            % (repo_path,))
+    data = Path(source_lex).read_bytes()
+    digest = sha256_bytes(data)
+    if digest != live_sha or len(data) != live_size:
+        raise UsageError(
+            "reconciliation source %r does not match the live entry "
+            "(expected sha256 %s size %d, found sha256 %s size %d)"
+            % (repo_path, live_sha, live_size, digest, len(data)))
+    return {
+        "repo_path": repo_path,
+        "sha256": digest,
+        "size": len(data),
+        "exact": True,
+        "historical_provenance": RECONSTRUCTED_HISTORICAL_PROVENANCE,
+        "introduced_by": RECONSTRUCTED_INTRODUCED_BY,
+    }
+
+
+def backup_original_evidence_block(
+        git: GitHistory, repo_artifact: str) -> Dict[str, Any]:
+    """Committed-variant lineage for a live text artifact whose exact bytes
+    are NOT committed (the documented backed-up clean original)."""
+    history = git.path_history(repo_artifact)
+    clean_evidence = []
+    for blob in sorted(history):
+        digest = git.blob_digest(blob)
+        clean_evidence.append({
+            "git_blob_sha": blob,
+            "content_sha256": digest["sha256"],
+            "content_md5": digest["md5"],
+            "size_bytes": digest["size_bytes"],
+            "commit_count": len(history[blob]),
+        })
+    return {
+        "repo_path": repo_artifact,
+        "committed_variants": clean_evidence,
+        "note": "the documented on-hub backed-up clean original corresponds "
+                "to the committed clean blob lineage; the live DIAG variant "
+                "is not committed anywhere in the scanned history",
+    }
+
+
 def near_miss_analysis(git: GitHistory, repo_path: str,
                        live_bytes: bytes) -> Optional[Dict[str, Any]]:
     """Token-level comparison of the closest committed blob vs live bytes."""
@@ -909,7 +1177,10 @@ def near_miss_analysis(git: GitHistory, repo_path: str,
 
 def derive_entry(snapshot: Snapshot, git: GitHistory, refs: List[Dict[str, str]],
                  entry: Dict[str, Any], hbus_report: Optional[Dict[str, Any]],
-                 expected_symlinks: List[str]) -> Dict[str, Any]:
+                 expected_symlinks: List[str],
+                 pilot_reports: Optional[List[Dict[str, Any]]] = None,
+                 reconciliation_root: Optional[str] = None
+                 ) -> Dict[str, Any]:
     path = entry["path"]
     mapping = MAPPING.get(path)
     if mapping is None:
@@ -937,6 +1208,7 @@ def derive_entry(snapshot: Snapshot, git: GitHistory, refs: List[Dict[str, str]]
         "near_miss_analysis": None,
         "backup_original_evidence": None,
         "documentation_references": None,
+        "reconciliation_source": None,
         "source_provenance": None,
         "build_status": None,
         "public_safety_status": None,
@@ -1053,6 +1325,27 @@ def derive_entry(snapshot: Snapshot, git: GitHistory, refs: List[Dict[str, str]]
             else:
                 record["source_provenance"] = "CANDIDATE_SOURCE_NO_BINARY_MATCH"
                 record["build_status"] = "UNVERIFIED_NO_BINARY_MATCH"
+        # -- integrity-pinned binary pilot reports override build status --
+        # (a pilot verdict is authoritative for its covered binaries whether
+        # or not a committed binary blob also matches: RECIPE_UNPROVEN from
+        # bounded pilots supersedes the lineage-only default; EXACT claims
+        # additionally require the rebuilt SHA-256 to equal the live digest)
+        pilot = pilot_verdict_for(path, live_sha, pilot_reports or [])
+        if pilot is not None:
+            record["binary_pilot"] = pilot
+            record["evidence"].append(pilot["report_label"])
+            record["build_status"] = pilot["verdict"]
+            if pilot["verdict"] == "EXACT_SOURCE_REPRODUCIBLE":
+                record["source_provenance"] = "EXACT_SOURCE_REPRODUCIBLE"
+                record["notes"].append(
+                    "two independent rebuilds from the exact candidate source "
+                    "with the pinned toolchain are byte-identical to the live "
+                    "binary (pilot report integrity-pinned by SHA-256)")
+            else:
+                record["notes"].append(
+                    "bounded binary pilot verdict %s: exact-source "
+                    "reproducibility NOT established for this binary"
+                    % pilot["verdict"])
         return record
 
     # text artifacts: scripts / lua / wrappers / generated manifests
@@ -1082,6 +1375,33 @@ def derive_entry(snapshot: Snapshot, git: GitHistory, refs: List[Dict[str, str]]
             "actual live files")
         return record
 
+    # Reconciliation-branch reconstruction: the exact live bytes are carried
+    # by the current working tree (absent from the pinned union scan).  The
+    # reader fails closed on any missing/symlink/escape/size/hash problem.
+    if mapping.get("reconciliation_source"):
+        assert repo_artifact is not None
+        root = reconciliation_root or REPO_ROOT
+        record["reconciliation_source"] = read_reconciliation_source(
+            root, repo_artifact, live_sha, entry["size"])
+        record["source_provenance"] = STATUS_RECONSTRUCTED
+        record["notes"].append(
+            "live bytes are byte-identical to the current reconciliation-"
+            "branch working-tree source %s (sha256 %s, %d bytes); the bytes "
+            "are absent from the pinned 112-commit union scan and were "
+            "introduced by the reconciliation branch"
+            % (repo_artifact, live_sha, entry["size"]))
+        if mapping.get("safety_reviewed"):
+            record["public_safety_status"] = "PUBLIC_SAFETY_PASS"
+            record["notes"].append(
+                "the completed independent public-safety review classified "
+                "the source bytes PUBLIC_SOURCE_SAFE (see "
+                "public-safety-review.json); the safety verdict makes no "
+                "reproducibility claim and is tracked separately from "
+                "source provenance")
+            record["backup_original_evidence"] = (
+                backup_original_evidence_block(git, repo_artifact))
+        return record
+
     record["source_provenance"] = "MANUAL_SOURCE_REQUIRED"
     if mapping.get("safety_reviewed"):
         record["public_safety_status"] = "PUBLIC_SAFETY_PASS"
@@ -1094,25 +1414,8 @@ def derive_entry(snapshot: Snapshot, git: GitHistory, refs: List[Dict[str, str]]
         # Backed-up clean original evidence: does a committed blob match the
         # documented clean-original digest (docs/SESSION_HANDOFF.md)?
         if repo_artifact is not None:
-            history = git.path_history(repo_artifact)
-            clean_evidence = []
-            for blob in sorted(history):
-                digest = git.blob_digest(blob)
-                clean_evidence.append({
-                    "git_blob_sha": blob,
-                    "content_sha256": digest["sha256"],
-                    "content_md5": digest["md5"],
-                    "size_bytes": digest["size_bytes"],
-                    "commit_count": len(history[blob]),
-                })
-            record["backup_original_evidence"] = {
-                "repo_path": repo_artifact,
-                "committed_variants": clean_evidence,
-                "note": "the documented on-hub backed-up clean original "
-                        "corresponds to the committed clean blob lineage; "
-                        "the live DIAG variant is not committed anywhere in "
-                        "the scanned history",
-            }
+            record["backup_original_evidence"] = (
+                backup_original_evidence_block(git, repo_artifact))
     return record
 
 
@@ -1158,7 +1461,9 @@ def build_public_manifest(snapshot: Snapshot) -> Dict[str, Any]:
 def build_repro_status(
         artifact_map: Dict[str, Any],
         git: GitHistory, refs: List[Dict[str, str]],
-        hbus_report: Optional[Dict[str, Any]]) -> Dict[str, Any]:
+        hbus_report: Optional[Dict[str, Any]],
+        pilot_reports: Optional[List[Dict[str, Any]]] = None
+        ) -> Dict[str, Any]:
     entries: List[Dict[str, Any]] = []
     source_counts: Dict[str, int] = {}
     build_counts: Dict[str, int] = {}
@@ -1187,7 +1492,7 @@ def build_repro_status(
             source_counts.get(entry["source_provenance"], 0) + 1)
         build_counts[entry["build_status"]] = (
             build_counts.get(entry["build_status"], 0) + 1)
-        if entry["build_status"] in ("VERIFIED", "BUILD_REPRODUCED"):
+        if entry["build_status"] == "EXACT_SOURCE_REPRODUCIBLE":
             build_verified += 1
 
     staleness = artifact_map["live_manifest_txt_staleness"]
@@ -1198,11 +1503,19 @@ def build_repro_status(
             blockers.append(
                 "MANUAL_SOURCE_REQUIRED: %s has no exact committed source"
                 % entry["live"]["path"])
-    if build_verified == 0:
+    unresolved = [
+        entry for entry in artifact_map["entries"]
+        if entry.get("category") in BINARY_CATEGORIES
+        and entry["build_status"] not in ("EXACT_SOURCE_REPRODUCIBLE",)
+    ]
+    if unresolved:
         blockers.append(
-            "NO_BINARY_BUILD_REPRODUCIBILITY: no live payload binary has "
-            "proven exact build reproduction from source; historical binary "
-            "matches are lineage evidence only")
+            "UNRESOLVED_BINARY_REPRODUCIBILITY: %d live payload binary(ies) "
+            "lack proven exact source reproduction (%s); historical binary "
+            "matches are lineage evidence only"
+            % (len(unresolved),
+               ", ".join(sorted(e["live"]["path"].rsplit("/", 1)[-1]
+                                for e in unresolved))))
     if staleness.get("stale"):
         blockers.append(
             "LIVE_MANIFEST_STALE: /data/codex/bin/MANIFEST.txt disagrees "
@@ -1225,7 +1538,17 @@ def build_repro_status(
             "label": EVIDENCE_HBUS_LABEL,
             "sha256": hbus_report.get("_sha256"),
             "verdict": hbus_report.get("verdict"),
+            "role": "corroborating prior evidence for codex_hbus",
         }
+    generated["binary_pilot_reports"] = [
+        {
+            "label": report["report_label"],
+            "sha256": report["report_sha256"],
+            "verdict": report["verdict"],
+            "diagnostic": report["diagnostic"],
+        }
+        for report in (pilot_reports or [])
+    ]
 
     return {
         "schema": SCHEMA_REPRO_STATUS,
@@ -1233,17 +1556,18 @@ def build_repro_status(
         "tool": {"name": TOOL_NAME, "version": TOOL_VERSION},
         "generated": generated,
         "history": {
-            "repos_scanned": [
-                {"label": label, "role": role}
-                for (label, _), role in zip(
-                    git.repos, ["primary"] + ["baseline"] * (len(git.repos) - 1))
-            ],
+            "repos_scanned": git.repo_ref_names(),
             "refs": [{"name": r["name"], "tip": r["tip"]} for r in refs],
             "scanned_commit_count": len(git.commits_in_order),
             "history_gaps": sorted(git.gaps),
             "gap_policy": (
                 "a parent missing from every scanned repo is a gap; parents "
-                "resolvable in any one repo are not"),
+                "resolvable in any one repo (baseline completing the "
+                "shallow historical clone) are not"),
+            "baseline_pin_policy": (
+                "baseline repo contributes only the pinned ref and its "
+                "ancestry; the live reconciliation branch is never scanned"),
+            "commit_order": "committer epoch, then sha",
         },
         "entry_count": len(artifact_map["entries"]),
         "status_counts": {
@@ -1255,7 +1579,9 @@ def build_repro_status(
             "policy": (
                 "a historical binary blob match is deployment-lineage "
                 "evidence only and never establishes source "
-                "reproducibility; codex_hbus additionally carries an "
+                "reproducibility; EXACT_SOURCE_REPRODUCIBLE is asserted "
+                "only from integrity-pinned pilot reports whose rebuilt "
+                "SHA-256 equals the live digest; codex_hbus carries an "
                 "explicit RECIPE_UNPROVEN reproduction diagnostic"),
         },
         "public_safety": {
@@ -1302,8 +1628,9 @@ def build_public_safety_review(snapshot: Snapshot) -> Dict[str, Any]:
             verdict["verdict"] = "PUBLIC_SOURCE_SAFE"
             verdict["scope"] = (
                 "live DIAG-variant source bytes reviewed; classified safe "
-                "for publication; source provenance remains "
-                "MANUAL_SOURCE_REQUIRED and is tracked separately")
+                "for publication; source provenance is "
+                "RECONSTRUCTED_SOURCE_EXACT (reconciliation-branch working "
+                "tree) and is tracked separately from the safety verdict")
         if path == "/data/codex/bin/codex_bthid_keyboard":
             verdict["finding_category"] = BTHID_MAC_FINDING_CATEGORY
             verdict["finding_basis"] = (
@@ -1340,12 +1667,18 @@ def build_public_safety_review(snapshot: Snapshot) -> Dict[str, Any]:
 # ---------------------------------------------------------------------------
 
 def derive(snapshot_dir: str, source_repo: str, hbus_report_path: str,
-           out_dir: str, baseline_repo: Optional[str] = None) -> Dict[str, str]:
+           out_dir: str, baseline_repo: Optional[str] = None,
+           baseline_ref: Optional[str] = None,
+           pilot_report_paths: Optional[List[Tuple[str, str]]] = None
+           ) -> Dict[str, str]:
     """Run the full derivation; returns {filename: absolute path} written.
 
     `source_repo` is the primary historical clone; `baseline_repo` (default:
     the repository this tool lives in) supplies missing ancestry during the
-    union scan.  Outputs reference both by sanitized labels only.
+    union scan, pinned to `baseline_ref` so the live reconciliation branch
+    can never change outputs.  `pilot_report_paths` is a list of
+    (label, path) binary pilot reports ingested with SHA-256 integrity
+    pinning.  Outputs reference everything by sanitized labels only.
     """
     snapshot = Snapshot(snapshot_dir)
     for entry in snapshot.entries:
@@ -1354,9 +1687,9 @@ def derive(snapshot_dir: str, source_repo: str, hbus_report_path: str,
     if counts.get("entries") not in (None, len(snapshot.entries)):
         raise UsageError("snapshot manifest counts disagree with entries")
 
-    repos: List[Tuple[str, str]] = [(SOURCE_REPO_LABEL, source_repo)]
+    repos: List[Tuple[Any, ...]] = [(SOURCE_REPO_LABEL, source_repo)]
     if baseline_repo is not None:
-        repos.append((BASELINE_REPO_LABEL, baseline_repo))
+        repos.append((BASELINE_REPO_LABEL, baseline_repo, baseline_ref))
     git = GitHistory(repos)
     git.load_all()
     if not git.commits_in_order:
@@ -1370,6 +1703,8 @@ def derive(snapshot_dir: str, source_repo: str, hbus_report_path: str,
         report["_sha256"] = sha256_bytes(raw)
         hbus_report = report
 
+    pilot_reports = load_pilot_reports(pilot_report_paths or [])
+
     allowlist = snapshot.manifest.get("allowlist") or {}
     expected_symlinks = list(allowlist.get("expected_symlinks") or [])
 
@@ -1378,7 +1713,9 @@ def derive(snapshot_dir: str, source_repo: str, hbus_report_path: str,
     entries = []
     for entry in sorted(snapshot.entries, key=lambda e: e["path"]):
         entries.append(derive_entry(
-            snapshot, git, refs, entry, hbus_report, expected_symlinks))
+            snapshot, git, refs, entry, hbus_report, expected_symlinks,
+            pilot_reports=pilot_reports,
+            reconciliation_root=baseline_repo))
 
     artifact_map: Dict[str, Any] = {
         "schema": SCHEMA_ARTIFACT_MAP,
@@ -1402,8 +1739,21 @@ def derive(snapshot_dir: str, source_repo: str, hbus_report_path: str,
                 "a parent missing from every scanned repo is a gap; parents "
                 "resolvable in any one repo (baseline completing the "
                 "shallow historical clone) are not"),
+            "baseline_pin": (
+                "baseline repo contributes only the pinned ref and its "
+                "ancestry; the live reconciliation branch is never scanned"
+            ) if baseline_ref else None,
             "commit_order": "committer epoch, then sha",
         },
+        "binary_pilot_reports": [
+            {
+                "label": report["report_label"],
+                "sha256": report["report_sha256"],
+                "verdict": report["verdict"],
+                "diagnostic": report["diagnostic"],
+            }
+            for report in pilot_reports
+        ],
         "entry_count": len(entries),
         "entries": entries,
         "live_manifest_txt_staleness": staleness,
@@ -1411,7 +1761,8 @@ def derive(snapshot_dir: str, source_repo: str, hbus_report_path: str,
 
     public_manifest = build_public_manifest(snapshot)
     safety_review = build_public_safety_review(snapshot)
-    repro_status = build_repro_status(artifact_map, git, refs, hbus_report)
+    repro_status = build_repro_status(
+        artifact_map, git, refs, hbus_report, pilot_reports=pilot_reports)
 
     outputs = {
         "artifact-map.json": canonical_json_bytes(artifact_map),
@@ -1432,6 +1783,16 @@ def main(argv: Optional[List[str]] = None) -> int:
     default_source = os.environ.get(SOURCE_REPO_ENV)
     default_baseline = (
         os.environ.get(BASELINE_REPO_ENV) or DEFAULT_BASELINE_REPO)
+    default_baseline_ref = (
+        os.environ.get(BASELINE_REF_ENV) or DEFAULT_BASELINE_REF)
+    default_pilot_dp = os.environ.get(PILOT_REPORT_DHCP_PORTAL_ENV) or (
+        os.path.normpath(os.path.join(
+            DEFAULT_SNAPSHOT_DIR, "..", "diagnostics", "binary-pilots",
+            "dhcpd-portal", "report.json")))
+    default_pilot_bth = os.environ.get(PILOT_REPORT_BT_HAL_HBUS_ENV) or (
+        os.path.normpath(os.path.join(
+            DEFAULT_SNAPSHOT_DIR, "..", "diagnostics", "binary-pilots",
+            "bt-hal-hbus", "report.json")))
     parser = argparse.ArgumentParser(
         prog=TOOL_NAME,
         description="Derive deterministic provenance ledger for %s" % SNAPSHOT_ID)
@@ -1444,7 +1805,19 @@ def main(argv: Optional[List[str]] = None) -> int:
                         help="secondary full-ancestry clone completing the "
                              "union scan (default: this repository; env: %s)"
                              % BASELINE_REPO_ENV)
+    parser.add_argument("--baseline-ref", default=default_baseline_ref,
+                        help="pin the baseline repo to exactly this ref/"
+                             "commit and its ancestry (default: the public "
+                             "base commit; env: %s). Never scans the live "
+                             "reconciliation branch."
+                             % BASELINE_REF_ENV)
     parser.add_argument("--hbus-report", default=DEFAULT_HBUS_REPORT)
+    parser.add_argument("--pilot-dhcp-portal-report", default=default_pilot_dp,
+                        help="binary pilot report for dhcpd/portal (env: %s)"
+                             % PILOT_REPORT_DHCP_PORTAL_ENV)
+    parser.add_argument("--pilot-bt-hal-hbus-report", default=default_pilot_bth,
+                        help="binary pilot report for pair/bthid/hal/hbus "
+                             "(env: %s)" % PILOT_REPORT_BT_HAL_HBUS_ENV)
     parser.add_argument("--out-dir", default=DEFAULT_OUT_DIR)
     args = parser.parse_args(argv)
 
@@ -1460,9 +1833,15 @@ def main(argv: Optional[List[str]] = None) -> int:
         if args.baseline_repo and not os.path.isdir(args.baseline_repo):
             raise UsageError(
                 "baseline repo not found: %s" % args.baseline_repo)
+        pilot_paths = [
+            (EVIDENCE_PILOT_DHCP_PORTAL_LABEL, args.pilot_dhcp_portal_report),
+            (EVIDENCE_PILOT_BT_HAL_HBUS_LABEL, args.pilot_bt_hal_hbus_report),
+        ]
         written = derive(args.snapshot_dir, args.source_repo,
                          args.hbus_report, args.out_dir,
-                         baseline_repo=args.baseline_repo)
+                         baseline_repo=args.baseline_repo,
+                         baseline_ref=args.baseline_ref,
+                         pilot_report_paths=pilot_paths)
     except UsageError as exc:
         print("%s: error: %s" % (TOOL_NAME, exc), file=sys.stderr)
         return 2

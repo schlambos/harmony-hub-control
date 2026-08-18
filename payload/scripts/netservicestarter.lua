@@ -1,8 +1,16 @@
 local hbus = require("tasks.hal.core.hbus"):instance()
+local connectUtils = require("tasks.connectserver.core.utils")
+local engine = require("tasks.connectserver.core.engine")
+local json = require("json")
 local log = require("log").logger("cs.netservicestarter")
 local mfgData = require("tasks.mfg.core.mfgdata")
+local nativeResourceHandler =
+  require("tasks.harmonywebservices.apihandler.resource")
+local nativeSyncHandler = require("tasks.setup.apihandler.sync")
 local prefMgr = require("tasks.harmonywebservices.core.preferencemanager")
+local resMgr = require("tasks.harmonywebservices.core.resourcemanager")
 local session = require("tasks.harmonywebservices.core.session")
+local string = require("string")
 local system = require("system")
 
 MSG_NETSERVICE_NEW_ADDRESS = "cs.netservicestarter_new_address"
@@ -28,6 +36,237 @@ local function cloudBlockerEnabled()
   local value = string.lower(tostring(f:read("*l") or ""))
   f:close()
   return not (value == "0" or value == "off" or value == "false" or value == "disabled" or value == "allow" or value == "allowed")
+end
+
+local function localResourceName(params)
+  local uri = tostring(params and params.uri or "")
+  local known = {
+    "ActivityList",
+    "DeviceList",
+    "MapList",
+    "FunctionList",
+    "CapabilityList",
+    "ProtocolList",
+    "InstallerInfo",
+    "Settings",
+    "Context"
+  }
+  for _, name in ipairs(known) do
+    if string.find(uri, "/" .. name, 1, true) then
+      return name
+    end
+  end
+  if string.find(uri, "HomeAutomationService/Config", 1, true) then
+    return "AutomationConfig"
+  end
+  if string.find(uri, "content://1.0/user", 1, true) then
+    return "ContentUser"
+  end
+  local deviceId = string.match(uri, "/device/(%d+)%-")
+  if not deviceId and params and params.deviceId then
+    deviceId = tostring(params.deviceId)
+  end
+  if deviceId and string.find(uri, "content://1.0/device", 1, true) then
+    return "CD_" .. deviceId
+  end
+  return nil
+end
+
+local function offlineResourceGet(cmd, verb, params)
+  if not cloudBlockerEnabled() then
+    return nativeResourceHandler.processGetResource(cmd, verb, params)
+  end
+  params = params or {}
+  connectUtils.fixHbusData(cmd, verb, params)
+  local uri = tostring(params.uri or "")
+  local resourceName = localResourceName(params)
+  if not resourceName then
+    log.notice("codex offline guard blocked resource get", uri)
+    local code = string.find(uri, "sus://", 1, true) and "304" or "404"
+    return connectUtils.createResponse(cmd, "200", "OK", {
+      code = code,
+      uri = uri,
+      localOnly = true
+    })
+  end
+  local status, etag, resource = resMgr.getResource(resourceName)
+  if tostring(status or "") ~= "200" then
+    log.notice(
+      "codex offline guard could not serve local resource",
+      resourceName
+    )
+    return connectUtils.createResponse(cmd, "200", "OK", {
+      code = "404",
+      uri = uri,
+      localOnly = true
+    })
+  end
+  if params.encode then
+    resource = json.encode(resource)
+  end
+  log.notice("codex offline guard served local resource", resourceName)
+  return connectUtils.createResponse(cmd, "200", "OK", {
+    code = "200",
+    uri = uri,
+    etag = etag,
+    hetag = resMgr.getHubEtag(resourceName),
+    resource = resource,
+    localOnly = true
+  })
+end
+
+local function offlineResourcePut(cmd, verb, params)
+  if not cloudBlockerEnabled() then
+    return nativeResourceHandler.processPutResource(cmd, verb, params)
+  end
+  params = params or {}
+  connectUtils.fixHbusData(cmd, verb, params)
+  local uri = tostring(params.uri or "")
+  local resourceName = localResourceName(params)
+  local etag
+  local hetag
+  if resourceName then
+    etag = resMgr.getEtag(resourceName)
+    hetag = resMgr.getHubEtag(resourceName)
+  end
+  -- CODEX DIAG (removable, behaviour-neutral): capture the paired remote's put payload
+  do
+    local body = params.resource
+    local encoded
+    if type(body) == "string" then
+      encoded = body
+    elseif body ~= nil then
+      local ok, enc = pcall(json.encode, body)
+      encoded = ok and enc or nil
+    end
+    log.notice(
+      "codex put payload",
+      uri,
+      "type", type(body),
+      "len", encoded and #encoded or 0
+    )
+    if encoded and #encoded < 262144 then
+      local path = "/var/volatile/codex-put-" .. tostring(resourceName or "unknown") .. ".json"
+      local f = io.open(path, "w")
+      if f then
+        f:write(encoded)
+        f:close()
+      end
+    end
+    if type(params) == "table" then
+      local names = {}
+      for k in pairs(params) do
+        names[#names + 1] = tostring(k)
+      end
+      log.notice("codex put param keys", uri, table.concat(names, ","))
+    end
+  end
+  log.notice(
+    "codex offline guard acknowledged resource put without cloud or mutation",
+    uri
+  )
+  return connectUtils.createResponse(cmd, "200", "OK", {
+    code = "204",
+    uri = uri,
+    etag = etag,
+    hetag = hetag,
+    localOnly = true
+  })
+end
+
+local function offlineSyncDefault(cmd, verb, params)
+  if not cloudBlockerEnabled() then
+    return nativeSyncHandler.processCmdDefault(cmd, verb, params)
+  end
+  log.notice("codex offline guard acknowledged local-only sync", cmd)
+  return connectUtils.createResponse(cmd, "200", "OK", {
+    localOnly = true
+  })
+end
+
+local function offlineSyncRemoteChanges(cmd, verb, params)
+  if not cloudBlockerEnabled() then
+    return nativeSyncHandler.processSyncRemoteChangesCommand(cmd, verb, params)
+  end
+  log.notice(
+    "codex offline guard discarded cloud-bound remote change queue request",
+    cmd
+  )
+  return connectUtils.createResponse(cmd, "200", "OK", {
+    localOnly = true
+  })
+end
+
+local function offlineConfigChanged(cmd, verb, params)
+  if not cloudBlockerEnabled() then
+    return nativeSyncHandler.processConfigChangedCommand(cmd, verb, params)
+  end
+  log.notice("codex offline guard ignored cloud-stale marker", cmd)
+  return connectUtils.createResponse(cmd, "200", "OK", {
+    localOnly = true
+  })
+end
+
+local function offlineSyncBegin(cmd, verb, params)
+  if not cloudBlockerEnabled() then
+    return nativeSyncHandler.processCmdBegin(cmd, verb, params)
+  end
+  return offlineSyncDefault(cmd, verb, params)
+end
+
+local function offlineSyncEnd(cmd, verb, params)
+  if not cloudBlockerEnabled() then
+    return nativeSyncHandler.processCmdEnd(cmd, verb, params)
+  end
+  return offlineSyncDefault(cmd, verb, params)
+end
+
+local function offlineSyncContentChanged(cmd, verb, params)
+  if not cloudBlockerEnabled() then
+    return nativeSyncHandler.processCmdContentChanged(cmd, verb, params)
+  end
+  return offlineSyncDefault(cmd, verb, params)
+end
+
+local function offlineDeleteResources(cmd, verb, params)
+  if not cloudBlockerEnabled() then
+    return nativeSyncHandler.processCmdDeleteResources(cmd, verb, params)
+  end
+  log.notice("codex offline guard refused resource deletion", cmd)
+  return connectUtils.createResponse(cmd, "200", "OK", {
+    localOnly = true
+  })
+end
+
+local function installOfflineApiGuards()
+  engine.registerMessage(
+    "proxy.resource?get", nil, offlineResourceGet
+  )
+  engine.registerMessage(
+    "proxy.resource?put", nil, offlineResourcePut
+  )
+  engine.registerMessage(
+    "setup.configchanged", nil, offlineConfigChanged
+  )
+  engine.registerMessage(
+    "setup.sync?begin", nil, offlineSyncBegin
+  )
+  engine.registerMessage(
+    "setup.sync?end", nil, offlineSyncEnd
+  )
+  engine.registerMessage(
+    "setup.sync?contentchanged", nil, offlineSyncContentChanged
+  )
+  engine.registerMessage(
+    "setup.sync?deleteresources", nil, offlineDeleteResources
+  )
+  engine.registerMessage(
+    "setup.sync", nil, offlineSyncDefault
+  )
+  engine.registerMessage(
+    "setup.syncremotechanges", nil, offlineSyncRemoteChanges
+  )
+  log.notice("codex offline HBus guards registered")
 end
 
 local function startCloudModule(label, moduleName)
@@ -133,6 +372,8 @@ local function handleEvent(event)
     end
   end
 end
+
+installOfflineApiGuards()
 
 if mfgData.hasNetwork == true then
   while not system.isMessageRegistered("config_unload") or not system.isMessageRegistered("get_setup_account") do

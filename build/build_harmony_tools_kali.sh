@@ -32,6 +32,7 @@ STRIP=mips-buildroot-linux-uclibc-strip
 "$CC" -Os -static -s -o "$OUT/codex_hbus" "$SRC/codex_hbus.c"
 "$CC" -Os -static -s -o "$OUT/codex_hal_ltcp" "$SRC/codex_hal_ltcp.c"
 "$CC" -Os -static -s -o "$OUT/codex_bthid_keyboard" "$SRC/codex_bthid_keyboard.c"
+"$CC" -Os -static -s -o "$OUT/codex_bt_pair_agent" "$SRC/codex_bt_pair_agent.c"
 "$CC" -Os -static -s -o "$OUT/codex_webui" "$SRC/codex_webui.c"
 
 DROPBEAR_VERSION=2025.89
@@ -69,7 +70,7 @@ cp dropbearmulti "$OUT/dropbearmulti"
 cd "$OUT"
 ln -sf dropbearmulti dropbear
 ln -sf dropbearmulti dropbearkey
-md5sum codex_dhcpd codex_portal codex_hbus codex_hal_ltcp codex_bthid_keyboard codex_webui dropbearmulti > MD5SUMS
-file codex_dhcpd codex_portal codex_hbus codex_hal_ltcp codex_bthid_keyboard codex_webui dropbearmulti > FILES
-ls -l codex_dhcpd codex_portal codex_hbus codex_hal_ltcp codex_bthid_keyboard codex_webui dropbearmulti > MANIFEST.txt
+md5sum codex_dhcpd codex_portal codex_hbus codex_hal_ltcp codex_bthid_keyboard codex_bt_pair_agent codex_webui dropbearmulti > MD5SUMS
+file codex_dhcpd codex_portal codex_hbus codex_hal_ltcp codex_bthid_keyboard codex_bt_pair_agent codex_webui dropbearmulti > FILES
+ls -l codex_dhcpd codex_portal codex_hbus codex_hal_ltcp codex_bthid_keyboard codex_bt_pair_agent codex_webui dropbearmulti > MANIFEST.txt
 cat MD5SUMS >> MANIFEST.txt

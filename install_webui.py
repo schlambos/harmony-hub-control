@@ -25,6 +25,53 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parent
 PAYLOAD = ROOT / "payload"
 
+#: Binary started by /data/codex/init.sh as the Bluetooth HID control
+#: daemon (btkeyboard ... --hid-control-daemon).  It must be deployed for
+#: the runtime closure to match init.sh; it is NOT yet rebuilt from source
+#: in this tree, so installation fails closed with an explicit source-build
+#: blocker instead of silently omitting it (see ensure_pair_agent_deployable).
+PAIR_AGENT_NAME = "codex_bt_pair_agent"
+PAIR_AGENT_LOCAL = PAYLOAD / "bin" / PAIR_AGENT_NAME
+PAIR_AGENT_REMOTE = "/data/codex/bin/codex_bt_pair_agent"
+
+#: Browser/update binary-manifest contract: the full /data/codex/bin set
+#: the deployed runtime expects (init.sh startup + web UI updater listing).
+#: codex_bt_pair_agent is included BY CONTRACT; payload/bin/MANIFEST.txt is
+#: deliberately NOT regenerated here (that happens with a staged build).
+BROWSER_UPDATE_MANIFEST_BINARIES = (
+    "codex_bt_pair_agent",
+    "codex_bthid_keyboard",
+    "codex_dhcpd",
+    "codex_hal_ltcp",
+    "codex_hbus",
+    "codex_portal",
+    "codex_webui",
+    "dropbearmulti",
+)
+
+
+def ensure_pair_agent_deployable() -> None:
+    """Fail closed (before any hub contact) when the pair agent is missing.
+
+    init.sh starts codex_bt_pair_agent at boot and the browser/update
+    manifest contract lists it, so silently omitting it would deploy a
+    degraded runtime.  The binary is not yet rebuilt from
+    payload/source/codex_bt_pair_agent.c in this tree; until it is built,
+    installation stops with this explicit source-build blocker.  The live
+    evidence binary must NOT be copied into payload/.
+    """
+    if not PAIR_AGENT_LOCAL.is_file():
+        raise RuntimeError(
+            f"source-build blocker: {PAIR_AGENT_REMOTE} is required by "
+            "/data/codex/init.sh (Bluetooth HID control daemon) and listed "
+            "in the browser/update binary manifest contract, but "
+            f"{PAIR_AGENT_LOCAL} is not built from source yet. Build it "
+            "from payload/source/codex_bt_pair_agent.c (provenance: "
+            "HISTORICAL_BINARY_MATCH_ONLY, see "
+            "docs/reconciliation/box-snapshot-20260818.md). Do not copy "
+            "the live evidence binary into payload/."
+        )
+
 
 def step(text: str) -> None:
     print(f"\n== {text} ==")
@@ -261,6 +308,8 @@ class Installer:
         return json.dumps(cfg, separators=(",", ":")) + "\n"
 
     def run(self) -> None:
+        ensure_pair_agent_deployable()
+
         step("Checking SSH")
         identity = self.run_remote("id; uname -a", timeout=30)
         print(identity.strip())
@@ -290,7 +339,7 @@ class Installer:
 STAMP=$(date +%Y%m%d-%H%M%S)
 B=/data/codex-backups/webui-handoff-$STAMP
 mkdir -p "$B"
-for f in /etc/init.d/rcS.local /opt/luaworks/tasks/connectserver/netservicestarter.lua /usr/sbin/dropbear /usr/sbin/dropbearkey /data/codex/hub_id /data/codex/cloud_blocker.conf /data/codexmqtt/config.json; do
+for f in /etc/init.d/rcS.local /opt/luaworks/tasks/connectserver/netservicestarter.lua /usr/sbin/dropbear /usr/sbin/dropbearkey /data/codex/hub_id /data/codex/cloud_blocker.conf /data/codex/offline_egress_guard.sh /data/codexmqtt/config.json /pkg/codexactivity/codexactivity.lua /pkg/codexactivity/manifest.json; do
   if [ -e "$f" ]; then
     n=$(echo "$f" | sed 's#/#_#g')
     cp -p "$f" "$B/$n"
@@ -307,6 +356,7 @@ echo "$B"
         self.upload_bytes(PAYLOAD / "bin" / "codex_hbus", "/data/codex/bin/codex_hbus", "755")
         self.upload_bytes(PAYLOAD / "bin" / "codex_hal_ltcp", "/data/codex/bin/codex_hal_ltcp", "755")
         self.upload_bytes(PAYLOAD / "bin" / "codex_bthid_keyboard", "/data/codex/bin/codex_bthid_keyboard", "755")
+        self.upload_bytes(PAIR_AGENT_LOCAL, PAIR_AGENT_REMOTE, "755")
         self.upload_bytes(PAYLOAD / "bin" / "codex_portal", "/data/codex/bin/codex_portal", "755")
         self.upload_bytes(PAYLOAD / "bin" / "codex_webui", "/data/codex/bin/codex_webui", "755")
         self.upload_bytes(PAYLOAD / "scripts" / "dropbear", "/usr/sbin/dropbear", "755")
@@ -314,6 +364,11 @@ echo "$B"
 
         step("Uploading runtime files")
         self.upload_bytes(PAYLOAD / "scripts" / "init.sh", "/data/codex/init.sh", "755")
+        self.upload_bytes(
+            PAYLOAD / "scripts" / "offline_egress_guard.sh",
+            "/data/codex/offline_egress_guard.sh",
+            "755",
+        )
         self.upload_bytes(PAYLOAD / "scripts" / "recovery_ap.sh", "/data/codex/recovery_ap.sh", "755")
         self.upload_bytes(PAYLOAD / "scripts" / "rcS.local", "/etc/init.d/rcS.local", "755")
         if not self.args.skip_cloud_suppression:
@@ -324,23 +379,32 @@ echo "$B"
             )
         else:
             info("skipped netservicestarter.lua cloud-suppression patch")
+        self.upload_bytes(
+            PAYLOAD / "activity" / "codexactivity.lua",
+            "/pkg/codexactivity/codexactivity.lua",
+            "644",
+        )
         self.upload_bytes(PAYLOAD / "mqtt" / "codexmqtt.lua", "/pkg/codexmqtt/codexmqtt.lua", "644")
 
         step("Uploading configuration")
         self.upload_text(f"{hub_id}\n", "/data/codex/hub_id", "644")
         self.upload_text("0\n" if self.args.skip_cloud_suppression else "1\n", "/data/codex/cloud_blocker.conf", "644")
         self.upload_text("1\n", "/etc/tdeenable", "644")
+        self.upload_text('{"plugin":"codexactivity"}\n', "/pkg/codexactivity/manifest.json", "644")
         self.upload_text('{"plugin":"codexmqtt"}\n', "/pkg/codexmqtt/manifest.json", "644")
         self.upload_text(self.build_mqtt_config(), "/data/codexmqtt/config.json", "600")
 
         step("Post-install permissions and startup")
         post = (
-            "mkdir -p /data/codex/bin /etc/dropbear /home/root/.ssh /data/codexmqtt /pkg/codexmqtt; "
+            "mkdir -p /data/codex/bin /etc/dropbear /home/root/.ssh /data/codexmqtt /pkg/codexactivity /pkg/codexmqtt; "
             "ln -sf dropbearmulti /data/codex/bin/dropbear; "
             "ln -sf dropbearmulti /data/codex/bin/dropbearkey; "
             "chmod 755 /data/codex/bin/dropbearmulti /data/codex/bin/codex_dhcpd /data/codex/bin/codex_hbus "
-            "/data/codex/bin/codex_hal_ltcp /data/codex/bin/codex_bthid_keyboard /data/codex/bin/codex_portal "
-            "/data/codex/bin/codex_webui /data/codex/init.sh /data/codex/recovery_ap.sh /usr/sbin/dropbear "
+            "/data/codex/bin/codex_hal_ltcp /data/codex/bin/codex_bthid_keyboard "
+            f"{PAIR_AGENT_REMOTE} "
+            "/data/codex/bin/codex_portal "
+            "/data/codex/bin/codex_webui /data/codex/init.sh /data/codex/offline_egress_guard.sh "
+            "/data/codex/recovery_ap.sh /usr/sbin/dropbear "
             "/usr/sbin/dropbearkey /etc/init.d/rcS.local; "
             "chmod 600 /data/codexmqtt/config.json 2>/dev/null || true; "
             "/bin/busybox sync 2>/dev/null || true"
@@ -349,11 +413,15 @@ echo "$B"
 
         start = (
             "killall codex_webui 2>/dev/null || true; killall codex_bthid_keyboard 2>/dev/null || true; "
+            "if ! ps | grep '[o]ffline_egress_guard' >/dev/null 2>&1; then "
+            "/data/codex/offline_egress_guard.sh monitor >> /cache/codex-init.log 2>&1 & fi; "
             "if ! ps | grep '[d]ropbear' >/dev/null 2>&1; then /usr/sbin/dropbear -R -p 22; fi; "
             "mkdir -p /cache/bin; ln -sf /data/codex/bin/codex_bthid_keyboard /cache/bin/bthid_keyboard; "
             "/data/codex/bin/codex_webui 8080 >> /cache/codex-init.log 2>&1 & "
             "/data/codex/bin/codex_bthid_keyboard >> /cache/codex-init.log 2>&1 & "
             "sleep 1; "
+            f"/data/codex/bin/codex_hbus {remote_quote(hub_id)} harmony.automation?discover "
+            f"{remote_quote('{\"gatewayType\":\"codexactivity\"}')} >> /cache/codex-init.log 2>&1 || true; "
             f"/data/codex/bin/codex_hbus {remote_quote(hub_id)} harmony.automation?discover "
             f"{remote_quote('{\"gatewayType\":\"codexmqtt\"}')} >> /cache/codex-init.log 2>&1 || true; "
             "ps | grep '[c]odex_webui' || true; ps | grep '[c]odex_bthid_keyboard' || true; ps | grep '[d]ropbear' || true"
@@ -367,6 +435,7 @@ echo "$B"
             "/data/codex/bin/codex_hbus": local_md5(PAYLOAD / "bin" / "codex_hbus"),
             "/data/codex/bin/codex_hal_ltcp": local_md5(PAYLOAD / "bin" / "codex_hal_ltcp"),
             "/data/codex/bin/codex_bthid_keyboard": local_md5(PAYLOAD / "bin" / "codex_bthid_keyboard"),
+            PAIR_AGENT_REMOTE: local_md5(PAIR_AGENT_LOCAL),
             "/data/codex/bin/codex_portal": local_md5(PAYLOAD / "bin" / "codex_portal"),
             "/data/codex/bin/codex_webui": local_md5(PAYLOAD / "bin" / "codex_webui"),
         }

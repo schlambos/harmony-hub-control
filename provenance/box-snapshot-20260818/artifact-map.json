@@ -1,4 +1,18 @@
 {
+  "binary_pilot_reports": [
+    {
+      "diagnostic": "dhcpd-portal-repro",
+      "label": "evidence/box-snapshot-20260817/diagnostics/binary-pilots/dhcpd-portal/report.json",
+      "sha256": "25bd2435e36177ea3aed0d931e1a81a634508f7617b0f621a9967e6f6177eee4",
+      "verdict": "EXACT_SOURCE_REPRODUCIBLE"
+    },
+    {
+      "diagnostic": "bt-hal-hbus-repro",
+      "label": "evidence/box-snapshot-20260817/diagnostics/binary-pilots/bt-hal-hbus/report.json",
+      "sha256": "68b353b647c462b23125c90407a11c6d2f7dafffbdf4a3a1d0509ae2a271ac68",
+      "verdict": "RECIPE_UNPROVEN"
+    }
+  ],
   "canonical": false,
   "entries": [
     {
@@ -24,6 +38,7 @@
       "near_miss_analysis": null,
       "notes": [],
       "public_safety_status": null,
+      "reconciliation_source": null,
       "repo_artifact_path": null,
       "repo_source_path": null,
       "source_history": null,
@@ -171,6 +186,7 @@
         "live MANIFEST.txt is a distinct generated instance with no byte-identical committed counterpart; see live_manifest_txt_staleness for its disagreement with the actual live files"
       ],
       "public_safety_status": null,
+      "reconciliation_source": null,
       "repo_artifact_path": "payload/bin/MANIFEST.txt",
       "repo_source_path": null,
       "source_history": null,
@@ -254,26 +270,37 @@
         "other_committed_variants": [],
         "other_committed_variants_truncated": false,
         "refs_with_match_at_tip": {
-          "HEAD": false,
+          "HEAD": true,
+          "pinned:d87cebafdee36ec33f1e4ea3055239dbfea6aa09": false,
           "refs/heads/agent/activity-webgui": true,
           "refs/heads/main": false,
-          "refs/heads/reconcile/box-snapshot-20260818": false,
           "refs/remotes/fork/HEAD": false,
           "refs/remotes/fork/agent/activity-webgui": true,
           "refs/remotes/fork/main": false,
           "refs/remotes/origin/HEAD": false,
-          "refs/remotes/origin/agent/activity-webgui": true,
           "refs/remotes/origin/main": false
         },
         "repo_path_scanned": "payload/bin/codex_bt_pair_agent",
         "size_bytes": 111796
       },
       "backup_original_evidence": null,
-      "build_status": "HISTORICAL_BINARY_MATCH_ONLY",
+      "binary_pilot": {
+        "diagnostic": "bt-hal-hbus-repro",
+        "rebuilt_matches_live": false,
+        "rebuilt_sha256": [
+          "6ac56393265f6f2fd9377790b73f5c2ebdc77473ec453542c9ce009205ad90fc",
+          "f13cf5de9405bd3296d126c8bbb9f14c8b34f870660ce3d2102076cc43f12c66"
+        ],
+        "report_label": "evidence/box-snapshot-20260817/diagnostics/binary-pilots/bt-hal-hbus/report.json",
+        "report_sha256": "68b353b647c462b23125c90407a11c6d2f7dafffbdf4a3a1d0509ae2a271ac68",
+        "verdict": "RECIPE_UNPROVEN"
+      },
+      "build_status": "RECIPE_UNPROVEN",
       "category": "binary",
       "documentation_references": null,
       "evidence": [
-        "evidence/box-snapshot-20260817/snapshot-nonsecret/manifest.json"
+        "evidence/box-snapshot-20260817/snapshot-nonsecret/manifest.json",
+        "evidence/box-snapshot-20260817/diagnostics/binary-pilots/bt-hal-hbus/report.json"
       ],
       "installer_literal_provenance": null,
       "live": {
@@ -288,9 +315,11 @@
       },
       "near_miss_analysis": null,
       "notes": [
-        "a committed payload binary blob is byte-identical to the live binary; this is deployment-lineage evidence only and does NOT establish that the candidate source rebuilds it"
+        "a committed payload binary blob is byte-identical to the live binary; this is deployment-lineage evidence only and does NOT establish that the candidate source rebuilds it",
+        "bounded binary pilot verdict RECIPE_UNPROVEN: exact-source reproducibility NOT established for this binary"
       ],
       "public_safety_status": null,
+      "reconciliation_source": null,
       "repo_artifact_path": "payload/bin/codex_bt_pair_agent",
       "repo_source_path": "payload/source/codex_bt_pair_agent.c",
       "source_history": {
@@ -417,26 +446,37 @@
         ],
         "other_committed_variants_truncated": false,
         "refs_with_match_at_tip": {
-          "HEAD": false,
+          "HEAD": true,
+          "pinned:d87cebafdee36ec33f1e4ea3055239dbfea6aa09": false,
           "refs/heads/agent/activity-webgui": true,
           "refs/heads/main": false,
-          "refs/heads/reconcile/box-snapshot-20260818": false,
           "refs/remotes/fork/HEAD": false,
           "refs/remotes/fork/agent/activity-webgui": true,
           "refs/remotes/fork/main": false,
           "refs/remotes/origin/HEAD": false,
-          "refs/remotes/origin/agent/activity-webgui": true,
           "refs/remotes/origin/main": false
         },
         "repo_path_scanned": "payload/bin/codex_bthid_keyboard",
         "size_bytes": 116452
       },
       "backup_original_evidence": null,
-      "build_status": "HISTORICAL_BINARY_MATCH_ONLY",
+      "binary_pilot": {
+        "diagnostic": "bt-hal-hbus-repro",
+        "rebuilt_matches_live": false,
+        "rebuilt_sha256": [
+          "20db169f480dd3118c13f0643ff8c1e2e50b02b8c7e0d6313888b2a36be329da",
+          "edb35b7107d8dd63b11079c64c913961f3af04a68cecc12090c3cb45d522eb26"
+        ],
+        "report_label": "evidence/box-snapshot-20260817/diagnostics/binary-pilots/bt-hal-hbus/report.json",
+        "report_sha256": "68b353b647c462b23125c90407a11c6d2f7dafffbdf4a3a1d0509ae2a271ac68",
+        "verdict": "RECIPE_UNPROVEN"
+      },
+      "build_status": "RECIPE_UNPROVEN",
       "category": "binary",
       "documentation_references": null,
       "evidence": [
-        "evidence/box-snapshot-20260817/snapshot-nonsecret/manifest.json"
+        "evidence/box-snapshot-20260817/snapshot-nonsecret/manifest.json",
+        "evidence/box-snapshot-20260817/diagnostics/binary-pilots/bt-hal-hbus/report.json"
       ],
       "installer_literal_provenance": null,
       "live": {
@@ -451,9 +491,11 @@
       },
       "near_miss_analysis": null,
       "notes": [
-        "a committed payload binary blob is byte-identical to the live binary; this is deployment-lineage evidence only and does NOT establish that the candidate source rebuilds it"
+        "a committed payload binary blob is byte-identical to the live binary; this is deployment-lineage evidence only and does NOT establish that the candidate source rebuilds it",
+        "bounded binary pilot verdict RECIPE_UNPROVEN: exact-source reproducibility NOT established for this binary"
       ],
       "public_safety_status": null,
+      "reconciliation_source": null,
       "repo_artifact_path": "payload/bin/codex_bthid_keyboard",
       "repo_source_path": "payload/source/codex_bthid_keyboard.c",
       "source_history": {
@@ -610,25 +652,35 @@
         "other_committed_variants_truncated": false,
         "refs_with_match_at_tip": {
           "HEAD": true,
+          "pinned:d87cebafdee36ec33f1e4ea3055239dbfea6aa09": true,
           "refs/heads/agent/activity-webgui": true,
           "refs/heads/main": true,
-          "refs/heads/reconcile/box-snapshot-20260818": true,
           "refs/remotes/fork/HEAD": true,
           "refs/remotes/fork/agent/activity-webgui": true,
           "refs/remotes/fork/main": true,
           "refs/remotes/origin/HEAD": true,
-          "refs/remotes/origin/agent/activity-webgui": true,
           "refs/remotes/origin/main": true
         },
         "repo_path_scanned": "payload/bin/codex_dhcpd",
         "size_bytes": 104168
       },
       "backup_original_evidence": null,
-      "build_status": "HISTORICAL_BINARY_MATCH_ONLY",
+      "binary_pilot": {
+        "diagnostic": "dhcpd-portal-repro",
+        "rebuilt_matches_live": true,
+        "rebuilt_sha256": [
+          "90ff5163fbbe7f8fa38725d3ac02d8cf4a5796b099e6947fa24108f9cc125c57"
+        ],
+        "report_label": "evidence/box-snapshot-20260817/diagnostics/binary-pilots/dhcpd-portal/report.json",
+        "report_sha256": "25bd2435e36177ea3aed0d931e1a81a634508f7617b0f621a9967e6f6177eee4",
+        "verdict": "EXACT_SOURCE_REPRODUCIBLE"
+      },
+      "build_status": "EXACT_SOURCE_REPRODUCIBLE",
       "category": "binary",
       "documentation_references": null,
       "evidence": [
-        "evidence/box-snapshot-20260817/snapshot-nonsecret/manifest.json"
+        "evidence/box-snapshot-20260817/snapshot-nonsecret/manifest.json",
+        "evidence/box-snapshot-20260817/diagnostics/binary-pilots/dhcpd-portal/report.json"
       ],
       "installer_literal_provenance": null,
       "live": {
@@ -643,9 +695,11 @@
       },
       "near_miss_analysis": null,
       "notes": [
-        "a committed payload binary blob is byte-identical to the live binary; this is deployment-lineage evidence only and does NOT establish that the candidate source rebuilds it"
+        "a committed payload binary blob is byte-identical to the live binary; this is deployment-lineage evidence only and does NOT establish that the candidate source rebuilds it",
+        "two independent rebuilds from the exact candidate source with the pinned toolchain are byte-identical to the live binary (pilot report integrity-pinned by SHA-256)"
       ],
       "public_safety_status": null,
+      "reconciliation_source": null,
       "repo_artifact_path": "payload/bin/codex_dhcpd",
       "repo_source_path": "payload/source/codex_dhcpd.c",
       "source_history": {
@@ -664,7 +718,7 @@
         "distinct_source_blobs": 1,
         "repo_path": "payload/source/codex_dhcpd.c"
       },
-      "source_provenance": "CANDIDATE_SOURCE_BINARY_MATCH_ONLY",
+      "source_provenance": "EXACT_SOURCE_REPRODUCIBLE",
       "symlink_analysis": null
     },
     {
@@ -763,26 +817,37 @@
         ],
         "other_committed_variants_truncated": false,
         "refs_with_match_at_tip": {
-          "HEAD": false,
+          "HEAD": true,
+          "pinned:d87cebafdee36ec33f1e4ea3055239dbfea6aa09": false,
           "refs/heads/agent/activity-webgui": true,
           "refs/heads/main": false,
-          "refs/heads/reconcile/box-snapshot-20260818": false,
           "refs/remotes/fork/HEAD": false,
           "refs/remotes/fork/agent/activity-webgui": true,
           "refs/remotes/fork/main": false,
           "refs/remotes/origin/HEAD": false,
-          "refs/remotes/origin/agent/activity-webgui": true,
           "refs/remotes/origin/main": false
         },
         "repo_path_scanned": "payload/bin/codex_hal_ltcp",
         "size_bytes": 76772
       },
       "backup_original_evidence": null,
-      "build_status": "HISTORICAL_BINARY_MATCH_ONLY",
+      "binary_pilot": {
+        "diagnostic": "bt-hal-hbus-repro",
+        "rebuilt_matches_live": false,
+        "rebuilt_sha256": [
+          "19040fc79b974355991e57494d8694b7b0f5cf4df3156c2f09ecc700302806e1",
+          "ab44e8b9452307682c4eb8b76846186911cc9ff7702cef81e81e7f6a7d4a92e5"
+        ],
+        "report_label": "evidence/box-snapshot-20260817/diagnostics/binary-pilots/bt-hal-hbus/report.json",
+        "report_sha256": "68b353b647c462b23125c90407a11c6d2f7dafffbdf4a3a1d0509ae2a271ac68",
+        "verdict": "RECIPE_UNPROVEN"
+      },
+      "build_status": "RECIPE_UNPROVEN",
       "category": "binary",
       "documentation_references": null,
       "evidence": [
-        "evidence/box-snapshot-20260817/snapshot-nonsecret/manifest.json"
+        "evidence/box-snapshot-20260817/snapshot-nonsecret/manifest.json",
+        "evidence/box-snapshot-20260817/diagnostics/binary-pilots/bt-hal-hbus/report.json"
       ],
       "installer_literal_provenance": null,
       "live": {
@@ -797,9 +862,11 @@
       },
       "near_miss_analysis": null,
       "notes": [
-        "a committed payload binary blob is byte-identical to the live binary; this is deployment-lineage evidence only and does NOT establish that the candidate source rebuilds it"
+        "a committed payload binary blob is byte-identical to the live binary; this is deployment-lineage evidence only and does NOT establish that the candidate source rebuilds it",
+        "bounded binary pilot verdict RECIPE_UNPROVEN: exact-source reproducibility NOT established for this binary"
       ],
       "public_safety_status": null,
+      "reconciliation_source": null,
       "repo_artifact_path": "payload/bin/codex_hal_ltcp",
       "repo_source_path": "payload/source/codex_hal_ltcp.c",
       "source_history": {
@@ -851,12 +918,24 @@
         "repo_path_scanned": "payload/bin/codex_hbus"
       },
       "backup_original_evidence": null,
+      "binary_pilot": {
+        "diagnostic": "bt-hal-hbus-repro",
+        "rebuilt_matches_live": false,
+        "rebuilt_sha256": [
+          "3c92e5b92301fa36277bbb5421e27ddb8baca4aab11412983592323ba6fd1a5e",
+          "cfaa234704207fb7d0ab34c97a0d21725c41e597abfb9cdc3ba2cc79b123bb74"
+        ],
+        "report_label": "evidence/box-snapshot-20260817/diagnostics/binary-pilots/bt-hal-hbus/report.json",
+        "report_sha256": "68b353b647c462b23125c90407a11c6d2f7dafffbdf4a3a1d0509ae2a271ac68",
+        "verdict": "RECIPE_UNPROVEN"
+      },
       "build_status": "RECIPE_UNPROVEN",
       "category": "binary",
       "documentation_references": null,
       "evidence": [
         "evidence/box-snapshot-20260817/snapshot-nonsecret/manifest.json",
-        "evidence/box-snapshot-20260817/diagnostics/hbus-repro/report.json"
+        "evidence/box-snapshot-20260817/diagnostics/hbus-repro/report.json",
+        "evidence/box-snapshot-20260817/diagnostics/binary-pilots/bt-hal-hbus/report.json"
       ],
       "hbus_reproduction": {
         "best_effort_variant": "zig cc -target mips-linux-musleabi -mcpu=mips32 -Os -static -s reproduces ELF identity and size within 20 bytes but not reference bytes",
@@ -880,9 +959,11 @@
       "near_miss_analysis": null,
       "notes": [
         "live binary sha256 equals the known-good on-hub backup reference dated 2026-07-30 (e8e62d851417aafa9995f687277e8414, 74660 bytes); the live hbus is that known-good build, distinct from every committed payload/bin/codex_hbus blob",
-        "hbus local-reproduction diagnostic verdict RECIPE_UNPROVEN: exact-source reproducibility is NOT established despite an exact candidate source lineage"
+        "hbus local-reproduction diagnostic verdict RECIPE_UNPROVEN: exact-source reproducibility is NOT established despite an exact candidate source lineage",
+        "bounded binary pilot verdict RECIPE_UNPROVEN: exact-source reproducibility NOT established for this binary"
       ],
       "public_safety_status": null,
+      "reconciliation_source": null,
       "repo_artifact_path": "payload/bin/codex_hbus",
       "repo_source_path": "payload/source/codex_hbus.c",
       "source_history": {
@@ -1057,25 +1138,35 @@
         "other_committed_variants_truncated": false,
         "refs_with_match_at_tip": {
           "HEAD": true,
+          "pinned:d87cebafdee36ec33f1e4ea3055239dbfea6aa09": true,
           "refs/heads/agent/activity-webgui": true,
           "refs/heads/main": true,
-          "refs/heads/reconcile/box-snapshot-20260818": true,
           "refs/remotes/fork/HEAD": true,
           "refs/remotes/fork/agent/activity-webgui": true,
           "refs/remotes/fork/main": true,
           "refs/remotes/origin/HEAD": true,
-          "refs/remotes/origin/agent/activity-webgui": true,
           "refs/remotes/origin/main": true
         },
         "repo_path_scanned": "payload/bin/codex_portal",
         "size_bytes": 109548
       },
       "backup_original_evidence": null,
-      "build_status": "HISTORICAL_BINARY_MATCH_ONLY",
+      "binary_pilot": {
+        "diagnostic": "dhcpd-portal-repro",
+        "rebuilt_matches_live": true,
+        "rebuilt_sha256": [
+          "43d3925147cd70fdb58be1ba53a684a2f76b1f05a12e5db3f5c258a3cf387cc7"
+        ],
+        "report_label": "evidence/box-snapshot-20260817/diagnostics/binary-pilots/dhcpd-portal/report.json",
+        "report_sha256": "25bd2435e36177ea3aed0d931e1a81a634508f7617b0f621a9967e6f6177eee4",
+        "verdict": "EXACT_SOURCE_REPRODUCIBLE"
+      },
+      "build_status": "EXACT_SOURCE_REPRODUCIBLE",
       "category": "binary",
       "documentation_references": null,
       "evidence": [
-        "evidence/box-snapshot-20260817/snapshot-nonsecret/manifest.json"
+        "evidence/box-snapshot-20260817/snapshot-nonsecret/manifest.json",
+        "evidence/box-snapshot-20260817/diagnostics/binary-pilots/dhcpd-portal/report.json"
       ],
       "installer_literal_provenance": null,
       "live": {
@@ -1090,9 +1181,11 @@
       },
       "near_miss_analysis": null,
       "notes": [
-        "a committed payload binary blob is byte-identical to the live binary; this is deployment-lineage evidence only and does NOT establish that the candidate source rebuilds it"
+        "a committed payload binary blob is byte-identical to the live binary; this is deployment-lineage evidence only and does NOT establish that the candidate source rebuilds it",
+        "two independent rebuilds from the exact candidate source with the pinned toolchain are byte-identical to the live binary (pilot report integrity-pinned by SHA-256)"
       ],
       "public_safety_status": null,
+      "reconciliation_source": null,
       "repo_artifact_path": "payload/bin/codex_portal",
       "repo_source_path": "payload/source/codex_portal.c",
       "source_history": {
@@ -1111,7 +1204,7 @@
         "distinct_source_blobs": 1,
         "repo_path": "payload/source/codex_portal.c"
       },
-      "source_provenance": "CANDIDATE_SOURCE_BINARY_MATCH_ONLY",
+      "source_provenance": "EXACT_SOURCE_REPRODUCIBLE",
       "symlink_analysis": null
     },
     {
@@ -1243,14 +1336,13 @@
         "other_committed_variants_truncated": true,
         "refs_with_match_at_tip": {
           "HEAD": false,
+          "pinned:d87cebafdee36ec33f1e4ea3055239dbfea6aa09": false,
           "refs/heads/agent/activity-webgui": false,
           "refs/heads/main": false,
-          "refs/heads/reconcile/box-snapshot-20260818": false,
           "refs/remotes/fork/HEAD": false,
           "refs/remotes/fork/agent/activity-webgui": true,
           "refs/remotes/fork/main": false,
           "refs/remotes/origin/HEAD": false,
-          "refs/remotes/origin/agent/activity-webgui": true,
           "refs/remotes/origin/main": false
         },
         "repo_path_scanned": "payload/bin/codex_webui",
@@ -1279,6 +1371,7 @@
         "a committed payload binary blob is byte-identical to the live binary; this is deployment-lineage evidence only and does NOT establish that the candidate source rebuilds it"
       ],
       "public_safety_status": null,
+      "reconciliation_source": null,
       "repo_artifact_path": "payload/bin/codex_webui",
       "repo_source_path": "payload/source/codex_webui.c",
       "source_history": {
@@ -1332,6 +1425,7 @@
       "near_miss_analysis": null,
       "notes": [],
       "public_safety_status": null,
+      "reconciliation_source": null,
       "repo_artifact_path": null,
       "repo_source_path": null,
       "source_history": null,
@@ -1369,6 +1463,7 @@
       "near_miss_analysis": null,
       "notes": [],
       "public_safety_status": null,
+      "reconciliation_source": null,
       "repo_artifact_path": null,
       "repo_source_path": null,
       "source_history": null,
@@ -1518,14 +1613,13 @@
         "other_committed_variants_truncated": false,
         "refs_with_match_at_tip": {
           "HEAD": true,
+          "pinned:d87cebafdee36ec33f1e4ea3055239dbfea6aa09": true,
           "refs/heads/agent/activity-webgui": true,
           "refs/heads/main": true,
-          "refs/heads/reconcile/box-snapshot-20260818": true,
           "refs/remotes/fork/HEAD": true,
           "refs/remotes/fork/agent/activity-webgui": true,
           "refs/remotes/fork/main": true,
           "refs/remotes/origin/HEAD": true,
-          "refs/remotes/origin/agent/activity-webgui": true,
           "refs/remotes/origin/main": true
         },
         "repo_path_scanned": "payload/bin/dropbearmulti",
@@ -1554,6 +1648,7 @@
         "third-party static multi-binary tracked verbatim in the repository; no in-repo source; build reproduction not applicable to this repository alone"
       ],
       "public_safety_status": null,
+      "reconciliation_source": null,
       "repo_artifact_path": "payload/bin/dropbearmulti",
       "repo_source_path": null,
       "source_history": null,
@@ -1674,15 +1769,14 @@
         ],
         "other_committed_variants_truncated": false,
         "refs_with_match_at_tip": {
-          "HEAD": false,
+          "HEAD": true,
+          "pinned:d87cebafdee36ec33f1e4ea3055239dbfea6aa09": false,
           "refs/heads/agent/activity-webgui": true,
           "refs/heads/main": false,
-          "refs/heads/reconcile/box-snapshot-20260818": false,
           "refs/remotes/fork/HEAD": false,
           "refs/remotes/fork/agent/activity-webgui": true,
           "refs/remotes/fork/main": false,
           "refs/remotes/origin/HEAD": false,
-          "refs/remotes/origin/agent/activity-webgui": true,
           "refs/remotes/origin/main": false
         },
         "repo_path_scanned": "payload/scripts/init.sh",
@@ -1709,6 +1803,7 @@
       "near_miss_analysis": null,
       "notes": [],
       "public_safety_status": null,
+      "reconciliation_source": null,
       "repo_artifact_path": "payload/scripts/init.sh",
       "repo_source_path": null,
       "source_history": null,
@@ -1793,15 +1888,14 @@
         "other_committed_variants": [],
         "other_committed_variants_truncated": false,
         "refs_with_match_at_tip": {
-          "HEAD": false,
+          "HEAD": true,
+          "pinned:d87cebafdee36ec33f1e4ea3055239dbfea6aa09": false,
           "refs/heads/agent/activity-webgui": true,
           "refs/heads/main": false,
-          "refs/heads/reconcile/box-snapshot-20260818": false,
           "refs/remotes/fork/HEAD": false,
           "refs/remotes/fork/agent/activity-webgui": true,
           "refs/remotes/fork/main": false,
           "refs/remotes/origin/HEAD": false,
-          "refs/remotes/origin/agent/activity-webgui": true,
           "refs/remotes/origin/main": false
         },
         "repo_path_scanned": "payload/scripts/offline_egress_guard.sh",
@@ -1828,6 +1922,7 @@
       "near_miss_analysis": null,
       "notes": [],
       "public_safety_status": null,
+      "reconciliation_source": null,
       "repo_artifact_path": "payload/scripts/offline_egress_guard.sh",
       "repo_source_path": null,
       "source_history": null,
@@ -1969,14 +2064,13 @@
         "other_committed_variants_truncated": false,
         "refs_with_match_at_tip": {
           "HEAD": true,
+          "pinned:d87cebafdee36ec33f1e4ea3055239dbfea6aa09": true,
           "refs/heads/agent/activity-webgui": true,
           "refs/heads/main": true,
-          "refs/heads/reconcile/box-snapshot-20260818": true,
           "refs/remotes/fork/HEAD": true,
           "refs/remotes/fork/agent/activity-webgui": true,
           "refs/remotes/fork/main": true,
           "refs/remotes/origin/HEAD": true,
-          "refs/remotes/origin/agent/activity-webgui": true,
           "refs/remotes/origin/main": true
         },
         "repo_path_scanned": "payload/scripts/recovery_ap.sh",
@@ -2003,6 +2097,7 @@
       "near_miss_analysis": null,
       "notes": [],
       "public_safety_status": null,
+      "reconciliation_source": null,
       "repo_artifact_path": "payload/scripts/recovery_ap.sh",
       "repo_source_path": null,
       "source_history": null,
@@ -2144,14 +2239,13 @@
         "other_committed_variants_truncated": false,
         "refs_with_match_at_tip": {
           "HEAD": true,
+          "pinned:d87cebafdee36ec33f1e4ea3055239dbfea6aa09": true,
           "refs/heads/agent/activity-webgui": true,
           "refs/heads/main": true,
-          "refs/heads/reconcile/box-snapshot-20260818": true,
           "refs/remotes/fork/HEAD": true,
           "refs/remotes/fork/agent/activity-webgui": true,
           "refs/remotes/fork/main": true,
           "refs/remotes/origin/HEAD": true,
-          "refs/remotes/origin/agent/activity-webgui": true,
           "refs/remotes/origin/main": true
         },
         "repo_path_scanned": "payload/scripts/rcS.local",
@@ -2178,6 +2272,7 @@
       "near_miss_analysis": null,
       "notes": [],
       "public_safety_status": null,
+      "reconciliation_source": null,
       "repo_artifact_path": "payload/scripts/rcS.local",
       "repo_source_path": null,
       "source_history": null,
@@ -2370,13 +2465,22 @@
         "tokens_only_in_repo": []
       },
       "notes": [
-        "live file is an uncommitted instrumentation variant with no exact committed source; the completed independent public-safety review classified its source bytes PUBLIC_SOURCE_SAFE (see public-safety-review.json); source provenance remains manual and is tracked separately from the safety verdict"
+        "live bytes are byte-identical to the current reconciliation-branch working-tree source payload/scripts/netservicestarter.lua (sha256 e9722835033257ec0f7dd4f66df4f1f037ee8139cd7bbadaecb7c6f37b9a652c, 12707 bytes); the bytes are absent from the pinned 112-commit union scan and were introduced by the reconciliation branch",
+        "the completed independent public-safety review classified the source bytes PUBLIC_SOURCE_SAFE (see public-safety-review.json); the safety verdict makes no reproducibility claim and is tracked separately from source provenance"
       ],
       "public_safety_status": "PUBLIC_SAFETY_PASS",
+      "reconciliation_source": {
+        "exact": true,
+        "historical_provenance": "absent from pinned 112-commit union scan",
+        "introduced_by": "reconciliation branch",
+        "repo_path": "payload/scripts/netservicestarter.lua",
+        "sha256": "e9722835033257ec0f7dd4f66df4f1f037ee8139cd7bbadaecb7c6f37b9a652c",
+        "size": 12707
+      },
       "repo_artifact_path": "payload/scripts/netservicestarter.lua",
       "repo_source_path": null,
       "source_history": null,
-      "source_provenance": "MANUAL_SOURCE_REQUIRED",
+      "source_provenance": "RECONSTRUCTED_SOURCE_EXACT",
       "symlink_analysis": null
     },
     {
@@ -2414,14 +2518,13 @@
         "other_committed_variants_truncated": false,
         "refs_with_match_at_tip": {
           "HEAD": false,
+          "pinned:d87cebafdee36ec33f1e4ea3055239dbfea6aa09": false,
           "refs/heads/agent/activity-webgui": false,
           "refs/heads/main": false,
-          "refs/heads/reconcile/box-snapshot-20260818": false,
           "refs/remotes/fork/HEAD": false,
           "refs/remotes/fork/agent/activity-webgui": false,
           "refs/remotes/fork/main": false,
           "refs/remotes/origin/HEAD": false,
-          "refs/remotes/origin/agent/activity-webgui": false,
           "refs/remotes/origin/main": false
         },
         "repo_path_scanned": "payload/activity/codexactivity.lua",
@@ -2448,6 +2551,7 @@
       "near_miss_analysis": null,
       "notes": [],
       "public_safety_status": null,
+      "reconciliation_source": null,
       "repo_artifact_path": "payload/activity/codexactivity.lua",
       "repo_source_path": null,
       "source_history": null,
@@ -2545,6 +2649,7 @@
         "live bytes equal the installer literal committed in install_webui.py; generated at install time by install_webui.py"
       ],
       "public_safety_status": null,
+      "reconciliation_source": null,
       "repo_artifact_path": null,
       "repo_source_path": null,
       "source_history": null,
@@ -2640,15 +2745,14 @@
         ],
         "other_committed_variants_truncated": false,
         "refs_with_match_at_tip": {
-          "HEAD": false,
+          "HEAD": true,
+          "pinned:d87cebafdee36ec33f1e4ea3055239dbfea6aa09": false,
           "refs/heads/agent/activity-webgui": true,
           "refs/heads/main": false,
-          "refs/heads/reconcile/box-snapshot-20260818": false,
           "refs/remotes/fork/HEAD": false,
           "refs/remotes/fork/agent/activity-webgui": true,
           "refs/remotes/fork/main": false,
           "refs/remotes/origin/HEAD": false,
-          "refs/remotes/origin/agent/activity-webgui": true,
           "refs/remotes/origin/main": false
         },
         "repo_path_scanned": "payload/mqtt/codexmqtt.lua",
@@ -2675,6 +2779,7 @@
       "near_miss_analysis": null,
       "notes": [],
       "public_safety_status": null,
+      "reconciliation_source": null,
       "repo_artifact_path": "payload/mqtt/codexmqtt.lua",
       "repo_source_path": null,
       "source_history": null,
@@ -2811,6 +2916,7 @@
         "live bytes equal the installer literal committed in install_webui.py; generated at install time by install_webui.py"
       ],
       "public_safety_status": null,
+      "reconciliation_source": null,
       "repo_artifact_path": null,
       "repo_source_path": null,
       "source_history": null,
@@ -2871,12 +2977,22 @@
           "-s"
         ]
       },
-      "notes": [],
+      "notes": [
+        "live bytes are byte-identical to the current reconciliation-branch working-tree source payload/scripts/dropbear (sha256 cb07cd5483028c5fd4ac7a090d32b87776b9308b0115ab157fe63b3ffe6afce6, 52 bytes); the bytes are absent from the pinned 112-commit union scan and were introduced by the reconciliation branch"
+      ],
       "public_safety_status": null,
+      "reconciliation_source": {
+        "exact": true,
+        "historical_provenance": "absent from pinned 112-commit union scan",
+        "introduced_by": "reconciliation branch",
+        "repo_path": "payload/scripts/dropbear",
+        "sha256": "cb07cd5483028c5fd4ac7a090d32b87776b9308b0115ab157fe63b3ffe6afce6",
+        "size": 52
+      },
       "repo_artifact_path": "payload/scripts/dropbear",
       "repo_source_path": null,
       "source_history": null,
-      "source_provenance": "MANUAL_SOURCE_REQUIRED",
+      "source_provenance": "RECONSTRUCTED_SOURCE_EXACT",
       "symlink_analysis": null
     },
     {
@@ -3014,14 +3130,13 @@
         "other_committed_variants_truncated": false,
         "refs_with_match_at_tip": {
           "HEAD": true,
+          "pinned:d87cebafdee36ec33f1e4ea3055239dbfea6aa09": true,
           "refs/heads/agent/activity-webgui": true,
           "refs/heads/main": true,
-          "refs/heads/reconcile/box-snapshot-20260818": true,
           "refs/remotes/fork/HEAD": true,
           "refs/remotes/fork/agent/activity-webgui": true,
           "refs/remotes/fork/main": true,
           "refs/remotes/origin/HEAD": true,
-          "refs/remotes/origin/agent/activity-webgui": true,
           "refs/remotes/origin/main": true
         },
         "repo_path_scanned": "payload/scripts/dropbearkey",
@@ -3048,6 +3163,7 @@
       "near_miss_analysis": null,
       "notes": [],
       "public_safety_status": null,
+      "reconciliation_source": null,
       "repo_artifact_path": "payload/scripts/dropbearkey",
       "repo_source_path": null,
       "source_history": null,
@@ -3059,6 +3175,7 @@
   "evidence_manifest_sha256": "9fbd3992bf6f74701b1a382c8cebdd6605c863ca08b62b954da216f1ce8d9c41",
   "generated_from_evidence_utc": "2026-08-18T02:27:38Z",
   "history": {
+    "baseline_pin": "baseline repo contributes only the pinned ref and its ancestry; the live reconciliation branch is never scanned",
     "commit_order": "committer epoch, then sha",
     "gap_policy": "a parent missing from every scanned repo is a gap; parents resolvable in any one repo (baseline completing the shallow historical clone) are not",
     "history_gaps": [],
@@ -3068,7 +3185,7 @@
         "tip": "0828c08a61afd07d60b0504281e58423e186e81d"
       },
       {
-        "name": "HEAD",
+        "name": "pinned:d87cebafdee36ec33f1e4ea3055239dbfea6aa09",
         "tip": "d87cebafdee36ec33f1e4ea3055239dbfea6aa09"
       },
       {
@@ -3077,10 +3194,6 @@
       },
       {
         "name": "refs/heads/main",
-        "tip": "d87cebafdee36ec33f1e4ea3055239dbfea6aa09"
-      },
-      {
-        "name": "refs/heads/reconcile/box-snapshot-20260818",
         "tip": "d87cebafdee36ec33f1e4ea3055239dbfea6aa09"
       },
       {
@@ -3098,10 +3211,6 @@
       {
         "name": "refs/remotes/origin/HEAD",
         "tip": "d87cebafdee36ec33f1e4ea3055239dbfea6aa09"
-      },
-      {
-        "name": "refs/remotes/origin/agent/activity-webgui",
-        "tip": "41236d8ae8eeca8f3d54bbdc50c86db6ebcb570b"
       },
       {
         "name": "refs/remotes/origin/main",
@@ -3123,12 +3232,10 @@
       },
       {
         "label": "harmony-hub-control reconciliation clone (baseline, full ancestry)",
-        "refs": [
-          "refs/heads/main",
-          "refs/heads/reconcile/box-snapshot-20260818",
-          "refs/remotes/origin/HEAD",
-          "refs/remotes/origin/agent/activity-webgui",
-          "refs/remotes/origin/main"
+        "pinned_ref": "d87cebafdee36ec33f1e4ea3055239dbfea6aa09",
+        "pinned_tip": "d87cebafdee36ec33f1e4ea3055239dbfea6aa09",
+        "scanned_refs": [
+          "d87cebafdee36ec33f1e4ea3055239dbfea6aa09"
         ]
       }
     ],
