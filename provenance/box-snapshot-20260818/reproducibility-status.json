@@ -1,0 +1,441 @@
+{
+  "binary_reproducibility": {
+    "build_verified_count": 0,
+    "policy": "a historical binary blob match is deployment-lineage evidence only and never establishes source reproducibility; codex_hbus additionally carries an explicit RECIPE_UNPROVEN reproduction diagnostic"
+  },
+  "blockers": [
+    "MANUAL_SOURCE_REQUIRED: /opt/luaworks/tasks/connectserver/netservicestarter.lua has no exact committed source",
+    "MANUAL_SOURCE_REQUIRED: /usr/sbin/dropbear has no exact committed source",
+    "NO_BINARY_BUILD_REPRODUCIBILITY: no live payload binary has proven exact build reproduction from source; historical binary matches are lineage evidence only",
+    "LIVE_MANIFEST_STALE: /data/codex/bin/MANIFEST.txt disagrees with the actual live files (4 hash/size mismatches, 1 live binaries missing from the listing)"
+  ],
+  "entries": [
+    {
+      "build_status": "NOT_APPLICABLE_SYMLINK",
+      "historical_artifact_match": false,
+      "path": "/cache/bin/bthid_keyboard",
+      "source_provenance": "SYMLINK_NO_CONTENT"
+    },
+    {
+      "build_status": "NOT_APPLICABLE_TEXT",
+      "historical_artifact_match": false,
+      "path": "/data/codex/bin/MANIFEST.txt",
+      "source_provenance": "GENERATED_DYNAMIC"
+    },
+    {
+      "build_status": "HISTORICAL_BINARY_MATCH_ONLY",
+      "commit_count": 54,
+      "earliest_commit": {
+        "committer_date_utc": "2026-07-29T22:17:55Z",
+        "committer_epoch": 1785363475,
+        "sha": "09d83b67367cb46e32579e4b3c2ccb13a8cc24ad"
+      },
+      "git_blob_sha": "e512cd4641b65c32ff64a140e34dd4051e94140c",
+      "historical_artifact_match": true,
+      "latest_commit": {
+        "committer_date_utc": "2026-08-06T01:51:45Z",
+        "committer_epoch": 1785981105,
+        "sha": "0828c08a61afd07d60b0504281e58423e186e81d"
+      },
+      "path": "/data/codex/bin/codex_bt_pair_agent",
+      "source_provenance": "CANDIDATE_SOURCE_BINARY_MATCH_ONLY"
+    },
+    {
+      "build_status": "HISTORICAL_BINARY_MATCH_ONLY",
+      "commit_count": 54,
+      "earliest_commit": {
+        "committer_date_utc": "2026-07-29T22:17:55Z",
+        "committer_epoch": 1785363475,
+        "sha": "09d83b67367cb46e32579e4b3c2ccb13a8cc24ad"
+      },
+      "git_blob_sha": "47d0bd1eb7ffced5930260364fbe13c60c6de868",
+      "historical_artifact_match": true,
+      "latest_commit": {
+        "committer_date_utc": "2026-08-06T01:51:45Z",
+        "committer_epoch": 1785981105,
+        "sha": "0828c08a61afd07d60b0504281e58423e186e81d"
+      },
+      "path": "/data/codex/bin/codex_bthid_keyboard",
+      "source_provenance": "CANDIDATE_SOURCE_BINARY_MATCH_ONLY"
+    },
+    {
+      "build_status": "HISTORICAL_BINARY_MATCH_ONLY",
+      "commit_count": 111,
+      "earliest_commit": {
+        "committer_date_utc": "2026-06-01T23:42:35Z",
+        "committer_epoch": 1780357355,
+        "sha": "8e823dae1d1f2d8929de4e99f63eb7032e066f92"
+      },
+      "git_blob_sha": "48070f5112989b13398c5a39afbb281c718705e7",
+      "historical_artifact_match": true,
+      "latest_commit": {
+        "committer_date_utc": "2026-08-06T01:51:45Z",
+        "committer_epoch": 1785981105,
+        "sha": "0828c08a61afd07d60b0504281e58423e186e81d"
+      },
+      "path": "/data/codex/bin/codex_dhcpd",
+      "source_provenance": "CANDIDATE_SOURCE_BINARY_MATCH_ONLY"
+    },
+    {
+      "build_status": "HISTORICAL_BINARY_MATCH_ONLY",
+      "commit_count": 54,
+      "earliest_commit": {
+        "committer_date_utc": "2026-07-29T22:17:55Z",
+        "committer_epoch": 1785363475,
+        "sha": "09d83b67367cb46e32579e4b3c2ccb13a8cc24ad"
+      },
+      "git_blob_sha": "119eeed9a122adc527f34d089e46aeb1754d7aff",
+      "historical_artifact_match": true,
+      "latest_commit": {
+        "committer_date_utc": "2026-08-06T01:51:45Z",
+        "committer_epoch": 1785981105,
+        "sha": "0828c08a61afd07d60b0504281e58423e186e81d"
+      },
+      "path": "/data/codex/bin/codex_hal_ltcp",
+      "source_provenance": "CANDIDATE_SOURCE_BINARY_MATCH_ONLY"
+    },
+    {
+      "build_status": "RECIPE_UNPROVEN",
+      "historical_artifact_match": false,
+      "path": "/data/codex/bin/codex_hbus",
+      "source_provenance": "CANDIDATE_SOURCE_NO_BINARY_MATCH"
+    },
+    {
+      "build_status": "HISTORICAL_BINARY_MATCH_ONLY",
+      "commit_count": 111,
+      "earliest_commit": {
+        "committer_date_utc": "2026-06-01T23:42:35Z",
+        "committer_epoch": 1780357355,
+        "sha": "8e823dae1d1f2d8929de4e99f63eb7032e066f92"
+      },
+      "git_blob_sha": "a745df84f2ca3a290108b90c7876c1c3c0a065d1",
+      "historical_artifact_match": true,
+      "latest_commit": {
+        "committer_date_utc": "2026-08-06T01:51:45Z",
+        "committer_epoch": 1785981105,
+        "sha": "0828c08a61afd07d60b0504281e58423e186e81d"
+      },
+      "path": "/data/codex/bin/codex_portal",
+      "source_provenance": "CANDIDATE_SOURCE_BINARY_MATCH_ONLY"
+    },
+    {
+      "build_status": "HISTORICAL_BINARY_MATCH_ONLY",
+      "commit_count": 32,
+      "earliest_commit": {
+        "committer_date_utc": "2026-07-31T18:54:29Z",
+        "committer_epoch": 1785524069,
+        "sha": "d64716c97651d389647df4dd429f85b5166c2f3a"
+      },
+      "git_blob_sha": "25b395ac3aa18e408e6aaaf49766256641df9b57",
+      "historical_artifact_match": true,
+      "latest_commit": {
+        "committer_date_utc": "2026-08-02T12:52:40Z",
+        "committer_epoch": 1785675160,
+        "sha": "93d1d7f91e82bced7b996a2bd51454b1774b16e9"
+      },
+      "path": "/data/codex/bin/codex_webui",
+      "source_provenance": "CANDIDATE_SOURCE_BINARY_MATCH_ONLY"
+    },
+    {
+      "build_status": "NOT_APPLICABLE_SYMLINK",
+      "historical_artifact_match": false,
+      "path": "/data/codex/bin/dropbear",
+      "source_provenance": "SYMLINK_NO_CONTENT"
+    },
+    {
+      "build_status": "NOT_APPLICABLE_SYMLINK",
+      "historical_artifact_match": false,
+      "path": "/data/codex/bin/dropbearkey",
+      "source_provenance": "SYMLINK_NO_CONTENT"
+    },
+    {
+      "build_status": "UNVERIFIED_THIRD_PARTY",
+      "commit_count": 111,
+      "earliest_commit": {
+        "committer_date_utc": "2026-06-01T23:42:35Z",
+        "committer_epoch": 1780357355,
+        "sha": "8e823dae1d1f2d8929de4e99f63eb7032e066f92"
+      },
+      "git_blob_sha": "7ea86221aa8045547072182b5059bf865f352bb6",
+      "historical_artifact_match": true,
+      "latest_commit": {
+        "committer_date_utc": "2026-08-06T01:51:45Z",
+        "committer_epoch": 1785981105,
+        "sha": "0828c08a61afd07d60b0504281e58423e186e81d"
+      },
+      "path": "/data/codex/bin/dropbearmulti",
+      "source_provenance": "THIRD_PARTY_BINARY"
+    },
+    {
+      "build_status": "NOT_APPLICABLE_TEXT",
+      "commit_count": 54,
+      "earliest_commit": {
+        "committer_date_utc": "2026-07-29T22:17:55Z",
+        "committer_epoch": 1785363475,
+        "sha": "09d83b67367cb46e32579e4b3c2ccb13a8cc24ad"
+      },
+      "git_blob_sha": "a4cd566df4be9cd2057e0fe430c092e616d15191",
+      "historical_artifact_match": true,
+      "latest_commit": {
+        "committer_date_utc": "2026-08-06T01:51:45Z",
+        "committer_epoch": 1785981105,
+        "sha": "0828c08a61afd07d60b0504281e58423e186e81d"
+      },
+      "path": "/data/codex/init.sh",
+      "source_provenance": "EXACT_COMMITTED_SOURCE"
+    },
+    {
+      "build_status": "NOT_APPLICABLE_TEXT",
+      "commit_count": 55,
+      "earliest_commit": {
+        "committer_date_utc": "2026-07-27T19:13:46Z",
+        "committer_epoch": 1785179626,
+        "sha": "309cec3ab15d96780ce4b5b6f7032aea296f0996"
+      },
+      "git_blob_sha": "c949ca8888628a02c446463b5aa47c181dad1fb2",
+      "historical_artifact_match": true,
+      "latest_commit": {
+        "committer_date_utc": "2026-08-06T01:51:45Z",
+        "committer_epoch": 1785981105,
+        "sha": "0828c08a61afd07d60b0504281e58423e186e81d"
+      },
+      "path": "/data/codex/offline_egress_guard.sh",
+      "source_provenance": "EXACT_COMMITTED_SOURCE"
+    },
+    {
+      "build_status": "NOT_APPLICABLE_TEXT",
+      "commit_count": 111,
+      "earliest_commit": {
+        "committer_date_utc": "2026-06-01T23:42:35Z",
+        "committer_epoch": 1780357355,
+        "sha": "8e823dae1d1f2d8929de4e99f63eb7032e066f92"
+      },
+      "git_blob_sha": "3f994bcee6a56051561b5ca6a25ec757007e9192",
+      "historical_artifact_match": true,
+      "latest_commit": {
+        "committer_date_utc": "2026-08-06T01:51:45Z",
+        "committer_epoch": 1785981105,
+        "sha": "0828c08a61afd07d60b0504281e58423e186e81d"
+      },
+      "path": "/data/codex/recovery_ap.sh",
+      "source_provenance": "EXACT_COMMITTED_SOURCE"
+    },
+    {
+      "build_status": "NOT_APPLICABLE_TEXT",
+      "commit_count": 111,
+      "earliest_commit": {
+        "committer_date_utc": "2026-06-01T23:42:35Z",
+        "committer_epoch": 1780357355,
+        "sha": "8e823dae1d1f2d8929de4e99f63eb7032e066f92"
+      },
+      "git_blob_sha": "96974eb98b5c426b3a6467fbc5332fb332ded24f",
+      "historical_artifact_match": true,
+      "latest_commit": {
+        "committer_date_utc": "2026-08-06T01:51:45Z",
+        "committer_epoch": 1785981105,
+        "sha": "0828c08a61afd07d60b0504281e58423e186e81d"
+      },
+      "path": "/etc/init.d/rcS.local",
+      "source_provenance": "EXACT_COMMITTED_SOURCE"
+    },
+    {
+      "build_status": "NOT_APPLICABLE_TEXT",
+      "historical_artifact_match": false,
+      "path": "/opt/luaworks/tasks/connectserver/netservicestarter.lua",
+      "public_safety_status": "PUBLIC_SAFETY_PASS",
+      "source_provenance": "MANUAL_SOURCE_REQUIRED"
+    },
+    {
+      "build_status": "NOT_APPLICABLE_TEXT",
+      "commit_count": 1,
+      "earliest_commit": {
+        "committer_date_utc": "2026-07-27T19:13:46Z",
+        "committer_epoch": 1785179626,
+        "sha": "309cec3ab15d96780ce4b5b6f7032aea296f0996"
+      },
+      "git_blob_sha": "aa97d229207b3e695d694a5be6f9fcb412daf503",
+      "historical_artifact_match": true,
+      "latest_commit": {
+        "committer_date_utc": "2026-07-27T19:13:46Z",
+        "committer_epoch": 1785179626,
+        "sha": "309cec3ab15d96780ce4b5b6f7032aea296f0996"
+      },
+      "path": "/pkg/codexactivity/codexactivity.lua",
+      "source_provenance": "EXACT_COMMITTED_SOURCE"
+    },
+    {
+      "build_status": "NOT_APPLICABLE_TEXT",
+      "historical_artifact_match": false,
+      "path": "/pkg/codexactivity/manifest.json",
+      "source_provenance": "EXACT_INSTALLER_LITERAL"
+    },
+    {
+      "build_status": "NOT_APPLICABLE_TEXT",
+      "commit_count": 56,
+      "earliest_commit": {
+        "committer_date_utc": "2026-07-26T23:56:47Z",
+        "committer_epoch": 1785110207,
+        "sha": "6ab8fb99edeb9ce5d63cc7505f656eaa1159aed3"
+      },
+      "git_blob_sha": "e7c998753fdca8c40cd28ffe56eebc1cc747d05c",
+      "historical_artifact_match": true,
+      "latest_commit": {
+        "committer_date_utc": "2026-08-06T01:51:45Z",
+        "committer_epoch": 1785981105,
+        "sha": "0828c08a61afd07d60b0504281e58423e186e81d"
+      },
+      "path": "/pkg/codexmqtt/codexmqtt.lua",
+      "source_provenance": "EXACT_COMMITTED_SOURCE"
+    },
+    {
+      "build_status": "NOT_APPLICABLE_TEXT",
+      "historical_artifact_match": false,
+      "path": "/pkg/codexmqtt/manifest.json",
+      "source_provenance": "EXACT_INSTALLER_LITERAL"
+    },
+    {
+      "build_status": "NOT_APPLICABLE_TEXT",
+      "historical_artifact_match": false,
+      "path": "/usr/sbin/dropbear",
+      "source_provenance": "MANUAL_SOURCE_REQUIRED"
+    },
+    {
+      "build_status": "NOT_APPLICABLE_TEXT",
+      "commit_count": 111,
+      "earliest_commit": {
+        "committer_date_utc": "2026-06-01T23:42:35Z",
+        "committer_epoch": 1780357355,
+        "sha": "8e823dae1d1f2d8929de4e99f63eb7032e066f92"
+      },
+      "git_blob_sha": "e0731199f4e2bc97ec60d74e03b3b5f9be50bc2d",
+      "historical_artifact_match": true,
+      "latest_commit": {
+        "committer_date_utc": "2026-08-06T01:51:45Z",
+        "committer_epoch": 1785981105,
+        "sha": "0828c08a61afd07d60b0504281e58423e186e81d"
+      },
+      "path": "/usr/sbin/dropbearkey",
+      "source_provenance": "EXACT_COMMITTED_SOURCE"
+    }
+  ],
+  "entry_count": 23,
+  "generated": {
+    "generated_from_evidence_utc": "2026-08-18T02:27:38Z",
+    "hbus_report": {
+      "label": "evidence/box-snapshot-20260817/diagnostics/hbus-repro/report.json",
+      "sha256": "0fba15562270cfdfebec92a9f099bb8729372c6c70ed863866203eb05bfac75d",
+      "verdict": "RECIPE_UNPROVEN"
+    }
+  },
+  "history": {
+    "gap_policy": "a parent missing from every scanned repo is a gap; parents resolvable in any one repo are not",
+    "history_gaps": [],
+    "refs": [
+      {
+        "name": "HEAD",
+        "tip": "0828c08a61afd07d60b0504281e58423e186e81d"
+      },
+      {
+        "name": "HEAD",
+        "tip": "d87cebafdee36ec33f1e4ea3055239dbfea6aa09"
+      },
+      {
+        "name": "refs/heads/agent/activity-webgui",
+        "tip": "0828c08a61afd07d60b0504281e58423e186e81d"
+      },
+      {
+        "name": "refs/heads/main",
+        "tip": "d87cebafdee36ec33f1e4ea3055239dbfea6aa09"
+      },
+      {
+        "name": "refs/heads/reconcile/box-snapshot-20260818",
+        "tip": "d87cebafdee36ec33f1e4ea3055239dbfea6aa09"
+      },
+      {
+        "name": "refs/remotes/fork/HEAD",
+        "tip": "d87cebafdee36ec33f1e4ea3055239dbfea6aa09"
+      },
+      {
+        "name": "refs/remotes/fork/agent/activity-webgui",
+        "tip": "41236d8ae8eeca8f3d54bbdc50c86db6ebcb570b"
+      },
+      {
+        "name": "refs/remotes/fork/main",
+        "tip": "d87cebafdee36ec33f1e4ea3055239dbfea6aa09"
+      },
+      {
+        "name": "refs/remotes/origin/HEAD",
+        "tip": "d87cebafdee36ec33f1e4ea3055239dbfea6aa09"
+      },
+      {
+        "name": "refs/remotes/origin/agent/activity-webgui",
+        "tip": "41236d8ae8eeca8f3d54bbdc50c86db6ebcb570b"
+      },
+      {
+        "name": "refs/remotes/origin/main",
+        "tip": "d87cebafdee36ec33f1e4ea3055239dbfea6aa09"
+      }
+    ],
+    "repos_scanned": [
+      {
+        "label": "harmony-hub-control read-only historical clone (shallow, primary)",
+        "role": "primary"
+      },
+      {
+        "label": "harmony-hub-control reconciliation clone (baseline, full ancestry)",
+        "role": "baseline"
+      }
+    ],
+    "scanned_commit_count": 112
+  },
+  "live_manifest_txt_staleness": {
+    "incoherent": true,
+    "mismatch_count": 4,
+    "mismatched_names": [
+      "codex_bthid_keyboard",
+      "codex_hal_ltcp",
+      "codex_hbus",
+      "codex_webui"
+    ],
+    "missing_from_listing": [
+      "codex_bt_pair_agent"
+    ],
+    "stale": true
+  },
+  "public_safety": {
+    "overall_status": "PUBLIC_SAFETY_PASS",
+    "pending": [],
+    "review_record": "public-safety-review.json",
+    "reviewed": [
+      {
+        "path": "/opt/luaworks/tasks/connectserver/netservicestarter.lua",
+        "status": "PUBLIC_SAFETY_PASS"
+      }
+    ]
+  },
+  "schema": "provenance-reproducibility-status/1",
+  "snapshot_id": "box-snapshot-20260818",
+  "status_counts": {
+    "build_status": {
+      "HISTORICAL_BINARY_MATCH_ONLY": 6,
+      "NOT_APPLICABLE_SYMLINK": 3,
+      "NOT_APPLICABLE_TEXT": 12,
+      "RECIPE_UNPROVEN": 1,
+      "UNVERIFIED_THIRD_PARTY": 1
+    },
+    "source_provenance": {
+      "CANDIDATE_SOURCE_BINARY_MATCH_ONLY": 6,
+      "CANDIDATE_SOURCE_NO_BINARY_MATCH": 1,
+      "EXACT_COMMITTED_SOURCE": 7,
+      "EXACT_INSTALLER_LITERAL": 2,
+      "GENERATED_DYNAMIC": 1,
+      "MANUAL_SOURCE_REQUIRED": 2,
+      "SYMLINK_NO_CONTENT": 3,
+      "THIRD_PARTY_BINARY": 1
+    }
+  },
+  "tool": {
+    "name": "derive_provenance",
+    "version": "1.0.0"
+  }
+}

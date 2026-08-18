@@ -1,0 +1,174 @@
+{
+  "canonical": false,
+  "entries": [
+    {
+      "kind": "symlink",
+      "mode": "lrwxrwxrwx",
+      "path": "/cache/bin/bthid_keyboard",
+      "sha256": "875df988f204346e6c6e9461202a7920b95e92c5d694fd815c2c52ced9e9f828",
+      "size": 36,
+      "target": "/data/codex/bin/codex_bthid_keyboard"
+    },
+    {
+      "kind": "file",
+      "mode": "-rw-r--r--",
+      "path": "/data/codex/bin/MANIFEST.txt",
+      "sha256": "7ccca3747dea7ecf494a4e75b583a2f6eb90c3769f152f888e94e1a15a7e3f34",
+      "size": 749
+    },
+    {
+      "kind": "file",
+      "mode": "-rwxr-xr-x",
+      "path": "/data/codex/bin/codex_bt_pair_agent",
+      "sha256": "563c6c58a3629edfebd7ec30ebcf14e6384a2d84e89669b1d7c3d79c75b619c8",
+      "size": 111796
+    },
+    {
+      "kind": "file",
+      "mode": "-rwxr-xr-x",
+      "path": "/data/codex/bin/codex_bthid_keyboard",
+      "sha256": "c6a3c4cd0db3aab1bbdc92ae22e3ae2ffe11d442ac7fe0920b46a6da0b5cef13",
+      "size": 116452
+    },
+    {
+      "kind": "file",
+      "mode": "-rwxr-xr-x",
+      "path": "/data/codex/bin/codex_dhcpd",
+      "sha256": "90ff5163fbbe7f8fa38725d3ac02d8cf4a5796b099e6947fa24108f9cc125c57",
+      "size": 104168
+    },
+    {
+      "kind": "file",
+      "mode": "-rwxr-xr-x",
+      "path": "/data/codex/bin/codex_hal_ltcp",
+      "sha256": "7fa9a84b9ee270bdf6e47d40859d29b6c1c30e5a1766f0ab59e9143dd13ca26c",
+      "size": 76772
+    },
+    {
+      "kind": "file",
+      "mode": "-rwxr-xr-x",
+      "path": "/data/codex/bin/codex_hbus",
+      "sha256": "4be9e6ac2e09e7eb052f9c47e81480d1e32aee7190bedb6ef7f932cf07aab8f9",
+      "size": 74660
+    },
+    {
+      "kind": "file",
+      "mode": "-rwxr-xr-x",
+      "path": "/data/codex/bin/codex_portal",
+      "sha256": "43d3925147cd70fdb58be1ba53a684a2f76b1f05a12e5db3f5c258a3cf387cc7",
+      "size": 109548
+    },
+    {
+      "kind": "file",
+      "mode": "-rwxr-xr-x",
+      "path": "/data/codex/bin/codex_webui",
+      "sha256": "c400173bb42f735734c522556c69f6c80f0604949413eb974c7b361b9e4ac11a",
+      "size": 906872
+    },
+    {
+      "kind": "symlink",
+      "mode": "lrwxrwxrwx",
+      "path": "/data/codex/bin/dropbear",
+      "sha256": "cb9d0dba8226ba02a6706767d867817e98a65b633fdd53385b2875cd44b2c058",
+      "size": 13,
+      "target": "dropbearmulti"
+    },
+    {
+      "kind": "symlink",
+      "mode": "lrwxrwxrwx",
+      "path": "/data/codex/bin/dropbearkey",
+      "sha256": "cb9d0dba8226ba02a6706767d867817e98a65b633fdd53385b2875cd44b2c058",
+      "size": 13,
+      "target": "dropbearmulti"
+    },
+    {
+      "kind": "file",
+      "mode": "-rwxr-xr-x",
+      "path": "/data/codex/bin/dropbearmulti",
+      "sha256": "e2ea632aed8b31dc5ea56b9673cbd983ec83260a97d33f891a0cebf51d5c6c8d",
+      "size": 577296
+    },
+    {
+      "kind": "file",
+      "mode": "-rwxr-xr-x",
+      "path": "/data/codex/init.sh",
+      "sha256": "4a334106f8acf9ecdf3d867c0deeb22d9ef7ede3afe9961c91e9651b210292c0",
+      "size": 2647
+    },
+    {
+      "kind": "file",
+      "mode": "-rwxr-xr-x",
+      "path": "/data/codex/offline_egress_guard.sh",
+      "sha256": "72f3ba67f492f51284509b029a5c38c2edccd21e334581438acd4c14708ceb42",
+      "size": 1753
+    },
+    {
+      "kind": "file",
+      "mode": "-rwxr-xr-x",
+      "path": "/data/codex/recovery_ap.sh",
+      "sha256": "5935e17d68e50216b96f5642bc4beeb2c4e491766068dbd8e36396ab0f5f9797",
+      "size": 1859
+    },
+    {
+      "kind": "file",
+      "mode": "-rwxr-xr-x",
+      "path": "/etc/init.d/rcS.local",
+      "sha256": "d5d9693e173e4bebd8c268f72a6fc9a60b2946032c95e9a718281da2a05ea5c0",
+      "size": 2799
+    },
+    {
+      "kind": "file",
+      "mode": "-rw-r--r--",
+      "path": "/opt/luaworks/tasks/connectserver/netservicestarter.lua",
+      "sha256": "e9722835033257ec0f7dd4f66df4f1f037ee8139cd7bbadaecb7c6f37b9a652c",
+      "size": 12707
+    },
+    {
+      "kind": "file",
+      "mode": "-rw-r--r--",
+      "path": "/pkg/codexactivity/codexactivity.lua",
+      "sha256": "d49ac11d49872324135b8bc7605e1ff4d0639ceabb5b3018735fcc6810cb40d6",
+      "size": 18551
+    },
+    {
+      "kind": "file",
+      "mode": "-rw-r--r--",
+      "path": "/pkg/codexactivity/manifest.json",
+      "sha256": "7de41b025c34eb8cc75fe9c9c2745f1d4e6df00db34f992af2e7a8c0498332c4",
+      "size": 27
+    },
+    {
+      "kind": "file",
+      "mode": "-rw-r--r--",
+      "path": "/pkg/codexmqtt/codexmqtt.lua",
+      "sha256": "3928b5d341acf25167724ea4375a9b7dd8cc73e40b8727d35f964fc87d3cfc21",
+      "size": 23533
+    },
+    {
+      "kind": "file",
+      "mode": "-rw-r--r--",
+      "path": "/pkg/codexmqtt/manifest.json",
+      "sha256": "afc52f542c021f34e57844aff6fadfb9efc619f9371f66327f9a770a08b5c155",
+      "size": 23
+    },
+    {
+      "kind": "file",
+      "mode": "-rwxr-xr-x",
+      "path": "/usr/sbin/dropbear",
+      "sha256": "cb07cd5483028c5fd4ac7a090d32b87776b9308b0115ab157fe63b3ffe6afce6",
+      "size": 52
+    },
+    {
+      "kind": "file",
+      "mode": "-rwxr-xr-x",
+      "path": "/usr/sbin/dropbearkey",
+      "sha256": "45d03451f1242b043f7824e3ccc4fd580f39a95322a7510c39959323ba3646cc",
+      "size": 48
+    }
+  ],
+  "entry_count": 23,
+  "notice": "NON-CANONICAL sanitized derivative of the private evidence snapshot: approved live paths, kinds, modes, sizes and SHA256/targets only; the canonical record lives offline with the collector evidence",
+  "schema": "public-payload-manifest/1",
+  "snapshot_id": "box-snapshot-20260818",
+  "source_label": "box-snapshot-20260817 evidence snapshot (private)"
+}
