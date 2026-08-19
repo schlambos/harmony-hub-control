@@ -53,3 +53,9 @@ build/zig-cache/
 
 # Generated from docs/FULL_FEATURE_ANALYSIS.md; regenerate rather than track
 docs/FULL_FEATURE_ANALYSIS.pdf
+tools/hub-emu/build/
+tools/webui-sim/build/
+.omo/
+.playwright-mcp/
+.slim/
+a.o
