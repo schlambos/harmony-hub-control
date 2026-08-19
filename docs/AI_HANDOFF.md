@@ -90,6 +90,43 @@ already rooted Logitech Harmony Hub.
   Bluetooth `KeyboardTextEntryActivityRole` also require a third map, the
   firmware Bluetooth keyboard/HID map `16420Activity<ActivityId>`. Validate
   references to both activities and current devices before saving.
+- Backup retention is owned entirely by the C binary. Four strict-name
+  families are recognized: bare `YYYYMMDD_HHMMSS` resource generations and
+  `settings_YYYYMMDD_HHMMSS` settings generations under
+  `/data/codex/resource-backups`, `webui-handoff-YYYYMMDD-HHMMSS` installer
+  handoff directories under `/data/codex-backups`, and canonical decimal
+  epoch-named update backups under `/data/codex/update-backups`.
+- `codex_webui --prune-backups` accounts apparent bytes with a
+  non-symlink-following traversal and enforces budgets of 768 KiB (resource),
+  64 KiB (settings), 256 KiB (handoff), 1536 KiB (updates), and 2 MiB
+  combined. The newest valid generation of each non-empty family is never
+  deleted; older eligible generations are removed oldest-first. Strict-name
+  directories that scan safely but contain no regular file are removed as
+  empty/incomplete; unrecognized names and recognized-looking non-directories
+  are left untouched; ambiguous scans fail before deletion.
+- Maintenance runs print one summary line
+  (`bytes_before bytes_after generations_deleted protected_generations
+  over_budget errors`) and exit 0 only when `errors=0` and `over_budget=0`.
+  If protected minima exceed a budget, older eligible generations are still
+  removed, `over_budget=1` is reported, and the CLI exits nonzero; production
+  startup logs the summary and continues serving.
+- Production startup runs the same prune engine before the BT helpers and
+  socket bind. Both installers run `--prune-backups` after uploading the new
+  binary and before starting services. They surface the summary, continue for
+  a protected-minimum `over_budget=1 errors=0` result, and stop for scan or
+  deletion errors. Newly created timestamped resource, settings, and handoff
+  generations use UTC. This is bounded retention, not exact JFFS2 free-space
+  enforcement. Step 4A resolves the temporary first-install and
+  direct-to-`/data` exposure windows via a private volatile staging tree,
+  read-only `codex_webui --file-status` destination probing (the Hub's
+  BusyBox lacks usable `stat`/`readlink`), and capacity-gated same-directory
+  atomic installs; an existing destination is a no-op only when its bytes
+  and canonical mode match, and a mode-only difference is corrected through
+  the same temporary-file-plus-rename path, never an in-place `chmod`.
+  A future explicitly authorized physical install must pass
+  `--no-apply-cloud-restart` / `-NoApplyCloudRestart` so it exits before
+  any reboot logic. Do not restate retention budgets or sizing logic in
+  Python, PowerShell, or Lua.
 
 ## Verification Checklist
 

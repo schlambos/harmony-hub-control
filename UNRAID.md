@@ -78,7 +78,19 @@ The installer:
 - connects to the Hub over SSH;
 - creates a timestamped backup under
   `/data/codex-backups/webui-handoff-*` on the Hub;
-- uploads and verifies the bundled MIPS binaries;
+- uploads every candidate into one private volatile staging tree and probes
+  each destination through the staged binary's read-only
+  `codex_webui --file-status` maintenance command — the Hub's BusyBox build
+  has no usable `stat`/`readlink`, so existence, type, size, MD5, and mode
+  all come from C syscalls with no-follow path handling — then installs
+  through the staged C engine as capacity-gated, same-directory atomic
+  replacements (an existing file is a no-op only when its bytes and the
+  canonical requested mode already match; a mode-only difference is applied
+  via the same temporary-file-plus-rename path, never an in-place `chmod`);
+- runs the new binary's `codex_webui --prune-backups` before any service
+  starts, surfaces its byte-accounting summary, and stops on scan/deletion
+  errors (a protected-minimum `over_budget=1 errors=0` result is preserved and
+  reported rather than deleted);
 - configures the optional MQTT bridge;
 - starts the hub-side web UI and Bluetooth helper;
 - enables strict LAN-only mode by default, including the Hub egress route and

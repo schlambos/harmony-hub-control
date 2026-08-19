@@ -3,6 +3,7 @@
 #include <dirent.h>
 #include <errno.h>
 #include <fcntl.h>
+#include <limits.h>
 #include <netdb.h>
 #include <netinet/in.h>
 #include <signal.h>
@@ -10,9 +11,11 @@
 #include <stdlib.h>
 #include <string.h>
 #include <strings.h>
+#include <stdint.h>
 #include <sys/select.h>
 #include <sys/socket.h>
 #include <sys/stat.h>
+#include <sys/statvfs.h>
 #include <sys/time.h>
 #include <sys/types.h>
 #include <sys/wait.h>
@@ -38,6 +41,7 @@
 #define OFFLINE_EGRESS_GUARD "/data/codex/offline_egress_guard.sh"
 #define RESOURCE_RELOAD_FLAG "/data/codex/reload_resources"
 #define RESOURCE_BACKUP_DIR "/data/codex/resource-backups"
+#define HANDOFF_BACKUP_DIR "/data/codex-backups"
 #define ACTIVITY_REQUEST_FILE "/var/volatile/codex-activity-request.json"
 #define ACTIVITY_RESPONSE_FILE "/var/volatile/codex-activity-response.json"
 #define IR_EVENT_LOG "/data/codex/ir-events.log"
@@ -56,6 +60,12 @@
 #endif
 #define UPDATE_STAGE_DIR "/tmp/codex_update"
 #define UPDATE_BACKUP_DIR "/data/codex/update-backups"
+#define BACKUP_RESOURCE_LIMIT_BYTES (UINT64_C(768) * UINT64_C(1024))
+#define BACKUP_SETTINGS_LIMIT_BYTES (UINT64_C(64) * UINT64_C(1024))
+#define BACKUP_HANDOFF_LIMIT_BYTES (UINT64_C(256) * UINT64_C(1024))
+#define BACKUP_UPDATE_LIMIT_BYTES (UINT64_C(1536) * UINT64_C(1024))
+#define BACKUP_COMBINED_LIMIT_BYTES (UINT64_C(2) * UINT64_C(1024) * UINT64_C(1024))
+#define BACKUP_TREE_MAX_DEPTH 64
 #define IR_EVENT_MAX_BYTES 65536
 #define MAX_REQUEST_BODY (1024 * 1024)
 #define MAX_REQUEST_BYTES (MAX_REQUEST_BODY + 8192)
@@ -450,6 +460,70 @@ static int copy_file_raw(const char *src, const char *dst) {
     }
     return 0;
 }
+static int copy_file_to_directory(
+    const char *source,
+    int directory_fd,
+    const char *destination_name,
+    mode_t destination_mode
+) {
+    FILE *in = fopen(source, "rb");
+    FILE *out;
+    int out_fd;
+    char buffer[4096];
+    size_t count;
+    if (!in) return -1;
+    out_fd = openat(
+        directory_fd, destination_name,
+        O_WRONLY | O_CREAT | O_EXCL | O_NOFOLLOW, destination_mode);
+    if (out_fd < 0) {
+        fclose(in);
+        return -1;
+    }
+    if (fchmod(out_fd, destination_mode) != 0) {
+        int saved_errno = errno;
+        close(out_fd);
+        unlinkat(directory_fd, destination_name, 0);
+        fclose(in);
+        errno = saved_errno;
+        return -1;
+    }
+    out = fdopen(out_fd, "wb");
+    if (!out) {
+        int saved_errno = errno;
+        close(out_fd);
+        unlinkat(directory_fd, destination_name, 0);
+        fclose(in);
+        errno = saved_errno;
+        return -1;
+    }
+    while ((count = fread(buffer, 1, sizeof(buffer), in)) > 0) {
+        if (fwrite(buffer, 1, count, out) != count) {
+            int saved_errno = errno;
+            fclose(in);
+            fclose(out);
+            unlinkat(directory_fd, destination_name, 0);
+            errno = saved_errno;
+            return -1;
+        }
+    }
+    if (ferror(in)) {
+        int saved_errno = errno;
+        fclose(in);
+        fclose(out);
+        unlinkat(directory_fd, destination_name, 0);
+        errno = saved_errno;
+        return -1;
+    }
+    fclose(in);
+    if (fclose(out) != 0) {
+        int saved_errno = errno;
+        unlinkat(directory_fd, destination_name, 0);
+        errno = saved_errno;
+        return -1;
+    }
+    return 0;
+}
+
 
 static void remove_tree_simple(const char *path) {
     struct stat st;
@@ -486,85 +560,797 @@ static void remove_dir_entries_with_prefix(const char *dir, const char *prefix) 
     closedir(d);
 }
 
-static int is_digit_name(const char *s) {
-    if (!s || !*s) return 0;
-    while (*s) {
-        if (!isdigit((unsigned char)*s)) return 0;
-        s++;
-    }
-    return 1;
+enum backup_family {
+    BACKUP_FAMILY_RESOURCE = 0,
+    BACKUP_FAMILY_SETTINGS,
+    BACKUP_FAMILY_HANDOFF,
+    BACKUP_FAMILY_UPDATE,
+    BACKUP_FAMILY_COUNT
+};
+
+enum backup_root {
+    BACKUP_ROOT_RESOURCE = 0,
+    BACKUP_ROOT_HANDOFF,
+    BACKUP_ROOT_UPDATE
+};
+
+enum retention_result {
+    RETENTION_ERROR = -1,
+    RETENTION_OK = 0,
+    RETENTION_OVER_BUDGET = 1
+};
+
+struct backup_family_spec {
+    const char *label;
+    const char *root;
+    uint64_t ceiling;
+};
+
+struct backup_generation {
+    enum backup_family family;
+    char *name;
+    int64_t chronology;
+    uint64_t bytes;
+    dev_t device;
+    ino_t inode;
+    int valid;
+    int protected;
+    int planned_delete;
+    size_t delete_rank;
+};
+
+struct backup_catalog {
+    struct backup_generation *entries;
+    size_t count;
+    size_t capacity;
+};
+struct retention_protection {
+    enum backup_family family;
+    const char *name;
+    dev_t device;
+    ino_t inode;
+};
+
+
+struct retention_summary {
+    uint64_t bytes_before;
+    uint64_t bytes_after;
+    size_t generations_deleted;
+    size_t protected_generations;
+    size_t errors;
+    int over_budget;
+};
+
+static const struct backup_family_spec BACKUP_FAMILIES[BACKUP_FAMILY_COUNT] = {
+    {"resources", RESOURCE_BACKUP_DIR, BACKUP_RESOURCE_LIMIT_BYTES},
+    {"settings", RESOURCE_BACKUP_DIR, BACKUP_SETTINGS_LIMIT_BYTES},
+    {"handoff", HANDOFF_BACKUP_DIR, BACKUP_HANDOFF_LIMIT_BYTES},
+    {"updates", UPDATE_BACKUP_DIR, BACKUP_UPDATE_LIMIT_BYTES}
+};
+
+static int add_u64_checked(uint64_t *total, uint64_t value) {
+    if (!total || UINT64_MAX - *total < value) return -1;
+    *total += value;
+    return 0;
 }
 
-static void prune_update_backups(int keep) {
-    struct backup_entry { long stamp; char name[64]; } entries[32], tmp;
-    DIR *d = opendir(UPDATE_BACKUP_DIR);
-    struct dirent *de;
-    int count = 0, i, j;
-    if (!d) return;
-    while ((de = readdir(d)) != NULL) {
-        if (!is_digit_name(de->d_name)) continue;
-        if (count >= (int)(sizeof(entries) / sizeof(entries[0]))) break;
-        entries[count].stamp = atol(de->d_name);
-        snprintf(entries[count].name, sizeof(entries[count].name), "%s", de->d_name);
-        count++;
-    }
-    closedir(d);
-    for (i = 0; i < count; i++) {
-        for (j = i + 1; j < count; j++) {
-            if (entries[j].stamp > entries[i].stamp) {
-                tmp = entries[i];
-                entries[i] = entries[j];
-                entries[j] = tmp;
-            }
-        }
-    }
-    for (i = keep; i < count; i++) {
-        char path[512];
-        snprintf(path, sizeof(path), "%s/%s", UPDATE_BACKUP_DIR, entries[i].name);
-        remove_tree_simple(path);
-    }
-}
-
-static int is_resource_backup_name(const char *name) {
+static int parse_fixed_digits(const char *text, size_t count, int *value) {
     size_t i;
-    if (!name || strlen(name) != 15 || name[8] != '_') return 0;
-    for (i = 0; i < 15; i++) {
-        if (i == 8) continue;
-        if (!isdigit((unsigned char)name[i])) return 0;
+    int parsed = 0;
+    if (!text || !value) return -1;
+    for (i = 0; i < count; i++) {
+        if (!isdigit((unsigned char)text[i])) return -1;
+        parsed = parsed * 10 + (text[i] - '0');
     }
-    return 1;
+    *value = parsed;
+    return 0;
 }
 
-static void prune_resource_backups(int keep) {
-    struct resource_backup_entry { char name[32]; } entries[64], tmp;
-    DIR *d = opendir(RESOURCE_BACKUP_DIR);
-    struct dirent *de;
-    int count = 0, i, j;
-    if (!d) return;
-    while ((de = readdir(d)) != NULL) {
-        if (!is_resource_backup_name(de->d_name)) continue;
-        if (count >= (int)(sizeof(entries) / sizeof(entries[0]))) break;
-        snprintf(entries[count].name, sizeof(entries[count].name),
-            "%s", de->d_name);
-        count++;
+static int is_leap_year(int year) {
+    return (year % 4 == 0 && year % 100 != 0) || year % 400 == 0;
+}
+
+static int days_in_month(int year, int month) {
+    static const int DAYS[] = {31, 28, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31};
+    if (month < 1 || month > 12) return 0;
+    if (month == 2 && is_leap_year(year)) return 29;
+    return DAYS[month - 1];
+}
+
+static int64_t days_before_year(int year) {
+    int64_t previous = (int64_t)year - 1;
+    return (int64_t)year * 365 + previous / 4 - previous / 100 + previous / 400;
+}
+
+static int parse_calendar_stamp(const char *stamp, char separator, int64_t *chronology) {
+    static const int MONTH_OFFSETS[] = {0, 31, 59, 90, 120, 151, 181, 212, 243, 273, 304, 334};
+    int year, month, day, hour, minute, second;
+    int64_t days;
+    if (!stamp || !chronology || strlen(stamp) != 15 || stamp[8] != separator) return -1;
+    if (parse_fixed_digits(stamp, 4, &year) != 0 ||
+        parse_fixed_digits(stamp + 4, 2, &month) != 0 ||
+        parse_fixed_digits(stamp + 6, 2, &day) != 0 ||
+        parse_fixed_digits(stamp + 9, 2, &hour) != 0 ||
+        parse_fixed_digits(stamp + 11, 2, &minute) != 0 ||
+        parse_fixed_digits(stamp + 13, 2, &second) != 0) {
+        return -1;
     }
-    closedir(d);
-    for (i = 0; i < count; i++) {
-        for (j = i + 1; j < count; j++) {
-            if (strcmp(entries[j].name, entries[i].name) > 0) {
-                tmp = entries[i];
-                entries[i] = entries[j];
-                entries[j] = tmp;
+    if (year < 1970 || month < 1 || month > 12 ||
+        day < 1 || day > days_in_month(year, month) ||
+        hour > 23 || minute > 59 || second > 59) {
+        return -1;
+    }
+    days = days_before_year(year) - days_before_year(1970);
+    days += MONTH_OFFSETS[month - 1] + day - 1;
+    if (month > 2 && is_leap_year(year)) days++;
+    *chronology = days * INT64_C(86400) +
+        (int64_t)hour * 3600 + (int64_t)minute * 60 + second;
+    return 0;
+}
+
+static int parse_update_stamp(const char *name, int64_t *chronology) {
+    uint64_t value = 0;
+    const unsigned char *p = (const unsigned char *)name;
+    if (!name || !name[0] || !chronology) return -1;
+    if (name[0] == '0' && name[1]) return -1;
+    while (*p) {
+        unsigned digit;
+        if (!isdigit(*p)) return -1;
+        digit = (unsigned)(*p - '0');
+        if (value > ((uint64_t)INT64_MAX - digit) / 10) return -1;
+        value = value * 10 + digit;
+        p++;
+    }
+    *chronology = (int64_t)value;
+    return 0;
+}
+
+static int classify_backup_name(
+    enum backup_root root,
+    const char *name,
+    enum backup_family *family,
+    int64_t *chronology
+) {
+    static const char SETTINGS_PREFIX[] = "settings_";
+    static const char HANDOFF_PREFIX[] = "webui-handoff-";
+    size_t prefix_len;
+    if (!name || !family || !chronology ||
+        strcmp(name, ".") == 0 || strcmp(name, "..") == 0) {
+        return 0;
+    }
+    if (root == BACKUP_ROOT_RESOURCE) {
+        prefix_len = sizeof(SETTINGS_PREFIX) - 1;
+        if (strncmp(name, SETTINGS_PREFIX, prefix_len) == 0) {
+            if (parse_calendar_stamp(name + prefix_len, '_', chronology) != 0) return 0;
+            *family = BACKUP_FAMILY_SETTINGS;
+            return 1;
+        }
+        if (parse_calendar_stamp(name, '_', chronology) != 0) return 0;
+        *family = BACKUP_FAMILY_RESOURCE;
+        return 1;
+    }
+    if (root == BACKUP_ROOT_HANDOFF) {
+        prefix_len = sizeof(HANDOFF_PREFIX) - 1;
+        if (strncmp(name, HANDOFF_PREFIX, prefix_len) != 0 ||
+            parse_calendar_stamp(name + prefix_len, '-', chronology) != 0) {
+            return 0;
+        }
+        *family = BACKUP_FAMILY_HANDOFF;
+        return 1;
+    }
+    if (root == BACKUP_ROOT_UPDATE && parse_update_stamp(name, chronology) == 0) {
+        *family = BACKUP_FAMILY_UPDATE;
+        return 1;
+    }
+    return 0;
+}
+
+
+static int path_join_alloc(const char *parent, const char *name, char **out) {
+    size_t parent_len, name_len, need;
+    char *joined;
+    if (!parent || !name || !out || !name[0] ||
+        strcmp(name, ".") == 0 || strcmp(name, "..") == 0 ||
+        strchr(name, '/')) {
+        errno = EINVAL;
+        return -1;
+    }
+    parent_len = strlen(parent);
+    name_len = strlen(name);
+    if (parent_len > SIZE_MAX - name_len - 2) {
+        errno = ENAMETOOLONG;
+        return -1;
+    }
+    need = parent_len + name_len + 2;
+    joined = (char *)malloc(need);
+    if (!joined) return -1;
+    memcpy(joined, parent, parent_len);
+    joined[parent_len] = '/';
+    memcpy(joined + parent_len + 1, name, name_len + 1);
+    *out = joined;
+    return 0;
+}
+
+static int same_file_identity(const struct stat *left, const struct stat *right) {
+    return left->st_dev == right->st_dev && left->st_ino == right->st_ino;
+}
+
+static int measure_backup_tree_fd(
+    int directory_fd,
+    unsigned depth,
+    uint64_t *bytes,
+    size_t *regular_files
+) {
+    DIR *dir;
+    struct dirent *entry;
+    int failed = 0;
+    if (depth > BACKUP_TREE_MAX_DEPTH) {
+        close(directory_fd);
+        errno = ELOOP;
+        return -1;
+    }
+    dir = fdopendir(directory_fd);
+    if (!dir) {
+        close(directory_fd);
+        return -1;
+    }
+    for (;;) {
+        struct stat st;
+        errno = 0;
+        entry = readdir(dir);
+        if (!entry) {
+            if (errno != 0) failed = 1;
+            break;
+        }
+        if (strcmp(entry->d_name, ".") == 0 || strcmp(entry->d_name, "..") == 0) continue;
+        if (fstatat(
+                dirfd(dir), entry->d_name, &st,
+                AT_SYMLINK_NOFOLLOW) != 0) {
+            failed = 1;
+            break;
+        }
+        if (S_ISDIR(st.st_mode)) {
+            struct stat opened_st;
+            int child_fd = openat(
+                dirfd(dir), entry->d_name,
+                O_RDONLY | O_DIRECTORY | O_NOFOLLOW);
+            if (child_fd < 0) {
+                failed = 1;
+                break;
+            }
+            if (fstat(child_fd, &opened_st) != 0 ||
+                !same_file_identity(&st, &opened_st)) {
+                close(child_fd);
+                errno = ESTALE;
+                failed = 1;
+                break;
+            }
+            if (measure_backup_tree_fd(
+                    child_fd, depth + 1, bytes, regular_files) != 0) {
+                failed = 1;
+                break;
+            }
+        } else {
+            if (st.st_size < 0 || add_u64_checked(bytes, (uint64_t)st.st_size) != 0) {
+                failed = 1;
+                break;
+            }
+            if (S_ISREG(st.st_mode)) {
+                if (*regular_files == SIZE_MAX) {
+                    errno = EOVERFLOW;
+                    failed = 1;
+                    break;
+                }
+                (*regular_files)++;
             }
         }
     }
-    if (keep < 0) keep = 0;
-    for (i = keep; i < count; i++) {
-        char path[512];
-        snprintf(path, sizeof(path), "%s/%s",
-            RESOURCE_BACKUP_DIR, entries[i].name);
-        remove_tree_simple(path);
+    if (closedir(dir) != 0) failed = 1;
+    return failed ? -1 : 0;
+}
+
+
+static int append_backup_generation(
+    struct backup_catalog *catalog,
+    enum backup_family family,
+    const char *name,
+    int64_t chronology,
+    uint64_t bytes,
+    int valid,
+    dev_t device,
+    ino_t inode
+) {
+    struct backup_generation *grown;
+    char *name_copy;
+    size_t name_len;
+    if (!catalog || !name) return -1;
+    if (catalog->count == catalog->capacity) {
+        size_t next = catalog->capacity ? catalog->capacity * 2 : 16;
+        if (next < catalog->capacity ||
+            next > SIZE_MAX / sizeof(*catalog->entries)) {
+            errno = EOVERFLOW;
+            return -1;
+        }
+        grown = (struct backup_generation *)realloc(
+            catalog->entries, next * sizeof(*catalog->entries));
+        if (!grown) return -1;
+        catalog->entries = grown;
+        catalog->capacity = next;
     }
+    name_len = strlen(name);
+    if (name_len == SIZE_MAX) {
+        errno = EOVERFLOW;
+        return -1;
+    }
+    name_copy = (char *)malloc(name_len + 1);
+    if (!name_copy) return -1;
+    memcpy(name_copy, name, name_len + 1);
+    memset(&catalog->entries[catalog->count], 0, sizeof(catalog->entries[catalog->count]));
+    catalog->entries[catalog->count].family = family;
+    catalog->entries[catalog->count].name = name_copy;
+    catalog->entries[catalog->count].chronology = chronology;
+    catalog->entries[catalog->count].bytes = bytes;
+    catalog->entries[catalog->count].valid = valid;
+    catalog->entries[catalog->count].device = device;
+    catalog->entries[catalog->count].inode = inode;
+    catalog->entries[catalog->count].delete_rank = SIZE_MAX;
+    catalog->count++;
+    return 0;
+}
+
+static void free_backup_catalog(struct backup_catalog *catalog) {
+    size_t i;
+    if (!catalog) return;
+    for (i = 0; i < catalog->count; i++) free(catalog->entries[i].name);
+    free(catalog->entries);
+    memset(catalog, 0, sizeof(*catalog));
+}
+
+static int scan_backup_root(
+    enum backup_root root_kind,
+    const char *root_path,
+    struct backup_catalog *catalog
+) {
+    struct stat path_st, opened_st;
+    int root_fd;
+    DIR *dir;
+    struct dirent *entry;
+    int failed = 0;
+    if (lstat(root_path, &path_st) != 0) return errno == ENOENT ? 0 : -1;
+    if (!S_ISDIR(path_st.st_mode)) {
+        errno = ENOTDIR;
+        return -1;
+    }
+    root_fd = open(root_path, O_RDONLY | O_DIRECTORY | O_NOFOLLOW);
+    if (root_fd < 0 || fstat(root_fd, &opened_st) != 0 ||
+        !same_file_identity(&path_st, &opened_st)) {
+        if (root_fd >= 0) close(root_fd);
+        return -1;
+    }
+    dir = fdopendir(root_fd);
+    if (!dir) {
+        close(root_fd);
+        return -1;
+    }
+    for (;;) {
+        enum backup_family family;
+        int64_t chronology;
+        struct stat st, generation_st;
+        int generation_fd;
+        uint64_t bytes = 0;
+        size_t regular_files = 0;
+        errno = 0;
+        entry = readdir(dir);
+        if (!entry) {
+            if (errno != 0) failed = 1;
+            break;
+        }
+        if (!classify_backup_name(
+                root_kind, entry->d_name, &family, &chronology)) {
+            continue;
+        }
+        if (fstatat(
+                dirfd(dir), entry->d_name, &st,
+                AT_SYMLINK_NOFOLLOW) != 0) {
+            failed = 1;
+            break;
+        }
+        if (!S_ISDIR(st.st_mode)) continue;
+        generation_fd = openat(
+            dirfd(dir), entry->d_name,
+            O_RDONLY | O_DIRECTORY | O_NOFOLLOW);
+        if (generation_fd < 0 ||
+            fstat(generation_fd, &generation_st) != 0 ||
+            !same_file_identity(&st, &generation_st)) {
+            if (generation_fd >= 0) close(generation_fd);
+            failed = 1;
+            break;
+        }
+        if (measure_backup_tree_fd(
+                generation_fd, 0, &bytes, &regular_files) != 0 ||
+            append_backup_generation(
+                catalog, family, entry->d_name, chronology,
+                bytes, regular_files > 0,
+                generation_st.st_dev, generation_st.st_ino) != 0) {
+            failed = 1;
+            break;
+        }
+    }
+    if (closedir(dir) != 0) failed = 1;
+    return failed ? -1 : 0;
+}
+
+static int generation_is_older(
+    const struct backup_generation *left,
+    const struct backup_generation *right
+) {
+    if (!right) return 1;
+    if (left->chronology != right->chronology) {
+        return left->chronology < right->chronology;
+    }
+    if (left->family != right->family) return left->family < right->family;
+    return strcmp(left->name, right->name) < 0;
+}
+
+static int generation_is_newer(
+    const struct backup_generation *left,
+    const struct backup_generation *right
+) {
+    if (!right) return 1;
+    if (left->chronology != right->chronology) {
+        return left->chronology > right->chronology;
+    }
+    return strcmp(left->name, right->name) > 0;
+}
+
+static int budget_exceeded(uint64_t bytes, uint64_t reserved, uint64_t ceiling) {
+    return reserved > UINT64_MAX - bytes || bytes + reserved > ceiling;
+}
+
+static struct backup_generation *oldest_eligible(
+    struct backup_catalog *catalog,
+    int family_filter,
+    int require_valid
+) {
+    struct backup_generation *oldest = NULL;
+    size_t i;
+    for (i = 0; i < catalog->count; i++) {
+        struct backup_generation *entry = &catalog->entries[i];
+        if (entry->planned_delete || entry->protected ||
+            (family_filter >= 0 && (int)entry->family != family_filter) ||
+            (require_valid >= 0 && entry->valid != require_valid)) {
+            continue;
+        }
+        if (generation_is_older(entry, oldest)) oldest = entry;
+    }
+    return oldest;
+}
+
+static int mark_generation_delete(
+    struct backup_generation *entry,
+    uint64_t family_bytes[BACKUP_FAMILY_COUNT],
+    uint64_t *combined_bytes,
+    size_t rank
+) {
+    if (!entry || entry->bytes > family_bytes[entry->family] ||
+        entry->bytes > *combined_bytes) {
+        errno = EOVERFLOW;
+        return -1;
+    }
+    entry->planned_delete = 1;
+    entry->delete_rank = rank;
+    family_bytes[entry->family] -= entry->bytes;
+    *combined_bytes -= entry->bytes;
+    return 0;
+}
+
+static int plan_backup_retention(
+    struct backup_catalog *catalog,
+    enum backup_family reserve_family,
+    uint64_t reserved_bytes,
+    const struct retention_protection *required_protection,
+    struct retention_summary *summary
+) {
+    uint64_t family_bytes[BACKUP_FAMILY_COUNT] = {0};
+    uint64_t combined_bytes = 0;
+    size_t i, rank = 0;
+    int family;
+    if (!catalog || !summary) return -1;
+    for (i = 0; i < catalog->count; i++) {
+        struct backup_generation *entry = &catalog->entries[i];
+        entry->protected = 0;
+        entry->planned_delete = 0;
+        entry->delete_rank = SIZE_MAX;
+        if (add_u64_checked(&family_bytes[entry->family], entry->bytes) != 0 ||
+            add_u64_checked(&combined_bytes, entry->bytes) != 0) {
+            return -1;
+        }
+    }
+    summary->bytes_before = combined_bytes;
+    summary->bytes_after = combined_bytes;
+    for (family = 0; family < BACKUP_FAMILY_COUNT; family++) {
+        struct backup_generation *newest = NULL;
+        for (i = 0; i < catalog->count; i++) {
+            struct backup_generation *entry = &catalog->entries[i];
+            if ((int)entry->family == family && entry->valid &&
+                generation_is_newer(entry, newest)) {
+                newest = entry;
+            }
+        }
+        if (newest) {
+            newest->protected = 1;
+            summary->protected_generations++;
+        }
+    }
+    if (required_protection) {
+        struct backup_generation *required = NULL;
+        for (i = 0; i < catalog->count; i++) {
+            struct backup_generation *entry = &catalog->entries[i];
+            if (entry->family == required_protection->family &&
+                entry->valid &&
+                entry->device == required_protection->device &&
+                entry->inode == required_protection->inode &&
+                strcmp(entry->name, required_protection->name) == 0) {
+                required = entry;
+                break;
+            }
+        }
+        if (!required) {
+            errno = ESTALE;
+            return -1;
+        }
+        if (!required->protected) {
+            required->protected = 1;
+            summary->protected_generations++;
+        }
+    }
+    for (family = 0; family < BACKUP_FAMILY_COUNT; family++) {
+        struct backup_generation *candidate;
+        while ((candidate = oldest_eligible(catalog, family, 0)) != NULL) {
+            if (mark_generation_delete(
+                    candidate, family_bytes, &combined_bytes, rank++) != 0) {
+                return -1;
+            }
+        }
+        while (budget_exceeded(
+                family_bytes[family],
+                (int)reserve_family == family ? reserved_bytes : 0,
+                BACKUP_FAMILIES[family].ceiling)) {
+            candidate = oldest_eligible(catalog, family, 1);
+            if (!candidate) {
+                summary->over_budget = 1;
+                break;
+            }
+            if (mark_generation_delete(
+                    candidate, family_bytes, &combined_bytes, rank++) != 0) {
+                return -1;
+            }
+        }
+    }
+    while (budget_exceeded(
+            combined_bytes,
+            reserve_family < BACKUP_FAMILY_COUNT ? reserved_bytes : 0,
+            BACKUP_COMBINED_LIMIT_BYTES)) {
+        struct backup_generation *candidate = oldest_eligible(catalog, -1, 1);
+        if (!candidate) {
+            summary->over_budget = 1;
+            break;
+        }
+        if (mark_generation_delete(
+                candidate, family_bytes, &combined_bytes, rank++) != 0) {
+            return -1;
+        }
+    }
+    return 0;
+}
+
+static int remove_backup_entry_fd(
+    int parent_fd,
+    const char *name,
+    unsigned depth,
+    dev_t expected_device,
+    ino_t expected_inode,
+    int check_expected_identity
+) {
+    struct stat st;
+    if (depth > BACKUP_TREE_MAX_DEPTH ||
+        !name || !name[0] ||
+        strcmp(name, ".") == 0 || strcmp(name, "..") == 0 ||
+        strchr(name, '/')) {
+        errno = depth > BACKUP_TREE_MAX_DEPTH ? ELOOP : EINVAL;
+        return -1;
+    }
+    if (fstatat(parent_fd, name, &st, AT_SYMLINK_NOFOLLOW) != 0) return -1;
+    if (check_expected_identity &&
+        (st.st_dev != expected_device || st.st_ino != expected_inode ||
+         !S_ISDIR(st.st_mode))) {
+        errno = ESTALE;
+        return -1;
+    }
+    if (!S_ISDIR(st.st_mode)) {
+        struct stat current_st;
+        if (fstatat(
+                parent_fd, name, &current_st,
+                AT_SYMLINK_NOFOLLOW) != 0 ||
+            !same_file_identity(&st, &current_st)) {
+            errno = ESTALE;
+            return -1;
+        }
+        return unlinkat(parent_fd, name, 0);
+    }
+    {
+        struct stat opened_st, current_st;
+        int child_fd = openat(
+            parent_fd, name, O_RDONLY | O_DIRECTORY | O_NOFOLLOW);
+        DIR *dir;
+        struct dirent *entry;
+        int failed = 0;
+        if (child_fd < 0 || fstat(child_fd, &opened_st) != 0 ||
+            !same_file_identity(&st, &opened_st)) {
+            if (child_fd >= 0) close(child_fd);
+            errno = ESTALE;
+            return -1;
+        }
+        dir = fdopendir(child_fd);
+        if (!dir) {
+            close(child_fd);
+            return -1;
+        }
+        for (;;) {
+            errno = 0;
+            entry = readdir(dir);
+            if (!entry) {
+                if (errno != 0) failed = 1;
+                break;
+            }
+            if (strcmp(entry->d_name, ".") == 0 ||
+                strcmp(entry->d_name, "..") == 0) {
+                continue;
+            }
+            if (remove_backup_entry_fd(
+                    dirfd(dir), entry->d_name, depth + 1,
+                    0, 0, 0) != 0) {
+                failed = 1;
+                break;
+            }
+        }
+        if (closedir(dir) != 0) failed = 1;
+        if (failed) return -1;
+        if (fstatat(
+                parent_fd, name, &current_st,
+                AT_SYMLINK_NOFOLLOW) != 0 ||
+            !same_file_identity(&st, &current_st)) {
+            errno = ESTALE;
+            return -1;
+        }
+    }
+    return unlinkat(parent_fd, name, AT_REMOVEDIR);
+}
+
+static int remove_backup_generation(
+    enum backup_family family,
+    const char *name,
+    dev_t expected_device,
+    ino_t expected_inode,
+    int check_expected_identity
+) {
+    enum backup_root root_kind;
+    enum backup_family classified_family;
+    int64_t chronology;
+    const char *root;
+    struct stat path_st, opened_st;
+    int root_fd, result;
+    if (family >= BACKUP_FAMILY_COUNT) {
+        errno = EINVAL;
+        return -1;
+    }
+    root_kind = family == BACKUP_FAMILY_HANDOFF ?
+        BACKUP_ROOT_HANDOFF :
+        (family == BACKUP_FAMILY_UPDATE ?
+            BACKUP_ROOT_UPDATE : BACKUP_ROOT_RESOURCE);
+    if (!classify_backup_name(
+            root_kind, name, &classified_family, &chronology) ||
+        classified_family != family) {
+        errno = EINVAL;
+        return -1;
+    }
+    root = BACKUP_FAMILIES[family].root;
+    if (lstat(root, &path_st) != 0 || !S_ISDIR(path_st.st_mode)) return -1;
+    root_fd = open(root, O_RDONLY | O_DIRECTORY | O_NOFOLLOW);
+    if (root_fd < 0 || fstat(root_fd, &opened_st) != 0 ||
+        !same_file_identity(&path_st, &opened_st)) {
+        if (root_fd >= 0) close(root_fd);
+        return -1;
+    }
+    result = remove_backup_entry_fd(
+        root_fd, name, 0,
+        expected_device, expected_inode, check_expected_identity);
+    if (close(root_fd) != 0) result = -1;
+    return result;
+}
+
+static int enforce_backup_retention_with_protection(
+    enum backup_family reserve_family,
+    uint64_t reserved_bytes,
+    const struct retention_protection *required_protection,
+    struct retention_summary *summary
+) {
+    struct backup_catalog catalog;
+    size_t rank;
+    int result = RETENTION_OK;
+    memset(&catalog, 0, sizeof(catalog));
+    memset(summary, 0, sizeof(*summary));
+    if (scan_backup_root(
+            BACKUP_ROOT_RESOURCE, RESOURCE_BACKUP_DIR, &catalog) != 0 ||
+        scan_backup_root(
+            BACKUP_ROOT_HANDOFF, HANDOFF_BACKUP_DIR, &catalog) != 0 ||
+        scan_backup_root(
+            BACKUP_ROOT_UPDATE, UPDATE_BACKUP_DIR, &catalog) != 0) {
+        summary->errors++;
+        result = RETENTION_ERROR;
+        goto out;
+    }
+    if (plan_backup_retention(
+            &catalog, reserve_family, reserved_bytes,
+            required_protection, summary) != 0) {
+        summary->errors++;
+        result = RETENTION_ERROR;
+        goto out;
+    }
+    for (rank = 0; rank < catalog.count; rank++) {
+        size_t i;
+        struct backup_generation *entry = NULL;
+        for (i = 0; i < catalog.count; i++) {
+            if (catalog.entries[i].planned_delete &&
+                catalog.entries[i].delete_rank == rank) {
+                entry = &catalog.entries[i];
+                break;
+            }
+        }
+        if (!entry) continue;
+        if (remove_backup_generation(
+                entry->family, entry->name,
+                entry->device, entry->inode, 1) != 0) {
+            summary->errors++;
+            result = RETENTION_ERROR;
+            goto out;
+        }
+        summary->generations_deleted++;
+        if (entry->bytes > summary->bytes_after) {
+            summary->errors++;
+            result = RETENTION_ERROR;
+            goto out;
+        }
+        summary->bytes_after -= entry->bytes;
+    }
+    if (summary->over_budget) result = RETENTION_OVER_BUDGET;
+out:
+    free_backup_catalog(&catalog);
+    return result;
+}
+static int enforce_backup_retention(
+    enum backup_family reserve_family,
+    uint64_t reserved_bytes,
+    struct retention_summary *summary
+) {
+    return enforce_backup_retention_with_protection(
+        reserve_family, reserved_bytes, NULL, summary);
+}
+
+
+static void print_retention_summary(
+    FILE *stream,
+    const struct retention_summary *summary
+) {
+    fprintf(stream,
+        "bytes_before=%llu bytes_after=%llu generations_deleted=%llu "
+        "protected_generations=%llu over_budget=%d errors=%llu\n",
+        (unsigned long long)summary->bytes_before,
+        (unsigned long long)summary->bytes_after,
+        (unsigned long long)summary->generations_deleted,
+        (unsigned long long)summary->protected_generations,
+        summary->over_budget ? 1 : 0,
+        (unsigned long long)summary->errors);
 }
 
 static char *json_escape_alloc(const char *s) {
@@ -1777,25 +2563,373 @@ static void request_resource_reload_names(const char *names) {
     trigger_mqtt_discover();
 }
 
-static void backup_resources(void) {
-    char cmd[768];
-    mkdir(RESOURCE_BACKUP_DIR, 0755);
-    prune_resource_backups(4);
-    snprintf(cmd, sizeof(cmd),
-        "mkdir -p " RESOURCE_BACKUP_DIR "; d=" RESOURCE_BACKUP_DIR "/$(date +%%Y%%m%%d_%%H%%M%%S); "
-        "mkdir -p \"$d\"; cp " DEVICE_LIST " " FUNCTION_LIST " " PROTOCOL_LIST " "
-        ACTIVITY_LIST " " MAP_LIST " " AUTOMATION_CONFIG " \"$d\" 2>/dev/null");
-    system(cmd);
-    prune_resource_backups(5);
+enum backup_result {
+    BACKUP_RETENTION_FAILED = -2,
+    BACKUP_CREATE_FAILED = -1,
+    BACKUP_CREATED = 0,
+    BACKUP_CREATED_OVER_BUDGET = 1
+};
+struct created_backup_generation {
+    enum backup_family family;
+    char name[64];
+    char *path;
+    int root_fd;
+    int directory_fd;
+    dev_t device;
+    ino_t inode;
+};
+
+
+static const char *RESOURCE_BACKUP_SOURCES[] = {
+    DEVICE_LIST,
+    FUNCTION_LIST,
+    PROTOCOL_LIST,
+    ACTIVITY_LIST,
+    MAP_LIST,
+    AUTOMATION_CONFIG
+};
+
+static const char *SETTINGS_BACKUP_SOURCES[] = {
+    MQTT_CONFIG,
+    WPA_CONFIG,
+    CLOUD_BLOCKER_CONFIG,
+    BT_DEVICE_STORE
+};
+
+static int backup_result_allows_mutation(enum backup_result result) {
+    return result == BACKUP_CREATED || result == BACKUP_CREATED_OVER_BUDGET;
 }
 
-static void backup_settings(void) {
-    char cmd[512];
-    snprintf(cmd, sizeof(cmd),
-        "mkdir -p " RESOURCE_BACKUP_DIR "; d=" RESOURCE_BACKUP_DIR "/settings_$(date +%%Y%%m%%d_%%H%%M%%S); "
-        "mkdir -p \"$d\"; cp " MQTT_CONFIG " " WPA_CONFIG " " CLOUD_BLOCKER_CONFIG " " BT_DEVICE_STORE " \"$d\" 2>/dev/null");
-    system(cmd);
+static int ensure_backup_root(enum backup_family family) {
+    const char *root = BACKUP_FAMILIES[family].root;
+    struct stat st;
+    if (mkdir(root, 0755) != 0 && errno != EEXIST) return -1;
+    if (lstat(root, &st) != 0 || !S_ISDIR(st.st_mode)) {
+        errno = ENOTDIR;
+        return -1;
+    }
+    return 0;
 }
+
+static int estimate_backup_sources(
+    const char *const *sources,
+    size_t source_count,
+    uint64_t *bytes,
+    size_t *regular_files
+) {
+    size_t i;
+    *bytes = 0;
+    *regular_files = 0;
+    for (i = 0; i < source_count; i++) {
+        struct stat st;
+        if (stat(sources[i], &st) != 0) {
+            if (errno == ENOENT) continue;
+            return -1;
+        }
+        if (!S_ISREG(st.st_mode) || st.st_size < 0 ||
+            add_u64_checked(bytes, (uint64_t)st.st_size) != 0) {
+            errno = EINVAL;
+            return -1;
+        }
+        if (*regular_files == SIZE_MAX) {
+            errno = EOVERFLOW;
+            return -1;
+        }
+        (*regular_files)++;
+    }
+    if (*regular_files == 0) {
+        errno = ENOENT;
+        return -1;
+    }
+    return 0;
+}
+
+static int format_backup_generation_name(
+    enum backup_family family,
+    time_t stamp,
+    char *name,
+    size_t name_size
+) {
+    char timestamp[32];
+    struct tm *tm_value;
+    if (family == BACKUP_FAMILY_UPDATE) {
+        int written = snprintf(name, name_size, "%lld", (long long)stamp);
+        return written > 0 && (size_t)written < name_size ? 0 : -1;
+    }
+    tm_value = gmtime(&stamp);
+    if (!tm_value) return -1;
+    if (family == BACKUP_FAMILY_RESOURCE || family == BACKUP_FAMILY_SETTINGS) {
+        if (strftime(timestamp, sizeof(timestamp), "%Y%m%d_%H%M%S", tm_value) != 15) return -1;
+        if (family == BACKUP_FAMILY_RESOURCE) {
+            return snprintf(name, name_size, "%s", timestamp) == 15 ? 0 : -1;
+        }
+        return snprintf(name, name_size, "settings_%s", timestamp) == 24 ? 0 : -1;
+    }
+    errno = EINVAL;
+    return -1;
+}
+
+static void init_created_backup(
+    struct created_backup_generation *generation,
+    enum backup_family family
+) {
+    memset(generation, 0, sizeof(*generation));
+    generation->family = family;
+    generation->root_fd = -1;
+    generation->directory_fd = -1;
+}
+
+static int create_backup_generation_directory(
+    enum backup_family family,
+    struct created_backup_generation *generation
+) {
+    const char *root = BACKUP_FAMILIES[family].root;
+    struct stat path_st, root_st;
+    time_t now = time(NULL);
+    int attempt;
+    init_created_backup(generation, family);
+    if (now == (time_t)-1 || ensure_backup_root(family) != 0 ||
+        lstat(root, &path_st) != 0 || !S_ISDIR(path_st.st_mode)) {
+        return -1;
+    }
+    generation->root_fd = open(
+        root, O_RDONLY | O_DIRECTORY | O_NOFOLLOW);
+    if (generation->root_fd < 0 ||
+        fstat(generation->root_fd, &root_st) != 0 ||
+        !same_file_identity(&path_st, &root_st)) {
+        if (generation->root_fd >= 0) close(generation->root_fd);
+        generation->root_fd = -1;
+        return -1;
+    }
+    for (attempt = 0; attempt < 120; attempt++) {
+        struct stat generation_st;
+        if (format_backup_generation_name(
+                family, now + attempt,
+                generation->name, sizeof(generation->name)) != 0) {
+            break;
+        }
+        if (mkdirat(generation->root_fd, generation->name, 0755) != 0) {
+            if (errno == EEXIST) continue;
+            break;
+        }
+        generation->directory_fd = openat(
+            generation->root_fd, generation->name,
+            O_RDONLY | O_DIRECTORY | O_NOFOLLOW);
+        if (generation->directory_fd < 0 ||
+            fstat(generation->directory_fd, &generation_st) != 0 ||
+            !S_ISDIR(generation_st.st_mode)) {
+            if (generation->directory_fd >= 0) close(generation->directory_fd);
+            generation->directory_fd = -1;
+            unlinkat(generation->root_fd, generation->name, AT_REMOVEDIR);
+            break;
+        }
+        generation->device = generation_st.st_dev;
+        generation->inode = generation_st.st_ino;
+        if (path_join_alloc(root, generation->name, &generation->path) != 0) {
+            close(generation->directory_fd);
+            generation->directory_fd = -1;
+            unlinkat(generation->root_fd, generation->name, AT_REMOVEDIR);
+            break;
+        }
+        return 0;
+    }
+    close(generation->root_fd);
+    generation->root_fd = -1;
+    if (attempt >= 120) errno = EEXIST;
+    return -1;
+}
+
+static int measure_created_backup(
+    const struct created_backup_generation *generation,
+    uint64_t *bytes,
+    size_t *regular_files
+) {
+    struct stat current_st, opened_st;
+    int scan_fd;
+    if (fstatat(
+            generation->root_fd, generation->name, &current_st,
+            AT_SYMLINK_NOFOLLOW) != 0 ||
+        current_st.st_dev != generation->device ||
+        current_st.st_ino != generation->inode ||
+        !S_ISDIR(current_st.st_mode)) {
+        errno = ESTALE;
+        return -1;
+    }
+    scan_fd = openat(
+        generation->root_fd, generation->name,
+        O_RDONLY | O_DIRECTORY | O_NOFOLLOW);
+    if (scan_fd < 0 || fstat(scan_fd, &opened_st) != 0 ||
+        !same_file_identity(&current_st, &opened_st)) {
+        if (scan_fd >= 0) close(scan_fd);
+        errno = ESTALE;
+        return -1;
+    }
+    *bytes = 0;
+    *regular_files = 0;
+    return measure_backup_tree_fd(scan_fd, 0, bytes, regular_files);
+}
+
+static int discard_created_backup(
+    struct created_backup_generation *generation
+) {
+    int result = 0;
+    if (generation->directory_fd >= 0 &&
+        close(generation->directory_fd) != 0) {
+        result = -1;
+    }
+    generation->directory_fd = -1;
+    if (generation->root_fd < 0 ||
+        remove_backup_entry_fd(
+            generation->root_fd, generation->name, 0,
+            generation->device, generation->inode, 1) != 0) {
+        result = -1;
+    }
+    if (generation->root_fd >= 0 &&
+        close(generation->root_fd) != 0) {
+        result = -1;
+    }
+    generation->root_fd = -1;
+    free(generation->path);
+    generation->path = NULL;
+    return result;
+}
+
+static int finish_created_backup(
+    struct created_backup_generation *generation
+) {
+    int result = 0;
+    if (generation->directory_fd >= 0 &&
+        close(generation->directory_fd) != 0) {
+        result = -1;
+    }
+    generation->directory_fd = -1;
+    if (generation->root_fd >= 0 &&
+        close(generation->root_fd) != 0) {
+        result = -1;
+    }
+    generation->root_fd = -1;
+    return result;
+}
+
+static int copy_backup_sources(
+    const char *const *sources,
+    size_t source_count,
+    const struct created_backup_generation *generation
+) {
+    size_t i, copied = 0;
+    for (i = 0; i < source_count; i++) {
+        const char *base;
+        struct stat st;
+        if (stat(sources[i], &st) != 0) {
+            if (errno == ENOENT) continue;
+            return -1;
+        }
+        if (!S_ISREG(st.st_mode)) {
+            errno = EINVAL;
+            return -1;
+        }
+        base = strrchr(sources[i], '/');
+        base = base ? base + 1 : sources[i];
+        if (copy_file_to_directory(
+                sources[i], generation->directory_fd, base,
+                st.st_mode & 07777) != 0) {
+            return -1;
+        }
+        copied++;
+    }
+    if (copied == 0) {
+        errno = ENOENT;
+        return -1;
+    }
+    return 0;
+}
+
+static enum backup_result create_family_backup(
+    enum backup_family family,
+    const char *const *sources,
+    size_t source_count
+) {
+    struct retention_summary before, after;
+    struct created_backup_generation generation;
+    struct retention_protection created_protection;
+    uint64_t estimated_bytes, actual_bytes;
+    size_t estimated_files, actual_files;
+    int before_result, after_result;
+    if (estimate_backup_sources(
+            sources, source_count, &estimated_bytes, &estimated_files) != 0) {
+        return BACKUP_CREATE_FAILED;
+    }
+    before_result = enforce_backup_retention(
+        family, estimated_bytes, &before);
+    if (before_result == RETENTION_ERROR) return BACKUP_RETENTION_FAILED;
+    if (create_backup_generation_directory(family, &generation) != 0) {
+        return BACKUP_CREATE_FAILED;
+    }
+    if (copy_backup_sources(sources, source_count, &generation) != 0 ||
+        measure_created_backup(
+            &generation, &actual_bytes, &actual_files) != 0 ||
+        actual_files == 0) {
+        return discard_created_backup(&generation) == 0 ?
+            BACKUP_CREATE_FAILED : BACKUP_RETENTION_FAILED;
+    }
+    created_protection.family = family;
+    created_protection.name = generation.name;
+    created_protection.device = generation.device;
+    created_protection.inode = generation.inode;
+    if (finish_created_backup(&generation) != 0) {
+        free(generation.path);
+        return BACKUP_RETENTION_FAILED;
+    }
+    free(generation.path);
+    after_result = enforce_backup_retention_with_protection(
+        BACKUP_FAMILY_COUNT, 0, &created_protection, &after);
+    if (after_result == RETENTION_ERROR) return BACKUP_RETENTION_FAILED;
+    if (after_result == RETENTION_OVER_BUDGET) {
+        fprintf(stderr, "%s backup protected minimum remains over budget\n",
+            BACKUP_FAMILIES[family].label);
+        print_retention_summary(stderr, &after);
+        return BACKUP_CREATED_OVER_BUDGET;
+    }
+    if (before_result == RETENTION_OVER_BUDGET) {
+        fprintf(stderr,
+            "%s backup pre-creation reservation could not fit while "
+            "preserving the prior rollback; final budget satisfied\n",
+            BACKUP_FAMILIES[family].label);
+    }
+    return BACKUP_CREATED;
+}
+
+static enum backup_result backup_resources(void) {
+    return create_family_backup(
+        BACKUP_FAMILY_RESOURCE,
+        RESOURCE_BACKUP_SOURCES,
+        sizeof(RESOURCE_BACKUP_SOURCES) / sizeof(RESOURCE_BACKUP_SOURCES[0]));
+}
+
+static enum backup_result backup_settings(void) {
+    return create_family_backup(
+        BACKUP_FAMILY_SETTINGS,
+        SETTINGS_BACKUP_SOURCES,
+        sizeof(SETTINGS_BACKUP_SOURCES) / sizeof(SETTINGS_BACKUP_SOURCES[0]));
+}
+static int require_resource_backup(char *message, size_t message_size) {
+    enum backup_result result = backup_resources();
+    if (backup_result_allows_mutation(result)) return 0;
+    snprintf(message, message_size, "%s; no resource changes were made.",
+        result == BACKUP_RETENTION_FAILED ?
+            "Backup retention failed" : "Required resource backup failed");
+    return -1;
+}
+
+static int require_settings_backup(char *message, size_t message_size) {
+    enum backup_result result = backup_settings();
+    if (backup_result_allows_mutation(result)) return 0;
+    snprintf(message, message_size, "%s; no settings changes were made.",
+        result == BACKUP_RETENTION_FAILED ?
+            "Backup retention failed" : "Required settings backup failed");
+    return -1;
+}
+
 
 static void bundle_value(FILE *f, const char *key, const char *path, int comma) {
     char *data;
@@ -2916,7 +4050,16 @@ static void render_activity_save_json(int fd, const struct request *req) {
     function_changed = !json_semantically_matches(
         functions, functions_len, old_functions, old_functions_len);
     if (activity_changed || map_changed || function_changed) {
-        backup_resources();
+        if (require_resource_backup(msg, sizeof(msg)) != 0) {
+            f = send_json_start(fd, "503 Service Unavailable");
+            if (f) {
+                fputs("{\"ok\":false,\"error\":", f);
+                json_write_string(f, msg);
+                fputs("}\n", f);
+                fclose(f);
+            }
+            goto out;
+        }
     }
     commit_reply[0] = 0;
     msg[0] = 0;
@@ -3134,7 +4277,10 @@ static int repair_known_protocols_for_current_commands(void) {
         missing679 = !present;
     }
     if (!missing2 && !missing679) return 0;
-    backup_resources();
+    {
+        char backup_error[160];
+        if (require_resource_backup(backup_error, sizeof(backup_error)) != 0) return -1;
+    }
     if (missing2 && ensure_builtin_protocol_for_id(2) != 0) return -1;
     if (missing679 && ensure_builtin_protocol_for_id(679) != 0) return -1;
     changed = missing2 || missing679;
@@ -3243,7 +4389,10 @@ static int delete_ir_device(const char *device_id, char *msg, size_t msglen) {
         item_end = find_matching_json(item_start, '{', '}');
         if (!item_end) break;
         if (strstr(item_start, idneedle) && strstr(item_start, idneedle) < item_end) {
-            backup_resources();
+            if (require_resource_backup(msg, msglen) != 0) {
+                free(raw);
+                return -1;
+            }
             if (remove_json_span(&raw, &len, (size_t)(item_start - raw), (size_t)(item_end + 1 - raw)) != 0 ||
                 write_file_atomic(DEVICE_LIST, raw, len) != 0) {
                 free(raw);
@@ -3283,7 +4432,10 @@ static int delete_ir_command(const char *device_id, const char *command_name, ch
         if (!obj_end || obj_end > arr_end) break;
         json_string_range(cpos, obj_end, "Name", name, sizeof(name));
         if (strcmp(name, command_name) == 0) {
-            backup_resources();
+            if (require_resource_backup(msg, msglen) != 0) {
+                free(raw);
+                return -1;
+            }
             if (remove_json_span(&raw, &len, (size_t)(cpos - raw), (size_t)(obj_end + 1 - raw)) != 0 ||
                 write_file_atomic(DEVICE_LIST, raw, len) != 0) {
                 free(raw);
@@ -3324,7 +4476,10 @@ static int clear_ir_commands(const char *device_id, char *msg, size_t msglen) {
         return -1;
     }
     scan_command_array(arr, arr_end, &count, NULL);
-    backup_resources();
+    if (require_resource_backup(msg, msglen) != 0) {
+        free(raw);
+        return -1;
+    }
     if (replace_span(&raw, &len, (size_t)(arr + 1 - raw), (size_t)(arr_end - raw), "") != 0 ||
         write_file_atomic(DEVICE_LIST, raw, len) != 0) {
         free(raw);
@@ -3437,7 +4592,10 @@ static int create_ir_device_ex(const char *name, const char *manufacturer, const
         "\"ActivityIds\":null,\"Characterization\":0,\"HoldMinRepeats\":-1,\"DefaultInterKeyDelay\":0},"
         "\"Commands\":[],\"DeviceFeatures\":[]}",
         dtype, id, et, (long)time(NULL), em, em, dtype, id, en, emo);
-    backup_resources();
+    if (require_resource_backup(msg, msglen) != 0) {
+        free(en); free(em); free(emo); free(et); free(item);
+        return -1;
+    }
     if (append_top_array_item(DEVICE_LIST, "\"DevicesWithFeatures\"", item) != 0) goto fail;
     request_resource_reload();
     if (created_id && created_id_len) snprintf(created_id, created_id_len, "%ld", id);
@@ -3480,7 +4638,10 @@ static int update_ir_device(const char *device_id, const char *name, const char 
         snprintf(msg, msglen, "Failed to read DeviceList.");
         return -1;
     }
-    backup_resources();
+    if (require_resource_backup(msg, msglen) != 0) {
+        free(raw);
+        return -1;
+    }
     if (update_device_string_field(&raw, &len, device_id, "Name", name) != 0 ||
         update_device_string_field(&raw, &len, device_id, "Manufacturer", manufacturer) != 0 ||
         update_device_string_field(&raw, &len, device_id, "Model", model) != 0 ||
@@ -3779,7 +4940,11 @@ static int update_ir_command(const char *device_id, const char *old_name, const 
         snprintf(msg, msglen, "Failed to build updated command.");
         return -1;
     }
-    backup_resources();
+    if (require_resource_backup(msg, msglen) != 0) {
+        free(raw);
+        free(cmd);
+        return -1;
+    }
     if (strcmp(effective_mode, "raw") != 0 && ensure_builtin_protocol_for_id(protocol_id) != 0) {
         free(raw);
         free(cmd);
@@ -3867,7 +5032,7 @@ static int add_ir_command(const char *device_id, const char *name, const char *m
     if (id < 39000000) id = 39000000 + (long)(time(NULL) % 9000000);
     cmd = build_ir_command_json(id, name, effective_mode, protocol_id, code, raw_code);
     if (!cmd) goto fail;
-    backup_resources();
+    if (require_resource_backup(msg, msglen) != 0) goto fail;
     if (strcmp(effective_mode, "raw") != 0 && ensure_builtin_protocol_for_id(protocol_id) != 0) {
         snprintf(msg, msglen, "Failed to ensure IR protocol %d.", protocol_id);
         goto fail;
@@ -4052,7 +5217,12 @@ static int bulk_import_irdb_commands(const char *device_id, char *payload, char 
     memcpy(out + prefix_len, joined, joined_len);
     memcpy(out + prefix_len + joined_len, raw + (arr_end - raw), suffix_len);
     out[out_len] = 0;
-    backup_resources();
+    if (require_resource_backup(msg, msglen) != 0) {
+        free(raw);
+        free(joined);
+        free(out);
+        return -1;
+    }
     if (imported_keycodes > 0 && ensure_builtin_protocol_for_id(2) != 0) {
         free(raw);
         free(joined);
@@ -5480,7 +6650,7 @@ static int upsert_bt_device(const char *device_id, const char *name, const char 
     copy_text(inv.devices[idx].name, sizeof(inv.devices[idx].name), name);
     copy_text(inv.devices[idx].type, sizeof(inv.devices[idx].type), type);
     copy_text(inv.devices[idx].bdaddr, sizeof(inv.devices[idx].bdaddr), bdaddr);
-    backup_settings();
+    if (require_settings_backup(msg, msglen) != 0) return -1;
     if (save_bt_inventory(&inv) != 0) {
         snprintf(msg, msglen, "Failed to save Bluetooth devices.");
         return -1;
@@ -5506,7 +6676,7 @@ static int delete_bt_device(const char *device_id, char *msg, size_t msglen) {
     }
     for (i = idx; i + 1 < inv.device_count; i++) inv.devices[i] = inv.devices[i + 1];
     inv.device_count--;
-    backup_settings();
+    if (require_settings_backup(msg, msglen) != 0) return -1;
     if (save_bt_inventory(&inv) != 0) {
         snprintf(msg, msglen, "Failed to delete Bluetooth device.");
         return -1;
@@ -5561,7 +6731,7 @@ static int upsert_bt_command(const char *device_id, const char *old_name, const 
     copy_text(dev->commands[cidx].name, sizeof(dev->commands[cidx].name), name);
     copy_text(dev->commands[cidx].script, sizeof(dev->commands[cidx].script), script);
     dev->commands[cidx].delay_ms = delay_ms;
-    backup_settings();
+    if (require_settings_backup(msg, msglen) != 0) return -1;
     if (save_bt_inventory(&inv) != 0) {
         snprintf(msg, msglen, "Failed to save Bluetooth command.");
         return -1;
@@ -5592,7 +6762,7 @@ static int delete_bt_command(const char *device_id, const char *name, char *msg,
     }
     for (i = cidx; i + 1 < dev->command_count; i++) dev->commands[i] = dev->commands[i + 1];
     dev->command_count--;
-    backup_settings();
+    if (require_settings_backup(msg, msglen) != 0) return -1;
     if (save_bt_inventory(&inv) != 0) {
         snprintf(msg, msglen, "Failed to delete Bluetooth command.");
         return -1;
@@ -5978,7 +7148,7 @@ static void render_post_result(int fd, const char *message) {
 
 static void handle_mqtt(int fd, const struct request *req) {
     struct mqtt_config old, cfg;
-    char tmp[256];
+    char tmp[256], backup_error[160];
     load_mqtt(&old);
     cfg = old;
     cfg.enabled = form_checked(req->body, "enabled");
@@ -6003,6 +7173,11 @@ static void handle_mqtt(int fd, const struct request *req) {
         strncpy(cfg.password, tmp, sizeof(cfg.password) - 1);
         cfg.password[sizeof(cfg.password) - 1] = 0;
     }
+    if (require_settings_backup(
+            backup_error, sizeof(backup_error)) != 0) {
+        render_post_result(fd, backup_error);
+        return;
+    }
     if (save_mqtt(&cfg) == 0) {
         trigger_mqtt_discover();
         render_post_result(fd, "MQTT settings saved. The bridge will reconnect when it notices the config change.");
@@ -6013,7 +7188,7 @@ static void handle_mqtt(int fd, const struct request *req) {
 
 static void handle_wifi(int fd, const struct request *req) {
     struct wifi_config old, cfg;
-    char tmp[256], apply[32];
+    char tmp[256], apply[32], backup_error[160];
     load_wifi(&old);
     cfg = old;
     form_value(req->body, "ssid", cfg.ssid, sizeof(cfg.ssid));
@@ -6030,6 +7205,11 @@ static void handle_wifi(int fd, const struct request *req) {
     }
     if (!cfg.open && !cfg.psk[0]) {
         render_post_result(fd, "Wi-Fi password is required unless Open network is checked.");
+        return;
+    }
+    if (require_settings_backup(
+            backup_error, sizeof(backup_error)) != 0) {
+        render_post_result(fd, backup_error);
         return;
     }
     if (save_wifi(&cfg) != 0) {
@@ -6055,6 +7235,12 @@ static void handle_system(int fd, const struct request *req) {
         system("/sbin/reboot >/dev/null 2>&1 &");
     } else if (strcmp(action, "cloud") == 0 || strcmp(action, "cloud_reboot") == 0) {
         int enabled = form_checked(req->body, "cloudBlocker");
+        char backup_error[160];
+        if (require_settings_backup(
+                backup_error, sizeof(backup_error)) != 0) {
+            render_post_result(fd, backup_error);
+            return;
+        }
         if (save_cloud_blocker(enabled) != 0) {
             render_post_result(fd, "Failed to save cloud blocker setting.");
             return;
@@ -6273,8 +7459,10 @@ static void handle_import_bundle(int fd, const char *payload) {
     if (cloud_value[0] && validate_import_payload("cloud", cloud_value, msg, sizeof(msg)) != 0) {
         goto done;
     }
-    backup_resources();
-    backup_settings();
+    if (require_resource_backup(msg, sizeof(msg)) != 0 ||
+        require_settings_backup(msg, sizeof(msg)) != 0) {
+        goto done;
+    }
     if (write_file_atomic(DEVICE_LIST, devices, strlen(devices)) != 0 ||
         write_file_atomic(FUNCTION_LIST, functions, strlen(functions)) != 0 ||
         write_file_atomic(PROTOCOL_LIST, protocols, strlen(protocols)) != 0 ||
@@ -6343,9 +7531,15 @@ static void handle_import(int fd, const struct request *req) {
     if (strcmp(target, "devices") == 0 || strcmp(target, "functions") == 0 ||
         strcmp(target, "protocols") == 0 || strcmp(target, "activities") == 0 ||
         strcmp(target, "maps") == 0 || strcmp(target, "automation") == 0) {
-        backup_resources();
-    } else {
-        backup_settings();
+        if (require_resource_backup(msg, sizeof(msg)) != 0) {
+            render_post_result(fd, msg);
+            free(payload_buf);
+            return;
+        }
+    } else if (require_settings_backup(msg, sizeof(msg)) != 0) {
+        render_post_result(fd, msg);
+        free(payload_buf);
+        return;
     }
     if (write_file_atomic(path, payload, len) != 0) {
         snprintf(msg, sizeof(msg), "Failed to import %s.", import_label_for_target(target));
@@ -7668,13 +8862,91 @@ static void render_update_chunk_json(int fd, const struct request *req) {
     fprintf(f, ",\"offset\":%ld,\"bytes\":%ld}\n", offset, wrote);
     fclose(f);
 }
+static int estimate_update_backup_sources(
+    uint64_t *bytes,
+    size_t *regular_files
+) {
+    size_t i;
+    char stage[256], destination[256];
+    struct stat st;
+    *bytes = 0;
+    *regular_files = 0;
+    for (i = 0; i < sizeof(UPDATE_FILES) / sizeof(UPDATE_FILES[0]); i++) {
+        update_stage_path(UPDATE_FILES[i], stage, sizeof(stage));
+        if (stat(stage, &st) != 0) {
+            if (errno == ENOENT) continue;
+            return -1;
+        }
+        update_dest_path(UPDATE_FILES[i], destination, sizeof(destination));
+        if (stat(destination, &st) != 0) {
+            if (errno == ENOENT) continue;
+            return -1;
+        }
+        if (!S_ISREG(st.st_mode) || st.st_size < 0 ||
+            add_u64_checked(bytes, (uint64_t)st.st_size) != 0) {
+            errno = EINVAL;
+            return -1;
+        }
+        if (*regular_files == SIZE_MAX) {
+            errno = EOVERFLOW;
+            return -1;
+        }
+        (*regular_files)++;
+    }
+    if (*regular_files == 0) {
+        errno = ENOENT;
+        return -1;
+    }
+    return 0;
+}
+
+static int copy_update_backup_sources(
+    const struct created_backup_generation *generation
+) {
+    size_t i, copied = 0;
+    char stage[256], destination[256];
+    struct stat st;
+    for (i = 0; i < sizeof(UPDATE_FILES) / sizeof(UPDATE_FILES[0]); i++) {
+        update_stage_path(UPDATE_FILES[i], stage, sizeof(stage));
+        if (stat(stage, &st) != 0) {
+            if (errno == ENOENT) continue;
+            return -1;
+        }
+        update_dest_path(UPDATE_FILES[i], destination, sizeof(destination));
+        if (stat(destination, &st) != 0) {
+            if (errno == ENOENT) continue;
+            return -1;
+        }
+        if (!S_ISREG(st.st_mode)) {
+            errno = EINVAL;
+            return -1;
+        }
+        if (copy_file_to_directory(
+                destination, generation->directory_fd, UPDATE_FILES[i],
+                st.st_mode & 07777) != 0) {
+            return -1;
+        }
+        copied++;
+    }
+    if (copied == 0) {
+        errno = ENOENT;
+        return -1;
+    }
+    return 0;
+}
+
 
 static void render_update_apply_json(int fd, const struct request *req) {
     char *manifest;
-    char restart_text[16], backup_dir[256], updated[512];
-    char stage[256], dest[256], dest_tmp[288], backup[256], expected[40], actual[40];
-    int restart, count = 0, rc = 0;
-    size_t i;
+    char restart_text[16], updated[512];
+    char stage[256], dest[256], dest_tmp[288], expected[40], actual[40];
+    char *backup_dir = NULL;
+    int restart, count = 0, rc = 0, retention_rc;
+    size_t i, estimated_backup_files, actual_backup_files;
+    uint64_t estimated_backup_bytes, actual_backup_bytes;
+    struct retention_summary before_retention, after_retention;
+    struct created_backup_generation backup_generation;
+    struct retention_protection backup_protection;
     struct stat st;
     FILE *f;
     form_value(req->body, "restart", restart_text, sizeof(restart_text));
@@ -7715,24 +8987,105 @@ static void render_update_apply_json(int fd, const struct request *req) {
         fclose(f);
         return;
     }
+    if (estimate_update_backup_sources(
+            &estimated_backup_bytes, &estimated_backup_files) != 0) {
+        free(manifest);
+        f = send_json_start(fd, "500 Internal Server Error");
+        if (!f) return;
+        fputs("{\"ok\":false,\"error\":\"required update rollback sources are unavailable\"}\n", f);
+        fclose(f);
+        return;
+    }
+    retention_rc = enforce_backup_retention(
+        BACKUP_FAMILY_UPDATE, estimated_backup_bytes, &before_retention);
+    if (retention_rc == RETENTION_ERROR) {
+        free(manifest);
+        f = send_json_start(fd, "500 Internal Server Error");
+        if (!f) return;
+        fputs("{\"ok\":false,\"error\":\"backup retention failed before update apply\"}\n", f);
+        fclose(f);
+        return;
+    }
+    if (create_backup_generation_directory(
+            BACKUP_FAMILY_UPDATE, &backup_generation) != 0) {
+        free(manifest);
+        f = send_json_start(fd, "500 Internal Server Error");
+        if (!f) return;
+        fputs("{\"ok\":false,\"error\":\"required update rollback backup could not be created\"}\n", f);
+        fclose(f);
+        return;
+    }
+    if (copy_update_backup_sources(&backup_generation) != 0 ||
+        measure_created_backup(
+            &backup_generation,
+            &actual_backup_bytes, &actual_backup_files) != 0 ||
+        actual_backup_files == 0) {
+        int saved_errno = errno;
+        int cleanup_failed = discard_created_backup(&backup_generation) != 0;
+        char message[192];
+        free(manifest);
+        f = send_json_start(fd, "500 Internal Server Error");
+        if (!f) return;
+        snprintf(message, sizeof(message),
+            cleanup_failed ?
+                "update rollback backup failed and partial cleanup failed: %s" :
+                "required update rollback backup failed: %s",
+            strerror(saved_errno));
+        fputs("{\"ok\":false,\"error\":", f);
+        json_write_string(f, message);
+        fputs("}\n", f);
+        fclose(f);
+        return;
+    }
+    backup_protection.family = BACKUP_FAMILY_UPDATE;
+    backup_protection.name = backup_generation.name;
+    backup_protection.device = backup_generation.device;
+    backup_protection.inode = backup_generation.inode;
+    if (finish_created_backup(&backup_generation) != 0) {
+        free(backup_generation.path);
+        free(manifest);
+        f = send_json_start(fd, "500 Internal Server Error");
+        if (!f) return;
+        fputs("{\"ok\":false,\"error\":\"required update rollback backup could not be finalized\"}\n", f);
+        fclose(f);
+        return;
+    }
+    backup_dir = backup_generation.path;
+    backup_generation.path = NULL;
+    retention_rc = enforce_backup_retention_with_protection(
+        BACKUP_FAMILY_COUNT, 0,
+        &backup_protection, &after_retention);
+    if (retention_rc == RETENTION_ERROR) {
+        free(backup_dir);
+        free(manifest);
+        f = send_json_start(fd, "500 Internal Server Error");
+        if (!f) return;
+        fputs("{\"ok\":false,\"error\":\"backup retention failed after update rollback creation\"}\n", f);
+        fclose(f);
+        return;
+    }
+    if (retention_rc == RETENTION_OVER_BUDGET) {
+        fputs("update backup protected minimum remains over budget\n", stderr);
+        print_retention_summary(stderr, &after_retention);
+    } else if (before_retention.over_budget) {
+        fputs(
+            "update backup pre-creation reservation could not fit while "
+            "preserving the prior rollback; final budget satisfied\n",
+            stderr);
+    }
     remove_dir_entries_with_prefix(CODEX_BIN_DIR, "codex_webui.prev");
-    mkdir(UPDATE_BACKUP_DIR, 0755);
-    prune_update_backups(3);
-    snprintf(backup_dir, sizeof(backup_dir), UPDATE_BACKUP_DIR "/%ld", (long)time(NULL));
-    mkdir(backup_dir, 0755);
     updated[0] = 0;
     for (i = 0; i < sizeof(UPDATE_FILES) / sizeof(UPDATE_FILES[0]); i++) {
         update_stage_path(UPDATE_FILES[i], stage, sizeof(stage));
         if (stat(stage, &st) != 0) continue;
         update_dest_path(UPDATE_FILES[i], dest, sizeof(dest));
         snprintf(dest_tmp, sizeof(dest_tmp), "%s.update", dest);
-        snprintf(backup, sizeof(backup), "%s/%s", backup_dir, UPDATE_FILES[i]);
-        if (stat(dest, &st) == 0) copy_file_raw(dest, backup);
         unlink(dest_tmp);
         if (copy_file_raw(stage, dest_tmp) != 0) {
             char msg[160];
             int saved_errno = errno;
             unlink(dest_tmp);
+            free(backup_dir);
             free(manifest);
             f = send_json_start(fd, "500 Internal Server Error");
             if (!f) return;
@@ -7746,6 +9099,7 @@ static void render_update_apply_json(int fd, const struct request *req) {
             char msg[160];
             int saved_errno = errno;
             unlink(dest_tmp);
+            free(backup_dir);
             free(manifest);
             f = send_json_start(fd, "500 Internal Server Error");
             if (!f) return;
@@ -7759,6 +9113,7 @@ static void render_update_apply_json(int fd, const struct request *req) {
             char msg[160];
             int saved_errno = errno;
             unlink(dest_tmp);
+            free(backup_dir);
             free(manifest);
             f = send_json_start(fd, "500 Internal Server Error");
             if (!f) return;
@@ -7775,16 +9130,19 @@ static void render_update_apply_json(int fd, const struct request *req) {
     copy_file_raw(UPDATE_STAGE_DIR "/MANIFEST.txt", CODEX_BIN_DIR "/MANIFEST.txt");
     chmod(CODEX_BIN_DIR "/MANIFEST.txt", 0644);
     unlink(UPDATE_STAGE_DIR "/MANIFEST.txt");
-    prune_update_backups(3);
     sync();
     free(manifest);
     f = send_json_start(fd, "200 OK");
-    if (!f) return;
+    if (!f) {
+        free(backup_dir);
+        return;
+    }
     fputs("{\"ok\":true,\"updated\":", f); json_write_string(f, updated);
     fputs(",\"backupDir\":", f); json_write_string(f, backup_dir);
     fputs(",\"restart\":", f); fputs(restart ? "true" : "false", f);
     fputs("}\n", f);
     fclose(f);
+    free(backup_dir);
     if (restart) {
         pid_t pid;
         shutdown(fd, SHUT_RDWR);
@@ -8752,6 +10110,1505 @@ static void start_bthid_keyboard_runtime(void) {
     }
 }
 
+/* Step 4A: storage authority and capacity-gated atomic installer CLI.
+ *
+ *   codex_webui --storage-status [FLOOR_BYTES]
+ *   codex_webui --install-plan SOURCE DESTINATION MODE FLOOR_BYTES
+ *   codex_webui --install-file SOURCE DESTINATION MODE FLOOR_BYTES [--rollback-restore]
+ *   codex_webui --file-status DESTINATION
+ *
+ * These maintenance modes dispatch before the server starts: they bind no
+ * port, fork no children, and touch no network.  Every dash-prefixed argv
+ * that does not exactly match one of these forms is rejected with exit 2
+ * before retention, helper, or socket startup.  Source and destination
+ * arguments containing CR or LF are rejected before any output echoes
+ * them.  Status, plan, and install all measure the same authoritative
+ * storage path: lstat("/mnt/data") must show a real directory (a symlink
+ * is never followed); "/data" is the fallback only when that lstat itself
+ * returns ENOENT, keeping /mnt/data the union backing authority for every
+ * allowlisted path instead of a destination-parent statvfs.  Sizes are
+ * authoritative from statvfs (f_bavail * f_frsize; f_bsize is the
+ * documented fragment fallback when f_frsize is zero) and every
+ * accumulation is checked u64 arithmetic.  Candidate allocation rounds
+ * source bytes up to whole fragments; candidate reservation is that
+ * allocation plus exactly one metadata fragment; forward rollback
+ * reservation is the existing destination's fragment allocation plus one
+ * metadata fragment, or zero when the destination is absent.  A plan is
+ * allowed only when available >= floor + candidate reservation + rollback
+ * reservation.  --install-plan stays read-only even when one or more
+ * allowlisted destination-parent components are genuinely absent: every
+ * existing component is still nofollow-validated and the plan reports
+ * parent_absent=1; --install-file keeps refusing absent parents because a
+ * temp file must live in the destination's own directory.
+ * --rollback-restore performs the same safe atomic replace but reports
+ * rollback_reservation_bytes=0 and requires the caller-supplied floor to
+ * already cover 1 MiB plus every later reverse restoration; it never
+ * reserves the failed new file recursively.  Output is stable
+ * newline-delimited key=value and never prints file contents or secrets.
+ * Sources must be absolute regular non-symlink files beneath a private
+ * /var/volatile/codex-install-* staging tree; destinations must exactly
+ * match the installer allowlist.  Temp files are created in the
+ * destination's own directory with openat(O_CREAT|O_EXCL|O_NOFOLLOW),
+ * copied with bounded partial-I/O handling, fchmod/fsync/size verified,
+ * committed with renameat against the held parent fd, and every temp
+ * cleanup uses unlinkat against that same fd; directory fsync reports
+ * unsupported filesystems explicitly apart from fatal errors.  Any
+ * pre-rename failure removes the temp file first; after rename_completed=1
+ * a fatal directory fsync, a failed post-write measurement, or a broken
+ * floor reports result=installed-needs-rollback with a nonzero exit so the
+ * wrapper records the change and rolls it back.  No orphan temp sweep
+ * exists: sweeping the parent directory could race a concurrent
+ * installer.  --file-status DESTINATION is a staged read-only probe:
+ * the destination must exactly match the allowlist, its parent is opened
+ * with the same descriptor-relative no-follow traversal, and the leaf is
+ * opened race-free with openat(O_RDONLY|O_NOFOLLOW|O_NONBLOCK) —
+ * ENOENT reports allowed absence (ok=1, exists=0, zeroed fields,
+ * md5=none) and ELOOP reports a symlink.  A regular leaf is measured and
+ * hashed from that one held fd; the MD5 is computed in-process so no
+ * busybox child is spawned.  An install no-op requires byte identity and
+ * the destination's current permission bits to already equal the
+ * allowlist mode; byte-identical wrong-mode destinations still take the
+ * full reservation and same-directory temp/fsync/atomic-rename path so
+ * the mode is corrected without an in-place chmod. */
+
+#define INSTALL_FLOOR_DEFAULT_BYTES UINT64_C(1048576)
+#define INSTALL_FLOOR_MIN_BYTES UINT64_C(1048576)
+#define INSTALL_SOURCE_ROOT_PREFIX "/var/volatile/codex-install-"
+#define INSTALL_DATA_PRIMARY "/mnt/data"
+#define INSTALL_DATA_FALLBACK "/data"
+#define INSTALL_TEMP_PREFIX ".codex-install-"
+#define INSTALL_TEMP_MAX_ATTEMPTS 8
+
+struct install_destination_rule {
+    const char *path;
+    mode_t mode;
+};
+
+/* Exact allowlist of every regular persistent file either installer
+ * writes.  Symlink aliases such as /data/codex/bin/dropbear are
+ * intentionally absent: they are not regular files. */
+static const struct install_destination_rule INSTALL_DESTINATION_ALLOWLIST[] = {
+    { "/data/codex/bin/codex_webui", 0755 },
+    { "/data/codex/bin/codex_bthid_keyboard", 0755 },
+    { "/data/codex/bin/codex_bt_pair_agent", 0755 },
+    { "/data/codex/bin/codex_hal_ltcp", 0755 },
+    { "/data/codex/bin/codex_hbus", 0755 },
+    { "/data/codex/bin/codex_portal", 0755 },
+    { "/data/codex/bin/codex_dhcpd", 0755 },
+    { "/data/codex/bin/dropbearmulti", 0755 },
+    { "/usr/sbin/dropbear", 0755 },
+    { "/usr/sbin/dropbearkey", 0755 },
+    { "/data/codex/init.sh", 0755 },
+    { "/data/codex/offline_egress_guard.sh", 0755 },
+    { "/data/codex/recovery_ap.sh", 0755 },
+    { "/etc/init.d/rcS.local", 0755 },
+    { "/opt/luaworks/tasks/connectserver/netservicestarter.lua", 0644 },
+    { "/pkg/codexactivity/codexactivity.lua", 0644 },
+    { "/pkg/codexmqtt/codexmqtt.lua", 0644 },
+    { "/data/codex/hub_id", 0644 },
+    { "/data/codex/cloud_blocker.conf", 0644 },
+    { "/etc/tdeenable", 0644 },
+    { "/pkg/codexactivity/manifest.json", 0644 },
+    { "/pkg/codexmqtt/manifest.json", 0644 },
+    { "/data/codexmqtt/config.json", 0600 }
+};
+
+static const struct install_destination_rule *install_destination_rule(const char *path) {
+    size_t i;
+    if (!path) return NULL;
+    for (i = 0; i < sizeof(INSTALL_DESTINATION_ALLOWLIST) / sizeof(INSTALL_DESTINATION_ALLOWLIST[0]); i++) {
+        if (strcmp(INSTALL_DESTINATION_ALLOWLIST[i].path, path) == 0)
+            return &INSTALL_DESTINATION_ALLOWLIST[i];
+    }
+    return NULL;
+}
+
+static int parse_u64_strict(const char *text, uint64_t *out) {
+    uint64_t value = 0;
+    if (!text || !*text || !out) return -1;
+    for (; *text; text++) {
+        unsigned digit;
+        if (!isdigit((unsigned char)*text)) return -1;
+        digit = (unsigned)(*text - '0');
+        if (value > (UINT64_MAX - digit) / 10) return -1;
+        value = value * 10 + digit;
+    }
+    *out = value;
+    return 0;
+}
+
+static int parse_install_mode(const char *text, mode_t *out) {
+    size_t len, i;
+    unsigned long value = 0;
+    if (!text || !out) return -1;
+    len = strlen(text);
+    if (len < 3 || len > 4) return -1;
+    for (i = 0; i < len; i++) {
+        if (text[i] < '0' || text[i] > '7') return -1;
+        value = value * 8 + (unsigned long)(text[i] - '0');
+    }
+    *out = (mode_t)value;
+    return 0;
+}
+
+static int install_ceil_alloc(uint64_t bytes, uint64_t fragment, uint64_t *out) {
+    uint64_t gap;
+    if (!fragment || !out) return -1;
+    if (bytes == 0) {
+        *out = 0;
+        return 0;
+    }
+    gap = fragment - (bytes % fragment);
+    if (gap == fragment) {
+        *out = bytes;
+        return 0;
+    }
+    if (bytes > UINT64_MAX - gap) return -1;
+    *out = bytes + gap;
+    return 0;
+}
+
+/* /mnt/data is authoritative; /data is consulted only when the /mnt/data
+ * lstat itself is ENOENT.  The lstat never follows a symlink and the
+ * primary must be a real directory: a symlinked or non-directory
+ * /mnt/data is a probe failure, never a fallback trigger. */
+static int install_storage_probe_path(const char **path_out) {
+    struct stat st;
+    if (lstat(INSTALL_DATA_PRIMARY, &st) == 0) {
+        if (!S_ISDIR(st.st_mode)) return -1;
+        *path_out = INSTALL_DATA_PRIMARY;
+        return 0;
+    }
+    if (errno == ENOENT) {
+        *path_out = INSTALL_DATA_FALLBACK;
+        return 0;
+    }
+    return -1;
+}
+
+static uint64_t install_fragment_of(const struct statvfs *vfs) {
+    if (vfs->f_frsize) return (uint64_t)vfs->f_frsize;
+    return (uint64_t)vfs->f_bsize; /* documented fallback */
+}
+
+static int install_available_of(const struct statvfs *vfs, uint64_t *out) {
+    uint64_t unit = install_fragment_of(vfs);
+    if (!unit) return -1;
+    if ((uint64_t)vfs->f_bavail > UINT64_MAX / unit) return -1;
+    *out = (uint64_t)vfs->f_bavail * unit;
+    return 0;
+}
+
+/* Pure path policy: absolute, beneath a codex-install-* staging
+ * directory, at least one level deep, no "." / ".." / empty components. */
+static int install_source_path_policy(const char *path) {
+    static const size_t prefix_len = sizeof(INSTALL_SOURCE_ROOT_PREFIX) - 1;
+    const char *rest, *p;
+    if (!path || path[0] != '/') return -1;
+    if (strncmp(path, INSTALL_SOURCE_ROOT_PREFIX, prefix_len) != 0) return -1;
+    rest = path + prefix_len;
+    if (rest[0] == 0 || rest[0] == '/') return -1;
+    if (!strchr(rest, '/')) return -1;
+    for (p = rest; *p; ) {
+        const char *slash = strchr(p, '/');
+        size_t len = slash ? (size_t)(slash - p) : strlen(p);
+        if (len == 0) return -1;
+        if ((len == 1 && p[0] == '.') ||
+            (len == 2 && p[0] == '.' && p[1] == '.')) return -1;
+        if (!slash) break;
+        p = slash + 1;
+    }
+    return 0;
+}
+
+/* Component-wise no-follow traversal; the leaf must be a regular file. */
+static int install_open_source_nofollow(const char *path, uint64_t *size_out) {
+    char component[256];
+    const char *p = path + 1;
+    int dir_fd, next_fd;
+    struct stat st;
+    dir_fd = open("/", O_RDONLY | O_DIRECTORY);
+    if (dir_fd < 0) return -1;
+    for (;;) {
+        const char *slash = strchr(p, '/');
+        size_t len = slash ? (size_t)(slash - p) : strlen(p);
+        if (len == 0 || len >= sizeof(component)) {
+            close(dir_fd);
+            errno = ENAMETOOLONG;
+            return -1;
+        }
+        memcpy(component, p, len);
+        component[len] = 0;
+        if (!slash) {
+            int file_fd = openat(dir_fd, component,
+                                 O_RDONLY | O_NONBLOCK | O_NOFOLLOW);
+            close(dir_fd);
+            if (file_fd < 0) return -1;
+            if (fstat(file_fd, &st) != 0 || !S_ISREG(st.st_mode)) {
+                close(file_fd);
+                errno = ELOOP;
+                return -1;
+            }
+            if (st.st_size < 0) {
+                close(file_fd);
+                errno = EOVERFLOW;
+                return -1;
+            }
+            if (size_out) *size_out = (uint64_t)st.st_size;
+            return file_fd;
+        }
+        next_fd = openat(dir_fd, component, O_RDONLY | O_NOFOLLOW | O_DIRECTORY);
+        close(dir_fd);
+        if (next_fd < 0) return -1;
+        dir_fd = next_fd;
+        p = slash + 1;
+    }
+}
+
+/* Every component after a missing one must still be a plain name
+ * (non-empty, bounded, no "." / "..") so the absent-parent verdict is
+ * only ever reached for well-formed paths; an empty rest is valid. */
+static int install_parent_rest_valid(const char *rest) {
+    const char *p = rest;
+    if (*p == 0) return 1;
+    for (;;) {
+        const char *slash = strchr(p, '/');
+        size_t len = slash ? (size_t)(slash - p) : strlen(p);
+        if (len == 0 || len >= 256) return 0;
+        if ((len == 1 && p[0] == '.') ||
+            (len == 2 && p[0] == '.' && p[1] == '.')) return 0;
+        if (!slash) return 1;
+        p = slash + 1;
+    }
+}
+
+/* Component-wise no-follow traversal for the destination parent
+ * directory: every existing component is opened with O_NOFOLLOW, so no
+ * symlink anywhere in the parent chain can redirect the install.  When a
+ * component is genuinely absent (ENOENT) and the remaining components are
+ * well-formed, *absent_out is set to 1 and -1 is returned with errno
+ * ENOENT: planning may continue read-only, installation still refuses.
+ * A component that exists but is not a directory, or any other open
+ * failure, is fatal with *absent_out left at 0. */
+static int install_open_parent_nofollow(const char *path, int *absent_out) {
+    char component[256];
+    const char *p;
+    int dir_fd, next_fd;
+    *absent_out = 0;
+    if (!path || path[0] != '/') {
+        errno = EINVAL;
+        return -1;
+    }
+    dir_fd = open("/", O_RDONLY | O_DIRECTORY);
+    if (dir_fd < 0) return -1;
+    p = path + 1;
+    for (;;) {
+        const char *slash = strchr(p, '/');
+        size_t len = slash ? (size_t)(slash - p) : strlen(p);
+        if (len == 0 || len >= sizeof(component)) {
+            close(dir_fd);
+            errno = ENAMETOOLONG;
+            return -1;
+        }
+        memcpy(component, p, len);
+        component[len] = 0;
+        next_fd = openat(dir_fd, component, O_RDONLY | O_NOFOLLOW | O_DIRECTORY);
+        if (next_fd < 0) {
+            int saved_errno = errno;
+            close(dir_fd);
+            if (saved_errno == ENOENT &&
+                install_parent_rest_valid(slash ? slash + 1 : p + len)) {
+                *absent_out = 1;
+                errno = ENOENT;
+            } else {
+                errno = saved_errno;
+            }
+            return -1;
+        }
+        close(dir_fd);
+        dir_fd = next_fd;
+        if (!slash) return dir_fd;
+        p = slash + 1;
+    }
+}
+
+static int install_read_exact(int fd, char *buffer, size_t count, size_t *got_out) {
+    size_t total = 0;
+    while (total < count) {
+        ssize_t got = read(fd, buffer + total, count - total);
+        if (got < 0) {
+            if (errno == EINTR) continue;
+            return -1;
+        }
+        if (got == 0) break;
+        total += (size_t)got;
+    }
+    *got_out = total;
+    return 0;
+}
+
+/* Bounded copy with partial I/O handling; fails closed if the source
+ * shrinks (short read) or grows (extra bytes) past the declared size. */
+static int install_copy_bounded(int source_fd, int dest_fd, uint64_t limit) {
+    static char buffer[16384];
+    uint64_t remaining = limit;
+    if (lseek(source_fd, 0, SEEK_SET) < 0) return -1;
+    while (remaining > 0) {
+        size_t chunk = remaining > sizeof(buffer) ? sizeof(buffer) : (size_t)remaining;
+        size_t got, written = 0;
+        if (install_read_exact(source_fd, buffer, chunk, &got) != 0) return -1;
+        if (got != chunk) return -1;
+        while (written < got) {
+            ssize_t put = write(dest_fd, buffer + written, got - written);
+            if (put < 0) {
+                if (errno == EINTR) continue;
+                return -1;
+            }
+            written += (size_t)put;
+        }
+        remaining -= got;
+    }
+    {
+        char extra;
+        ssize_t probe;
+        do { probe = read(source_fd, &extra, 1); } while (probe < 0 && errno == EINTR);
+        if (probe != 0) return -1;
+    }
+    return 0;
+}
+
+/* Parent-fd relative identical check: the destination is opened against
+ * the held parent directory fd, never by absolute path, and every
+ * observation the caller needs (type, size, permission bits) comes from
+ * fstat on that one already-open descriptor so no pathname re-resolution
+ * happens after the byte comparison.  When identical is set,
+ * *dest_mode_out (if non-NULL) receives the destination's permission
+ * bits (st_mode & 07777) captured from that same descriptor. */
+static int install_contents_identical(
+    int source_fd, uint64_t source_bytes, int parent_fd, const char *leaf,
+    int *identical, mode_t *dest_mode_out) {
+    static char left[16384], right[16384];
+    struct stat st;
+    int dest_fd;
+    uint64_t remaining;
+    *identical = 0;
+    dest_fd = openat(parent_fd, leaf, O_RDONLY | O_NOFOLLOW);
+    if (dest_fd < 0) {
+        if (errno == ENOENT) return 0;
+        return -1;
+    }
+    if (fstat(dest_fd, &st) != 0 || !S_ISREG(st.st_mode)) {
+        close(dest_fd);
+        return -1;
+    }
+    if ((uint64_t)st.st_size != source_bytes) {
+        close(dest_fd);
+        return 0;
+    }
+    if (lseek(source_fd, 0, SEEK_SET) < 0) {
+        close(dest_fd);
+        return -1;
+    }
+    remaining = source_bytes;
+    while (remaining > 0) {
+        size_t chunk = remaining > sizeof(left) ? sizeof(left) : (size_t)remaining;
+        size_t left_got, right_got;
+        if (install_read_exact(source_fd, left, chunk, &left_got) != 0 ||
+            install_read_exact(dest_fd, right, chunk, &right_got) != 0) {
+            close(dest_fd);
+            return -1;
+        }
+        if (left_got != chunk || right_got != chunk ||
+            memcmp(left, right, chunk) != 0) {
+            close(dest_fd);
+            return 0;
+        }
+        remaining -= chunk;
+    }
+    close(dest_fd);
+    if (dest_mode_out) *dest_mode_out = st.st_mode & 07777;
+    *identical = 1;
+    return 0;
+}
+
+/* Minimal self-contained MD5 (RFC 1321): the hub toolchain ships no MD5
+ * header and maintenance modes must never spawn a busybox child to hash
+ * an allowlisted destination, so the digest is computed in-process. */
+struct codex_md5_ctx {
+    uint32_t state[4];
+    uint64_t bits;
+    unsigned char block[64];
+    size_t used;
+};
+
+#define CODEX_MD5_ROTATE(value, amount) \
+    (((value) << (amount)) | ((value) >> (32 - (amount))))
+#define CODEX_MD5_F(x, y, z) (((x) & (y)) | (~(x) & (z)))
+#define CODEX_MD5_G(x, y, z) (((x) & (z)) | ((y) & ~(z)))
+#define CODEX_MD5_H(x, y, z) ((x) ^ (y) ^ (z))
+#define CODEX_MD5_I(x, y, z) ((y) ^ ((x) | ~(z)))
+#define CODEX_MD5_ROUND(func, a, b, c, d, x, shift, add)    \
+    do {                                                    \
+        (a) += func((b), (c), (d)) + (x) + (uint32_t)(add); \
+        (a) = CODEX_MD5_ROTATE((a), (shift));               \
+        (a) += (b);                                         \
+    } while (0)
+
+static void codex_md5_transform(struct codex_md5_ctx *ctx, const unsigned char *block) {
+    uint32_t words[16];
+    uint32_t a, b, c, d;
+    size_t i;
+    for (i = 0; i < 16; i++) {
+        words[i] = (uint32_t)block[i * 4] |
+            ((uint32_t)block[i * 4 + 1] << 8) |
+            ((uint32_t)block[i * 4 + 2] << 16) |
+            ((uint32_t)block[i * 4 + 3] << 24);
+    }
+    a = ctx->state[0]; b = ctx->state[1]; c = ctx->state[2]; d = ctx->state[3];
+    CODEX_MD5_ROUND(CODEX_MD5_F, a, b, c, d, words[0], 7, 0xd76aa478);
+    CODEX_MD5_ROUND(CODEX_MD5_F, d, a, b, c, words[1], 12, 0xe8c7b756);
+    CODEX_MD5_ROUND(CODEX_MD5_F, c, d, a, b, words[2], 17, 0x242070db);
+    CODEX_MD5_ROUND(CODEX_MD5_F, b, c, d, a, words[3], 22, 0xc1bdceee);
+    CODEX_MD5_ROUND(CODEX_MD5_F, a, b, c, d, words[4], 7, 0xf57c0faf);
+    CODEX_MD5_ROUND(CODEX_MD5_F, d, a, b, c, words[5], 12, 0x4787c62a);
+    CODEX_MD5_ROUND(CODEX_MD5_F, c, d, a, b, words[6], 17, 0xa8304613);
+    CODEX_MD5_ROUND(CODEX_MD5_F, b, c, d, a, words[7], 22, 0xfd469501);
+    CODEX_MD5_ROUND(CODEX_MD5_F, a, b, c, d, words[8], 7, 0x698098d8);
+    CODEX_MD5_ROUND(CODEX_MD5_F, d, a, b, c, words[9], 12, 0x8b44f7af);
+    CODEX_MD5_ROUND(CODEX_MD5_F, c, d, a, b, words[10], 17, 0xffff5bb1);
+    CODEX_MD5_ROUND(CODEX_MD5_F, b, c, d, a, words[11], 22, 0x895cd7be);
+    CODEX_MD5_ROUND(CODEX_MD5_F, a, b, c, d, words[12], 7, 0x6b901122);
+    CODEX_MD5_ROUND(CODEX_MD5_F, d, a, b, c, words[13], 12, 0xfd987193);
+    CODEX_MD5_ROUND(CODEX_MD5_F, c, d, a, b, words[14], 17, 0xa679438e);
+    CODEX_MD5_ROUND(CODEX_MD5_F, b, c, d, a, words[15], 22, 0x49b40821);
+    CODEX_MD5_ROUND(CODEX_MD5_G, a, b, c, d, words[1], 5, 0xf61e2562);
+    CODEX_MD5_ROUND(CODEX_MD5_G, d, a, b, c, words[6], 9, 0xc040b340);
+    CODEX_MD5_ROUND(CODEX_MD5_G, c, d, a, b, words[11], 14, 0x265e5a51);
+    CODEX_MD5_ROUND(CODEX_MD5_G, b, c, d, a, words[0], 20, 0xe9b6c7aa);
+    CODEX_MD5_ROUND(CODEX_MD5_G, a, b, c, d, words[5], 5, 0xd62f105d);
+    CODEX_MD5_ROUND(CODEX_MD5_G, d, a, b, c, words[10], 9, 0x02441453);
+    CODEX_MD5_ROUND(CODEX_MD5_G, c, d, a, b, words[15], 14, 0xd8a1e681);
+    CODEX_MD5_ROUND(CODEX_MD5_G, b, c, d, a, words[4], 20, 0xe7d3fbc8);
+    CODEX_MD5_ROUND(CODEX_MD5_G, a, b, c, d, words[9], 5, 0x21e1cde6);
+    CODEX_MD5_ROUND(CODEX_MD5_G, d, a, b, c, words[14], 9, 0xc33707d6);
+    CODEX_MD5_ROUND(CODEX_MD5_G, c, d, a, b, words[3], 14, 0xf4d50d87);
+    CODEX_MD5_ROUND(CODEX_MD5_G, b, c, d, a, words[8], 20, 0x455a14ed);
+    CODEX_MD5_ROUND(CODEX_MD5_G, a, b, c, d, words[13], 5, 0xa9e3e905);
+    CODEX_MD5_ROUND(CODEX_MD5_G, d, a, b, c, words[2], 9, 0xfcefa3f8);
+    CODEX_MD5_ROUND(CODEX_MD5_G, c, d, a, b, words[7], 14, 0x676f02d9);
+    CODEX_MD5_ROUND(CODEX_MD5_G, b, c, d, a, words[12], 20, 0x8d2a4c8a);
+    CODEX_MD5_ROUND(CODEX_MD5_H, a, b, c, d, words[5], 4, 0xfffa3942);
+    CODEX_MD5_ROUND(CODEX_MD5_H, d, a, b, c, words[8], 11, 0x8771f681);
+    CODEX_MD5_ROUND(CODEX_MD5_H, c, d, a, b, words[11], 16, 0x6d9d6122);
+    CODEX_MD5_ROUND(CODEX_MD5_H, b, c, d, a, words[14], 23, 0xfde5380c);
+    CODEX_MD5_ROUND(CODEX_MD5_H, a, b, c, d, words[1], 4, 0xa4beea44);
+    CODEX_MD5_ROUND(CODEX_MD5_H, d, a, b, c, words[4], 11, 0x4bdecfa9);
+    CODEX_MD5_ROUND(CODEX_MD5_H, c, d, a, b, words[7], 16, 0xf6bb4b60);
+    CODEX_MD5_ROUND(CODEX_MD5_H, b, c, d, a, words[10], 23, 0xbebfbc70);
+    CODEX_MD5_ROUND(CODEX_MD5_H, a, b, c, d, words[13], 4, 0x289b7ec6);
+    CODEX_MD5_ROUND(CODEX_MD5_H, d, a, b, c, words[0], 11, 0xeaa127fa);
+    CODEX_MD5_ROUND(CODEX_MD5_H, c, d, a, b, words[3], 16, 0xd4ef3085);
+    CODEX_MD5_ROUND(CODEX_MD5_H, b, c, d, a, words[6], 23, 0x04881d05);
+    CODEX_MD5_ROUND(CODEX_MD5_H, a, b, c, d, words[9], 4, 0xd9d4d039);
+    CODEX_MD5_ROUND(CODEX_MD5_H, d, a, b, c, words[12], 11, 0xe6db99e5);
+    CODEX_MD5_ROUND(CODEX_MD5_H, c, d, a, b, words[15], 16, 0x1fa27cf8);
+    CODEX_MD5_ROUND(CODEX_MD5_H, b, c, d, a, words[2], 23, 0xc4ac5665);
+    CODEX_MD5_ROUND(CODEX_MD5_I, a, b, c, d, words[0], 6, 0xf4292244);
+    CODEX_MD5_ROUND(CODEX_MD5_I, d, a, b, c, words[7], 10, 0x432aff97);
+    CODEX_MD5_ROUND(CODEX_MD5_I, c, d, a, b, words[14], 15, 0xab9423a7);
+    CODEX_MD5_ROUND(CODEX_MD5_I, b, c, d, a, words[5], 21, 0xfc93a039);
+    CODEX_MD5_ROUND(CODEX_MD5_I, a, b, c, d, words[12], 6, 0x655b59c3);
+    CODEX_MD5_ROUND(CODEX_MD5_I, d, a, b, c, words[3], 10, 0x8f0ccc92);
+    CODEX_MD5_ROUND(CODEX_MD5_I, c, d, a, b, words[10], 15, 0xffeff47d);
+    CODEX_MD5_ROUND(CODEX_MD5_I, b, c, d, a, words[1], 21, 0x85845dd1);
+    CODEX_MD5_ROUND(CODEX_MD5_I, a, b, c, d, words[8], 6, 0x6fa87e4f);
+    CODEX_MD5_ROUND(CODEX_MD5_I, d, a, b, c, words[15], 10, 0xfe2ce6e0);
+    CODEX_MD5_ROUND(CODEX_MD5_I, c, d, a, b, words[6], 15, 0xa3014314);
+    CODEX_MD5_ROUND(CODEX_MD5_I, b, c, d, a, words[13], 21, 0x4e0811a1);
+    CODEX_MD5_ROUND(CODEX_MD5_I, a, b, c, d, words[4], 6, 0xf7537e82);
+    CODEX_MD5_ROUND(CODEX_MD5_I, d, a, b, c, words[11], 10, 0xbd3af235);
+    CODEX_MD5_ROUND(CODEX_MD5_I, c, d, a, b, words[2], 15, 0x2ad7d2bb);
+    CODEX_MD5_ROUND(CODEX_MD5_I, b, c, d, a, words[9], 21, 0xeb86d391);
+    ctx->state[0] += a;
+    ctx->state[1] += b;
+    ctx->state[2] += c;
+    ctx->state[3] += d;
+}
+
+static void codex_md5_init(struct codex_md5_ctx *ctx) {
+    memset(ctx, 0, sizeof(*ctx));
+    ctx->state[0] = 0x67452301;
+    ctx->state[1] = 0xefcdab89;
+    ctx->state[2] = 0x98badcfe;
+    ctx->state[3] = 0x10325476;
+}
+
+static void codex_md5_update(
+    struct codex_md5_ctx *ctx, const void *data, size_t length) {
+    const unsigned char *p = (const unsigned char *)data;
+    ctx->bits += (uint64_t)length * 8;
+    while (length > 0) {
+        size_t space = sizeof(ctx->block) - ctx->used;
+        size_t take = length < space ? length : space;
+        memcpy(ctx->block + ctx->used, p, take);
+        ctx->used += take;
+        p += take;
+        length -= take;
+        if (ctx->used == sizeof(ctx->block)) {
+            codex_md5_transform(ctx, ctx->block);
+            ctx->used = 0;
+        }
+    }
+}
+
+static void codex_md5_final(struct codex_md5_ctx *ctx, unsigned char digest[16]) {
+    uint64_t bits = ctx->bits;
+    unsigned char pad = 0x80;
+    unsigned char zero = 0;
+    unsigned char length_bytes[8];
+    size_t i;
+    codex_md5_update(ctx, &pad, 1);
+    while (ctx->used != 56) codex_md5_update(ctx, &zero, 1);
+    for (i = 0; i < 8; i++)
+        length_bytes[i] = (unsigned char)(bits >> (8 * i));
+    /* The length update leaves ctx->used at zero; place the length into
+     * the pending block directly and transform it. */
+    memcpy(ctx->block + 56, length_bytes, 8);
+    codex_md5_transform(ctx, ctx->block);
+    for (i = 0; i < 4; i++) {
+        digest[i * 4] = (unsigned char)(ctx->state[i] & 0xff);
+        digest[i * 4 + 1] = (unsigned char)((ctx->state[i] >> 8) & 0xff);
+        digest[i * 4 + 2] = (unsigned char)((ctx->state[i] >> 16) & 0xff);
+        digest[i * 4 + 3] = (unsigned char)((ctx->state[i] >> 24) & 0xff);
+    }
+}
+
+static void codex_md5_hex(const unsigned char digest[16], char out[33]) {
+    static const char hex[] = "0123456789abcdef";
+    size_t i;
+    for (i = 0; i < 16; i++) {
+        out[i * 2] = hex[digest[i] >> 4];
+        out[i * 2 + 1] = hex[digest[i] & 0x0f];
+    }
+    out[32] = 0;
+}
+
+/* Hashes an already-held descriptor from its current offset; the caller
+ * owns the race-free open, so no path lookup happens here. */
+static int codex_md5_fd(int fd, char out[33]) {
+    static char buffer[16384];
+    unsigned char digest[16];
+    struct codex_md5_ctx ctx;
+    codex_md5_init(&ctx);
+    for (;;) {
+        ssize_t got = read(fd, buffer, sizeof(buffer));
+        if (got < 0) {
+            if (errno == EINTR) continue;
+            return -1;
+        }
+        if (got == 0) break;
+        codex_md5_update(&ctx, buffer, (size_t)got);
+    }
+    codex_md5_final(&ctx, digest);
+    codex_md5_hex(digest, out);
+    return 0;
+}
+
+struct install_evaluation {
+    const struct install_destination_rule *rule;
+    char parent_path[512];
+    char leaf_name[128];
+    int parent_fd;
+    int parent_absent;
+    int destination_exists;
+    uint64_t fragment;
+    uint64_t available;
+    const char *storage_path;
+    uint64_t source_bytes;
+    uint64_t candidate_bytes;
+    uint64_t candidate_reservation;
+    uint64_t existing_bytes;
+    uint64_t destination_allocation;
+    uint64_t rollback_reservation;
+    uint64_t required;
+};
+
+#define INSTALL_REFUSE(token)                       \
+    do {                                            \
+        snprintf(reason, reason_len, "%s", token);  \
+        return -1;                                  \
+    } while (0)
+
+static int install_evaluate(
+    const char *source,
+    const char *destination,
+    mode_t mode,
+    uint64_t floor,
+    int rollback_restore,
+    int allow_parent_absent,
+    struct install_evaluation *ev,
+    int *source_fd_out,
+    char *reason,
+    size_t reason_len) {
+    const struct install_destination_rule *rule;
+    const char *slash;
+    size_t parent_len, leaf_len;
+    struct stat st;
+    struct statvfs vfs;
+    uint64_t fragment, available, candidate, reservation = 0, rollback = 0, required;
+    const char *storage_path;
+    int source_fd, parent_fd, parent_absent = 0;
+
+    memset(ev, 0, sizeof(*ev));
+    ev->parent_fd = -1;
+    *source_fd_out = -1;
+
+    rule = install_destination_rule(destination);
+    if (!rule) INSTALL_REFUSE("destination_not_allowed");
+    ev->rule = rule;
+    if (mode != rule->mode) INSTALL_REFUSE("mode_not_allowed");
+    if (floor < INSTALL_FLOOR_MIN_BYTES) INSTALL_REFUSE("floor_invalid");
+    if (install_source_path_policy(source) != 0) INSTALL_REFUSE("source_path_invalid");
+
+    slash = strrchr(destination, '/');
+    if (!slash) INSTALL_REFUSE("destination_not_allowed");
+    parent_len = (size_t)(slash - destination);
+    leaf_len = strlen(slash + 1);
+    if (parent_len == 0 || parent_len >= sizeof(ev->parent_path) ||
+        leaf_len == 0 || leaf_len >= sizeof(ev->leaf_name))
+        INSTALL_REFUSE("destination_not_allowed");
+    memcpy(ev->parent_path, destination, parent_len);
+    ev->parent_path[parent_len] = 0;
+    memcpy(ev->leaf_name, slash + 1, leaf_len + 1);
+
+
+    source_fd = install_open_source_nofollow(source, &ev->source_bytes);
+    if (source_fd < 0) INSTALL_REFUSE("source_open_failed");
+    *source_fd_out = source_fd;
+
+    parent_fd = install_open_parent_nofollow(ev->parent_path, &parent_absent);
+    if (parent_fd < 0) {
+        if (!parent_absent || !allow_parent_absent)
+            INSTALL_REFUSE("destination_open_failed");
+        ev->parent_absent = 1;
+    }
+    ev->parent_fd = parent_fd;
+    if (!parent_absent) {
+        if (fstatat(parent_fd, ev->leaf_name, &st, AT_SYMLINK_NOFOLLOW) == 0) {
+            if (!S_ISREG(st.st_mode) || st.st_size < 0)
+                INSTALL_REFUSE("destination_type_invalid");
+            ev->destination_exists = 1;
+            ev->existing_bytes = (uint64_t)st.st_size;
+        } else if (errno != ENOENT) {
+            INSTALL_REFUSE("destination_type_invalid");
+        }
+    }
+
+    if (install_storage_probe_path(&storage_path) != 0 ||
+        statvfs(storage_path, &vfs) != 0)
+        INSTALL_REFUSE("statvfs_failed");
+    ev->storage_path = storage_path;
+    fragment = install_fragment_of(&vfs);
+    if (fragment == 0 || install_available_of(&vfs, &available) != 0)
+        INSTALL_REFUSE("storage_unavailable");
+    ev->fragment = fragment;
+    ev->available = available;
+
+    if (install_ceil_alloc(ev->source_bytes, fragment, &candidate) != 0)
+        INSTALL_REFUSE("arithmetic_overflow");
+    ev->candidate_bytes = candidate;
+    if (add_u64_checked(&reservation, candidate) != 0 ||
+        add_u64_checked(&reservation, fragment) != 0)
+        INSTALL_REFUSE("arithmetic_overflow");
+    ev->candidate_reservation = reservation;
+
+    if (!rollback_restore && ev->destination_exists) {
+        uint64_t allocation;
+        if (install_ceil_alloc(ev->existing_bytes, fragment, &allocation) != 0)
+            INSTALL_REFUSE("arithmetic_overflow");
+        ev->destination_allocation = allocation;
+        if (add_u64_checked(&rollback, allocation) != 0 ||
+            add_u64_checked(&rollback, fragment) != 0)
+            INSTALL_REFUSE("arithmetic_overflow");
+    }
+    ev->rollback_reservation = rollback;
+
+    required = floor;
+    if (add_u64_checked(&required, reservation) != 0 ||
+        add_u64_checked(&required, rollback) != 0)
+        INSTALL_REFUSE("arithmetic_overflow");
+    ev->required = required;
+    return 0;
+}
+
+#undef INSTALL_REFUSE
+
+static void install_print_plan_fields(
+    const struct install_evaluation *ev,
+    uint64_t floor) {
+    printf("storage_path=%s\n", ev->storage_path);
+    printf("parent_absent=%d\n", ev->parent_absent ? 1 : 0);
+    printf("destination_mode=%03o\n", (unsigned)ev->rule->mode);
+    printf("fragment_bytes=%llu\n", (unsigned long long)ev->fragment);
+    printf("source_bytes=%llu\n", (unsigned long long)ev->source_bytes);
+    printf("source_allocated_bytes=%llu\n", (unsigned long long)ev->candidate_bytes);
+    printf("candidate_bytes=%llu\n", (unsigned long long)ev->candidate_bytes);
+    printf("candidate_reservation_bytes=%llu\n", (unsigned long long)ev->candidate_reservation);
+    printf("destination_existed=%d\n", ev->destination_exists ? 1 : 0);
+    printf("destination_bytes_before=%llu\n", (unsigned long long)ev->existing_bytes);
+    printf("destination_allocated_bytes=%llu\n", (unsigned long long)ev->destination_allocation);
+    printf("existing_destination_bytes=%llu\n", (unsigned long long)ev->existing_bytes);
+    printf("rollback_reservation_bytes=%llu\n", (unsigned long long)ev->rollback_reservation);
+    printf("floor_bytes=%llu\n", (unsigned long long)floor);
+    printf("available_bytes=%llu\n", (unsigned long long)ev->available);
+    printf("available_bytes_before=%llu\n", (unsigned long long)ev->available);
+    printf("bytes_available=%llu\n", (unsigned long long)ev->available);
+    printf("blocks_available=%llu\n",
+        (unsigned long long)(ev->fragment ? ev->available / ev->fragment : 0));
+    printf("required_bytes=%llu\n", (unsigned long long)ev->required);
+}
+
+/* Arguments are echoed verbatim into stable key=value output; a CR or LF
+ * would forge extra lines, so such arguments are rejected before any
+ * output is written. */
+static int install_arg_echoable(const char *s) {
+    if (!s) return 0;
+    for (; *s; s++) {
+        if (*s == '\r' || *s == '\n') return 0;
+    }
+    return 1;
+}
+
+static int install_argv_echoable(int argc, char **argv) {
+    int i;
+    if (argc < 0 || !argv) return 0;
+    for (i = 0; i < argc; i++) {
+        if (!install_arg_echoable(argv[i])) return 0;
+    }
+    return 1;
+}
+
+#define INSTALL_DIR_SYNC_OK 0
+#define INSTALL_DIR_SYNC_UNSUPPORTED 1
+#define INSTALL_DIR_SYNC_FATAL 2
+
+/* Directory fsync support varies by filesystem: EINVAL/ENOTSUP/ENOSYS
+ * mean directory fsync is unsupported, which is reported explicitly and
+ * treated as success; any other errno after a failed fsync is fatal. */
+static int install_dir_sync_classify(int fsync_rc, int fsync_errno) {
+    if (fsync_rc == 0) return INSTALL_DIR_SYNC_OK;
+    if (fsync_errno == EINVAL || fsync_errno == ENOTSUP || fsync_errno == ENOSYS)
+        return INSTALL_DIR_SYNC_UNSUPPORTED;
+    return INSTALL_DIR_SYNC_FATAL;
+}
+
+/* After rename_completed=1, a fatal directory fsync, a failed post-write
+ * measurement, or a broken floor means the installed bytes must be rolled
+ * back by the wrapper (nonzero exit). */
+static int install_needs_rollback_after_rename(int dir_sync_class, int measured, int floor_after) {
+    if (dir_sync_class == INSTALL_DIR_SYNC_FATAL) return 1;
+    if (!measured) return 1;
+    if (!floor_after) return 1;
+    return 0;
+}
+
+/* Exact matcher for every well-formed maintenance argv; main rejects any
+ * other dash-prefixed argv with exit 2 before retention, helpers, or the
+ * listening socket start. */
+static int install_maintenance_argv_valid(int argc, char **argv) {
+    if (argc < 2 || !argv || !argv[1] || argv[1][0] != '-') return 0;
+    if (strcmp(argv[1], "--prune-backups") == 0) return argc == 2;
+    if (strcmp(argv[1], "--storage-status") == 0) return argc == 2 || argc == 3;
+    if (strcmp(argv[1], "--file-status") == 0) return argc == 3;
+    if (strcmp(argv[1], "--install-plan") == 0) return argc == 6;
+    if (strcmp(argv[1], "--install-file") == 0) {
+        if (argc == 6) return 1;
+        return argc == 7 && strcmp(argv[6], "--rollback-restore") == 0;
+    }
+    return 0;
+}
+
+static int install_cli_storage_status(const char *floor_text) {
+    uint64_t floor = INSTALL_FLOOR_DEFAULT_BYTES;
+    uint64_t available, fragment;
+    const char *storage_path = NULL;
+    struct statvfs vfs;
+    int floor_met;
+    if ((floor_text && parse_u64_strict(floor_text, &floor) != 0) ||
+        floor < INSTALL_FLOOR_MIN_BYTES) {
+        printf("mode=storage-status\nok=0\nreason=floor_invalid\nerrors=0\n");
+        return 2;
+    }
+    if (install_storage_probe_path(&storage_path) != 0) {
+        printf("mode=storage-status\nok=0\nreason=statvfs_failed\nerrors=1\n");
+        return 1;
+    }
+    if (statvfs(storage_path, &vfs) != 0) {
+        printf("mode=storage-status\nok=0\nstorage_path=%s\nreason=statvfs_failed\nerrors=1\n",
+            storage_path);
+        return 1;
+    }
+    fragment = install_fragment_of(&vfs);
+    if (fragment == 0 || install_available_of(&vfs, &available) != 0) {
+        printf("mode=storage-status\nok=0\nstorage_path=%s\nfragment_bytes=0\nblocks_available=0\nbytes_available=0\navailable_bytes=0\nfloor_bytes=%llu\nsufficient=0\nfloor_met=0\nerrors=1\nreason=storage_unavailable\n",
+            storage_path, (unsigned long long)floor);
+        return 1;
+    }
+    floor_met = available >= floor;
+    printf("mode=storage-status\nok=1\nstorage_path=%s\nfragment_bytes=%llu\nblocks_available=%llu\nbytes_available=%llu\navailable_bytes=%llu\nfloor_bytes=%llu\nsufficient=%d\nfloor_met=%d\nerrors=0\n",
+        storage_path,
+        (unsigned long long)fragment,
+        (unsigned long long)(uint64_t)vfs.f_bavail,
+        (unsigned long long)available,
+        (unsigned long long)available,
+        (unsigned long long)floor,
+        floor_met ? 1 : 0,
+        floor_met ? 1 : 0);
+    if (!floor_met) {
+        printf("reason=floor_not_met\n");
+        return 1;
+    }
+    return 0;
+}
+
+/* Read-only destination probe shared by both installers: every line is
+ * stable key=value, file contents are never printed, and the MD5 leaves
+ * the hub only inside this status output (never echoed from wrappers).
+ * Exit 0 covers success including an allowed absent destination; exit 1
+ * covers every allowed-path refusal and unknown-path refusal; exit 2 is
+ * reserved for unechoable arguments. */
+static int install_cli_file_status(const char *destination) {
+    const struct install_destination_rule *rule;
+    const char *slash;
+    char parent_path[512];
+    char leaf_name[128];
+    size_t parent_len, leaf_len;
+    int parent_absent = 0;
+    int parent_fd, leaf_fd;
+    int saved_errno;
+    struct stat st;
+    uint64_t allocated;
+    if (!install_arg_echoable(destination)) {
+        printf("operation=file-status\nok=0\nreason=argument_invalid\nerrors=0\n");
+        return 2;
+    }
+    rule = install_destination_rule(destination);
+    if (!rule) {
+        printf("operation=file-status\nok=0\ndestination=%s\nallowed=0\nexists=0\ntype=absent\nbytes=0\nallocated_bytes=0\nmd5=none\nmode_decimal=0\nerrors=0\nreason=destination_not_allowed\n",
+            destination);
+        return 1;
+    }
+    slash = strrchr(destination, '/');
+    if (!slash) {
+        printf("operation=file-status\nok=0\ndestination=%s\nallowed=0\nexists=0\ntype=absent\nbytes=0\nallocated_bytes=0\nmd5=none\nmode_decimal=0\nerrors=0\nreason=destination_not_allowed\n",
+            destination);
+        return 1;
+    }
+    parent_len = (size_t)(slash - destination);
+    leaf_len = strlen(slash + 1);
+    if (parent_len == 0 || parent_len >= sizeof(parent_path) ||
+        leaf_len == 0 || leaf_len >= sizeof(leaf_name)) {
+        printf("operation=file-status\nok=0\ndestination=%s\nallowed=0\nexists=0\ntype=absent\nbytes=0\nallocated_bytes=0\nmd5=none\nmode_decimal=0\nerrors=0\nreason=destination_not_allowed\n",
+            destination);
+        return 1;
+    }
+    memcpy(parent_path, destination, parent_len);
+    parent_path[parent_len] = 0;
+    memcpy(leaf_name, slash + 1, leaf_len + 1);
+
+    parent_fd = install_open_parent_nofollow(parent_path, &parent_absent);
+    if (parent_fd < 0) {
+        if (parent_absent) goto destination_absent;
+        printf("operation=file-status\nok=0\ndestination=%s\nallowed=1\nexists=0\ntype=absent\nbytes=0\nallocated_bytes=0\nmd5=none\nmode_decimal=0\nerrors=1\nreason=destination_parent_invalid\n",
+            destination);
+        return 1;
+    }
+    /* Race-free leaf classification: a single openat against the held
+     * parent fd decides absence (ENOENT) and symlink (ELOOP); metadata
+     * and the MD5 then come from that same descriptor. */
+    leaf_fd = openat(parent_fd, leaf_name,
+        O_RDONLY | O_NOFOLLOW | O_NONBLOCK);
+    if (leaf_fd < 0) {
+        saved_errno = errno;
+        close(parent_fd);
+        if (saved_errno == ENOENT) goto destination_absent;
+        if (saved_errno == ELOOP) {
+            printf("operation=file-status\nok=0\ndestination=%s\nallowed=1\nexists=1\ntype=symlink\nbytes=0\nallocated_bytes=0\nmd5=none\nmode_decimal=0\nerrors=1\nreason=destination_type_invalid\n",
+                destination);
+            return 1;
+        }
+        printf("operation=file-status\nok=0\ndestination=%s\nallowed=1\nexists=0\ntype=absent\nbytes=0\nallocated_bytes=0\nmd5=none\nmode_decimal=0\nerrors=1\nreason=destination_read_failed\n",
+            destination);
+        return 1;
+    }
+    if (fstat(leaf_fd, &st) != 0) {
+        close(leaf_fd);
+        close(parent_fd);
+        printf("operation=file-status\nok=0\ndestination=%s\nallowed=1\nexists=0\ntype=absent\nbytes=0\nallocated_bytes=0\nmd5=none\nmode_decimal=0\nerrors=1\nreason=destination_read_failed\n",
+            destination);
+        return 1;
+    }
+    if (!S_ISREG(st.st_mode) || st.st_size < 0 || st.st_blocks < 0 ||
+        (uint64_t)st.st_blocks > UINT64_MAX / 512) {
+        close(leaf_fd);
+        close(parent_fd);
+        printf("operation=file-status\nok=0\ndestination=%s\nallowed=1\nexists=1\ntype=other\nbytes=0\nallocated_bytes=0\nmd5=none\nmode_decimal=0\nerrors=1\nreason=destination_type_invalid\n",
+            destination);
+        return 1;
+    }
+    allocated = (uint64_t)st.st_blocks * 512;
+    {
+        char md5_hex[33];
+        if (codex_md5_fd(leaf_fd, md5_hex) != 0) {
+            close(leaf_fd);
+            close(parent_fd);
+            printf("operation=file-status\nok=0\ndestination=%s\nallowed=1\nexists=1\ntype=regular\nbytes=%llu\nallocated_bytes=%llu\nmd5=none\nmode_decimal=%u\nerrors=1\nreason=destination_read_failed\n",
+                destination,
+                (unsigned long long)(uint64_t)st.st_size,
+                (unsigned long long)allocated,
+                (unsigned)(st.st_mode & 07777));
+            return 1;
+        }
+        printf("operation=file-status\nok=1\ndestination=%s\nallowed=1\nexists=1\ntype=regular\nbytes=%llu\nallocated_bytes=%llu\nmd5=%s\nmode_decimal=%u\nerrors=0\n",
+            destination,
+            (unsigned long long)(uint64_t)st.st_size,
+            (unsigned long long)allocated,
+            md5_hex,
+            (unsigned)(st.st_mode & 07777));
+    }
+    close(leaf_fd);
+    close(parent_fd);
+    return 0;
+destination_absent:
+    printf("operation=file-status\nok=1\ndestination=%s\nallowed=1\nexists=0\ntype=absent\nbytes=0\nallocated_bytes=0\nmd5=none\nmode_decimal=0\nerrors=0\n",
+        destination);
+    return 0;
+}
+
+static int install_cli_install_plan(
+    const char *source,
+    const char *destination,
+    const char *mode_text,
+    const char *floor_text) {
+    struct install_evaluation ev;
+    char reason[48];
+    mode_t mode;
+    uint64_t floor;
+    int source_fd = -1;
+    int sufficient;
+    if (!install_arg_echoable(source) || !install_arg_echoable(destination)) {
+        printf("mode=install-plan\nok=0\nreason=argument_invalid\nerrors=0\n");
+        return 2;
+    }
+    if (parse_install_mode(mode_text, &mode) != 0) {
+        printf("mode=install-plan\nok=0\nreason=mode_invalid\nerrors=0\n");
+        return 2;
+    }
+    if (parse_u64_strict(floor_text, &floor) != 0 ||
+        floor < INSTALL_FLOOR_MIN_BYTES) {
+        printf("mode=install-plan\nok=0\nreason=floor_invalid\nerrors=0\n");
+        return 2;
+    }
+    if (install_evaluate(source, destination, mode, floor, 0, 1,
+                         &ev, &source_fd, reason, sizeof(reason)) != 0) {
+        printf("mode=install-plan\nok=0\nsource=%s\ndestination=%s\nallowed=%d\nerrors=1\nreason=%s\n",
+            source, destination,
+            install_destination_rule(destination) != NULL ? 1 : 0, reason);
+        if (source_fd >= 0) close(source_fd);
+        if (ev.parent_fd >= 0) close(ev.parent_fd);
+        return 1;
+    }
+    sufficient = ev.available >= ev.required;
+    printf("mode=install-plan\nok=1\nsource=%s\ndestination=%s\nallowed=1\n",
+        source, destination);
+    install_print_plan_fields(&ev, floor);
+    printf("sufficient=%d\nfloor_met=%d\nerrors=0\n",
+        sufficient ? 1 : 0, ev.available >= floor ? 1 : 0);
+    if (!sufficient) printf("reason=insufficient_storage\n");
+    close(source_fd);
+    if (ev.parent_fd >= 0) close(ev.parent_fd);
+    if (!sufficient) return 1;
+    return 0;
+}
+
+static int install_cli_install_file(
+    const char *source,
+    const char *destination,
+    const char *mode_text,
+    const char *floor_text,
+    int rollback_restore) {
+    struct install_evaluation ev;
+    char reason[48];
+    const char *mode_name = rollback_restore
+        ? "install-file-rollback-restore" : "install-file";
+    mode_t mode;
+    uint64_t floor;
+    int source_fd = -1;
+    int identical = 0;
+    mode_t dest_mode = 0;
+    int rc;
+    if (!install_arg_echoable(source) || !install_arg_echoable(destination)) {
+        printf("mode=%s\nok=0\nreason=argument_invalid\nerrors=0\n", mode_name);
+        return 2;
+    }
+    if (parse_install_mode(mode_text, &mode) != 0) {
+        printf("mode=%s\nok=0\nreason=mode_invalid\nerrors=0\n", mode_name);
+        return 2;
+    }
+    if (parse_u64_strict(floor_text, &floor) != 0 ||
+        floor < INSTALL_FLOOR_MIN_BYTES) {
+        printf("mode=%s\nok=0\nreason=floor_invalid\nerrors=0\n", mode_name);
+        return 2;
+    }
+    if (install_evaluate(source, destination, mode, floor, rollback_restore, 0,
+                         &ev, &source_fd, reason, sizeof(reason)) != 0) {
+        printf("mode=%s\nok=0\nsource=%s\ndestination=%s\nallowed=%d\nerrors=1\nresult=refused\nreason=%s\n",
+            mode_name, source, destination,
+            install_destination_rule(destination) != NULL ? 1 : 0, reason);
+        if (source_fd >= 0) close(source_fd);
+        if (ev.parent_fd >= 0) close(ev.parent_fd);
+        return 1;
+    }
+    printf("mode=%s\nok=1\nsource=%s\ndestination=%s\nallowed=1\n",
+        mode_name, source, destination);
+    install_print_plan_fields(&ev, floor);
+    if (install_contents_identical(source_fd, ev.source_bytes,
+                                   ev.parent_fd, ev.leaf_name,
+                                   &identical, &dest_mode) != 0) {
+        printf("identical=0\nsufficient=%d\nfloor_met=%d\nerrors=1\nresult=refused\nreason=destination_open_failed\n",
+            ev.available >= ev.required ? 1 : 0,
+            ev.available >= floor ? 1 : 0);
+        close(source_fd);
+        close(ev.parent_fd);
+        return 1;
+    }
+    printf("identical=%d\nsufficient=%d\nfloor_met=%d\n",
+        identical ? 1 : 0,
+        ev.available >= ev.required ? 1 : 0,
+        ev.available >= floor ? 1 : 0);
+    if (identical) {
+        /* A no-op requires byte identity AND the destination's
+         * permission bits — captured by fstat on the same already-open
+         * descriptor used for the byte comparison, with no pathname
+         * re-resolution — to already equal the allowlist mode.  A
+         * byte-identical wrong-mode destination falls through to the
+         * full reservation and same-directory temp/fsync/atomic-rename
+         * path (fchmod on the temp fd before renameat), so the mode is
+         * corrected without any in-place chmod on the live file. */
+        if ((dest_mode & 07777) == (ev.rule->mode & 07777)) {
+            printf("rename_completed=0\nresult=no-op\nerrors=0\n");
+            close(source_fd);
+            close(ev.parent_fd);
+            return 0;
+        }
+    }
+    if (ev.available < ev.required) {
+        printf("rename_completed=0\nresult=refused\nreason=insufficient_storage\nerrors=1\n");
+        close(source_fd);
+        close(ev.parent_fd);
+        return 1;
+    }
+    {
+        char temp_name[288];
+        struct stat temp_st;
+        int temp_fd = -1;
+        int attempt;
+        long stamp = (long)time(NULL);
+        for (attempt = 1; attempt <= INSTALL_TEMP_MAX_ATTEMPTS; attempt++) {
+            snprintf(temp_name, sizeof(temp_name),
+                INSTALL_TEMP_PREFIX "%ld-%ld-%d-%s",
+                (long)getpid(), stamp, attempt, ev.leaf_name);
+            temp_fd = openat(ev.parent_fd, temp_name,
+                O_WRONLY | O_CREAT | O_EXCL | O_NOFOLLOW, 0600);
+            if (temp_fd >= 0 || errno != EEXIST) break;
+            temp_fd = -1;
+        }
+        if (temp_fd < 0) {
+            printf("rename_completed=0\nresult=refused\nreason=temp_create_failed\nerrors=1\n");
+            close(source_fd);
+            close(ev.parent_fd);
+            return 1;
+        }
+        if (install_copy_bounded(source_fd, temp_fd, ev.source_bytes) != 0) {
+            close(temp_fd);
+            unlinkat(ev.parent_fd, temp_name, 0);
+            printf("rename_completed=0\nresult=refused\nreason=copy_failed\nerrors=1\n");
+            close(source_fd);
+            close(ev.parent_fd);
+            return 1;
+        }
+        {
+            int verify_ok =
+                fchmod(temp_fd, ev.rule->mode) == 0 &&
+                fsync(temp_fd) == 0 &&
+                fstat(temp_fd, &temp_st) == 0 &&
+                (uint64_t)temp_st.st_size == ev.source_bytes;
+            /* The temp fd is closed unconditionally, even when an
+             * earlier verify step already failed. */
+            if (verify_ok) verify_ok = close(temp_fd) == 0;
+            else close(temp_fd);
+            temp_fd = -1;
+            if (!verify_ok) {
+                unlinkat(ev.parent_fd, temp_name, 0);
+                printf("rename_completed=0\nresult=refused\nreason=verify_failed\nerrors=1\n");
+                close(source_fd);
+                close(ev.parent_fd);
+                return 1;
+            }
+        }
+        if (renameat(ev.parent_fd, temp_name, ev.parent_fd, ev.leaf_name) != 0) {
+            unlinkat(ev.parent_fd, temp_name, 0);
+            printf("rename_completed=0\nresult=refused\nreason=rename_failed\nerrors=1\n");
+            close(source_fd);
+            close(ev.parent_fd);
+            return 1;
+        }
+        /* Commit complete: everything past this point reports
+         * rename_completed=1, and any nonzero exit tells the wrapper the
+         * path changed and must be rolled back. */
+        {
+            int dir_sync_rc = fsync(ev.parent_fd);
+            int dir_sync_errno = dir_sync_rc != 0 ? errno : 0;
+            int dir_sync_class = install_dir_sync_classify(dir_sync_rc, dir_sync_errno);
+            struct statvfs vfs;
+            uint64_t after = 0;
+            int measured = statvfs(ev.storage_path, &vfs) == 0 &&
+                install_available_of(&vfs, &after) == 0;
+            int floor_after = measured && after >= floor;
+            int needs_rollback = install_needs_rollback_after_rename(
+                dir_sync_class, measured, floor_after);
+            /* Post-write measurement on the same authoritative storage
+             * path used for the pre-write gate. */
+            printf("rename_completed=1\n");
+            if (needs_rollback) {
+                printf("result=installed-needs-rollback\nreason=%s\n",
+                    dir_sync_class == INSTALL_DIR_SYNC_FATAL ? "directory_fsync_failed"
+                    : !measured ? "post_measure_failed"
+                    : "floor_not_met_after");
+            } else {
+                printf("result=installed\n");
+            }
+            printf("directory_fsync=%d\ndirectory_fsync_unsupported=%d\n",
+                dir_sync_class == INSTALL_DIR_SYNC_OK ? 1 : 0,
+                dir_sync_class == INSTALL_DIR_SYNC_UNSUPPORTED ? 1 : 0);
+            if (measured)
+                printf("available_bytes_after=%llu\nfloor_met_after=%d\n",
+                    (unsigned long long)after, floor_after ? 1 : 0);
+            printf("errors=%d\n", needs_rollback ? 1 : 0);
+            rc = needs_rollback ? 1 : 0;
+        }
+    }
+    close(source_fd);
+    close(ev.parent_fd);
+    return rc;
+}
+
+/* Pure self-test cases: arithmetic, parsing, and path policy only; no
+ * filesystem mutation. */
+static int install_cli_expect(const char *name, int actual, int expected) {
+    if (actual != expected) {
+        fprintf(stderr, "FAIL install cli %s: expected %d, got %d\n",
+            name, expected, actual);
+        return 1;
+    }
+    return 0;
+}
+
+static int install_cli_self_test(void) {
+    int failures = 0;
+    uint64_t value;
+    mode_t mode;
+    failures += install_cli_expect("floor parses digits",
+        parse_u64_strict("1048576", &value) == 0 && value == UINT64_C(1048576), 1);
+    failures += install_cli_expect("floor parses u64 max",
+        parse_u64_strict("18446744073709551615", &value) == 0 && value == UINT64_MAX, 1);
+    failures += install_cli_expect("floor rejects overflow",
+        parse_u64_strict("18446744073709551616", &value), -1);
+    failures += install_cli_expect("floor rejects empty",
+        parse_u64_strict("", &value), -1);
+    failures += install_cli_expect("floor rejects sign",
+        parse_u64_strict("-1", &value) == -1 && parse_u64_strict("+1", &value) == -1, 1);
+    failures += install_cli_expect("floor rejects junk",
+        parse_u64_strict("1x", &value) == -1 && parse_u64_strict(" 1", &value) == -1 &&
+        parse_u64_strict("0x10", &value) == -1, 1);
+    failures += install_cli_expect("mode parses octal triple",
+        parse_install_mode("755", &mode) == 0 && mode == 0755, 1);
+    failures += install_cli_expect("mode parses octal quad",
+        parse_install_mode("0644", &mode) == 0 && mode == 0644, 1);
+    failures += install_cli_expect("mode rejects short or long or non-octal",
+        parse_install_mode("77", &mode) == -1 &&
+        parse_install_mode("75555", &mode) == -1 &&
+        parse_install_mode("75a", &mode) == -1 &&
+        parse_install_mode("888", &mode) == -1, 1);
+    failures += install_cli_expect("ceil alloc zero",
+        install_ceil_alloc(0, 4096, &value) == 0 && value == 0, 1);
+    failures += install_cli_expect("ceil alloc rounds up",
+        install_ceil_alloc(1, 4096, &value) == 0 && value == 4096 &&
+        install_ceil_alloc(4096, 4096, &value) == 0 && value == 4096 &&
+        install_ceil_alloc(4097, 4096, &value) == 0 && value == 8192, 1);
+    failures += install_cli_expect("ceil alloc detects overflow",
+        install_ceil_alloc(UINT64_MAX, 4096, &value), -1);
+    failures += install_cli_expect("allowlist knows binaries",
+        install_destination_rule("/data/codex/bin/codex_webui") != NULL &&
+        install_destination_rule("/data/codex/bin/codex_webui")->mode == 0755 &&
+        install_destination_rule("/data/codex/bin/dropbearmulti") != NULL, 1);
+    failures += install_cli_expect("allowlist knows config mode",
+        install_destination_rule("/data/codexmqtt/config.json") != NULL &&
+        install_destination_rule("/data/codexmqtt/config.json")->mode == 0600, 1);
+    failures += install_cli_expect("allowlist rejects symlink alias",
+        install_destination_rule("/data/codex/bin/dropbear") == NULL, 1);
+    failures += install_cli_expect("allowlist rejects arbitrary path",
+        install_destination_rule("/etc/passwd") == NULL, 1);
+    failures += install_cli_expect("source policy accepts staged file",
+        install_source_path_policy("/var/volatile/codex-install-20260806/codex_webui") == 0 &&
+        install_source_path_policy("/var/volatile/codex-install-a/b/c") == 0, 1);
+    failures += install_cli_expect("source policy rejects escapes",
+        install_source_path_policy("/var/volatile/codex-install-abc") == -1 &&
+        install_source_path_policy("/var/volatile/codex-install-") == -1 &&
+        install_source_path_policy("var/volatile/codex-install-a/b") == -1 &&
+        install_source_path_policy("/var/volatile/codex-install-a/../b") == -1 &&
+        install_source_path_policy("/var/volatile/codex-install-a/./b") == -1 &&
+        install_source_path_policy("/var/volatile/codex-install-a//b") == -1 &&
+        install_source_path_policy("/tmp/codex-install-a/b") == -1, 1);
+    failures += install_cli_expect("echo rejects CR or LF in arguments",
+        install_arg_echoable("/var/volatile/codex-install-a/b") == 1 &&
+        install_arg_echoable("bad\npath") == 0 &&
+        install_arg_echoable("bad\rpath") == 0 &&
+        install_arg_echoable("") == 1 &&
+        install_arg_echoable(NULL) == 0, 1);
+    failures += install_cli_expect("maintenance argv accepts exact forms",
+        install_maintenance_argv_valid(2, (char *[]){"x", "--prune-backups"}) == 1 &&
+        install_maintenance_argv_valid(2, (char *[]){"x", "--storage-status"}) == 1 &&
+        install_maintenance_argv_valid(3, (char *[]){"x", "--storage-status", "1048576"}) == 1 &&
+        install_maintenance_argv_valid(3, (char *[]){"x", "--file-status", "/data/codex/hub_id"}) == 1 &&
+        install_maintenance_argv_valid(6, (char *[]){"x", "--install-plan", "s", "d", "755", "1048576"}) == 1 &&
+        install_maintenance_argv_valid(6, (char *[]){"x", "--install-file", "s", "d", "755", "1048576"}) == 1 &&
+        install_maintenance_argv_valid(7, (char *[]){"x", "--install-file", "s", "d", "755", "1048576", "--rollback-restore"}) == 1, 1);
+    failures += install_cli_expect("maintenance argv rejects malformed forms",
+        install_maintenance_argv_valid(2, (char *[]){"x", "--bogus"}) == 0 &&
+        install_maintenance_argv_valid(3, (char *[]){"x", "--prune-backups", "extra"}) == 0 &&
+        install_maintenance_argv_valid(4, (char *[]){"x", "--storage-status", "1", "2"}) == 0 &&
+        install_maintenance_argv_valid(2, (char *[]){"x", "--file-status"}) == 0 &&
+        install_maintenance_argv_valid(4, (char *[]){"x", "--file-status", "/data/codex/hub_id", "extra"}) == 0 &&
+        install_maintenance_argv_valid(5, (char *[]){"x", "--install-plan", "s", "d", "755"}) == 0 &&
+        install_maintenance_argv_valid(7, (char *[]){"x", "--install-file", "s", "d", "755", "1048576", "--bogus"}) == 0 &&
+        install_maintenance_argv_valid(8, (char *[]){"x", "--install-file", "s", "d", "755", "1048576", "--rollback-restore", "x"}) == 0 &&
+        install_maintenance_argv_valid(1, (char *[]){"x"}) == 0 &&
+        install_maintenance_argv_valid(2, (char *[]){"x", "8080"}) == 0, 1);
+    failures += install_cli_expect("directory fsync classification",
+        install_dir_sync_classify(0, 0) == INSTALL_DIR_SYNC_OK &&
+        install_dir_sync_classify(-1, EINVAL) == INSTALL_DIR_SYNC_UNSUPPORTED &&
+        install_dir_sync_classify(-1, ENOTSUP) == INSTALL_DIR_SYNC_UNSUPPORTED &&
+        install_dir_sync_classify(-1, ENOSYS) == INSTALL_DIR_SYNC_UNSUPPORTED &&
+        install_dir_sync_classify(-1, EIO) == INSTALL_DIR_SYNC_FATAL, 1);
+    failures += install_cli_expect("post-rename state demands rollback",
+        install_needs_rollback_after_rename(INSTALL_DIR_SYNC_OK, 1, 1) == 0 &&
+        install_needs_rollback_after_rename(INSTALL_DIR_SYNC_UNSUPPORTED, 1, 1) == 0 &&
+        install_needs_rollback_after_rename(INSTALL_DIR_SYNC_FATAL, 1, 1) == 1 &&
+        install_needs_rollback_after_rename(INSTALL_DIR_SYNC_OK, 0, 0) == 1 &&
+        install_needs_rollback_after_rename(INSTALL_DIR_SYNC_OK, 1, 0) == 1, 1);
+    {
+        struct codex_md5_ctx ctx;
+        unsigned char digest[16];
+        char hex[33];
+        codex_md5_init(&ctx);
+        codex_md5_final(&ctx, digest);
+        codex_md5_hex(digest, hex);
+        failures += install_cli_expect("md5 empty vector",
+            strcmp(hex, "d41d8cd98f00b204e9800998ecf8427e") == 0, 1);
+        codex_md5_init(&ctx);
+        codex_md5_update(&ctx, "abc", 3);
+        codex_md5_final(&ctx, digest);
+        codex_md5_hex(digest, hex);
+        failures += install_cli_expect("md5 abc vector",
+            strcmp(hex, "900150983cd24fb0d6963f7d28e17f72") == 0, 1);
+        codex_md5_init(&ctx);
+        codex_md5_update(&ctx,
+            "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789", 62);
+        codex_md5_final(&ctx, digest);
+        codex_md5_hex(digest, hex);
+        failures += install_cli_expect("md5 alphanumeric vector",
+            strcmp(hex, "d174ab98d277d9f5a5611c2c9f419d9f") == 0, 1);
+        codex_md5_init(&ctx);
+        codex_md5_update(&ctx,
+            "123456789012345678901234567890123456789012345678901234567890"
+            "12345678901234567890", 80);
+        codex_md5_final(&ctx, digest);
+        codex_md5_hex(digest, hex);
+        failures += install_cli_expect("md5 eighty-digit vector",
+            strcmp(hex, "57edf4a22be3c955ac49da2e2107b67a") == 0, 1);
+    }
+    {
+        struct stat gate_st;
+        int gate_ok;
+        memset(&gate_st, 0, sizeof(gate_st));
+        gate_st.st_mode = S_IFREG | 0755;
+        gate_ok = S_ISREG(gate_st.st_mode) &&
+            (gate_st.st_mode & 07777) == (0755 & 07777);
+        gate_st.st_mode = S_IFREG | 0644;
+        gate_ok = gate_ok && !(S_ISREG(gate_st.st_mode) &&
+            (gate_st.st_mode & 07777) == (0755 & 07777));
+        gate_st.st_mode = S_IFDIR | 0755;
+        gate_ok = gate_ok && !(S_ISREG(gate_st.st_mode) &&
+            (gate_st.st_mode & 07777) == (0755 & 07777));
+        failures += install_cli_expect(
+            "no-op requires canonical mode on a regular destination", gate_ok, 1);
+    }
+    /* --file-status refusal output is stable, environment-independent
+     * key=value: a CR/LF destination is a usage error (exit 2, no
+     * echo), and a non-allowlisted destination refuses with exit 1 and
+     * the exact documented line set. */
+    failures += install_cli_expect("file-status rejects unechoable destination",
+        install_cli_file_status("bad\npath"), 2);
+    failures += install_cli_expect("file-status refuses non-allowlisted destination",
+        install_cli_file_status("/etc/passwd"), 1);
+    {
+        int parent_absent = -1;
+        int parent_fd = install_open_parent_nofollow(
+            "/data/codex/bin", &parent_absent);
+        if (parent_fd >= 0) {
+            close(parent_fd);
+        } else if (parent_absent == 1) {
+            failures += install_cli_expect(
+                "file-status allows an absent allowlisted parent chain",
+                install_cli_file_status("/data/codex/bin/codex_webui"), 0);
+        }
+    }
+    {
+        const char *probe_path = NULL;
+        failures += install_cli_expect("storage probe selects an authoritative path",
+            install_storage_probe_path(&probe_path) == 0 &&
+            (strcmp(probe_path, INSTALL_DATA_PRIMARY) == 0 ||
+             strcmp(probe_path, INSTALL_DATA_FALLBACK) == 0), 1);
+    }
+    {
+        char temp_root[256];
+        char root[384];
+        char sub[512];
+        int absent;
+        int fd;
+        int root_len;
+        if (realpath("/tmp", temp_root) &&
+            (root_len = snprintf(root, sizeof(root), "%s/codex-install-selftest-%ld",
+                                 temp_root, (long)getpid())) > 0 &&
+            (size_t)root_len < sizeof(root) &&
+            mkdir(root, 0700) == 0) {
+            snprintf(sub, sizeof(sub), "%s/a", root);
+            if (mkdir(sub, 0700) == 0) {
+                char file_path[640];
+                char deep_path[640];
+                int path_len;
+                absent = -1;
+                fd = install_open_parent_nofollow(sub, &absent);
+                failures += install_cli_expect("parent walk opens an existing directory",
+                    fd >= 0 && absent == 0, 1);
+                if (fd >= 0) close(fd);
+                absent = -1;
+                path_len = snprintf(deep_path, sizeof(deep_path), "%s/missing", sub);
+                fd = path_len >= 0 && (size_t)path_len < sizeof(deep_path)
+                    ? install_open_parent_nofollow(deep_path, &absent) : -1;
+                failures += install_cli_expect("parent walk reports a genuinely absent component",
+                    path_len >= 0 && (size_t)path_len < sizeof(deep_path) &&
+                    fd < 0 && absent == 1 && errno == ENOENT, 1);
+                absent = -1;
+                path_len = snprintf(deep_path, sizeof(deep_path), "%s/missing/../x", sub);
+                fd = path_len >= 0 && (size_t)path_len < sizeof(deep_path)
+                    ? install_open_parent_nofollow(deep_path, &absent) : -1;
+                failures += install_cli_expect("absent verdict refuses traversal in the rest",
+                    path_len >= 0 && (size_t)path_len < sizeof(deep_path) &&
+                    fd < 0 && absent == 0, 1);
+                snprintf(file_path, sizeof(file_path), "%s/f", sub);
+                fd = open(file_path, O_WRONLY | O_CREAT | O_EXCL, 0600);
+                if (fd >= 0) {
+                    close(fd);
+                    snprintf(deep_path, sizeof(deep_path), "%s/f/g", sub);
+                    absent = -1;
+                    fd = install_open_parent_nofollow(deep_path, &absent);
+                    failures += install_cli_expect("non-directory component is fatal, not absent",
+                        fd < 0 && absent == 0, 1);
+                    unlink(file_path);
+                }
+                /* --file-status probe behavior against real leaves: the
+                 * destination itself is not in the compiled allowlist, so
+                 * these cases exercise classification through a detached
+                 * copy of the probe rather than the public CLI. */
+                {
+                    char probe_path[640];
+                    struct stat probe_st;
+                    int probe_parent, probe_fd, probe_errno;
+                    snprintf(file_path, sizeof(file_path), "%s/f", sub);
+                    fd = open(file_path, O_WRONLY | O_CREAT | O_EXCL, 0644);
+                    if (fd >= 0 && write(fd, "abc", 3) == 3) {
+                        char probe_md5[33];
+                        close(fd);
+                        fd = -1;
+                        probe_parent = install_open_parent_nofollow(sub, &absent);
+                        failures += install_cli_expect(
+                            "file-status parent opens for present leaf",
+                            probe_parent >= 0, 1);
+                        if (probe_parent >= 0) {
+                            probe_fd = openat(probe_parent, "f",
+                                O_RDONLY | O_NOFOLLOW | O_NONBLOCK);
+                            failures += install_cli_expect(
+                                "file-status present leaf opens race-free",
+                                probe_fd >= 0, 1);
+                            if (probe_fd >= 0) {
+                                failures += install_cli_expect(
+                                    "file-status present leaf reports regular metadata",
+                                    fstat(probe_fd, &probe_st) == 0 &&
+                                    S_ISREG(probe_st.st_mode) &&
+                                    probe_st.st_size == 3 &&
+                                    (probe_st.st_mode & 07777) == 0644 &&
+                                    probe_st.st_blocks >= 0 &&
+                                    (uint64_t)probe_st.st_blocks <=
+                                        UINT64_MAX / 512, 1);
+                                failures += install_cli_expect(
+                                    "file-status md5 matches leaf contents",
+                                    codex_md5_fd(probe_fd, probe_md5) == 0 &&
+                                    strcmp(probe_md5,
+                                        "900150983cd24fb0d6963f7d28e17f72") == 0, 1);
+                                close(probe_fd);
+                            }
+                            probe_fd = openat(probe_parent, "missing",
+                                O_RDONLY | O_NOFOLLOW | O_NONBLOCK);
+                            probe_errno = probe_fd < 0 ? errno : 0;
+                            failures += install_cli_expect(
+                                "file-status absent leaf classifies ENOENT",
+                                probe_fd < 0 && probe_errno == ENOENT, 1);
+                            if (probe_fd >= 0) close(probe_fd);
+                            close(probe_parent);
+                        }
+                        path_len = snprintf(probe_path, sizeof(probe_path),
+                            "%s/link", sub);
+                        if (path_len > 0 && (size_t)path_len < sizeof(probe_path) &&
+                            symlink("f", probe_path) == 0) {
+                            probe_parent = install_open_parent_nofollow(sub, &absent);
+                            if (probe_parent >= 0) {
+                                probe_fd = openat(probe_parent, "link",
+                                    O_RDONLY | O_NOFOLLOW | O_NONBLOCK);
+                                probe_errno = probe_fd < 0 ? errno : 0;
+                                failures += install_cli_expect(
+                                    "file-status symlink leaf classifies ELOOP",
+                                    probe_fd < 0 && probe_errno == ELOOP, 1);
+                                if (probe_fd >= 0) close(probe_fd);
+                                close(probe_parent);
+                            }
+                            unlink(probe_path);
+                        }
+                        unlink(file_path);
+                    } else if (fd >= 0) {
+                        close(fd);
+                        unlink(file_path);
+                    }
+                }
+                rmdir(sub);
+            }
+            rmdir(root);
+        }
+    }
+    return failures;
+}
+
 #ifdef CODEX_WEBUI_SEMANTIC_TEST
 static int semantic_test_case(
     const char *name,
@@ -8768,6 +11625,196 @@ static int semantic_test_case(
     }
     return 0;
 }
+static int backup_name_test(
+    enum backup_root root,
+    const char *name,
+    int expected_match,
+    enum backup_family expected_family,
+    int64_t *chronology
+) {
+    enum backup_family family = BACKUP_FAMILY_COUNT;
+    int64_t parsed = -1;
+    int matched = classify_backup_name(root, name, &family, &parsed);
+    if (matched != expected_match ||
+        (matched && family != expected_family)) {
+        fprintf(stderr, "FAIL backup name classification: %s\n", name);
+        return 1;
+    }
+    if (matched && chronology) *chronology = parsed;
+    return 0;
+}
+
+static void init_test_generation(
+    struct backup_generation *entry,
+    enum backup_family family,
+    const char *name,
+    int64_t chronology,
+    uint64_t bytes,
+    int valid
+) {
+    memset(entry, 0, sizeof(*entry));
+    entry->family = family;
+    entry->name = (char *)name;
+    entry->chronology = chronology;
+    entry->bytes = bytes;
+    entry->valid = valid;
+    entry->delete_rank = SIZE_MAX;
+}
+
+static int retention_policy_self_test(void) {
+    int failures = 0;
+    int64_t resource_old, resource_new, handoff_old, handoff_new;
+    struct retention_summary summary;
+    struct backup_generation entries[6];
+    struct retention_protection required;
+    struct backup_catalog catalog;
+    failures += backup_name_test(
+        BACKUP_ROOT_RESOURCE, "20260727_174852", 1,
+        BACKUP_FAMILY_RESOURCE, &resource_old);
+    failures += backup_name_test(
+        BACKUP_ROOT_RESOURCE, "20260804_220000", 1,
+        BACKUP_FAMILY_RESOURCE, &resource_new);
+    failures += backup_name_test(
+        BACKUP_ROOT_RESOURCE, "settings_20260804_220000", 1,
+        BACKUP_FAMILY_SETTINGS, NULL);
+    failures += backup_name_test(
+        BACKUP_ROOT_HANDOFF, "webui-handoff-20260727-174852", 1,
+        BACKUP_FAMILY_HANDOFF, &handoff_old);
+    failures += backup_name_test(
+        BACKUP_ROOT_HANDOFF, "webui-handoff-20260804-220000", 1,
+        BACKUP_FAMILY_HANDOFF, &handoff_new);
+    failures += backup_name_test(
+        BACKUP_ROOT_UPDATE, "1722812400", 1,
+        BACKUP_FAMILY_UPDATE, NULL);
+    failures += backup_name_test(
+        BACKUP_ROOT_RESOURCE, "20260230_120000", 0,
+        BACKUP_FAMILY_RESOURCE, NULL);
+    failures += backup_name_test(
+        BACKUP_ROOT_RESOURCE, "20260804-220000", 0,
+        BACKUP_FAMILY_RESOURCE, NULL);
+    failures += backup_name_test(
+        BACKUP_ROOT_RESOURCE, "settings_20260804_220000.extra", 0,
+        BACKUP_FAMILY_SETTINGS, NULL);
+    failures += backup_name_test(
+        BACKUP_ROOT_HANDOFF, "webui-handoff-20260804_220000", 0,
+        BACKUP_FAMILY_HANDOFF, NULL);
+    failures += backup_name_test(
+        BACKUP_ROOT_UPDATE, "01722812400", 0,
+        BACKUP_FAMILY_UPDATE, NULL);
+    failures += backup_name_test(
+        BACKUP_ROOT_UPDATE, "9223372036854775808", 0,
+        BACKUP_FAMILY_UPDATE, NULL);
+    if (resource_old >= resource_new || handoff_old >= handoff_new) {
+        fputs("FAIL lexical backup chronology\n", stderr);
+        failures++;
+    }
+    {
+        int64_t update_old = -1, update_new = -1;
+        enum backup_family family;
+        if (!classify_backup_name(
+                BACKUP_ROOT_UPDATE, "9", &family, &update_old) ||
+            !classify_backup_name(
+                BACKUP_ROOT_UPDATE, "10", &family, &update_new) ||
+            update_old >= update_new) {
+            fputs("FAIL numeric update chronology\n", stderr);
+            failures++;
+        }
+    }
+    memset(&catalog, 0, sizeof(catalog));
+    catalog.entries = entries;
+    catalog.count = 3;
+    catalog.capacity = 3;
+    init_test_generation(
+        &entries[0], BACKUP_FAMILY_RESOURCE, "19700101_000000",
+        0, UINT64_C(400) * 1024, 1);
+    init_test_generation(
+        &entries[1], BACKUP_FAMILY_RESOURCE, "20260804_220000",
+        resource_new, UINT64_C(400) * 1024, 1);
+    init_test_generation(
+        &entries[2], BACKUP_FAMILY_RESOURCE, "20260805_220000",
+        resource_new + 86400, 0, 0);
+    memset(&summary, 0, sizeof(summary));
+    if (plan_backup_retention(
+            &catalog, BACKUP_FAMILY_COUNT, 0, NULL, &summary) != 0 ||
+        !entries[1].protected || entries[1].planned_delete ||
+        !entries[0].planned_delete || !entries[2].planned_delete ||
+        summary.over_budget) {
+        fputs("FAIL newest protection or incomplete generation planning\n", stderr);
+        failures++;
+    }
+    memset(&catalog, 0, sizeof(catalog));
+    catalog.entries = entries;
+    catalog.count = 3;
+    catalog.capacity = 3;
+    init_test_generation(
+        &entries[0], BACKUP_FAMILY_RESOURCE, "older", 10,
+        UINT64_C(400) * 1024, 1);
+    init_test_generation(
+        &entries[1], BACKUP_FAMILY_RESOURCE, "just-created", 20,
+        UINT64_C(400) * 1024, 1);
+    init_test_generation(
+        &entries[2], BACKUP_FAMILY_RESOURCE, "future-newest", 30,
+        UINT64_C(400) * 1024, 1);
+    entries[1].device = 7;
+    entries[1].inode = 11;
+    required.family = BACKUP_FAMILY_RESOURCE;
+    required.name = entries[1].name;
+    required.device = entries[1].device;
+    required.inode = entries[1].inode;
+    memset(&summary, 0, sizeof(summary));
+    if (plan_backup_retention(
+            &catalog, BACKUP_FAMILY_COUNT, 0, &required, &summary) != 0 ||
+        !entries[1].protected || entries[1].planned_delete ||
+        !entries[0].planned_delete || !entries[2].protected ||
+        !summary.over_budget) {
+        fputs("FAIL required generation identity protection\n", stderr);
+        failures++;
+    }
+    memset(&catalog, 0, sizeof(catalog));
+    catalog.entries = entries;
+    catalog.count = 6;
+    catalog.capacity = 6;
+    init_test_generation(&entries[0], BACKUP_FAMILY_RESOURCE, "r-old", 10,
+        UINT64_C(500) * 1024, 1);
+    init_test_generation(&entries[1], BACKUP_FAMILY_RESOURCE, "r-new", 20,
+        UINT64_C(500) * 1024, 1);
+    init_test_generation(&entries[2], BACKUP_FAMILY_SETTINGS, "s-old", 30,
+        UINT64_C(60) * 1024, 1);
+    init_test_generation(&entries[3], BACKUP_FAMILY_SETTINGS, "s-new", 40,
+        UINT64_C(60) * 1024, 1);
+    init_test_generation(&entries[4], BACKUP_FAMILY_UPDATE, "1000", 1000,
+        UINT64_C(750) * 1024, 1);
+    init_test_generation(&entries[5], BACKUP_FAMILY_UPDATE, "2000", 2000,
+        UINT64_C(750) * 1024, 1);
+    memset(&summary, 0, sizeof(summary));
+    if (plan_backup_retention(
+            &catalog, BACKUP_FAMILY_COUNT, 0, NULL, &summary) != 0 ||
+        entries[0].delete_rank != 0 || entries[2].delete_rank != 1 ||
+        entries[4].delete_rank != 2 || summary.over_budget ||
+        !entries[1].protected || !entries[3].protected ||
+        !entries[5].protected) {
+        fputs("FAIL family-before-global budget planning\n", stderr);
+        failures++;
+    }
+    memset(&catalog, 0, sizeof(catalog));
+    catalog.entries = entries;
+    catalog.count = 2;
+    catalog.capacity = 2;
+    init_test_generation(
+        &entries[0], BACKUP_FAMILY_RESOURCE, "overflow-a", 1,
+        UINT64_MAX, 1);
+    init_test_generation(
+        &entries[1], BACKUP_FAMILY_RESOURCE, "overflow-b", 2,
+        1, 1);
+    memset(&summary, 0, sizeof(summary));
+    if (plan_backup_retention(
+            &catalog, BACKUP_FAMILY_COUNT, 0, NULL, &summary) == 0) {
+        fputs("FAIL retention byte overflow rejection\n", stderr);
+        failures++;
+    }
+    return failures;
+}
+
 
 int main(void) {
     const char *ordered =
@@ -8789,12 +11836,8 @@ int main(void) {
     failures += semantic_test_case(
         "invalid JSON is not equal",
         "{\"item\":1}", "{\"item\":1", 0);
-    if (!is_resource_backup_name("20260726_224354") ||
-        is_resource_backup_name("settings_20260726_224354") ||
-        is_resource_backup_name("20260726-224354")) {
-        fputs("FAIL resource backup retention name filter\n", stderr);
-        failures++;
-    }
+    failures += retention_policy_self_test();
+    failures += install_cli_self_test();
     if (bt_native_code("{\"id\":1,\"code\":200,\"connected\":false}") != 200 ||
         !bt_native_reply_ok("{\"id\":1,\"code\":200}") ||
         bt_native_reply_ok("{\"id\":1,\"code\":505}") ||
@@ -8814,21 +11857,63 @@ int main(void) {
         }
     }
     if (failures) return 1;
-    puts("PASS semantic JSON, resource backup, and Bluetooth native response validation");
+    puts("PASS semantic JSON, backup retention policy, and Bluetooth native response validation");
     return 0;
 }
 #else
 int main(int argc, char **argv) {
-    int port = argc > 1 ? atoi(argv[1]) : 8080;
+    int port;
     int fd, one = 1;
+    int retention_rc;
+    struct retention_summary retention;
     struct sigaction sa;
     struct sockaddr_in addr;
+    if ((argc > 1 && !install_argv_echoable(argc, argv)) ||
+        (argc > 1 && argv[1][0] == '-' &&
+         !install_maintenance_argv_valid(argc, argv))) {
+        printf("mode=usage\nok=0\nreason=usage_invalid\n");
+        return 2;
+    }
+    if (argc == 2 && strcmp(argv[1], "--prune-backups") == 0) {
+        retention_rc = enforce_backup_retention(
+            BACKUP_FAMILY_COUNT, 0, &retention);
+        print_retention_summary(stdout, &retention);
+        return retention_rc == RETENTION_OK ? 0 : 1;
+    }
+    if ((argc == 2 || argc == 3) &&
+        strcmp(argv[1], "--storage-status") == 0)
+        return install_cli_storage_status(argc == 3 ? argv[2] : NULL);
+    if (argc == 3 && strcmp(argv[1], "--file-status") == 0)
+        return install_cli_file_status(argv[2]);
+    if (argc == 6 && strcmp(argv[1], "--install-plan") == 0)
+        return install_cli_install_plan(argv[2], argv[3], argv[4], argv[5]);
+    if ((argc == 6 || argc == 7) && strcmp(argv[1], "--install-file") == 0) {
+        int rollback_restore = 0;
+        if (argc == 7) {
+            if (strcmp(argv[6], "--rollback-restore") != 0) {
+                printf("mode=install-file\nok=0\nreason=usage_invalid\n");
+                return 2;
+            }
+            rollback_restore = 1;
+        }
+        return install_cli_install_file(
+            argv[2], argv[3], argv[4], argv[5], rollback_restore);
+    }
+    port = argc > 1 ? atoi(argv[1]) : 8080;
     signal(SIGPIPE, SIG_IGN);
     memset(&sa, 0, sizeof(sa));
     sa.sa_handler = handle_sigchld;
     sigemptyset(&sa.sa_mask);
     sa.sa_flags = SA_RESTART;
     sigaction(SIGCHLD, &sa, NULL);
+    retention_rc = enforce_backup_retention(
+        BACKUP_FAMILY_COUNT, 0, &retention);
+    print_retention_summary(stderr, &retention);
+    if (retention_rc == RETENTION_ERROR) {
+        fputs("backup retention failed closed during startup\n", stderr);
+    } else if (retention_rc == RETENTION_OVER_BUDGET) {
+        fputs("backup retention protected minimum remains over budget during startup\n", stderr);
+    }
     ensure_bt_hid_control_runtime();
     start_bthid_keyboard_runtime();
     fd = socket(AF_INET, SOCK_STREAM, 0);

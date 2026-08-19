@@ -3,8 +3,23 @@
 # the engine emulator, then hand the process over to the REAL codex_webui.
 set -eu
 
+mkdir -p /var/volatile /cache /mnt/data /data
+
+# Step 4A capacity fixture: Docker provisions /mnt/data as the authoritative
+# small FIXED-SIZE stand-in for the box's writable /data flash (a tmpfs,
+# deliberately NOT JFFS2-equivalent — it only gives deterministic statvfs
+# numbers for the real MIPS capacity gate). /data is bind-mounted over it so
+# every existing /data path resolves to the same measured filesystem without
+# any symlink in the destination component walk. The bind mount requires
+# --cap-add SYS_ADMIN (run.sh).
+if ! grep -qs ' /data ' /proc/mounts; then
+    mount --bind /mnt/data /data
+fi
+
+# The box's /data directory layout — recreated AFTER the bind mount so it
+# lives inside the measured fixture filesystem.
 mkdir -p /data/resources /data/codex/bin /data/codex/resource-backups \
-    /data/codexmqtt /var/volatile /cache
+    /data/codexmqtt /data/codex-backups
 
 # Seed resources on first boot only (persisted for the container's lifetime;
 # POST /reset on the control plane reseeds without a restart).
@@ -42,6 +57,17 @@ install -m 0755 /opt/hub/stubs/hciconfig /usr/local/bin/hciconfig
 install -m 0755 /opt/hub/stubs/logread /usr/local/bin/logread
 install -m 0755 /opt/hub/stubs/ps /usr/local/bin/ps
 install -m 0755 /opt/hub/stubs/reboot /sbin/reboot
+# The production update verifier invokes the physical hub's BusyBox by its
+# absolute path. Mirror only the md5sum applet needed by QEMU update QA.
+cat > /bin/busybox <<'EOF'
+#!/bin/sh
+if [ "$1" = "md5sum" ]; then
+    shift
+    exec md5sum "$@"
+fi
+exit 127
+EOF
+chmod 0755 /bin/busybox
 install -m 0755 /opt/hub/stubs/codex_hal_ltcp /data/codex/bin/codex_hal_ltcp
 install -m 0755 /opt/hub/stubs/codex_hbus /data/codex/bin/codex_hbus
 

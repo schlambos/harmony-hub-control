@@ -31,7 +31,12 @@ docker build -t hub-emu -f "$HERE/docker/Dockerfile" "$HERE"
 
 echo "== container =="
 docker rm -f hub-emu >/dev/null 2>&1 || true
+# Docker provisions the small fixed-size /mnt/data tmpfs; --cap-add SYS_ADMIN
+# lets the entrypoint bind-mount /data over it (Step 4A QA only).
 docker run -d --name hub-emu \
+    --cap-add SYS_ADMIN \
+    --security-opt apparmor=unconfined \
+    --tmpfs /mnt/data:rw,exec,size=16m,mode=0755 \
     -p 127.0.0.1:8788:8080 \
     -p 127.0.0.1:8789:8089 \
     hub-emu >/dev/null
@@ -43,7 +48,7 @@ while [ "$i" -lt 60 ]; do
         echo " — up."
         echo
         echo "1:1 hub API : http://127.0.0.1:8788 (real codex_webui, MIPS under qemu)"
-        echo "control     : http://127.0.0.1:8789 (POST /reset, GET /events, GET /status)"
+        echo "control     : http://127.0.0.1:8789 (reset/events/status + retention fixtures)"
         echo "front-end   : $NODE $HERE/dev-proxy.mjs   ->  http://127.0.0.1:8787/#control"
         exit 0
     fi

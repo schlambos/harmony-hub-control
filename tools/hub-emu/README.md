@@ -55,7 +55,7 @@ Open http://127.0.0.1:8787/#control
 |---|---|---|
 | 8787 | dev-proxy | front-end + verbatim `/api/*`, `/export/*` and setup-POST forwarding |
 | 8788 | real `codex_webui` | the 1:1 hub API — point curl/tests here |
-| 8789 | engine-emu control | `POST /reset` · `GET /events` · `GET /status` (with `rebootCount`) |
+| 8789 | engine-emu control | reset/events/status plus emulator-only retention and Step 4A install seeding, inspection, and real-MIPS execution |
 
 The proxy byte-forwards the legacy setup POST routes (`/system`, `/mqtt`,
 `/wifi`, `/import`, `/ir/*`, `/bt/*`) to the real binary, so the redesigned
@@ -98,17 +98,80 @@ Reset after every QA session: `curl -X POST http://127.0.0.1:8789/reset` (or
 removes `webui_auth.conf` and `update_state.conf`, clears `/tmp/codex_update`
 staging, the reboot log, backups, events, and returns the engine to PowerOff.
 
+### Retention fixtures
+
+Retention setup stays out of the production HTTP API. The control plane exposes:
+
+- `POST /retention/seed?scenario=standard` — all four strict-name families,
+  nested sparse files, more than 64 resource/settings and 32 update
+  generations, family and combined overages, an empty newest-looking
+  generation, unknown manual artifacts, and an external-target symlink.
+- `POST /retention/seed?scenario=creation` — two resource rollbacks sized so a
+  real resource mutation must reserve space and prune the oldest.
+- `POST /retention/seed?scenario=copy-failure` plus
+  `POST /retention/arm-copy-failure` — a readable `stat()` source whose read
+  fails inside the real MIPS backup copier.
+- `POST /retention/seed?scenario=oversized` — a protected newest settings
+  generation that alone exceeds 64 KiB.
+- `GET /retention/inspect` — out-of-band apparent-byte, file-count, and digest
+  inventory. It never decides what to delete.
+- `POST /retention/prune` — executes
+  `qemu-mips /opt/hub/bin/codex_webui.mips --prune-backups`; Python only
+  captures its exit status and stable summary.
+
+Only the compiled C binary prunes. `POST /reset` reseeds the normal fixtures,
+removes every synthetic retention root, manual artifact, and external target,
+and leaves the copy-failure seam explicitly disarmed.
+
+### Step 4A capacity-gated install fixtures
+
+The installer's capacity gate and atomic same-directory installs run against
+the box's REAL MIPS maintenance CLI — `codex_webui --storage-status`,
+`--install-plan`, `--install-file [--rollback-restore]` — under qemu-mips,
+never through a production HTTP route. The control plane exposes:
+
+- `/mnt/data` — a small FIXED-SIZE tmpfs mounted at container boot and
+  bind-mounted over `/data` (requires `--cap-add SYS_ADMIN`, which `run.sh`
+  adds). This is the C binary's authoritative capacity source. It gives
+  deterministic `statvfs()` numbers for exact-floor fixtures; it is NOT a
+  JFFS2 equivalence claim.
+- `POST /step4a/seed` `{"scenario":"upgrade"|"fresh"}` — deterministic
+  pre-install destination state over the installer allowlist (obvious fake
+  old content; `fresh` = first-install absent shape).
+- `POST /step4a/capacity` `{"free":N}` — drives free capacity to exactly N
+  bytes with one filler file (N=0 empties), enabling exact-floor,
+  one-byte-below, and insufficient fixtures.
+- `POST /step4a/stage`, `/step4a/fault`, `/step4a/run`, `/step4a/inspect`,
+  `/step4a/handoff`, `/step4a/rollback-copy`, `/step4a/remove`,
+  `/step4a/md5` — staging tree, deterministic refusal seams (symlink/dir/FIFO
+  destinations and sources, traversal, wrong modes), real-MIPS execution with
+  exit/stdout/process counts, state inspection, wrapper-shaped handoff,
+  wrapper rollback copies, and the corrected `/bin/busybox md5sum` interface.
+- `POST /step4a/run` accepts an optional `fault` object with harness-only,
+  production-unmodified syscall seams: `errnoOn` (seccomp-BPF makes guest
+  fchmod/fsync/fdatasync/rename return an errno), `partialBytes` (RLIMIT_FSIZE
+  + SIGXFSZ ignored -> EFBIG mid-copy), `truncateRace` (truncate the staged
+  source the instant the temp appears -> verified short read before rename),
+  and `tempCollision` (pre-create every possible O_EXCL temp name for the
+  child pid). These prove copy/verify/rename failure cleanup and exact temp
+  collision without any C hook.
+- `POST /step4a/reset` — same cleanup as `POST /reset`.
+
+
+
 ## Contract QA
 
-`node tools/hub-emu/qa.mjs` — 84 assertions covering: config/state envelopes,
+`node tools/hub-emu/qa.mjs` covers the baseline config/state envelopes,
 form-vs-JSON body parsing on `activity-run`/`ir-send`, Bluetooth (Transport 32)
 send path, 404s for endpoints the box lacks (`/api/control-button`,
 `/api/sim/events`), full save/409/revision flow through the writer daemon, the
 1 MiB `MAX_REQUEST_BODY` 413, bounded `GET /api/system-status` data and auth,
-the six setup-page contracts (seeded exports, JSON-body rejection on the legacy
-form parsers, compact result HTML with escaped messages, import restore),
-reboot observability/harmlessness via `rebootCount`, auth enable/disable,
-update-state set-and-clear, and full settings restoration on reset.
+the setup-page contracts, reboot observability, auth enable/disable,
+update-state reset, and full settings restoration. It then drives the
+retention scenarios above and proves deletion order, recursive apparent-byte
+accounting, family/global budgets, protected minima, idempotence, unknown and
+symlink safety, copy-failure rollback preservation, and reset cleanup through
+the real MIPS binary.
 
 ## What is genuinely real vs emulated
 

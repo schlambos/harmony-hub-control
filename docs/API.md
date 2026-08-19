@@ -49,10 +49,14 @@ Content-Type: application/json
 
 `baseRevision` must match the value returned by `/api/activity-config`. A stale
 editor receives `409 Conflict`, preventing another local editor from being
-overwritten. Before writing, the Hub snapshots all resource files.
-The five newest timestamped resource snapshots are retained so repeated edits
-cannot exhaust the Hub's small data partition; settings backups are not part of
-that rotation.
+overwritten. Before writing, the Hub snapshots all resource files. Retention
+of those snapshots is byte-budgeted by the C binary itself
+(`codex_webui --prune-backups` and the same engine at production startup),
+never by count: strict-name generations under `/data/codex/resource-backups`
+are bounded by a 768 KiB resource budget and a 64 KiB settings budget within
+a 2 MiB combined budget across all backup families, and the newest valid
+generation of each non-empty family is protected from deletion. This bounds
+growth but is not exact JFFS2 free-space enforcement.
 The endpoint compares parsed JSON rather than serialized bytes, so whitespace,
 object-key order, escaped characters, and equivalent number formatting do not
 turn an unchanged browser payload into a resource write. Changed data is passed
