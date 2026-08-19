@@ -1,0 +1,649 @@
+/* -- Layout: source list | remote column | command side ------- */
+
+.control-grid {
+  display: grid;
+  grid-template-columns: minmax(240px, 300px) minmax(280px, 360px) minmax(240px, 1fr);
+  gap: var(--space-5);
+  align-items: start;
+}
+
+.control-src {
+  padding: var(--space-4);
+}
+
+@media (min-width: 1121px) {
+  .control-src,
+  .control-side {
+    position: sticky;
+    top: calc(var(--topbar-h) + var(--space-5));
+  }
+}
+
+.control-src .panel-head {
+  margin-bottom: var(--space-3);
+}
+
+.control-remotecol {
+  justify-self: center;
+  width: 100%;
+}
+
+.control-side {
+  display: grid;
+  gap: var(--space-4);
+  min-width: 0;
+}
+
+/* -- Source lists (activities / devices) ----------------------- */
+
+.src-list {
+  display: grid;
+  gap: var(--space-2);
+  max-height: calc(100vh - 260px);
+  overflow-y: auto;
+  padding-right: 2px;
+}
+
+.src-row {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr) auto;
+  gap: var(--space-3);
+  align-items: center;
+  padding: var(--space-3);
+  background: var(--surface-primary);
+  border: 1px solid var(--border-default);
+  border-radius: var(--radius-panel);
+  text-align: left;
+  transition: transform var(--dur-fast) var(--ease-out),
+    opacity var(--dur-fast) var(--ease-out);
+}
+
+button.src-row {
+  grid-template-columns: minmax(0, 1fr);
+  width: 100%;
+}
+
+.src-row:hover {
+  transform: translateY(-1px);
+  border-color: var(--border-strong);
+}
+
+.src-row.is-selected {
+  border-color: var(--border-accent);
+  background: var(--surface-elevated);
+  box-shadow: inset 3px 0 0 var(--accent-primary);
+}
+
+.src-row.is-live {
+  border-color: var(--border-live);
+}
+
+.src-row.is-live.is-selected {
+  box-shadow: inset 3px 0 0 var(--status-live);
+}
+
+.src-order {
+  min-width: 30px;
+  padding: var(--space-1) 0;
+  text-align: center;
+  font-size: 11px;
+  color: var(--text-tertiary);
+  background: var(--surface-inset);
+  border: 1px solid var(--border-default);
+  border-radius: 6px;
+}
+
+.src-main {
+  display: block;
+  min-width: 0;
+  text-align: left;
+}
+
+.src-name {
+  display: block;
+  font-size: var(--text-body-sm);
+  font-weight: 600;
+  line-height: 1.35;
+  color: var(--text-primary);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.src-meta {
+  display: block;
+  margin-top: 2px;
+  font-size: 11px;
+  color: var(--text-tertiary);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.src-side {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+}
+
+.remote-wrap {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: var(--space-4);
+}
+
+.ir-remote-card {
+  display: grid;
+  justify-items: center;
+  gap: var(--space-3);
+  width: 100%;
+  min-width: 0;
+}
+
+.ir-remote-shell {
+  width: 100%;
+  display: grid;
+  place-items: center;
+  background: var(--surface-elevated);
+  border: 1px solid var(--border-default);
+  border-radius: 12px;
+  padding: var(--space-3);
+  box-shadow: var(--shadow-remote);
+}
+
+.ir-remote-skin {
+  position: relative;
+  width: min(100%, 315px);
+  aspect-ratio: 591 / 1280;
+}
+
+.ir-remote-skin img {
+  display: block;
+  width: 100%;
+  height: 100%;
+  object-fit: contain;
+  border-radius: 12px;
+  user-select: none;
+  pointer-events: none;
+}
+
+.remote-help {
+  max-width: min(315px, 100%);
+  text-align: center;
+  font-size: var(--text-caption, 11px);
+  line-height: 1.4;
+}
+
+/* The photo is the interface. Hotspots are invisible at rest — mappedness
+   is communicated by response (glow on hover/focus, flash on press), not by
+   permanent decoration, exactly like the physical handset. */
+.remote-hotspot {
+  position: absolute;
+  margin: 0;
+  padding: 0;
+  min-height: 0;
+  border-radius: 999px;
+  border: 0;
+  background: transparent;
+  color: transparent;
+  box-shadow: none;
+  touch-action: manipulation;
+  cursor: pointer;
+  z-index: 2;
+  transition: background var(--dur-fast) var(--ease-out),
+    box-shadow var(--dur-fast) var(--ease-out),
+    transform var(--dur-fast) var(--ease-out);
+}
+
+.remote-hotspot:hover:not(:disabled):not(.disabled),
+.remote-hotspot:focus-visible:not(:disabled):not(.disabled) {
+  box-shadow:
+    0 0 0 2px var(--border-accent),
+    0 0 18px 4px var(--accent-muted);
+}
+
+.remote-hotspot:active:not(:disabled):not(.disabled),
+.remote-hotspot.is-sending {
+  background: rgba(232, 165, 75, 0.35);
+  box-shadow:
+    0 0 0 2px var(--accent-hover),
+    0 0 22px 6px var(--accent-muted);
+}
+
+/* Long-press window: the glow intensifies while the hold timer runs. */
+.remote-hotspot.is-holding {
+  background: rgba(232, 165, 75, 0.48);
+  box-shadow:
+    0 0 0 3px var(--accent-primary),
+    0 0 30px 10px var(--accent-muted);
+  transform: scale(0.97);
+}
+
+.remote-hotspot:focus-visible {
+  outline: 2px solid #fff;
+  outline-offset: 2px;
+  z-index: 5;
+}
+
+.remote-hotspot:disabled,
+.remote-hotspot.disabled {
+  background: transparent;
+  box-shadow: none;
+  cursor: default;
+  pointer-events: none;
+}
+
+/* Hold-capable tick: 4px amber dot, revealed only while the key is
+   hovered or focused. */
+.remote-hotspot.has-hold::after {
+  content: "";
+  position: absolute;
+  top: 3px;
+  right: 4px;
+  width: 4px;
+  height: 4px;
+  border-radius: 50%;
+  background: var(--accent-primary);
+  opacity: 0;
+  transition: opacity var(--dur-fast) var(--ease-out);
+  pointer-events: none;
+}
+
+.remote-hotspot.has-hold:hover::after,
+.remote-hotspot.has-hold:focus-visible::after,
+.remote-hotspot.has-hold.is-holding::after {
+  opacity: 1;
+}
+
+@media (max-width: 980px) {
+  .ir-remote-skin {
+    width: min(100%, 250px);
+  }
+}
+
+@media (max-width: 520px) {
+  .ir-remote-shell {
+    padding: var(--space-2);
+  }
+
+  .ir-remote-skin {
+    width: min(100%, 230px);
+  }
+}
+
+/* -- Status line: pinned under the now-strip, above the remote ----------- */
+
+.remote-status {
+  display: flex;
+  align-items: baseline;
+  gap: var(--space-3);
+  min-height: 40px;
+  margin-bottom: var(--space-5);
+  padding: var(--space-2) var(--space-4);
+  color: var(--text-secondary);
+  font-size: var(--text-mono);
+  background: var(--surface-primary);
+  border: 1px solid var(--border-default);
+  border-radius: 8px;
+}
+
+.remote-status .status-target {
+  color: var(--text-primary);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.remote-status .status-note {
+  margin-left: auto;
+  flex: none;
+  color: var(--text-tertiary);
+}
+
+.remote-status .status-note.is-ok {
+  color: var(--status-live);
+}
+
+.remote-status .status-note.is-local {
+  color: var(--status-warn);
+}
+
+.remote-status .status-note.is-err {
+  color: var(--status-error);
+}
+
+/* -- All commands + Send log side panels ----------------------------------
+   Commands: primary sendable list (Devices often open; Activities collapsed).
+   Send log: secondary debug trail, collapsed by default. */
+
+.commands-panel,
+.inspector {
+  padding: 0;
+}
+
+.commands-panel {
+  margin-bottom: var(--space-3);
+}
+
+.commands-panel summary,
+.inspector summary {
+  display: flex;
+  align-items: center;
+  gap: var(--space-3);
+  padding: var(--space-4) var(--space-5);
+  cursor: pointer;
+  list-style: none;
+  color: var(--text-secondary);
+  font-size: var(--text-body-sm);
+  font-weight: 600;
+}
+
+.commands-panel summary::-webkit-details-marker,
+.inspector summary::-webkit-details-marker {
+  display: none;
+}
+
+.commands-panel summary::before,
+.inspector summary::before {
+  content: "";
+  width: 7px;
+  height: 7px;
+  flex: none;
+  border-right: 1.75px solid var(--text-tertiary);
+  border-bottom: 1.75px solid var(--text-tertiary);
+  transform: rotate(-45deg);
+  transition: transform var(--dur-fast) var(--ease-out);
+}
+
+.commands-panel[open] summary::before,
+.inspector[open] summary::before {
+  transform: rotate(45deg);
+}
+
+.commands-panel summary:hover,
+.inspector summary:hover {
+  color: var(--text-primary);
+}
+
+.commands-title {
+  color: var(--text-primary);
+}
+
+.commands-panel summary .mono,
+.inspector summary .mono {
+  margin-left: auto;
+  font-weight: 450;
+}
+
+.commands-body,
+.inspector-body {
+  padding: 0 var(--space-5) var(--space-5);
+}
+
+.commands-body .mini {
+  margin: 0 0 var(--space-3);
+}
+
+.inspector-actions {
+  display: flex;
+  gap: var(--space-2);
+  margin-bottom: var(--space-4);
+}
+
+.inspector-h {
+  margin: var(--space-4) 0 var(--space-2);
+  font-size: var(--text-caption);
+  font-weight: 500;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  color: var(--text-tertiary);
+}
+
+/* -- Soft button chips --------------------------------------------- */
+
+.chip-grid {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: center;
+  gap: var(--space-2);
+  max-width: min(var(--remote-max-w), 100%);
+}
+
+.chip-grid:empty {
+  display: none;
+}
+
+.chip {
+  padding: 6px var(--space-3);
+  border-radius: var(--radius-pill);
+  border: 1px solid var(--border-default);
+  background: var(--surface-elevated);
+  color: var(--text-secondary);
+  font-family: var(--font-mono);
+  font-size: 11px;
+  line-height: 1.35;
+  transition: transform var(--dur-fast) var(--ease-out),
+    opacity var(--dur-fast) var(--ease-out);
+}
+
+.chip:hover {
+  border-color: var(--border-strong);
+  color: var(--text-primary);
+}
+
+.chip:active,
+.chip.is-sending {
+  transform: scale(0.96);
+  background: var(--accent-primary);
+  border-color: transparent;
+  color: var(--text-inverse);
+}
+
+/* -- Resolved actions panel ------------------------------------------ */
+
+.resolve-list {
+  display: grid;
+  gap: 2px;
+  max-height: 344px;
+  overflow-y: auto;
+  mask-image: linear-gradient(#000 88%, transparent);
+  -webkit-mask-image: linear-gradient(#000 88%, transparent);
+}
+
+.resolve-row {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr);
+  gap: 1px;
+  width: 100%;
+  padding: 7px var(--space-2);
+  border-radius: 6px;
+  text-align: left;
+  font-family: var(--font-mono);
+  font-size: 11px;
+  transition: transform var(--dur-fast) var(--ease-out),
+    opacity var(--dur-fast) var(--ease-out);
+}
+
+.resolve-row:nth-child(odd) {
+  background: var(--surface-primary);
+}
+
+.resolve-row:not(:disabled):hover {
+  transform: translateX(2px);
+}
+
+.resolve-row:disabled {
+  cursor: default;
+}
+
+.resolve-key {
+  color: var(--text-primary);
+  font-weight: 500;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.resolve-target {
+  color: var(--text-tertiary);
+  line-height: 1.35;
+  overflow-wrap: anywhere;
+}
+
+.resolve-row:not(:disabled) .resolve-target {
+  color: var(--text-secondary);
+}
+
+.resolve-row:disabled .resolve-key {
+  color: var(--text-tertiary);
+}
+
+.resolve-empty {
+  padding: var(--space-4);
+  color: var(--text-tertiary);
+  font-size: var(--text-body-sm);
+  text-align: center;
+}
+
+/* -- Send log ----------------------------------------------------------- */
+
+.send-log {
+  display: grid;
+  gap: 2px;
+  max-height: 240px;
+  overflow-y: auto;
+  mask-image: linear-gradient(#000 84%, transparent);
+  -webkit-mask-image: linear-gradient(#000 84%, transparent);
+}
+
+.send-log li {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr) auto;
+  gap: var(--space-3);
+  align-items: baseline;
+  padding: 6px var(--space-2);
+  border-radius: 6px;
+}
+
+.send-log li:nth-child(odd) {
+  background: var(--surface-primary);
+}
+
+.send-time {
+  color: var(--text-tertiary);
+  font-size: 11px;
+}
+
+.send-target {
+  font-family: var(--font-mono);
+  font-size: 11px;
+  color: var(--text-secondary);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.send-note {
+  font-size: 10px;
+  font-weight: 600;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+}
+
+.send-note.is-ok {
+  color: var(--status-live);
+}
+
+.send-note.is-ir {
+  color: var(--accent-hover);
+}
+
+.send-note.is-local {
+  color: var(--status-warn);
+}
+
+.send-note.is-err {
+  color: var(--status-error);
+}
+
+.send-log .resolve-empty,
+.send-log .send-hint {
+  grid-column: 1 / -1;
+  padding: var(--space-3) var(--space-2);
+  color: var(--text-tertiary);
+  font-size: var(--text-body-sm);
+  text-align: center;
+}
+
+/* -- Responsive ----------------------------------------------------------- */
+
+@media (max-width: 1120px) {
+  .control-grid {
+    grid-template-columns: minmax(220px, 300px) minmax(280px, 360px);
+  }
+
+  .control-side {
+    grid-column: 1 / -1;
+  }
+}
+
+@media (max-width: 760px) {
+  .control-grid {
+    grid-template-columns: minmax(0, 1fr);
+    gap: var(--space-4);
+  }
+
+  .remote-status {
+    flex-wrap: wrap;
+    row-gap: 0;
+  }
+
+  .remote-status .status-note {
+    margin-left: 0;
+    flex-basis: 100%;
+  }
+
+  .control-src {
+    order: 1;
+  }
+
+  .control-remotecol {
+    order: 2;
+  }
+
+  .control-side {
+    order: 3;
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .ir-remote-shell {
+    padding: var(--space-2);
+  }
+
+  .ir-remote-skin {
+    width: min(100%, 200px);
+  }
+
+  /* Hotspot percent geometry is sacred: no min-size overrides here.
+     Enlarged targets overlap neighboring keys and mislead taps. */
+
+  .src-list {
+    max-height: none;
+    display: flex;
+    overflow-x: auto;
+    padding-bottom: var(--space-2);
+    gap: var(--space-2);
+  }
+
+  .src-row {
+    flex: none;
+    width: 200px;
+    grid-template-columns: auto minmax(0, 1fr);
+  }
+
+  .src-side {
+    grid-column: 1 / -1;
+    justify-content: flex-end;
+  }
+}

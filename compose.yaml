@@ -1,0 +1,35 @@
+services:
+  harmony-hub-control:
+    build:
+      context: .
+      args:
+        VCS_REF: d87cebafdee36ec33f1e4ea3055239dbfea6aa09
+    image: harmony-hub-control:local
+    container_name: harmony-hub-control
+    restart: "no"
+    ports:
+      - "${HARMONY_PROXY_PORT:-8088}:8080"
+    volumes:
+      - "${HARMONY_CONFIG_PATH:-./data}:/config"
+      - "${HARMONY_KEYS_PATH:-./keys}:/keys:ro"
+    environment:
+      TZ: "${TZ:-Etc/UTC}"
+      HUB_HOST: "${HUB_HOST:?Set HUB_HOST to the rooted Harmony Hub IP or hostname}"
+      HUB_ID: "${HUB_ID:?Set HUB_ID to the exact numeric Harmony Hub ID}"
+      HUB_SSH_PORT: "${HUB_SSH_PORT:-22}"
+      HUB_SSH_USER: "${HUB_SSH_USER:-root}"
+      HUB_WEB_PORT: "${HUB_WEB_PORT:-8080}"
+      SSH_KEY_PATH: "${SSH_KEY_PATH:-/keys/harmony_owner_key}"
+      MQTT_ENABLED: "${MQTT_ENABLED:-false}"
+      MQTT_BROKER: "${MQTT_BROKER:-}"
+      MQTT_PORT: "${MQTT_PORT:-1883}"
+      MQTT_USER: "${MQTT_USER:-}"
+      MQTT_PASSWORD: "${MQTT_PASSWORD:-}"
+      MQTT_PASSWORD_FILE: "${MQTT_PASSWORD_FILE:-}"
+      MQTT_BASE_TOPIC: "${MQTT_BASE_TOPIC:-harmony/hub}"
+      MQTT_DISCOVERY_PREFIX: "${MQTT_DISCOVERY_PREFIX:-homeassistant}"
+      MQTT_CLIENT_ID: "${MQTT_CLIENT_ID:-harmony-local-mqtt}"
+      CLOUD_BLOCKER_ENABLED: "${CLOUD_BLOCKER_ENABLED:-true}"
+      REBOOT_HUB_AFTER_INSTALL: "${REBOOT_HUB_AFTER_INSTALL:-true}"
+      INSTALL_MODE: "${INSTALL_MODE:-once}"
+      FORCE_INSTALL: "${FORCE_INSTALL:-false}"

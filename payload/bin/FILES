@@ -1,7 +1,8 @@
 codex_dhcpd:          ELF 32-bit MSB executable, MIPS, MIPS32 version 1 (SYSV), statically linked, stripped
 codex_portal:         ELF 32-bit MSB executable, MIPS, MIPS32 version 1 (SYSV), statically linked, stripped
 codex_hbus:           ELF 32-bit MSB executable, MIPS, MIPS32 version 1 (SYSV), statically linked, stripped
-codex_hal_ltcp:       ELF 32-bit MSB executable, MIPS, MIPS32 version 1 (SYSV), statically linked, stripped
-codex_bthid_keyboard: ELF 32-bit MSB executable, MIPS, MIPS32 version 1 (SYSV), statically linked, stripped
-codex_webui:          ELF 32-bit MSB executable, MIPS, MIPS32 version 1 (SYSV), statically linked, stripped
+codex_hal_ltcp:       ELF 32-bit MSB executable, MIPS, MIPS32 rel2 version 1 (SYSV), statically linked, stripped
+codex_bthid_keyboard: ELF 32-bit MSB executable, MIPS, MIPS32 rel2 version 1 (SYSV), statically linked, stripped
+codex_bt_pair_agent:  ELF 32-bit MSB executable, MIPS, MIPS32 rel2 version 1 (SYSV), statically linked, stripped
+codex_webui:          ELF 32-bit MSB executable, MIPS, MIPS32 rel2 version 1 (SYSV), statically linked, stripped
 dropbearmulti:        ELF 32-bit MSB executable, MIPS, MIPS32 version 1 (SYSV), statically linked, stripped

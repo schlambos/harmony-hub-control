@@ -1,0 +1,47 @@
+<?xml version="1.0"?>
+<Container version="2">
+  <Name>Harmony-Hub-Control</Name>
+  <Repository>harmony-hub-control:local</Repository>
+  <Registry/>
+  <Network>bridge</Network>
+  <MyIP/>
+  <Shell>sh</Shell>
+  <Privileged>false</Privileged>
+  <Support/>
+  <Project>https://github.com/Ripthulhu/harmony-hub-control</Project>
+  <Overview>Installs Harmony Hub Control onto an already-rooted Logitech Harmony Hub over SSH exactly once, then keeps a local reverse proxy running so the hub-hosted dashboard appears as this container's WebUI. The container does not root the hub. A valid owner SSH private key and the exact numeric Hub ID are required.</Overview>
+  <Category>HomeAutomation: Tools:</Category>
+  <WebUI>http://[IP]:[PORT:8080]/</WebUI>
+  <TemplateURL/>
+  <Icon>https://github.com/Ripthulhu.png</Icon>
+  <ExtraParams/>
+  <PostArgs/>
+  <CPUset/>
+  <DateInstalled/>
+  <DonateText/>
+  <DonateLink/>
+  <Requires>An already-rooted Harmony Hub, its exact numeric Hub ID, and the matching harmony_owner SSH private key. The first successful install changes files on the hub and can reboot the hub once; it does not reboot Unraid.</Requires>
+  <Config Name="Appdata" Target="/config" Default="/mnt/user/appdata/harmony-hub-control" Mode="rw" Description="Persistent install marker and SSH known-host data." Type="Path" Display="always" Required="true" Mask="false">/mnt/user/appdata/harmony-hub-control</Config>
+  <Config Name="SSH Key Directory" Target="/keys" Default="/mnt/user/appdata/harmony-hub-control/keys" Mode="ro" Description="Directory containing the Harmony owner private key. Keep it read-only and chmod the key to 600." Type="Path" Display="always" Required="true" Mask="false">/mnt/user/appdata/harmony-hub-control/keys</Config>
+  <Config Name="WebUI Proxy Port" Target="8080" Default="8088" Mode="tcp" Description="Unraid host port for the reverse-proxied Harmony Hub dashboard." Type="Port" Display="always" Required="true" Mask="false">8088</Config>
+  <Config Name="Harmony Hub Host" Target="HUB_HOST" Default="" Mode="" Description="Static LAN IP or hostname of the already-rooted Harmony Hub. Do not include http:// or a port." Type="Variable" Display="always" Required="true" Mask="false"/>
+  <Config Name="Harmony Hub ID" Target="HUB_ID" Default="" Mode="" Description="Exact numeric Hub ID printed by the root tool. Do not guess this value." Type="Variable" Display="always" Required="true" Mask="false"/>
+  <Config Name="SSH Key Path" Target="SSH_KEY_PATH" Default="/keys/harmony_owner_key" Mode="" Description="Container path to the mounted Harmony owner private key." Type="Variable" Display="always" Required="true" Mask="false">/keys/harmony_owner_key</Config>
+  <Config Name="MQTT Enabled" Target="MQTT_ENABLED" Default="false" Mode="" Description="Set true to configure the hub-side MQTT and Home Assistant bridge during first install." Type="Variable" Display="always" Required="true" Mask="false">false</Config>
+  <Config Name="MQTT Broker" Target="MQTT_BROKER" Default="" Mode="" Description="MQTT broker IP or hostname. Required only when MQTT Enabled is true." Type="Variable" Display="always" Required="false" Mask="false"/>
+  <Config Name="MQTT Username" Target="MQTT_USER" Default="" Mode="" Description="Optional MQTT username." Type="Variable" Display="always" Required="false" Mask="false"/>
+  <Config Name="MQTT Password" Target="MQTT_PASSWORD" Default="" Mode="" Description="Optional MQTT password. Docker stores environment variables in container metadata; use MQTT_PASSWORD_FILE for stronger local handling." Type="Variable" Display="always" Required="false" Mask="true"/>
+  <Config Name="Cloud Blocker Enabled" Target="CLOUD_BLOCKER_ENABLED" Default="true" Mode="" Description="Make the Hub LAN-only: remove WAN egress, block Logitech background tasks, and keep paired-remote resource/sync traffic local." Type="Variable" Display="always" Required="true" Mask="false">true</Config>
+  <Config Name="Reboot Hub After Install" Target="REBOOT_HUB_AFTER_INSTALL" Default="true" Mode="" Description="When the cloud blocker is enabled, reboot the Harmony Hub once after a successful first install so the setting takes effect. This never reboots Unraid." Type="Variable" Display="always" Required="true" Mask="false">true</Config>
+  <Config Name="SSH Port" Target="HUB_SSH_PORT" Default="22" Mode="" Description="Harmony Hub SSH port." Type="Variable" Display="advanced" Required="true" Mask="false">22</Config>
+  <Config Name="SSH User" Target="HUB_SSH_USER" Default="root" Mode="" Description="Harmony Hub SSH user." Type="Variable" Display="advanced" Required="true" Mask="false">root</Config>
+  <Config Name="Hub Web Port" Target="HUB_WEB_PORT" Default="8080" Mode="" Description="Port where Harmony Hub Control runs on the hub." Type="Variable" Display="advanced" Required="true" Mask="false">8080</Config>
+  <Config Name="MQTT Port" Target="MQTT_PORT" Default="1883" Mode="" Description="MQTT broker port." Type="Variable" Display="advanced" Required="true" Mask="false">1883</Config>
+  <Config Name="MQTT Base Topic" Target="MQTT_BASE_TOPIC" Default="harmony/hub" Mode="" Description="Base topic used by the hub-side MQTT bridge." Type="Variable" Display="advanced" Required="true" Mask="false">harmony/hub</Config>
+  <Config Name="MQTT Discovery Prefix" Target="MQTT_DISCOVERY_PREFIX" Default="homeassistant" Mode="" Description="Home Assistant MQTT discovery prefix." Type="Variable" Display="advanced" Required="true" Mask="false">homeassistant</Config>
+  <Config Name="MQTT Client ID" Target="MQTT_CLIENT_ID" Default="harmony-local-mqtt" Mode="" Description="MQTT client ID used by the hub." Type="Variable" Display="advanced" Required="true" Mask="false">harmony-local-mqtt</Config>
+  <Config Name="MQTT Password File" Target="MQTT_PASSWORD_FILE" Default="" Mode="" Description="Optional in-container path to a one-line password file; takes precedence over MQTT_PASSWORD." Type="Variable" Display="advanced" Required="false" Mask="false"/>
+  <Config Name="Install Mode" Target="INSTALL_MODE" Default="once" Mode="" Description="once installs only when no matching success marker exists; never only runs the proxy; always reinstalls on every container start and is not recommended." Type="Variable" Display="advanced" Required="true" Mask="false">once</Config>
+  <Config Name="Force Install" Target="FORCE_INSTALL" Default="false" Mode="" Description="Set true for one deliberate reinstall, then immediately return it to false or every restart will reinstall and may reboot the hub." Type="Variable" Display="advanced" Required="true" Mask="false">false</Config>
+  <Config Name="Timezone" Target="TZ" Default="Etc/UTC" Mode="" Description="Container timezone, for example America/New_York." Type="Variable" Display="advanced" Required="true" Mask="false">Etc/UTC</Config>
+</Container>

@@ -1,0 +1,126 @@
+/* ============================================================
+   Harmony Hub Control — design tokens (webui-sim)
+   Runtime source of truth. Must match DESIGN.md at repo root.
+   ============================================================ */
+
+:root {
+  color-scheme: dark;
+
+  /* -- Surfaces ------------------------------------------------ */
+  --surface-canvas: #0c0e10;    /* page background */
+  --surface-primary: #12151a;   /* main content well */
+  --surface-secondary: #181c22; /* cards, side nav */
+  --surface-elevated: #1e242c;  /* popovers, remote shell */
+  --surface-inset: #0a0c0f;     /* recessed remote body */
+
+  /* -- Text ---------------------------------------------------- */
+  --text-primary: #e8eaed;
+  --text-secondary: #9aa3ad;
+  --text-tertiary: #8b93a0;
+  --text-inverse: #0c0e10;      /* text on accent fills */
+
+  /* -- Borders (opacity whites on dark) ------------------------ */
+  --border-default: rgba(255, 255, 255, 0.08);
+  --border-strong: rgba(255, 255, 255, 0.14);
+
+  /* -- Accent: amber, interactive primary actions only --------- */
+  --accent-primary: #e8a54b;
+  --accent-hover: #f0b862;
+  --accent-muted: rgba(232, 165, 75, 0.14);
+  --border-accent: rgba(232, 165, 75, 0.38);
+
+  /* -- Status: teal reserved for live/on-air ------------------- */
+  --status-live: #3dcaa0;
+  --status-live-glow: rgba(61, 202, 160, 0.28);
+  --status-warn: #d4a017;
+  --status-error: #e25c5c;
+  --status-info: #6b8caf;
+
+  /* Muted status fills for notices, chips, badges */
+  --status-live-muted: rgba(61, 202, 160, 0.12);
+  --status-warn-muted: rgba(212, 160, 23, 0.12);
+  --status-error-muted: rgba(226, 92, 92, 0.12);
+  --status-info-muted: rgba(107, 140, 175, 0.12);
+  --border-live: rgba(61, 202, 160, 0.38);
+  --border-warn: rgba(212, 160, 23, 0.40);
+  --border-error: rgba(226, 92, 92, 0.40);
+  --border-info: rgba(107, 140, 175, 0.38);
+
+  /* -- Remote keys ---------------------------------------------- */
+  --key-face: #252b34;
+  --key-face-hover: #2f3742;
+  --key-label: #d5dae0;
+  --key-disabled: #1a1f26;
+  /* Tints for the Red/Green/Yellow/Blue shortcut row */
+  --key-tint-red: #cf7d74;
+  --key-tint-green: #7cb98a;
+  --key-tint-yellow: #cdb36e;
+  --key-tint-blue: #7d9ecf;
+
+  --shadow-remote:
+    0 24px 48px rgba(0, 0, 0, 0.45),
+    0 2px 0 rgba(255, 255, 255, 0.04) inset;
+  --overlay: rgba(0, 0, 0, 0.72);
+
+  /* -- Spacing (4px base) --------------------------------------- */
+  --space-1: 4px;
+  --space-2: 8px;
+  --space-3: 12px;
+  --space-4: 16px;
+  --space-5: 20px;
+  --space-6: 24px;
+  --space-8: 32px;
+  --space-10: 40px;
+  --space-12: 48px;
+
+  /* -- Radii ----------------------------------------------------- */
+  --radius-btn: 10px;
+  --radius-panel: 12px;
+  --radius-remote: 18px;
+  --radius-pill: 999px;
+
+  /* -- Typography ------------------------------------------------ */
+  --font-sans: "IBM Plex Sans", "Segoe UI", system-ui, sans-serif;
+  --font-mono: "IBM Plex Mono", ui-monospace, "SF Mono", Menlo, monospace;
+
+  --text-display: clamp(28px, 4vw, 40px); /* weight 600 / 1.1 / -0.03em */
+  --text-h1: 22px;                        /* weight 600 / 1.25 / -0.02em */
+  --text-h2: 17px;                        /* weight 600 / 1.3 / -0.01em */
+  --text-h3: 14px;                        /* weight 600 / 1.35 */
+  --text-body: 14px;                      /* weight 400 / 1.5 */
+  --text-body-sm: 13px;                   /* weight 400 / 1.45 */
+  --text-caption: 11px;                   /* weight 500 / 1.35 / 0.04em */
+  --text-key: 11px;                       /* weight 600 / 1.1 / 0.02em */
+  --text-mono: 12px;                      /* weight 450 / 1.4 */
+
+  /* -- Motion ---------------------------------------------------- */
+  --ease-out: cubic-bezier(0.22, 1, 0.36, 1);
+  --dur-fast: 120ms;
+  --dur-med: 200ms;
+  --dur-slow: 320ms;
+
+  /* -- Layout ---------------------------------------------------- */
+  --content-max: 1280px;
+  --rail-w: 220px;
+  --topbar-h: 56px;
+  --remote-max-w: 320px;
+
+  /* Focus ring: amber, sits off the dark canvas */
+  --ring-focus:
+    0 0 0 2px var(--surface-canvas),
+    0 0 0 4px var(--accent-primary);
+}
+
+/* Aliases expected by the vendored activity-ui.css (light-era names
+   remapped onto the dark token set; scoped values live in
+   activity-overrides.css). */
+:root {
+  --accent: var(--accent-primary);
+  --fg: var(--text-primary);
+  --muted: var(--text-secondary);
+  --line: var(--border-default);
+  --warn: var(--status-warn);
+  --bad: var(--status-error);
+  --wash: var(--surface-primary);
+  --soft2: var(--surface-elevated);
+}

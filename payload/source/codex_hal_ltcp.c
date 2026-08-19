@@ -5,6 +5,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <strings.h>
 #include <sys/socket.h>
 #include <sys/time.h>
 #include <unistd.h>
@@ -214,6 +215,11 @@ static int decode_ltcp_payload(const unsigned char *buf, size_t len,
         pos += chunk_len;
         packets--;
     }
+    if (packets > 0) {
+        free(*payload);
+        *payload = NULL;
+        *payload_len = 0;
+    }
     return 0;
 }
 
@@ -354,6 +360,8 @@ static int run_ltcp_once(const char *cmd, const char *data, int timeout, const c
 
     while (total < MAX_RESPONSE_SIZE) {
         ssize_t n = recv(fd, buf + total, MAX_RESPONSE_SIZE - total, 0);
+        unsigned char *complete_payload = NULL;
+        size_t complete_payload_len = 0;
         if (n < 0) {
             if (errno == EAGAIN || errno == EWOULDBLOCK) {
                 break;
@@ -367,10 +375,23 @@ static int run_ltcp_once(const char *cmd, const char *data, int timeout, const c
             break;
         }
         total += (size_t)n;
+        /*
+         * HAL keeps LTCP sockets open after replying.  Waiting for EOF therefore
+         * adds the full receive timeout to every command (twice for a key press
+         * plus release).  Stop as soon as a complete LTCP payload is present.
+         */
+        if (decode_ltcp_payload(buf, total, &complete_payload,
+                &complete_payload_len) == 0 && complete_payload) {
+            payload = complete_payload;
+            payload_len = complete_payload_len;
+            break;
+        }
+        free(complete_payload);
     }
     close(fd);
 
-    if (decode_ltcp_payload(buf, total, &payload, &payload_len) != 0 || !payload) {
+    if (!payload &&
+        (decode_ltcp_payload(buf, total, &payload, &payload_len) != 0 || !payload)) {
         fprintf(stderr, "decode_ltcp_payload failed (raw_len=%lu)\n", (unsigned long)total);
         free(payload);
         free(buf);
@@ -388,6 +409,100 @@ static int run_ltcp_once(const char *cmd, const char *data, int timeout, const c
     free(payload);
     free(buf);
     return 0;
+}
+
+static int json_reply_code(const char *json) {
+    const char *p, *colon;
+    char *end;
+    long value;
+    if (!json) return -1;
+    p = strstr(json, "\"code\"");
+    if (!p) return -1;
+    colon = strchr(p, ':');
+    if (!colon) return -1;
+    errno = 0;
+    value = strtol(colon + 1, &end, 10);
+    if (errno != 0 || end == colon + 1 || value < 0 || value > 999) return -1;
+    return (int)value;
+}
+
+static int json_reply_true(const char *json, const char *key) {
+    char needle[96];
+    const char *p, *colon;
+    if (!json || !key || strlen(key) + 3 >= sizeof(needle)) return 0;
+    snprintf(needle, sizeof(needle), "\"%s\"", key);
+    p = strstr(json, needle);
+    if (!p) return 0;
+    colon = strchr(p, ':');
+    if (!colon) return 0;
+    colon++;
+    while (*colon && isspace((unsigned char)*colon)) colon++;
+    return strncmp(colon, "true", 4) == 0;
+}
+
+static int json_reply_string(const char *json, const char *key,
+                             char *out, size_t outlen) {
+    char needle[96];
+    const char *p, *colon, *start, *end;
+    size_t len;
+    if (!json || !key || !out || outlen < 2 ||
+        strlen(key) + 3 >= sizeof(needle)) {
+        return 0;
+    }
+    out[0] = 0;
+    snprintf(needle, sizeof(needle), "\"%s\"", key);
+    p = strstr(json, needle);
+    if (!p) return 0;
+    colon = strchr(p, ':');
+    if (!colon) return 0;
+    start = colon + 1;
+    while (*start && isspace((unsigned char)*start)) start++;
+    if (*start != '"') return 0;
+    start++;
+    end = strchr(start, '"');
+    if (!end) return 0;
+    len = (size_t)(end - start);
+    if (len >= outlen) return 0;
+    memcpy(out, start, len);
+    out[len] = 0;
+    return 1;
+}
+
+static int ensure_bthid_report_ready(const char *data, int timeout) {
+    char status[MAX_RESPONSE_SIZE], status_data[160];
+    char type[48], expected_addr[32], current_addr[32];
+    int rc, code;
+    int status_timeout = timeout;
+    type[0] = 0;
+    expected_addr[0] = 0;
+    current_addr[0] = 0;
+    if (!json_reply_string(data, "type", type, sizeof(type)) ||
+        !json_reply_string(data, "bdaddr", expected_addr,
+            sizeof(expected_addr))) {
+        fprintf(stderr, "refusing bthid.report with missing type or bdaddr\n");
+        return 3;
+    }
+    snprintf(status_data, sizeof(status_data), "{\"type\":\"%s\"}", type);
+    if (status_timeout < 1 || status_timeout > 4) status_timeout = 4;
+    rc = run_ltcp_once(
+        "bthid.status", status_data, status_timeout, NULL, status, sizeof(status)
+    );
+    code = rc == 0 ? json_reply_code(status) : -1;
+    if (rc == 0 && code == 200 &&
+        json_reply_true(status, "connected") &&
+        json_reply_string(status, "bdaddr", current_addr,
+            sizeof(current_addr)) &&
+        strcasecmp(current_addr, expected_addr) == 0) {
+        return 0;
+    }
+    fprintf(
+        stderr,
+        "refusing bthid.report while native HID state is not connected "
+        "(status=%d, reply=%s)\n",
+        code,
+        status[0] ? status : "no response"
+    );
+    return 3;
 }
 
 static int run_sequence_file(const char *cmd, const char *data, int timeout, const char *path, int gap_ms,
@@ -412,6 +527,10 @@ static int run_sequence_file(const char *cmd, const char *data, int timeout, con
         while (part) {
             part = trim_in_place(part);
             if (part[0]) {
+                if (strcmp(cmd, "bthid.report") == 0) {
+                    rc = ensure_bthid_report_ready(data, timeout);
+                    if (rc != 0) break;
+                }
                 rc = run_ltcp_once(cmd, data, timeout, part, last, last_len);
                 if (rc != 0) break;
                 if (sent) (*sent)++;
@@ -460,6 +579,10 @@ int main(int argc, char **argv) {
     if (first_payload < argc) {
         int multiple = (argc - first_payload) > 1;
         for (i = first_payload; i < argc; i++) {
+            if (strcmp(cmd, "bthid.report") == 0) {
+                rc = ensure_bthid_report_ready(data, timeout);
+                if (rc != 0) return rc;
+            }
             rc = run_ltcp_once(cmd, data, timeout, argv[i], last, sizeof(last));
             if (rc != 0) return rc;
             sent++;
@@ -473,6 +596,10 @@ int main(int argc, char **argv) {
         return 0;
     }
 
+    if (strcmp(cmd, "bthid.report") == 0) {
+        rc = ensure_bthid_report_ready(data, timeout);
+        if (rc != 0) return rc;
+    }
     rc = run_ltcp_once(cmd, data, timeout, NULL, last, sizeof(last));
     if (rc != 0) return rc;
     printf("%s\n", last[0] ? last : "no response");
