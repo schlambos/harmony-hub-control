@@ -1,0 +1,9 @@
+#!/bin/sh
+# hub-emu stub: on the box, /sbin/reboot signals PID 1 to reboot the OS. In the
+# emulator PID 1 is qemu-mips running codex_webui — signaling it would kill the
+# container. Instead, record every request so the control plane can expose it
+# (GET /status -> rebootCount; POST /reset clears the log), then exit
+# successfully without signaling anything.
+printf '%s pid=%s\n' "$(date '+%Y-%m-%dT%H:%M:%S')" "${PPID:-?}" \
+    >> /var/volatile/reboot-requests.log 2>/dev/null
+exit 0

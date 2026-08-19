@@ -1,0 +1,1 @@
+{"baseTopic":"harmony/hub-emu-fake","broker":{"host":"mqtt.hub-emu.invalid","password":"hub-emu-fake-password","port":1883,"username":"hub-emu-fake-user"},"clientId":"hub-emu-fake-client","discoveryPrefix":"homeassistant","enabled":false,"haDiscovery":true,"keepAlive":60,"name":"Harmony Hub (Emu)","pollSeconds":10}

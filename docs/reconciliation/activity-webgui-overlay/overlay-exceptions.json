@@ -1,0 +1,29 @@
+{
+  "base_commit": "391e10e663ced493d1a1dff0afa38530812f32a1",
+  "exceptions": [
+    {
+      "base_git_blob": "32c7be8fc349da7d00fd95a1332eb7576aeb6e60",
+      "base_sha256": "365f6c7d264cce3e2d9b0795f8cf3f1dc75f504e1dff500a14904e57e71edd2a",
+      "base_size": 6859,
+      "factual_guards": [
+        "no local absolute paths or owner identity",
+        "no commit/push/box-testing/canonical/full-hub claims",
+        "every shown command is annotated with its exact expected result or gap; no failing or unavailable command is presented as passing/runnable without immediate annotation",
+        "install/rollback/security truth preserved from 391e",
+        "omitted dirty installers/payload changes are not implied present"
+      ],
+      "kind": "modified_base_exception",
+      "path": "README.md",
+      "rationale": "top-level README synthesized from the 391e operational baseline plus the verified safe narrative in the recovery dirty README; the overlay adds a branch notice, exact reconciliation status, source-only disclosure, and test truth without implying omitted dirty installers/payload changes are present",
+      "source_inputs": [
+        "391e10e:README.md (operational baseline)",
+        "recovery dirty README (0828c08, custody object 0b98bc05c0af9dafed328f52204a652c8d92554bebeab5977143aa2a67aefd2d)"
+      ],
+      "target_mode": "100644",
+      "target_sha256": "5fafd4639378b91aebb5374af4ca2d3afc3e58d8a742015d8d738d0ef79d25c4",
+      "target_size": 13945
+    }
+  ],
+  "schema": "activity-webgui-overlay/exceptions/1",
+  "source_commit": "0828c08a61afd07d60b0504281e58423e186e81d"
+}

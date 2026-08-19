@@ -1,0 +1,6 @@
+#!/bin/sh
+# hub-emu stub: deterministic process snapshot for System-status QA.
+printf '%s\n' \
+  '  PID USER       TIME COMMAND' \
+  '    1 root       0:00 qemu-mips /opt/hub/bin/codex_webui.mips 8080' \
+  '    7 root       0:00 python3 /opt/hub/engine-emu.py'

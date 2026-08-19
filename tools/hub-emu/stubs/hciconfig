@@ -1,0 +1,3 @@
+#!/bin/sh
+# hub-emu stub: hciconfig (putkey etc.) — succeed quietly, no BT hardware.
+exit 0
