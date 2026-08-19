@@ -467,15 +467,13 @@ for the full Linux toolchain path.
 | [tools/hub-emu/README.md](tools/hub-emu/README.md) | QEMU hub emulator |
 | [CONTRIBUTING.md](CONTRIBUTING.md) | Contribution guidelines |
 
-> **Historical reconciliation (not current-main truth).** The provenance
-> derivation ledger at
+> **Live-box reconciliation.** The provenance derivation ledger at
 > [docs/reconciliation/box-snapshot-20260818.md](docs/reconciliation/box-snapshot-20260818.md)
 > and the machine-readable records under
-> `provenance/box-snapshot-20260818/` document the historical
+> `provenance/box-snapshot-20260818/` document the live
 > `box-snapshot-20260818` evidence snapshot and its binary-reproducibility
-> findings. They are a point-in-time reconciliation of a prior live hub, not
-> the current product baseline; the current product build flow and artifact
-> identities are in [docs/BUILD.md](docs/BUILD.md) and
+> findings. Those live identities are product truth. The current product
+> build flow is in [docs/BUILD.md](docs/BUILD.md) and
 > [docs/integration/main-product-20260819.md](docs/integration/main-product-20260819.md).
 
 ## Contributing, security, and credits

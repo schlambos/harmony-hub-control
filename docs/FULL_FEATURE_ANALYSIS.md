@@ -1,10 +1,9 @@
 # Harmony Hub Control — Full Feature Analysis
 
-> **HISTORICAL / NOT CURRENT MAIN.** This analysis is dated 2026-07-31 against
-> the `agent/activity-webgui` branch. Its `codex_webui` identity (`6f05d649…`,
-> 906,872 bytes) is a **historical** artifact, not the final product identity.
-> The final product webui is `7bcf00bdcc98ded1795851ea72864f434e4e15d376a95dc7bedc70d34902b2a2`
-> (778,408 bytes); see `docs/BUILD.md` and
+> This analysis is dated 2026-07-31 against the `agent/activity-webgui`
+> branch. Its `codex_webui` identity (`6f05d649…`, 906,872 bytes) **is** the
+> live product identity. The later 778,408-byte / `7bcf00bd…` Recovery rebuild
+> is not the product; see `docs/BUILD.md` and
 > `docs/integration/main-product-20260819.md`.
 
 **Repository:** `schlambos/harmony-hub-control`<br>

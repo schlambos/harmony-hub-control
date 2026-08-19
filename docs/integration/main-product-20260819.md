@@ -1,10 +1,13 @@
 # Integration — main-product-20260819
 
-Final product integration lane `integrate/main-product-20260819`. This document
-is the **current product truth** for the integrated main product. Historical
-reconciliation material lives under `docs/reconciliation/**` and
-`provenance/box-snapshot-20260818/**` and is explicitly **not** current-main
-truth.
+Integration lane `integrate/main-product-20260819`. **Product truth is the live
+hub / box snapshot**, not the later Recovery-source rebuild this lane briefly
+shipped. The live `codex_webui` is 906872 bytes,
+SHA-256 `c400173bb42f735734c522556c69f6c80f0604949413eb974c7b361b9e4ac11a`.
+The 778408-byte Recovery webui is a discarded inversion. Reconciliation
+ledgers under `docs/reconciliation/**` and
+`provenance/box-snapshot-20260818/**` recorded that live identity first; they
+are not “historical instead of product.”
 
 ## Lineage
 
@@ -35,7 +38,7 @@ the OVERLAY branch. Full blobs (git object IDs) for the conflicted paths:
 | Path | Base (d87) | RECOVERY (5e1b552) | OVERLAY (e6d4df1) | Final (HEAD) |
 | --- | --- | --- | --- | --- |
 | `README.md` | `32c7be8f…` | `eba6358a…` | `6339e802…` | `eba6358a…` (RECOVERY) |
-| `build/build_harmony_tools_kali.sh` | `89152471…` | `c01fc2a7…` | `64fd0bf2…` | `c01fc2a7…` (RECOVERY) |
+| `build/build_harmony_tools_kali.sh` | `89152471…` | `c01fc2a7…` | `64fd0bf2…` | `64fd0bf2…` (OVERLAY; box-repro Zig recipe) |
 | `docs/FOOTPRINT_AUDIT.md` | *(absent)* | `dfe86218…` | `37c0e68e…` | `37c0e68e…` (OVERLAY) |
 | `docs/FRONTEND_REDESIGN_HANDOFF.md` | *(absent)* | `13e2b17e…` | `afc7d78d…` | `afc7d78d…` (OVERLAY) |
 | `docs/FULL_FEATURE_ANALYSIS.md` | *(absent)* | `4bbb4908…` | `ec511856…` | `ec511856…` (OVERLAY) |
@@ -46,8 +49,8 @@ the OVERLAY branch. Full blobs (git object IDs) for the conflicted paths:
 | `payload/activity/codexactivity.lua` | *(absent)* | `abb1579e…` | `aa97d229…` | `abb1579e…` (RECOVERY) |
 | `payload/scripts/netservicestarter.lua` | `b04e0286…` | `0cf6bb4b…` | `e9b0f31f…` | `0cf6bb4b…` (RECOVERY) |
 | `payload/scripts/offline_egress_guard.sh` | *(absent)* | `c949ca88…` | `c949ca88…` | `c949ca88…` (identical) |
-| `payload/source/codex_webui.c` | `d379d1fe…` | `c4ad6b63…` | `aa173f17…` | `c4ad6b63…` (RECOVERY) |
-| `payload/source/harmony_shell_assets.h` | *(absent)* | `947cafd1…` | `ba6c4ce9…` | `947cafd1…` (RECOVERY) |
+| `payload/source/codex_webui.c` | `d379d1fe…` | `c4ad6b63…` | `aa173f17…` | `aa173f17…` (OVERLAY; box-repro) |
+| `payload/source/harmony_shell_assets.h` | *(absent)* | `947cafd1…` | `ba6c4ce9…` | `ba6c4ce9…` (OVERLAY; box-repro) |
 | `tools/hub-emu/docker/entrypoint.sh` | *(absent)* | `4000fc41…` | `8d537da6…` | `4000fc41…` (RECOVERY) |
 | `tools/hub-emu/engine-emu.py` | *(absent)* | `7216e145…` | `e38ea4f7…` | `7216e145…` (RECOVERY) |
 | `tools/hub-emu/seed/resources/MapList.json` | *(absent)* | `ee956c92…` | `6d6cc47a…` | `6d6cc47a…` (OVERLAY) |
@@ -55,11 +58,14 @@ the OVERLAY branch. Full blobs (git object IDs) for the conflicted paths:
 | `tools/webui-sim/fixtures/activity-config.json` | *(absent)* | `d30af455…` | `a15fbf13…` | `a15fbf13…` (OVERLAY) |
 | `tools/webui-sim/server.mjs` | *(absent)* | `e32b427a…` | `e3e9e23f…` | `e3e9e23f…` (OVERLAY) |
 
-Resolution policy: RECOVERY wins for the installers, the activity plugin, the
-webui/hbus sources, and the hub-emu engine/entrypoint (the product-test
-surface); OVERLAY wins for the reconciliation documentation, provenance
-records, and the webui-sim fixtures/server (the historical-reconciliation
-surface). Where the two branches carried identical blobs, the shared blob is
+Resolution policy: RECOVERY wins for the installers, the activity plugin,
+and the hub-emu engine/entrypoint (the product-test surface); OVERLAY wins
+for the live-reproducing webui sources (`codex_webui.c` +
+`harmony_shell_assets.h`), the dual-Zig build script, the reconciliation
+documentation, provenance records, and the webui-sim fixtures/server. The
+integration originally selected the RECOVERY webui pair and shipped a
+778408-byte binary; that choice does not reproduce the box and is reversed
+here. Where the two branches carried identical blobs, the shared blob is
 retained.
 
 ### Guard repair (authorized product-test correction)
@@ -104,7 +110,7 @@ machine-readable record. Summary of the eight final binaries:
 | `codex_hal_ltcp` | 76772 | `282c60662ef6374fe0eefa1971e32361` | `7fa9a84b9ee270bdf6e47d40859d29b6c1c30e5a1766f0ab59e9143dd13ca26c` |
 | `codex_hbus` | 74660 | `e8e62d851417aafa9995f687277e8414` | `4be9e6ac2e09e7eb052f9c47e81480d1e32aee7190bedb6ef7f932cf07aab8f9` |
 | `codex_portal` | 109548 | `bd1a7e51f476ea3a680741ca9b321b14` | `43d3925147cd70fdb58be1ba53a684a2f76b1f05a12e5db3f5c258a3cf387cc7` |
-| `codex_webui` | 778408 | `7c6b0daa3df6677d23d26777ae9ed485` | `7bcf00bdcc98ded1795851ea72864f434e4e15d376a95dc7bedc70d34902b2a2` |
+| `codex_webui` | 906872 | `6f05d6496067141fe13c1408224a42af` | `c400173bb42f735734c522556c69f6c80f0604949413eb974c7b361b9e4ac11a` |
 | `dropbearmulti` | 577296 | `3733327fd04bca282dbf06f33da0bf6c` | `e2ea632aed8b31dc5ea56b9673cbd983ec83260a97d33f891a0cebf51d5c6c8d` |
 
 `payload/bin/MANIFEST.txt` and `payload/bin/FILES` are the tracked inventory
@@ -155,9 +161,9 @@ or prior verified historical evidence. The prior verified historical result
   notices (see `docs/reconciliation/README.md`).
 - `provenance/box-snapshot-20260818/**` carries a historical pointer/README
   without falsifying the immutable historical JSON hashes/claims.
-- No current-main doc treats the `391e`/live pins as final product truth; the
-  historical `906872`-byte webui and `39793b19…`/`6f05d649…` md5s remain
-  confined to the historical reconciliation records.
+- Current-main docs treat the live box pins as product truth: the `906872`-byte
+  webui, SHA-256 `c400173b…`, md5 `6f05d649…`. The 778408-byte /
+  `7bcf00bd…` Recovery rebuild is not the product.
 
 ## Branch-closure plan
 

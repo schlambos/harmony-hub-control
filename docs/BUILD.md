@@ -1,11 +1,12 @@
-# Build Notes — final product
+# Build Notes — live box product
 
 The repository ships ready-to-install MIPS binaries in `payload/bin/`. Rebuild
-only when native source or embedded assets change. This document is the
-**current product build flow**; the historical `box-snapshot-20260818`
-reconciliation is recorded separately in
-[docs/reconciliation/box-snapshot-20260818.md](reconciliation/box-snapshot-20260818.md)
-and is not the current-main truth.
+only when native source or embedded assets change. **Product truth is the live
+hub / box snapshot**, not a later integration rebuild. The live
+`box-snapshot-20260818` / `box-snapshot-20260819` webui identity is the current
+product; the 778408-byte Recovery rebuild is a discarded inversion, not the
+baseline. Reconciliation ledgers that recorded that snapshot live in
+[docs/reconciliation/box-snapshot-20260818.md](reconciliation/box-snapshot-20260818.md).
 
 ## Target
 
@@ -20,7 +21,7 @@ exact SHA-256 digests and sizes are:
 
 | Binary | Size | SHA-256 |
 | --- | --- | --- |
-| `codex_webui` | 778408 | `7bcf00bdcc98ded1795851ea72864f434e4e15d376a95dc7bedc70d34902b2a2` |
+| `codex_webui` | 906872 | `c400173bb42f735734c522556c69f6c80f0604949413eb974c7b361b9e4ac11a` |
 | `codex_hbus` | 74660 | `4be9e6ac2e09e7eb052f9c47e81480d1e32aee7190bedb6ef7f932cf07aab8f9` |
 
 The remaining six binaries (`codex_bt_pair_agent`, `codex_bthid_keyboard`,
@@ -41,15 +42,28 @@ interchangeable**: each reproduces a specific subset of binaries byte-for-byte.
 
 ### codex_webui (Homebrew Zig)
 
+Use the pinned live-reproducing sources as-is. Do **not** regenerate
+`harmony_shell_assets.h` or `activity_ui_assets.h` first; those regenerators
+do not reproduce the live binary.
+
+Pinned source blobs:
+
+- `payload/source/codex_webui.c` — `aa173f177b8ac10270372a126b5b1d4bab41df9c`
+- `payload/source/harmony_shell_assets.h` — `ba6c4ce95dec58429ed965961904a1ac1cf7755c`
+- `payload/source/activity_ui_assets.h` — `5dad607f7c09a0d5cc0034969b76e6c5df1eb2bc`
+- `payload/source/remote_skin_jpg.h` — `419611c5ff0713f1f5de2dd684d699f6d77238d5`
+
 ```sh
-sh tools/embed_activity_ui.sh   # embed the advanced editor assets first
 "$WEBUI_ZIG" cc -target mips-linux-musleabi -Os -static -s \
-  -I payload/source -o payload/bin/codex_webui payload/source/codex_webui.c
+  -I payload/source \
+  -o payload/bin/codex_webui \
+  payload/source/codex_webui.c
 ```
 
 Result must be `ELF 32-bit MSB executable, MIPS, MIPS32 rel2, statically
-linked, stripped`, size 778408, SHA-256
-`7bcf00bdcc98ded1795851ea72864f434e4e15d376a95dc7bedc70d34902b2a2`.
+linked, stripped`, size 906872, SHA-256
+`c400173bb42f735734c522556c69f6c80f0604949413eb974c7b361b9e4ac11a`.
+A 778408-byte or 541264-byte result is not the product.
 
 ### codex_hbus (Official Zig, `-mcpu=mips32`)
 
@@ -108,10 +122,11 @@ cd build
 
 It downloads the Bootlin MIPS uClibc toolchain and Dropbear source into
 `build/toolchains/` and `build/tmp/`, then writes fresh binaries to
-`build/output/`. Before compilation it also runs
-`tools/embed_activity_ui.sh`, which regenerates
-`payload/source/activity_ui_assets.h` from the readable CSS and JavaScript under
-`payload/web/`.
+`build/output/`. Do **not** run `tools/embed_activity_ui.sh` or
+`tools/package_harmony_shell.sh` before a live-box webui rebuild: regenerating
+`activity_ui_assets.h` or `harmony_shell_assets.h` will not reproduce the
+906872-byte product binary. Use the pinned source blobs and the Homebrew Zig
+recipe above.
 
 Deploy `codex_webui` and `codex_hbus` from the same build. Activity resource
 updates use the fail-closed `payload/activity/codexactivity.lua` plugin and a

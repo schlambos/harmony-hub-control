@@ -1,13 +1,11 @@
-# Historical Box Snapshot — NOT current-main truth
+# Box Snapshot — live product identities
 
-> **HISTORICAL / NOT CURRENT MAIN.** The JSON records in this directory are
-> immutable historical artifacts of the `box-snapshot-20260818` provenance
-> derivation. They describe a **prior live hub** evidence snapshot and are
-> **not** the current product baseline. Their embedded hashes, sizes, and
-> claims are preserved exactly as derived and are **not** falsified or
-> rewritten by the current product integration.
+> The JSON records in this directory are the immutable
+> `box-snapshot-20260818` provenance derivation. They describe the **live
+> hub** evidence snapshot. **Those live identities are product truth.**
+> Embedded hashes, sizes, and claims are preserved exactly as derived.
 >
-> Current product truth lives in:
+> Current product build flow and the corrected integration ledger:
 >
 > - [docs/BUILD.md](../../docs/BUILD.md)
 > - [docs/integration/main-product-20260819.md](../../docs/integration/main-product-20260819.md)
@@ -23,8 +21,6 @@
 | `public-safety-review.json` | sanitized durable record of the completed public-safety review |
 | `staging-contract.json` | machine-readable historical staging contract |
 
-The historical webui digest recorded here (`c400173b…`, 906872 bytes) and the
-stale live MANIFEST md5s (`39793b19…` / `6f05d649…`) are **historical** values
-and are **not** the final product artifact identity. The final product webui is
-`7bcf00bdcc98ded1795851ea72864f434e4e15d376a95dc7bedc70d34902b2a2` (778408
-bytes); see `docs/BUILD.md`.
+The live webui digest recorded here (`c400173b…`, 906872 bytes, md5
+`6f05d649…`) **is** the product artifact identity. The later 778408-byte /
+`7bcf00bd…` Recovery rebuild is not the product. See `docs/BUILD.md`.

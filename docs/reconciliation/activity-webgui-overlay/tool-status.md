@@ -1,9 +1,8 @@
 # Tool Status — activity-webgui overlay
 
-> **HISTORICAL / NOT CURRENT MAIN.** This is a point-in-time record of the
-> source-only `activity-webgui` overlay worktree (HEAD `391e10e…`). It is
-> **not** the current product baseline. The current product build flow and
-> integration ledger are in `docs/BUILD.md` and
+> Point-in-time record of the source-only `activity-webgui` overlay worktree
+> (HEAD `391e10e…`). Live box binary identities remain product truth. The
+> current product build flow is in `docs/BUILD.md` and
 > `docs/integration/main-product-20260819.md`.
 
 Status of the materialized source-only overlay tools.  No box access, no

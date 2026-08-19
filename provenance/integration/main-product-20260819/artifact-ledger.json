@@ -53,9 +53,9 @@
     },
     {
       "name": "codex_webui",
-      "size": 778408,
-      "md5": "7c6b0daa3df6677d23d26777ae9ed485",
-      "sha256": "7bcf00bdcc98ded1795851ea72864f434e4e15d376a95dc7bedc70d34902b2a2",
+      "size": 906872,
+      "md5": "6f05d6496067141fe13c1408224a42af",
+      "sha256": "c400173bb42f735734c522556c69f6c80f0604949413eb974c7b361b9e4ac11a",
       "build_status": "EXACT_SOURCE_REPRODUCIBLE",
       "toolchain": "Homebrew Zig 0.16.0 (clang 21.1.8)"
     },

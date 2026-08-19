@@ -1,10 +1,10 @@
 # Box Snapshot 2026-08-18 — Provenance Derivation Ledger
 
-> **HISTORICAL / NOT CURRENT MAIN.** This ledger reconciles the historical
-> `box-snapshot-20260818` evidence snapshot of a **prior live hub**. It is
-> **not** the current product baseline and must not be read as final product
-> truth. The current product build flow and artifact identities are in
-> `docs/BUILD.md` and `docs/integration/main-product-20260819.md`.
+> This ledger reconciles the `box-snapshot-20260818` evidence snapshot of the
+> **live hub**. Those live binary identities are product truth. The current
+> product build flow is in `docs/BUILD.md` and
+> `docs/integration/main-product-20260819.md`. The later 778408-byte Recovery
+> webui is not the product.
 
 Status: **security-verifier and Oracle Gate 1 completed — Phase 1 passed;
 Phase 2 provenance remediation applied** (pinned baseline ancestry,
