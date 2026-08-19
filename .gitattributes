@@ -14,3 +14,6 @@ payload/bin/MANIFEST.txt text eol=lf
 
 payload/bin/codex_* binary
 payload/bin/dropbearmulti binary
+
+# Preserve the tag-pinned upstream license bytes, including two trailing spaces.
+third_party/dropbear-2025.89/LICENSE -whitespace

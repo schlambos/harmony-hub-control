@@ -1,0 +1,738 @@
+{
+  "aggregate_bytes": 6746958,
+  "base_branch": "reconcile/box-snapshot-20260818-overlay",
+  "base_commit": "391e10e663ced493d1a1dff0afa38530812f32a1",
+  "binary_scan": {
+    "jpeg": 1,
+    "png": 9,
+    "text": 103
+  },
+  "created_count": 113,
+  "handoff_artifact_count": 5,
+  "invariants": {
+    "active_unchanged": "391e10e663ced493d1a1dff0afa38530812f32a1",
+    "no_box_access": true,
+    "no_commit": true,
+    "no_git_add": true,
+    "no_network": true,
+    "no_push": true,
+    "recovery_unchanged": true,
+    "source_unchanged": "0828c08a61afd07d60b0504281e58423e186e81d"
+  },
+  "max_single_bytes": 639006,
+  "max_single_path": "docs/screenshots/control.png",
+  "no_elf_mach_o_pe": true,
+  "per_path": [
+    {
+      "mode": "100644",
+      "path": ".dockerignore",
+      "size": 239,
+      "target_sha256": "165379740cbaa6a307cb67f7f70ff3fe489762eed677c30801f76c615326ce71"
+    },
+    {
+      "mode": "100644",
+      "path": ".env.example",
+      "size": 636,
+      "target_sha256": "f6e9a5f28c9a44f1fb9ea209a82744881cb7fa459213ff0d3a66dccdceadae9b"
+    },
+    {
+      "mode": "100644",
+      "path": "DESIGN.md",
+      "size": 10063,
+      "target_sha256": "ea0b829f14f80618e4486e21b7e55edfcf71c61b1290f0a5395eb7ba049368ae"
+    },
+    {
+      "mode": "100644",
+      "path": "Dockerfile",
+      "size": 1960,
+      "target_sha256": "7e7a902ccd3bb6847019f8ce7415ed68fa2262de2f70c756909f368503ebd671"
+    },
+    {
+      "mode": "100644",
+      "path": "TO_DO.md",
+      "size": 10723,
+      "target_sha256": "cc2bd73dc7bbecf3393a91d6a327947f13a3acce6de5109fb954e407c0dec10a"
+    },
+    {
+      "mode": "100644",
+      "path": "UNRAID.md",
+      "size": 7811,
+      "target_sha256": "a5e377467dc8d722c24d6eca7ce2815abc6ff3a8e5d42a024d2e78ec4ccf8421"
+    },
+    {
+      "mode": "100644",
+      "path": "UPSTREAM_REVISION",
+      "size": 41,
+      "target_sha256": "9f84f302187fa254f54ff7ca8a52d4b3a53df0acaaca67d97b1b032a9a7e7a96"
+    },
+    {
+      "mode": "100644",
+      "path": "compose.yaml",
+      "size": 1446,
+      "target_sha256": "3ff4a5b976f47fe2be85626cc97acc0c681bb5fbe6be8e5f0bc108f80c86ef29"
+    },
+    {
+      "mode": "100644",
+      "path": "docker/manager.py",
+      "size": 17668,
+      "target_sha256": "266804801320ea2cafcfb7d2a269e074babcc8c2383aab9175d918b971301a9b"
+    },
+    {
+      "mode": "100644",
+      "path": "docker/tests/test_manager.py",
+      "size": 6812,
+      "target_sha256": "d2f712b68be05f40989a0ad7f7c4858ee1f4514ce6c28850eb0e31899438f733"
+    },
+    {
+      "mode": "100644",
+      "path": "docs/FOOTPRINT_AUDIT.md",
+      "size": 18157,
+      "target_sha256": "76627d626026515724fd83c9f690868adf308a8ec40bcb65cebac6de06f25b10"
+    },
+    {
+      "mode": "100644",
+      "path": "docs/FRONTEND_REDESIGN_HANDOFF.md",
+      "size": 11886,
+      "target_sha256": "fb8ac73a583415afd89fa4275c94a2ab7adb08d23a1ad1829b312682ee9ced05"
+    },
+    {
+      "mode": "100644",
+      "path": "docs/FULL_FEATURE_ANALYSIS.md",
+      "size": 71065,
+      "target_sha256": "bef87e7355be34a85c9685755946aaa1a82c757caedcfa6247044c21784640cc"
+    },
+    {
+      "mode": "100644",
+      "path": "docs/PRODUCTION_PUSH_READINESS.md",
+      "size": 17915,
+      "target_sha256": "715a3cb403b949d87fed1a352f8eba2e26e4d78b6e4da3dffff22e6b1a542435"
+    },
+    {
+      "mode": "100644",
+      "path": "docs/SESSION_HANDOFF.md",
+      "size": 26835,
+      "target_sha256": "eddce67b2dcbe529e73926bbb2aeaa7339a0c5668912c4b624bb33c841fb7b9d"
+    },
+    {
+      "mode": "100644",
+      "path": "docs/screenshots/activities.png",
+      "size": 459447,
+      "target_sha256": "3472f51df7f4c607d0d776b667ffee460a8b058efae657404b27c3a3070204f3"
+    },
+    {
+      "mode": "100644",
+      "path": "docs/screenshots/backup.png",
+      "size": 518704,
+      "target_sha256": "12d665490a43fa8315dc6e23a5df85ec51548939aa348ba5634afd5640304047"
+    },
+    {
+      "mode": "100644",
+      "path": "docs/screenshots/bluetooth.png",
+      "size": 505281,
+      "target_sha256": "eb76e4899591ee4e7631b7146066ddecfb8351a288b3d51ee9a17190eb880745"
+    },
+    {
+      "mode": "100644",
+      "path": "docs/screenshots/control.png",
+      "size": 639006,
+      "target_sha256": "cb28d26d21b3a2791a47e463e50ac224bbc4057bff6d590b1db3fa6bd41fffa3"
+    },
+    {
+      "mode": "100644",
+      "path": "docs/screenshots/home.png",
+      "size": 463844,
+      "target_sha256": "53fec51dccc61ad61af9a62490cf2bba64466e026566cb99d1c62b118448b47c"
+    },
+    {
+      "mode": "100644",
+      "path": "docs/screenshots/ir.png",
+      "size": 504384,
+      "target_sha256": "3cc50ddd2f74234594b04fdd60aa152528bbf09f691491517a2e6c22c8dfb410"
+    },
+    {
+      "mode": "100644",
+      "path": "docs/screenshots/mqtt.png",
+      "size": 502705,
+      "target_sha256": "0265ea399463f77aa7f8c0e773e89263d9f9948fd3ff8ac1bc1d42ff9bad18ab"
+    },
+    {
+      "mode": "100644",
+      "path": "docs/screenshots/system.png",
+      "size": 474366,
+      "target_sha256": "5b6882528751b8327e2059d69a96d7a919b46753efad8bec66f0b04b25f33072"
+    },
+    {
+      "mode": "100644",
+      "path": "docs/screenshots/wizard.png",
+      "size": 474070,
+      "target_sha256": "eec4fa6bbd073ffcd8dd6f75e546442ae07862b58735802c7e4646a549cc657e"
+    },
+    {
+      "mode": "100644",
+      "path": "tools/activity_graph_repair.mjs",
+      "size": 50632,
+      "target_sha256": "d2f1ea0e6b21536d2d2b8b498dd10422bb48e56f9eaa88534938e89a29e29b7b"
+    },
+    {
+      "mode": "100755",
+      "path": "tools/activity_json_semantic_smoke.sh",
+      "size": 466,
+      "target_sha256": "1162d23b2d9a7e3e709717ab2a5ce9d0032e1c8f10293fe3a1b703c022688d60"
+    },
+    {
+      "mode": "100755",
+      "path": "tools/activity_offline_guard.sh",
+      "size": 2223,
+      "target_sha256": "9f6adfe1eb41ce1c210fd386a4756136d5585a75ab7dd8be65d379e906a4781e"
+    },
+    {
+      "mode": "100644",
+      "path": "tools/activity_ui_model_smoke.mjs",
+      "size": 15590,
+      "target_sha256": "f69f5e967778bf6851c86164693c982a6d1c7f7fbe6248d24128b1c4c18514dc"
+    },
+    {
+      "mode": "100644",
+      "path": "tools/bluetooth_device_bridge.mjs",
+      "size": 15631,
+      "target_sha256": "5010ed5df12903b9857aaefaf1b7d72d8dd2ae8aa09b8f5655b8fb3c9a6f106d"
+    },
+    {
+      "mode": "100755",
+      "path": "tools/bluetooth_hid_smoke.sh",
+      "size": 2710,
+      "target_sha256": "dfc78a3835bc4a8f024b2d140dba225363ebe5ca80f9d62713ee770ed7874795"
+    },
+    {
+      "mode": "100644",
+      "path": "tools/embed_activity_ui.sh",
+      "size": 1159,
+      "target_sha256": "d32362b06d64e053fca228d4ef1f372617a549a1bb7cef38eb46e453f09221d9"
+    },
+    {
+      "mode": "100644",
+      "path": "tools/harmony_shell_smoke.mjs",
+      "size": 48061,
+      "target_sha256": "1fa04d6c71447e2d2b2d102e82a505395e130456f627e2ddd5e53644aa28efe7"
+    },
+    {
+      "mode": "100644",
+      "path": "tools/hbus_notification_smoke.py",
+      "size": 5707,
+      "target_sha256": "fca3fd6e5d16e48307562d9bc3ed8446a6d43b68fbf3b38ba9f43421f1685977"
+    },
+    {
+      "mode": "100644",
+      "path": "tools/hub-emu/README.md",
+      "size": 11711,
+      "target_sha256": "a3ab87bc3164efabbe1de747ecf072779acdb5bc77972afc6197affdc4918680"
+    },
+    {
+      "mode": "100644",
+      "path": "tools/hub-emu/dev-proxy.mjs",
+      "size": 5846,
+      "target_sha256": "a204c229c5c5e3bda1834b4e7e60bef6c2fdb593907dad903135283cd1eeaa33"
+    },
+    {
+      "mode": "100644",
+      "path": "tools/hub-emu/docker/Dockerfile",
+      "size": 881,
+      "target_sha256": "c38a839e3172884c161e9b861283ddad88e413c2ac880daf889d80ec7bfe7843"
+    },
+    {
+      "mode": "100644",
+      "path": "tools/hub-emu/docker/entrypoint.sh",
+      "size": 3572,
+      "target_sha256": "91127cd7a96203202ae7d5ae0b9fe1461149551d090fcb2341b381a3bb0b4c1a"
+    },
+    {
+      "mode": "100644",
+      "path": "tools/hub-emu/engine-emu.py",
+      "size": 72320,
+      "target_sha256": "0ce2b26fb81f0e3b6ed53f1f9fbba4be227a66c8505ae97aeb21eca36d1811d5"
+    },
+    {
+      "mode": "100644",
+      "path": "tools/hub-emu/make-seed.mjs",
+      "size": 1959,
+      "target_sha256": "a16d35e9e1e87d9d8219e22693fb14cc8232aa4657dc4d24eae7befb61af030a"
+    },
+    {
+      "mode": "100644",
+      "path": "tools/hub-emu/qa.mjs",
+      "size": 100977,
+      "target_sha256": "c51be879ca1166ad2a8b82d7a2a45bebc63dab28b2fbf1e062065446aa1452db"
+    },
+    {
+      "mode": "100755",
+      "path": "tools/hub-emu/run.sh",
+      "size": 2310,
+      "target_sha256": "2c93666375bf0e37e484e39e1fea65e2e6733785d6331eca29ea40d7d11e9d09"
+    },
+    {
+      "mode": "100644",
+      "path": "tools/hub-emu/seed/resources/ActivityList.json",
+      "size": 5777,
+      "target_sha256": "06bbee846998d9467f477368c8c96938227e27db711e77cfbc6850194c897e41"
+    },
+    {
+      "mode": "100644",
+      "path": "tools/hub-emu/seed/resources/AutomationConfig.json",
+      "size": 3,
+      "target_sha256": "ca3d163bab055381827226140568f3bef7eaac187cebd76878e0b63e9e442356"
+    },
+    {
+      "mode": "100644",
+      "path": "tools/hub-emu/seed/resources/DeviceList.json",
+      "size": 74446,
+      "target_sha256": "dbcd4742fe49701d6f46ec807700559239542578b46ea3f728cc272483bf7fbf"
+    },
+    {
+      "mode": "100644",
+      "path": "tools/hub-emu/seed/resources/FunctionList.json",
+      "size": 20,
+      "target_sha256": "dd2fa0b081789c80766e095e81ae505904e0648a3f2706c71fd60d91a2348368"
+    },
+    {
+      "mode": "100644",
+      "path": "tools/hub-emu/seed/resources/MapList.json",
+      "size": 334328,
+      "target_sha256": "48a52be5910da5b637316004f72658fd7c91f5f526c52472651df0c4b5849bb7"
+    },
+    {
+      "mode": "100644",
+      "path": "tools/hub-emu/seed/resources/ProtocolList.json",
+      "size": 17,
+      "target_sha256": "6d73006ead918d0ed92d228e6ad88412a7d62f22078080bf367cda1e7ead7f89"
+    },
+    {
+      "mode": "100644",
+      "path": "tools/hub-emu/seed/settings/bt-devices.json",
+      "size": 27,
+      "target_sha256": "b99e53e60a30935cece31213691cd444044fcbf3a7e64fc99b45e82fe9f1144f"
+    },
+    {
+      "mode": "100644",
+      "path": "tools/hub-emu/seed/settings/cloud_blocker.conf",
+      "size": 2,
+      "target_sha256": "4355a46b19d348dc2f57c046f8ef63d4538ebb936000f3c9ee954a27460dd865"
+    },
+    {
+      "mode": "100644",
+      "path": "tools/hub-emu/seed/settings/mqtt-config.json",
+      "size": 317,
+      "target_sha256": "fc13fea70bc906fc2bc7f9aacaa7777de00d376eb29bf914ff62568d1186d727"
+    },
+    {
+      "mode": "100644",
+      "path": "tools/hub-emu/seed/settings/version",
+      "size": 9,
+      "target_sha256": "1cdfda0d03cb2e941f4664b7ea2b95727e859b4f767144336d3e9604e62a54b3"
+    },
+    {
+      "mode": "100644",
+      "path": "tools/hub-emu/seed/settings/wpa_supplicant.conf",
+      "size": 137,
+      "target_sha256": "34aabbba1af3e95344d4c01d92f63570df711225b8bc33f40991f116f3080473"
+    },
+    {
+      "mode": "100755",
+      "path": "tools/hub-emu/stubs/codex_hal_ltcp",
+      "size": 703,
+      "target_sha256": "d9b28283ff4db971ed945167ba57bfe672808696398e03b7b1decced67ac10d7"
+    },
+    {
+      "mode": "100755",
+      "path": "tools/hub-emu/stubs/codex_hbus",
+      "size": 207,
+      "target_sha256": "dcf44d6bf86e4c09b72865180e67df47e7c9aae2453eecb1dd4310ec9ae14ec9"
+    },
+    {
+      "mode": "100755",
+      "path": "tools/hub-emu/stubs/hciconfig",
+      "size": 94,
+      "target_sha256": "8fefa72c490f0bf1cbcd45876123769020234af6e78d5e9e68a345a9a0761067"
+    },
+    {
+      "mode": "100755",
+      "path": "tools/hub-emu/stubs/hcitool",
+      "size": 735,
+      "target_sha256": "e4a3294ee8fa3cdeca80bbab4cb0be10dd36358e4f064612fea712f56cb0bcea"
+    },
+    {
+      "mode": "100755",
+      "path": "tools/hub-emu/stubs/logread",
+      "size": 69,
+      "target_sha256": "d27973c3a0b73f83df2b2c1ee8a40aedddeca62510a2e3910164edd1211ab2d3"
+    },
+    {
+      "mode": "100755",
+      "path": "tools/hub-emu/stubs/ps",
+      "size": 261,
+      "target_sha256": "36a90626e1a48fa487738e8ce2aa0bf35121aa6c761258d295f0cabc8857c55c"
+    },
+    {
+      "mode": "100644",
+      "path": "tools/hub-emu/stubs/reboot",
+      "size": 490,
+      "target_sha256": "092c0fe131dc07360bb4e18cc59ff3efba6de017ac380c7adef6a4c1230487d4"
+    },
+    {
+      "mode": "100755",
+      "path": "tools/installer_contract_smoke.py",
+      "size": 60795,
+      "target_sha256": "6e785b63475962b11e2d8ebbbd1536dae25834cecc2d87364c144dd194b5227c"
+    },
+    {
+      "mode": "100644",
+      "path": "tools/package_harmony_shell.sh",
+      "size": 7670,
+      "target_sha256": "37da094d28e2143558c118655195a2efe86eac2e056789176f10bc5b2918873e"
+    },
+    {
+      "mode": "100644",
+      "path": "tools/payload_bin_inventory.mjs",
+      "size": 8190,
+      "target_sha256": "de2d143c608dd718587ecb7a52635f6a962ddfc2b869d8246e14318faf342154"
+    },
+    {
+      "mode": "100644",
+      "path": "tools/shipped_copy_hygiene.mjs",
+      "size": 7584,
+      "target_sha256": "544a8d808f09c7c24d45b2080d60112deeda50d8de2f15d703e3fbc3332c4a2c"
+    },
+    {
+      "mode": "100644",
+      "path": "tools/webui-sim/README.md",
+      "size": 4137,
+      "target_sha256": "d25e5f6b2febffdce79435053a0b12607fae5ce8174eba875b6686b320984014"
+    },
+    {
+      "mode": "100644",
+      "path": "tools/webui-sim/fixtures/activity-config.json",
+      "size": 414707,
+      "target_sha256": "ecf25f7fbf941d210c20debaab8a7d66bd5a97c0906dcf58c55922a46a257e9d"
+    },
+    {
+      "mode": "100644",
+      "path": "tools/webui-sim/public/assets/remote-skin.jpg",
+      "size": 59892,
+      "target_sha256": "ae2359639f9a0fc45d395429297c47b46543a24db9b0c809dcd04c4a2ede7fb4"
+    },
+    {
+      "mode": "100644",
+      "path": "tools/webui-sim/public/css/activity-overrides.css",
+      "size": 9014,
+      "target_sha256": "ecd2d1cd324579ab2cb262180019ea1af9d734fbe54d9eb7db7389719728d40b"
+    },
+    {
+      "mode": "100644",
+      "path": "tools/webui-sim/public/css/app.css",
+      "size": 29913,
+      "target_sha256": "176e1226a09a396912a06359ed7756302222df0cdf5edc09b9a8c22990c05bd8"
+    },
+    {
+      "mode": "100644",
+      "path": "tools/webui-sim/public/css/remote.css",
+      "size": 13010,
+      "target_sha256": "3486e12649676a1933e04d7da73a511fd0b8671a45dc5fbd59aabbedd1de5c0e"
+    },
+    {
+      "mode": "100644",
+      "path": "tools/webui-sim/public/css/tokens.css",
+      "size": 4530,
+      "target_sha256": "143803d68899f51cf3479eb64f1512c5d98c81631ff82572107d5d46ad2a42b9"
+    },
+    {
+      "mode": "100644",
+      "path": "tools/webui-sim/public/css/wizard.css",
+      "size": 6290,
+      "target_sha256": "2f39fbe3ab3cb6f168390fd17ff39d283d8641689d3111ceefc2c9b7211ad24f"
+    },
+    {
+      "mode": "100644",
+      "path": "tools/webui-sim/public/index.html",
+      "size": 10082,
+      "target_sha256": "7203051be05cf361c10079af1ab7b5243977660ef13da9cc283ad65094d7f277"
+    },
+    {
+      "mode": "100644",
+      "path": "tools/webui-sim/public/js/api.js",
+      "size": 6578,
+      "target_sha256": "f9a3b72bccf6161c6751fb8aefb5beb52dd1af114f286fc54894410ddf08d735"
+    },
+    {
+      "mode": "100644",
+      "path": "tools/webui-sim/public/js/app.js",
+      "size": 4020,
+      "target_sha256": "5c1efba2742579bbb9817fc6f27ad007b31fe5630e79366c23f8fffed6188363"
+    },
+    {
+      "mode": "100644",
+      "path": "tools/webui-sim/public/js/ir-library.js",
+      "size": 18582,
+      "target_sha256": "a1bb014f0cbf7a9b65c750999dda627bca21293f6c46b0a9bf0086d8f53b7044"
+    },
+    {
+      "mode": "100644",
+      "path": "tools/webui-sim/public/js/remote-layout.js",
+      "size": 6636,
+      "target_sha256": "1c447dc074d7c75aacea5b1ab3dd543a5f91ba8746b3285d96d11e5a34cf55f4"
+    },
+    {
+      "mode": "100644",
+      "path": "tools/webui-sim/public/js/setup-kit.js",
+      "size": 5306,
+      "target_sha256": "1d8b0d05eae163d313d330be437e03a3d128e666920e2dfab92e7c9323f52245"
+    },
+    {
+      "mode": "100644",
+      "path": "tools/webui-sim/public/js/setup-parsers.js",
+      "size": 3088,
+      "target_sha256": "c365b4a79afd643ddd2bd6e632be565ea942106ed4bf900edc790cec524eb0fa"
+    },
+    {
+      "mode": "100644",
+      "path": "tools/webui-sim/public/js/state.js",
+      "size": 5547,
+      "target_sha256": "55e3e0daef6d328a571c65eec17c74be4dc5705ddf65f9969fd7c2bcf02adac3"
+    },
+    {
+      "mode": "100644",
+      "path": "tools/webui-sim/public/js/views/activities-home.js",
+      "size": 7049,
+      "target_sha256": "f1904743ef2522792cb5d27c71c5abe4af42530e5f2341ea3f53ac20f15317d5"
+    },
+    {
+      "mode": "100644",
+      "path": "tools/webui-sim/public/js/views/activities.js",
+      "size": 10176,
+      "target_sha256": "a5c44e6f614008d197eadd558ef9d79925587cd16b2d82802ddc32dce369361d"
+    },
+    {
+      "mode": "100644",
+      "path": "tools/webui-sim/public/js/views/backup-model.js",
+      "size": 11655,
+      "target_sha256": "3b6ac717de9e7a805e156081ee0e8e71a1dd6800ae93916e8036b0c5774a2aa3"
+    },
+    {
+      "mode": "100644",
+      "path": "tools/webui-sim/public/js/views/backup.js",
+      "size": 14856,
+      "target_sha256": "469fbe5a6e050395f6a42872c47387519e388de7b4c3d38c90c03a70e7d22a1b"
+    },
+    {
+      "mode": "100644",
+      "path": "tools/webui-sim/public/js/views/bluetooth-model.js",
+      "size": 9693,
+      "target_sha256": "934f547fe0a83523bd9166322052d52b1f6e432cd97972d9d6493353a255c02f"
+    },
+    {
+      "mode": "100644",
+      "path": "tools/webui-sim/public/js/views/bluetooth.js",
+      "size": 28892,
+      "target_sha256": "c4a8b3b8ef198a2c6489e99504f2d80b703a7c4dce3f34366330dd85359170ed"
+    },
+    {
+      "mode": "100644",
+      "path": "tools/webui-sim/public/js/views/control-panel-state.js",
+      "size": 455,
+      "target_sha256": "ac48f064d39f97f42ef852ec98272d3b5e8962ebac88aba4efeba2391f2f1ce3"
+    },
+    {
+      "mode": "100644",
+      "path": "tools/webui-sim/public/js/views/control-power.js",
+      "size": 2641,
+      "target_sha256": "9979099a6941baf96c0cf3a1a47695d9d57a8a6bc7bccfcb8930a31a6eb78dd9"
+    },
+    {
+      "mode": "100644",
+      "path": "tools/webui-sim/public/js/views/control.js",
+      "size": 29110,
+      "target_sha256": "55a33bd203dda8e0c621ca2bb43bd0184fc4838a66b27c164bffdfa83e70a4b1"
+    },
+    {
+      "mode": "100644",
+      "path": "tools/webui-sim/public/js/views/dashboard.js",
+      "size": 10118,
+      "target_sha256": "7f53e539fce87ec27e1eff4354d871116a7168032d151c1ee146679b3f00d5b5"
+    },
+    {
+      "mode": "100644",
+      "path": "tools/webui-sim/public/js/views/ir-model.js",
+      "size": 13346,
+      "target_sha256": "f214d34b4de66596da179e422661aaff9a88f540fabed50ea4de3f3e3d605404"
+    },
+    {
+      "mode": "100644",
+      "path": "tools/webui-sim/public/js/views/ir.js",
+      "size": 56970,
+      "target_sha256": "7e1cd9bd1ba7f481c1ca23afe3951d08646f734a3197262a248b6ed69342ff77"
+    },
+    {
+      "mode": "100644",
+      "path": "tools/webui-sim/public/js/views/mqtt.js",
+      "size": 17908,
+      "target_sha256": "5fe697c5d9aaa68900b59e58eb1a1b96cdd691397993c33ed226a30076ab16e8"
+    },
+    {
+      "mode": "100644",
+      "path": "tools/webui-sim/public/js/views/system-model.js",
+      "size": 8523,
+      "target_sha256": "04de4c10a67cb42d9e14888f6c1c49801819c3f91fb4cca1463ea927b1bd52d5"
+    },
+    {
+      "mode": "100644",
+      "path": "tools/webui-sim/public/js/views/system.js",
+      "size": 22901,
+      "target_sha256": "d5142ae23963ef8700bc9f8b5d3e878e9e6883edf330fcee49ea712fd333db36"
+    },
+    {
+      "mode": "100644",
+      "path": "tools/webui-sim/public/js/views/wifi.js",
+      "size": 12888,
+      "target_sha256": "7ded8c687088e8e68e6ed1675e49ccd259fd9d991a01c3a95c95c412c3c676a7"
+    },
+    {
+      "mode": "100644",
+      "path": "tools/webui-sim/public/js/views/wizard.js",
+      "size": 25163,
+      "target_sha256": "9c7e3836cb463b8e806297ac229aa778bfa580da66096e12260961664fa88dfd"
+    },
+    {
+      "mode": "100644",
+      "path": "tools/webui-sim/public/js/wizard-model.js",
+      "size": 27362,
+      "target_sha256": "7bb87c129592c866b888e9fc7136bcdd882f9f2f2560a22145ec6ebdb222a411"
+    },
+    {
+      "mode": "100644",
+      "path": "tools/webui-sim/public/vendor/activity-ui.css",
+      "size": 10432,
+      "target_sha256": "796b71209593abf513f2cc7889a5ec7f62d256085314e7d534b704b2b87b9329"
+    },
+    {
+      "mode": "100644",
+      "path": "tools/webui-sim/public/vendor/activity-ui.js",
+      "size": 88711,
+      "target_sha256": "fd46dfdc04495b432f9ca0cce9531af26a29007785bdcf077e727a4fd707e1f7"
+    },
+    {
+      "mode": "100644",
+      "path": "tools/webui-sim/server.mjs",
+      "size": 22934,
+      "target_sha256": "02937dc0e248b2eaace303f3977b0772459e2525d285fce3ec5fc4177189e65f"
+    },
+    {
+      "mode": "100644",
+      "path": "tools/webui-sim/test/backup-model.test.mjs",
+      "size": 13088,
+      "target_sha256": "fee8c037a5e09745372e6b792a498a41d042b844b68ce9c1747c0204e869a44b"
+    },
+    {
+      "mode": "100644",
+      "path": "tools/webui-sim/test/bluetooth-model.test.mjs",
+      "size": 9420,
+      "target_sha256": "32cfbf30cccd537ef04db5f727b38f5522dac32f240edac55d0c45c3e612bc50"
+    },
+    {
+      "mode": "100644",
+      "path": "tools/webui-sim/test/control-panel-state.test.mjs",
+      "size": 2004,
+      "target_sha256": "4c044fee72cf09212e1c5eb89535a7af3f27be98114e69d4b428c008023f4781"
+    },
+    {
+      "mode": "100644",
+      "path": "tools/webui-sim/test/control-power.test.mjs",
+      "size": 3851,
+      "target_sha256": "a7f17e6cc92b3e87a101f328a69f64a35908663adf1bd4559e4d8e51ebadcdbc"
+    },
+    {
+      "mode": "100644",
+      "path": "tools/webui-sim/test/ir-library.test.mjs",
+      "size": 19488,
+      "target_sha256": "9cf7d9866439ad2c52bd1540b37d38778cd2453168e472dbbc396d2a253cd793"
+    },
+    {
+      "mode": "100644",
+      "path": "tools/webui-sim/test/ir-model.test.mjs",
+      "size": 15022,
+      "target_sha256": "740662d784f92002b6d9b141583e08652522c4dbfe1703449c6467e9aa3135e0"
+    },
+    {
+      "mode": "100644",
+      "path": "tools/webui-sim/test/payload-bin-inventory.test.mjs",
+      "size": 1241,
+      "target_sha256": "9c2d2a659f1d03bb4df508b5cf0a129888ef6a800dac7d2952ab9b2388312bc1"
+    },
+    {
+      "mode": "100644",
+      "path": "tools/webui-sim/test/setup-kit.test.mjs",
+      "size": 3409,
+      "target_sha256": "389bdd93037fdf331c447d9a606c3b287a812345aa88f11a9280752f637d4d85"
+    },
+    {
+      "mode": "100644",
+      "path": "tools/webui-sim/test/setup-parsers.test.mjs",
+      "size": 5314,
+      "target_sha256": "e9f1f61a6e3a9518604c4fffad4da68153a4feffd1dd4de373450f23730c7787"
+    },
+    {
+      "mode": "100644",
+      "path": "tools/webui-sim/test/system-model.test.mjs",
+      "size": 9074,
+      "target_sha256": "411caa0f99c423c644ae8c7bde44908c77005b41938702907ac10cf9d6da3c80"
+    },
+    {
+      "mode": "100644",
+      "path": "tools/webui-sim/test/wizard-button-defaults.test.mjs",
+      "size": 11740,
+      "target_sha256": "6474cb2ba4d95eed5e4534e4b6c5d18e96165ea130f913d7aa19013185505e99"
+    },
+    {
+      "mode": "100644",
+      "path": "tools/webui-sim/test/wizard-model.test.mjs",
+      "size": 24658,
+      "target_sha256": "1c8a7ca20e7f34a25d16f53954ce19c4ab5ba2a61f782fa38227810017621381"
+    },
+    {
+      "mode": "100644",
+      "path": "unraid/harmony-hub-control.xml",
+      "size": 6834,
+      "target_sha256": "561cef225b3611c50a6f65952edff3d8f23818d548540e8df3d19ba2d0540f4a"
+    }
+  ],
+  "protected_equality_verified": true,
+  "readme_exception": {
+    "base_sha256": "365f6c7d264cce3e2d9b0795f8cf3f1dc75f504e1dff500a14904e57e71edd2a",
+    "mode": "100644",
+    "path": "README.md",
+    "target_sha256": "5fafd4639378b91aebb5374af4ca2d3afc3e58d8a742015d8d738d0ef79d25c4",
+    "target_size": 13945
+  },
+  "readme_exception_count": 1,
+  "schema": "activity-webgui-overlay/materialization-report/1",
+  "skipped_collision_count": 0,
+  "skipped_missing_count": 0,
+  "source_branch": "agent/activity-webgui",
+  "source_commit": "0828c08a61afd07d60b0504281e58423e186e81d",
+  "source_file_count": 113,
+  "sanitization": {
+    "count": 9,
+    "categories": {
+      "ssh_key_filename": 2,
+      "hub_id": 6,
+      "hostname": 1,
+      "repo_path": 1,
+      "bun_binary_path": 1
+    },
+    "note": "category-only; sensitive original values not repeated"
+  },
+  "normalization": {
+    "count": 2,
+    "categories": {
+      "markdown_trailing_whitespace": 2
+    },
+    "note": "deterministic formatting normalization of 0828-inherited Markdown trailing whitespace; source blob/commit identity retained"
+  }
+}

@@ -162,7 +162,7 @@ zig cc -target mips-linux-musleabi -Os -static -s -I payload/source \
 md5 payload/bin/codex_webui       # MUST be 08a68298159fa5137b510b28af984789
 wc -c payload/bin/codex_webui     # MUST be 906872
 # 3. Keep a durable copy of the CURRENT hub binary as the rollback artifact:
-ssh -i ~/.ssh/harmony_owner_ed25519 root@192.168.0.123 \
+ssh -i ~/.ssh/harmony_owner_<key-name> root@192.168.0.123 \
   'cat /data/codex/bin/codex_webui' > /tmp/codex_webui.rollback-39793b19
 md5 /tmp/codex_webui.rollback-39793b19   # MUST be 39793b19…
 ```

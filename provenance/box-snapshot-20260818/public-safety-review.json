@@ -1,0 +1,112 @@
+{
+  "completed": "2026-08-18",
+  "entry_count": 23,
+  "limitations": [
+    "PUBLIC_SAFETY_PASS is a publication-safety verdict only; it makes no claim of source reproducibility or build verification",
+    "the safety pass does not authorize copying evidence binaries or private objects into payload/"
+  ],
+  "notice": "Sanitized durable record of the completed independent public-safety review.  Categories and verdicts only: no MAC values, credentials, host/owner identity, local paths, or object bytes are reproduced.",
+  "overall_status": "PUBLIC_SAFETY_PASS",
+  "path_verdicts": [
+    {
+      "path": "/cache/bin/bthid_keyboard",
+      "verdict": "SAFE"
+    },
+    {
+      "path": "/data/codex/bin/MANIFEST.txt",
+      "verdict": "SAFE"
+    },
+    {
+      "path": "/data/codex/bin/codex_bt_pair_agent",
+      "verdict": "SAFE"
+    },
+    {
+      "finding_basis": "concrete Bluetooth MAC addresses in the candidate source are self-test fixtures documented in docs/SESSION_HANDOFF.md (bthid section, lines ~405-407); the owner previously elected to publish as-is; this record captures the category only, not the values",
+      "finding_category": "SELF_TEST_FIXTURE_MACS_DOCUMENTED_OWNER_ELECTED_PUBLISH_AS_IS",
+      "path": "/data/codex/bin/codex_bthid_keyboard",
+      "verdict": "SAFE"
+    },
+    {
+      "path": "/data/codex/bin/codex_dhcpd",
+      "verdict": "SAFE"
+    },
+    {
+      "path": "/data/codex/bin/codex_hal_ltcp",
+      "verdict": "SAFE"
+    },
+    {
+      "path": "/data/codex/bin/codex_hbus",
+      "verdict": "SAFE"
+    },
+    {
+      "path": "/data/codex/bin/codex_portal",
+      "verdict": "SAFE"
+    },
+    {
+      "path": "/data/codex/bin/codex_webui",
+      "verdict": "SAFE"
+    },
+    {
+      "path": "/data/codex/bin/dropbear",
+      "verdict": "SAFE"
+    },
+    {
+      "path": "/data/codex/bin/dropbearkey",
+      "verdict": "SAFE"
+    },
+    {
+      "path": "/data/codex/bin/dropbearmulti",
+      "verdict": "SAFE"
+    },
+    {
+      "path": "/data/codex/init.sh",
+      "verdict": "SAFE"
+    },
+    {
+      "path": "/data/codex/offline_egress_guard.sh",
+      "verdict": "SAFE"
+    },
+    {
+      "path": "/data/codex/recovery_ap.sh",
+      "verdict": "SAFE"
+    },
+    {
+      "path": "/etc/init.d/rcS.local",
+      "verdict": "SAFE"
+    },
+    {
+      "path": "/opt/luaworks/tasks/connectserver/netservicestarter.lua",
+      "scope": "live DIAG-variant source bytes reviewed; classified safe for publication; source provenance is RECONSTRUCTED_SOURCE_EXACT (reconciliation-branch working tree) and is tracked separately from the safety verdict",
+      "verdict": "PUBLIC_SOURCE_SAFE"
+    },
+    {
+      "path": "/pkg/codexactivity/codexactivity.lua",
+      "verdict": "SAFE"
+    },
+    {
+      "path": "/pkg/codexactivity/manifest.json",
+      "verdict": "SAFE"
+    },
+    {
+      "path": "/pkg/codexmqtt/codexmqtt.lua",
+      "verdict": "SAFE"
+    },
+    {
+      "path": "/pkg/codexmqtt/manifest.json",
+      "verdict": "SAFE"
+    },
+    {
+      "path": "/usr/sbin/dropbear",
+      "verdict": "SAFE"
+    },
+    {
+      "path": "/usr/sbin/dropbearkey",
+      "verdict": "SAFE"
+    }
+  ],
+  "reviewer": "independent public-safety review (identity withheld)",
+  "sanitized": true,
+  "schema": "public-safety-review/1",
+  "scope": "all allowlisted live paths and their digests from the authoritative evidence snapshot",
+  "snapshot_id": "box-snapshot-20260818"
+}

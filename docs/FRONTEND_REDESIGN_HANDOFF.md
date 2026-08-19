@@ -207,7 +207,7 @@ duplicated, hidden advanced fields preserved).
 
 ## 9. STATE AT HANDOFF
 
-- Repo: `/Users/matt/Documents/Codex/2026-07-26/ro/work/harmony-hub-control`,
+- Repo: `<repo-root>` (repository-relative `harmony-hub-control`),
   branch `agent/activity-webgui` @ 5d84cd9. **No commits, nothing pushed.**
   Uncommitted: `DESIGN.md`, `docs/SESSION_HANDOFF.md`,
   `docs/FRONTEND_REDESIGN_HANDOFF.md`, `tools/webui-sim/` (entire tree).

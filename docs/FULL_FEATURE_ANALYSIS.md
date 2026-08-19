@@ -1,9 +1,9 @@
 # Harmony Hub Control — Full Feature Analysis
 
-**Repository:** `schlambos/harmony-hub-control`  
-**Branch / HEAD:** `agent/activity-webgui` / `3de7b92da09323bdb569d9fcad1314c880bf6adb`  
-**Analysis date:** 2026-07-31  
-**Mode:** source and report analysis only; no hub mutation, prohibited endpoint use, commit, or push  
+**Repository:** `schlambos/harmony-hub-control`<br>
+**Branch / HEAD:** `agent/activity-webgui` / `3de7b92da09323bdb569d9fcad1314c880bf6adb`<br>
+**Analysis date:** 2026-07-31<br>
+**Mode:** source and report analysis only; no hub mutation, prohibited endpoint use, commit, or push<br>
 **Production artifact identity supplied by owner and independently matched to HEAD:** `codex_webui` md5 `6f05d6496067141fe13c1408224a42af`, 906,872 bytes
 
 ### Evidence notation

@@ -50,8 +50,8 @@ device bridge, HID smoke test).
 
 ```
 IP / WebGUI    192.168.0.123 : 8080
-SSH            root, key ~/.ssh/harmony_owner_ed25519
-Hub / HBus ID  15390924        hostname pimentoblue
+SSH            root, key ~/.ssh/harmony_owner_<key-name>
+Hub / HBus ID  12345678        hostname <hub-hostname>
 Firmware       4.15.600, Linux 2.6.31, 32-bit big-endian MIPS
 configVersion  576
 cloud_blocker  1

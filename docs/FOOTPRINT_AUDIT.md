@@ -1,9 +1,9 @@
 # Footprint audit — redesigned web UI vs hub budgets
 
 **Scope:** audit only. No production changes, no `payload/` edits, no live hub.
-**Date:** 2026-07-30  
-**Branch context:** `agent/activity-webgui` @ `5d84cd9` + uncommitted `tools/webui-sim` / `tools/hub-emu` work  
-**Method:** byte inventory + trial MIPS embeds (quarantined under `tools/hub-emu/build/footprint-trial/`) + static analysis of `codex_webui.c` + Playwright request/action census against hub-emu (`127.0.0.1:8787` → real MIPS `codex_webui`).  
+**Date:** 2026-07-30<br>
+**Branch context:** `agent/activity-webgui` @ `5d84cd9` + uncommitted `tools/webui-sim` / `tools/hub-emu` work<br>
+**Method:** byte inventory + trial MIPS embeds (quarantined under `tools/hub-emu/build/footprint-trial/`) + static analysis of `codex_webui.c` + Playwright request/action census against hub-emu (`127.0.0.1:8787` → real MIPS `codex_webui`).<br>
 **QA after measurements:** `node tools/hub-emu/qa.mjs` → **24/24**; `POST /reset` applied.
 
 Ground truth for hardware: `docs/SESSION_HANDOFF.md` §8.
@@ -119,7 +119,7 @@ Embedded assets live in `.rodata` of the static binary: FULL/DEDUP grow the mapp
 
 ### 1.5 Compute / requests — Playwright census (cache disabled, fresh context)
 
-**Hub process model:** each same-origin request → one `fork` + `handle_client`.  
+**Hub process model:** each same-origin request → one `fork` + `handle_client`.
 **HBus spawn:** `run_cmd` → `popen` → `/data/codex/bin/codex_hbus` for `getCurrentActivity`, `startactivity`, `holdaction` (and BT helpers on some IR paths).
 
 #### Cold load (hub-origin counts; fonts are external and die on real hub)
@@ -181,7 +181,7 @@ Calibration anchor (handoff): spawning `codex_hbus` **once per second** → load
 - Loose static files on flash **instead of** embed still consume the same compressed bytes and need a static handler the box lacks today.
 - CDN fonts contribute **0** flash but **break offline**; self-hosting latin adds ~75 KB.
 
-Not **fits** unconditionally: free space cannot be proven from the device.  
+Not **fits** unconditionally: free space cannot be proven from the device.
 Not **does-not-fit**: DEDUP_MIN/DEDUP growth is small relative to backup churn (~2 MB logical worst case).
 
 ### 2.2 MEMORY — **fits**
@@ -219,11 +219,11 @@ Estimated savings are vs a naive FULL embed of the entire `public/` tree into `c
 
 **Packaging recipe that the numbers support (recommendation only):**
 
-1. System fonts.  
-2. Embed or serve: `index` + minified shell CSS + minified shell JS bundle.  
-3. Reuse `/assets/activity-ui.*` for advanced editor.  
-4. One skin strategy (existing B64 inline or one JPEG route).  
-5. Stage binary via tmpfs; prune `resource-backups` before replace.  
+1. System fonts.
+2. Embed or serve: `index` + minified shell CSS + minified shell JS bundle.
+3. Reuse `/assets/activity-ui.*` for advanced editor.
+4. One skin strategy (existing B64 inline or one JPEG route).
+5. Stage binary via tmpfs; prune `resource-backups` before replace.
 6. Expect `codex_webui` ≈ **0.83–0.86 MB** raw (DEDUP_MIN/DEDUP class), **~290–296 KB** gz-proxy — not 0.92 MB FULL.
 
 ---

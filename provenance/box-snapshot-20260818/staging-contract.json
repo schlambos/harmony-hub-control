@@ -1,0 +1,174 @@
+{
+  "schema": "staging-contract/1",
+  "snapshot_id": "box-snapshot-20260818",
+  "canonical": false,
+  "notice": "NON-CANONICAL staging contract for box-snapshot-20260818: declares the required staging closure, the exact text/literal/symlink mappings, the allowed exact-build binaries, the current blockers, the no-fallback policy, and the output schema; derived from the sanitized public payload manifest and the reproducibility status record only",
+  "tool": {
+    "name": "build_staging",
+    "version": "1.0.0"
+  },
+  "inputs": {
+    "live_manifest": "provenance/box-snapshot-20260818/public-payload-manifest.json",
+    "reproducibility_status": "provenance/box-snapshot-20260818/reproducibility-status.json",
+    "repo_text_sources": "current harmony-hub-control working tree (repo-relative paths only)",
+    "build_output_dir": "caller-supplied directory of fresh source-built binaries (--build-output-dir); optional"
+  },
+  "required_closure": {
+    "entry_count": 22,
+    "policy": "every live entry of public-payload-manifest/1 except the excluded stale live MANIFEST.txt must be staged with exact bytes, size, mode, and symlink target verified against the live manifest, or reported as a blocker; a staging with any blocker is incomplete",
+    "paths": [
+      "/cache/bin/bthid_keyboard",
+      "/data/codex/bin/codex_bt_pair_agent",
+      "/data/codex/bin/codex_bthid_keyboard",
+      "/data/codex/bin/codex_dhcpd",
+      "/data/codex/bin/codex_hal_ltcp",
+      "/data/codex/bin/codex_hbus",
+      "/data/codex/bin/codex_portal",
+      "/data/codex/bin/codex_webui",
+      "/data/codex/bin/dropbear",
+      "/data/codex/bin/dropbearkey",
+      "/data/codex/bin/dropbearmulti",
+      "/data/codex/init.sh",
+      "/data/codex/offline_egress_guard.sh",
+      "/data/codex/recovery_ap.sh",
+      "/etc/init.d/rcS.local",
+      "/opt/luaworks/tasks/connectserver/netservicestarter.lua",
+      "/pkg/codexactivity/codexactivity.lua",
+      "/pkg/codexactivity/manifest.json",
+      "/pkg/codexmqtt/codexmqtt.lua",
+      "/pkg/codexmqtt/manifest.json",
+      "/usr/sbin/dropbear",
+      "/usr/sbin/dropbearkey"
+    ],
+    "excluded_live_paths": [
+      {
+        "path": "/data/codex/bin/MANIFEST.txt",
+        "reason_code": "LIVE_MANIFEST_STALE",
+        "detail": "the live listing is stale and incoherent (4 hash/size mismatches, 1 live binary missing from the listing); it is never staged; a fresh legacy MANIFEST.txt is generated only for a complete staging"
+      }
+    ]
+  },
+  "mappings": {
+    "text_sources": {
+      "/data/codex/init.sh": {"repo_path": "payload/scripts/init.sh"},
+      "/data/codex/offline_egress_guard.sh": {"repo_path": "payload/scripts/offline_egress_guard.sh"},
+      "/data/codex/recovery_ap.sh": {"repo_path": "payload/scripts/recovery_ap.sh"},
+      "/etc/init.d/rcS.local": {"repo_path": "payload/scripts/rcS.local"},
+      "/opt/luaworks/tasks/connectserver/netservicestarter.lua": {"repo_path": "payload/scripts/netservicestarter.lua"},
+      "/pkg/codexactivity/codexactivity.lua": {"repo_path": "payload/activity/codexactivity.lua"},
+      "/pkg/codexmqtt/codexmqtt.lua": {"repo_path": "payload/mqtt/codexmqtt.lua"},
+      "/usr/sbin/dropbear": {"repo_path": "payload/scripts/dropbear"},
+      "/usr/sbin/dropbearkey": {"repo_path": "payload/scripts/dropbearkey"}
+    },
+    "installer_literals": {
+      "/pkg/codexactivity/manifest.json": {"literal": "{\"plugin\":\"codexactivity\"}\n"},
+      "/pkg/codexmqtt/manifest.json": {"literal": "{\"plugin\":\"codexmqtt\"}\n"}
+    },
+    "symlinks": {
+      "/cache/bin/bthid_keyboard": {"target": "/data/codex/bin/codex_bthid_keyboard"},
+      "/data/codex/bin/dropbear": {"target": "dropbearmulti"},
+      "/data/codex/bin/dropbearkey": {"target": "dropbearmulti"}
+    },
+    "binaries": {
+      "/data/codex/bin/codex_bt_pair_agent": {"build_output_name": "codex_bt_pair_agent"},
+      "/data/codex/bin/codex_bthid_keyboard": {"build_output_name": "codex_bthid_keyboard"},
+      "/data/codex/bin/codex_dhcpd": {"build_output_name": "codex_dhcpd"},
+      "/data/codex/bin/codex_hal_ltcp": {"build_output_name": "codex_hal_ltcp"},
+      "/data/codex/bin/codex_hbus": {"build_output_name": "codex_hbus"},
+      "/data/codex/bin/codex_portal": {"build_output_name": "codex_portal"},
+      "/data/codex/bin/codex_webui": {"build_output_name": "codex_webui"},
+      "/data/codex/bin/dropbearmulti": {"build_output_name": "dropbearmulti"}
+    }
+  },
+  "allowed_exact_build_binaries": {
+    "policy": "a live binary is staged only when its build_status in reproducibility-status.json is EXACT_SOURCE_REPRODUCIBLE and a regular file named build_output_name in the caller-supplied build-output dir matches the live SHA-256 and size; this declared set must equal the live binary paths whose build_status is EXACT_SOURCE_REPRODUCIBLE",
+    "derivation": "recomputed from reproducibility-status.json at every run; a disagreement is a contract failure, not a silent difference",
+    "paths": [
+      "/data/codex/bin/codex_bt_pair_agent",
+      "/data/codex/bin/codex_bthid_keyboard",
+      "/data/codex/bin/codex_dhcpd",
+      "/data/codex/bin/codex_hal_ltcp",
+      "/data/codex/bin/codex_hbus",
+      "/data/codex/bin/codex_portal",
+      "/data/codex/bin/codex_webui"
+    ]
+  },
+  "blockers": {
+    "policy": "every closure entry that cannot be staged is omitted with an exact reason code plus the live build_status and source_provenance from reproducibility-status.json; a staging with any blocker is incomplete and fails closed unless --allow-partial is given",
+    "reason_codes": {
+      "UNRESOLVED_BINARY_REPRODUCIBILITY": "binary build_status is not EXACT_SOURCE_REPRODUCIBLE",
+      "NO_SOURCE_BUILD_OUTPUT": "build_status is EXACT_SOURCE_REPRODUCIBLE but no qualifying source-built artifact was supplied",
+      "BUILD_OUTPUT_MISMATCH": "a source-built artifact was supplied but its SHA-256 or size does not match the live entry",
+      "SOURCE_TEXT_MISSING": "the mapped repository text source is absent",
+      "SOURCE_TEXT_MISMATCH": "the mapped repository text source is not byte-identical to the live entry"
+    },
+    "current_expected": [
+      {
+        "path": "/data/codex/bin/dropbearmulti",
+        "build_status": "UNVERIFIED_THIRD_PARTY",
+        "source_provenance": "THIRD_PARTY_BINARY",
+        "reason_code": "UNRESOLVED_BINARY_REPRODUCIBILITY"
+      }
+    ]
+  },
+  "no_fallback_policy": {
+    "tracked_payload_bin": "the tool never reads the repository payload/bin tree and never falls back to it; a binary without a qualifying source-built artifact in the build-output dir is omitted with a blocker, never sourced from tracked payload/bin",
+    "build_output_dir_requirements": [
+      "must exist and be a directory when supplied",
+      "must not be, or be inside, the repository payload/bin tree (checked lexically and through symlinks)",
+      "must not overlap the out-dir in either direction",
+      "binary artifacts must be regular files; symlinks in the build-output dir are refused"
+    ],
+    "out_dir_safety": [
+      "must not be the filesystem root",
+      "must not be the repository root or inside the repository payload/, provenance/, docs/, tools/, .git/, or .slim/ trees (checked lexically and through symlinks)",
+      "live paths are materialized only after validation: absolute, normalized, no '..' segments, and confined to the rootfs directory"
+    ]
+  },
+  "legacy_manifest": {
+    "live_path": "/data/codex/bin/MANIFEST.txt",
+    "mode": "0644",
+    "format": "one '<md5sum>  <name>' line per required binary (two spaces, lowercase hex), LF-terminated, in the declared binaries order",
+    "binaries": [
+      "codex_bt_pair_agent",
+      "codex_bthid_keyboard",
+      "codex_dhcpd",
+      "codex_hal_ltcp",
+      "codex_hbus",
+      "codex_portal",
+      "codex_webui",
+      "dropbearmulti"
+    ],
+    "emit_policy": "a fresh legacy MANIFEST.txt is emitted only for a complete staging, which requires every required binary to be source-reproducible (EXACT_SOURCE_REPRODUCIBLE) and present as a matching source-built artifact; it is never emitted for a partial staging and the stale live MANIFEST.txt bytes are never staged"
+  },
+  "outputs": {
+    "rootfs_dir": "rootfs",
+    "manifests": [
+      "staging-manifest.json",
+      "blockers.json",
+      "staging-attestation.json"
+    ],
+    "fail_closed_outputs": [
+      "staging-manifest.json",
+      "blockers.json"
+    ],
+    "manifest_mode": "0644",
+    "json": "canonical JSON: sorted keys, 2-space indent, ASCII, LF-terminated; no wall-clock timestamps; determinism is inherited from the input digests"
+  },
+  "exit_codes": {
+    "0": "complete staging published (rootfs plus all manifests)",
+    "2": "usage, input, contract, or safety failure; nothing published",
+    "3": "partial staging published under --allow-partial",
+    "4": "incomplete staging without --allow-partial: fail closed, no rootfs published; diagnostic staging-manifest.json and blockers.json are written"
+  },
+  "public_safety": {
+    "no_private_evidence_paths": true,
+    "no_host_or_user_identity": true,
+    "no_md5_digests_in_generated_manifests": true,
+    "sha256_only": true,
+    "note": "the legacy MANIFEST.txt rootfs file (emitted only for a complete staging) carries MD5 digests by the on-hub browser/update contract; no generated manifest ever does"
+  },
+  "validation": {
+    "owner": "security verifier + Oracle Gate 2"
+  }
+}

@@ -334,7 +334,7 @@ function handleInventory(res) {
     requestBodyLimit: MAX_BODY,
     resourceFileLimit: 4 * 1024 * 1024,
     devices,
-    hubId: "15390924-sim",
+    hubId: "12345678-sim",
     limits: {}
   });
 }

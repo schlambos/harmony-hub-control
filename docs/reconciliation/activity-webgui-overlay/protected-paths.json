@@ -1,0 +1,630 @@
+{
+  "base_commit": "391e10e663ced493d1a1dff0afa38530812f32a1",
+  "entries": [
+    {
+      "category": "other",
+      "git_blob": "43085dc08c20acbefd1def5865532732c53a3caf",
+      "git_mode": "100644",
+      "path": ".gitattributes",
+      "protection": "protected",
+      "worktree_sha256": "c0f19860db1abe3d650a63201b6a8c1ffb0b39d31fb66016f14ab9f533444d12",
+      "worktree_size": 426,
+      "worktree_type": "text"
+    },
+    {
+      "category": "other",
+      "git_blob": "cfa494c1413b7e7f399cff454e9f1e8afe8ae892",
+      "git_mode": "100644",
+      "path": ".gitignore",
+      "protection": "protected",
+      "worktree_sha256": "228e84b2af6c625f2e281cc90a145391d232b71ef2dc74706567123b8d27c770",
+      "worktree_size": 609,
+      "worktree_type": "text"
+    },
+    {
+      "category": "other",
+      "git_blob": "3ea4c1f2e6694a1af88873920581e2a847b8c2b7",
+      "git_mode": "100644",
+      "path": "CONTRIBUTING.md",
+      "protection": "protected",
+      "worktree_sha256": "362f47da91d178380ed5d3c47db32289589b5584966c45c1d5277d5ae5c0d48f",
+      "worktree_size": 961,
+      "worktree_type": "text"
+    },
+    {
+      "category": "installer",
+      "git_blob": "2ec764a18451ca838909eca6b18fe486533787ee",
+      "git_mode": "100644",
+      "path": "Install_Harmony_Control.cmd",
+      "protection": "protected",
+      "worktree_sha256": "4fc1c3dc8c6ff8ec59b9cf3c3c185bc5ec96561bb34de185b9d8616627c6f3bc",
+      "worktree_size": 1087,
+      "worktree_type": "text"
+    },
+    {
+      "category": "readme",
+      "git_blob": "32c7be8fc349da7d00fd95a1332eb7576aeb6e60",
+      "git_mode": "100644",
+      "path": "README.md",
+      "protection": "applied_exception",
+      "worktree_sha256": "5fafd4639378b91aebb5374af4ca2d3afc3e58d8a742015d8d738d0ef79d25c4",
+      "worktree_size": 13945,
+      "worktree_type": "text"
+    },
+    {
+      "category": "build",
+      "git_blob": "64fd0bf2cfa615ce7f1e1e40e861ae6627edaa81",
+      "git_mode": "100755",
+      "path": "build/build_harmony_tools_kali.sh",
+      "protection": "protected",
+      "worktree_sha256": "b427849d45fefc8248331307e0df887ffd2e759e68e465ecbda83e083b4d7c57",
+      "worktree_size": 9241,
+      "worktree_type": "text"
+    },
+    {
+      "category": "doc",
+      "git_blob": "f8bce30310c55e2faff97fd6e94e80309aab3d59",
+      "git_mode": "100644",
+      "path": "docs/AI_HANDOFF.md",
+      "protection": "protected",
+      "worktree_sha256": "a27d204251122df40c730c858544e567256c1d62ea492c4fe9f3fd414aa7ea69",
+      "worktree_size": 3499,
+      "worktree_type": "text"
+    },
+    {
+      "category": "doc",
+      "git_blob": "42423de46c8254b4ba71c58b4c3e33c440c4da69",
+      "git_mode": "100644",
+      "path": "docs/API.md",
+      "protection": "protected",
+      "worktree_sha256": "102014867c5edc0a8ff3ec5ffd0eef79666906b24bc7aeaa7236488b5e41d996",
+      "worktree_size": 5228,
+      "worktree_type": "text"
+    },
+    {
+      "category": "doc",
+      "git_blob": "6b8572dfc2a857d12718122132d1af744e810349",
+      "git_mode": "100644",
+      "path": "docs/BUILD.md",
+      "protection": "protected",
+      "worktree_sha256": "b18335d98c7adeabe60019c951fdacbbbb923986a8af22d7647c237a0965a348",
+      "worktree_size": 4918,
+      "worktree_type": "text"
+    },
+    {
+      "category": "doc",
+      "git_blob": "3df3d14191cb2a53db9df9772396799fd985dc82",
+      "git_mode": "100644",
+      "path": "docs/GITHUB_SETUP.md",
+      "protection": "protected",
+      "worktree_sha256": "8482139f65b96f4bc597fa634d67e219c9324d6f9f34920b16d6d3e482853464",
+      "worktree_size": 1155,
+      "worktree_type": "text"
+    },
+    {
+      "category": "doc",
+      "git_blob": "92f25e9814bf5bed1d05f254dd20212dc060261d",
+      "git_mode": "100644",
+      "path": "docs/SECURITY.md",
+      "protection": "protected",
+      "worktree_sha256": "a73c2b075b6a63931afd17509bd672b1ccc1f91f89df21c0ee47f2a96eb2a4c8",
+      "worktree_size": 1053,
+      "worktree_type": "text"
+    },
+    {
+      "category": "reconciliation_doc",
+      "git_blob": "c603e7186881569f7ffec95f68efd93cec586c3b",
+      "git_mode": "100644",
+      "path": "docs/reconciliation/box-snapshot-20260818.md",
+      "protection": "protected",
+      "worktree_sha256": "a88a7bd5c31601627f21c5710e492481a7538893f09a6da8a6e7e7aec51a41ae",
+      "worktree_size": 23737,
+      "worktree_type": "text"
+    },
+    {
+      "category": "reconciliation_doc",
+      "git_blob": "a346acc362c5f1a7e30f8d5a1cb57145a807864e",
+      "git_mode": "100644",
+      "path": "docs/reconciliation/staging-contract.md",
+      "protection": "protected",
+      "worktree_sha256": "eb19ed772605ac65d9faf92119ab11b6b6f3ace2b39746287e12d9d36d133f78",
+      "worktree_size": 9504,
+      "worktree_type": "text"
+    },
+    {
+      "category": "other",
+      "git_blob": "3403c84defa469a8b56e8a8261aba933a7ecbba1",
+      "git_mode": "100644",
+      "path": "examples/mqtt-config.example.json",
+      "protection": "protected",
+      "worktree_sha256": "58178418fe3b5e1789c5d994e2b06eabdd79c1279c3947e52d55cc93c4b199a2",
+      "worktree_size": 318,
+      "worktree_type": "text"
+    },
+    {
+      "category": "installer",
+      "git_blob": "ed756b1c5ae5b2eff3a29a0a40b2e569e3cc6c72",
+      "git_mode": "100644",
+      "path": "install_webui.ps1",
+      "protection": "protected",
+      "worktree_sha256": "7a35796482c1f10ad3f20166980d76a4ae5d5e04559919c4a7878384503ecff3",
+      "worktree_size": 21137,
+      "worktree_type": "text"
+    },
+    {
+      "category": "installer",
+      "git_blob": "a9662d634d3101f9fd1a97ac99ca9eaed843facb",
+      "git_mode": "100755",
+      "path": "install_webui.py",
+      "protection": "protected",
+      "worktree_sha256": "e50e871fe759b13afac131dd9a2b9c93f58bee4c9333e4d5b842a4b188c89d5a",
+      "worktree_size": 22780,
+      "worktree_type": "text"
+    },
+    {
+      "category": "script",
+      "git_blob": "aa97d229207b3e695d694a5be6f9fcb412daf503",
+      "git_mode": "100644",
+      "path": "payload/activity/codexactivity.lua",
+      "protection": "protected",
+      "worktree_sha256": "d49ac11d49872324135b8bc7605e1ff4d0639ceabb5b3018735fcc6810cb40d6",
+      "worktree_size": 18551,
+      "worktree_type": "text"
+    },
+    {
+      "category": "binary",
+      "git_blob": "8beb3c69c81d92df25cd980a9cf2a89b37718395",
+      "git_mode": "100644",
+      "path": "payload/bin/FILES",
+      "protection": "protected",
+      "worktree_sha256": "53999dc0492e1d4abf3a540587ac398e0e011018b1fef6c01f9eb8db583a025f",
+      "worktree_size": 756,
+      "worktree_type": "text"
+    },
+    {
+      "category": "binary",
+      "git_blob": "60deb3aadd9293ebf2b700cbba0e73325e585f04",
+      "git_mode": "100644",
+      "path": "payload/bin/MANIFEST.txt",
+      "protection": "protected",
+      "worktree_sha256": "dfe176842dd1caae66e0ee9867e759880fb6cb9893b5f23d15ec92d107e2e6e6",
+      "worktree_size": 749,
+      "worktree_type": "text"
+    },
+    {
+      "category": "binary",
+      "git_blob": "68bb8e31672cd80f38a01f73b45715addbd0c7d8",
+      "git_mode": "100644",
+      "path": "payload/bin/codex_bthid_keyboard",
+      "protection": "protected",
+      "worktree_sha256": "53513054f48a2a41c1283e7cc862598ce79263a85d28c8b23de863f6e7cb216d",
+      "worktree_size": 117808,
+      "worktree_type": "elf"
+    },
+    {
+      "category": "binary",
+      "git_blob": "48070f5112989b13398c5a39afbb281c718705e7",
+      "git_mode": "100755",
+      "path": "payload/bin/codex_dhcpd",
+      "protection": "protected",
+      "worktree_sha256": "90ff5163fbbe7f8fa38725d3ac02d8cf4a5796b099e6947fa24108f9cc125c57",
+      "worktree_size": 104168,
+      "worktree_type": "elf"
+    },
+    {
+      "category": "binary",
+      "git_blob": "fc29d1cb14bd36f981dfafd9a761e671faeaf345",
+      "git_mode": "100755",
+      "path": "payload/bin/codex_hal_ltcp",
+      "protection": "protected",
+      "worktree_sha256": "47656471a406123d328ffb7c83f6333b60d37ede0e72b53f4bebfb591358422b",
+      "worktree_size": 108764,
+      "worktree_type": "elf"
+    },
+    {
+      "category": "binary",
+      "git_blob": "353a1c7a5ef95968a0474696fd4494379ffea808",
+      "git_mode": "100755",
+      "path": "payload/bin/codex_hbus",
+      "protection": "protected",
+      "worktree_sha256": "406a9b2a60af05b0dd5c2711339ddd53694c87b716c2bd388fb9a4ad4bfb89cd",
+      "worktree_size": 104244,
+      "worktree_type": "elf"
+    },
+    {
+      "category": "binary",
+      "git_blob": "a745df84f2ca3a290108b90c7876c1c3c0a065d1",
+      "git_mode": "100755",
+      "path": "payload/bin/codex_portal",
+      "protection": "protected",
+      "worktree_sha256": "43d3925147cd70fdb58be1ba53a684a2f76b1f05a12e5db3f5c258a3cf387cc7",
+      "worktree_size": 109548,
+      "worktree_type": "elf"
+    },
+    {
+      "category": "binary",
+      "git_blob": "24c801f34db4b7ae24daa9de210ca858d8d9656d",
+      "git_mode": "100755",
+      "path": "payload/bin/codex_webui",
+      "protection": "protected",
+      "worktree_sha256": "1b247a4b28622b04a3e52132d1fa25437462215730f3d7460471d97378e93631",
+      "worktree_size": 541264,
+      "worktree_type": "elf"
+    },
+    {
+      "category": "binary",
+      "git_blob": "7ea86221aa8045547072182b5059bf865f352bb6",
+      "git_mode": "100755",
+      "path": "payload/bin/dropbearmulti",
+      "protection": "protected",
+      "worktree_sha256": "e2ea632aed8b31dc5ea56b9673cbd983ec83260a97d33f891a0cebf51d5c6c8d",
+      "worktree_size": 577296,
+      "worktree_type": "elf"
+    },
+    {
+      "category": "script",
+      "git_blob": "e7c998753fdca8c40cd28ffe56eebc1cc747d05c",
+      "git_mode": "100644",
+      "path": "payload/mqtt/codexmqtt.lua",
+      "protection": "protected",
+      "worktree_sha256": "3928b5d341acf25167724ea4375a9b7dd8cc73e40b8727d35f964fc87d3cfc21",
+      "worktree_size": 23533,
+      "worktree_type": "text"
+    },
+    {
+      "category": "script",
+      "git_blob": "0ac2d2b1b35491e13bf4fc9518b3b5d8e10fb464",
+      "git_mode": "100755",
+      "path": "payload/scripts/dropbear",
+      "protection": "protected",
+      "worktree_sha256": "cb07cd5483028c5fd4ac7a090d32b87776b9308b0115ab157fe63b3ffe6afce6",
+      "worktree_size": 52,
+      "worktree_type": "text"
+    },
+    {
+      "category": "script",
+      "git_blob": "e0731199f4e2bc97ec60d74e03b3b5f9be50bc2d",
+      "git_mode": "100755",
+      "path": "payload/scripts/dropbearkey",
+      "protection": "protected",
+      "worktree_sha256": "45d03451f1242b043f7824e3ccc4fd580f39a95322a7510c39959323ba3646cc",
+      "worktree_size": 48,
+      "worktree_type": "text"
+    },
+    {
+      "category": "script",
+      "git_blob": "a4cd566df4be9cd2057e0fe430c092e616d15191",
+      "git_mode": "100755",
+      "path": "payload/scripts/init.sh",
+      "protection": "protected",
+      "worktree_sha256": "4a334106f8acf9ecdf3d867c0deeb22d9ef7ede3afe9961c91e9651b210292c0",
+      "worktree_size": 2647,
+      "worktree_type": "text"
+    },
+    {
+      "category": "script",
+      "git_blob": "e9b0f31fb72a1e178762a8d3d78b9f106c42e1c1",
+      "git_mode": "100644",
+      "path": "payload/scripts/netservicestarter.lua",
+      "protection": "protected",
+      "worktree_sha256": "e9722835033257ec0f7dd4f66df4f1f037ee8139cd7bbadaecb7c6f37b9a652c",
+      "worktree_size": 12707,
+      "worktree_type": "text"
+    },
+    {
+      "category": "script",
+      "git_blob": "c949ca8888628a02c446463b5aa47c181dad1fb2",
+      "git_mode": "100755",
+      "path": "payload/scripts/offline_egress_guard.sh",
+      "protection": "protected",
+      "worktree_sha256": "72f3ba67f492f51284509b029a5c38c2edccd21e334581438acd4c14708ceb42",
+      "worktree_size": 1753,
+      "worktree_type": "text"
+    },
+    {
+      "category": "script",
+      "git_blob": "96974eb98b5c426b3a6467fbc5332fb332ded24f",
+      "git_mode": "100644",
+      "path": "payload/scripts/rcS.local",
+      "protection": "protected",
+      "worktree_sha256": "d5d9693e173e4bebd8c268f72a6fc9a60b2946032c95e9a718281da2a05ea5c0",
+      "worktree_size": 2799,
+      "worktree_type": "text"
+    },
+    {
+      "category": "script",
+      "git_blob": "3f994bcee6a56051561b5ca6a25ec757007e9192",
+      "git_mode": "100755",
+      "path": "payload/scripts/recovery_ap.sh",
+      "protection": "protected",
+      "worktree_sha256": "5935e17d68e50216b96f5642bc4beeb2c4e491766068dbd8e36396ab0f5f9797",
+      "worktree_size": 1859,
+      "worktree_type": "text"
+    },
+    {
+      "category": "source",
+      "git_blob": "5dad607f7c09a0d5cc0034969b76e6c5df1eb2bc",
+      "git_mode": "100644",
+      "path": "payload/source/activity_ui_assets.h",
+      "protection": "protected",
+      "worktree_sha256": "2d8136d3ab970dceb55a875c82942ef934a3eba4f17413eb91604f3dbdfa74eb",
+      "worktree_size": 502204,
+      "worktree_type": "text"
+    },
+    {
+      "category": "source",
+      "git_blob": "be5be52aa32d00f4ef19c64477dd2b1422b1beca",
+      "git_mode": "100644",
+      "path": "payload/source/codex_bt_pair_agent.c",
+      "protection": "protected",
+      "worktree_sha256": "070278725b6d2a4b9590efb4e126e07f68e5f67930da33b7cd65ac0f00dad8c5",
+      "worktree_size": 32008,
+      "worktree_type": "text"
+    },
+    {
+      "category": "source",
+      "git_blob": "cfb831152ccd576ea5bb307e71c687212c60c684",
+      "git_mode": "100644",
+      "path": "payload/source/codex_bthid_keyboard.c",
+      "protection": "protected",
+      "worktree_sha256": "fcfc5c9c44ce5c0ea599dd51082d8341ef75de255b9979f78233c9d8e59c0375",
+      "worktree_size": 27246,
+      "worktree_type": "text"
+    },
+    {
+      "category": "source",
+      "git_blob": "7655554a7e6f8bbee5544b9481aa941a36fcc323",
+      "git_mode": "100644",
+      "path": "payload/source/codex_dhcpd.c",
+      "protection": "protected",
+      "worktree_sha256": "269256fa77b0515cc4635a4c72f387e0d2112704b62699cab50990c3bad1c638",
+      "worktree_size": 4462,
+      "worktree_type": "text"
+    },
+    {
+      "category": "source",
+      "git_blob": "03ba4c72cccd173606cde7c63f51e421c42f2fdc",
+      "git_mode": "100644",
+      "path": "payload/source/codex_hal_ltcp.c",
+      "protection": "protected",
+      "worktree_sha256": "a24dc967d610af9cb6e59c35822c84f7ae7a4ed8a2a3efdfd43f9b5972dd103d",
+      "worktree_size": 17314,
+      "worktree_type": "text"
+    },
+    {
+      "category": "source",
+      "git_blob": "d2bbcdef214369bff3dacf1836d6b5a0057f5ede",
+      "git_mode": "100644",
+      "path": "payload/source/codex_hbus.c",
+      "protection": "protected",
+      "worktree_sha256": "4b4ff376825f26607ec55f75685469831801f54b3f2af56e3d2d720a5d5d8ba8",
+      "worktree_size": 12680,
+      "worktree_type": "text"
+    },
+    {
+      "category": "source",
+      "git_blob": "bdfb50ca9122af054cb42539ac87dbd8b90a517e",
+      "git_mode": "100644",
+      "path": "payload/source/codex_portal.c",
+      "protection": "protected",
+      "worktree_sha256": "6f24d1de35e52a0ac1dfd2e524732ecd60079b6ecf524463d5b2c8437a7849b2",
+      "worktree_size": 6852,
+      "worktree_type": "text"
+    },
+    {
+      "category": "source",
+      "git_blob": "aa173f177b8ac10270372a126b5b1d4bab41df9c",
+      "git_mode": "100644",
+      "path": "payload/source/codex_webui.c",
+      "protection": "protected",
+      "worktree_sha256": "8a4e536f8997c5b9b483c123633a6dde386c51f69f66ab7544357b4c32f54e5c",
+      "worktree_size": 519094,
+      "worktree_type": "text"
+    },
+    {
+      "category": "source",
+      "git_blob": "ba6c4ce95dec58429ed965961904a1ac1cf7755c",
+      "git_mode": "100644",
+      "path": "payload/source/harmony_shell_assets.h",
+      "protection": "protected",
+      "worktree_sha256": "967d1e44f267b8713a5b411f9f1eeefebaf51268110676c0c317cb5b965390e5",
+      "worktree_size": 1126675,
+      "worktree_type": "text"
+    },
+    {
+      "category": "source",
+      "git_blob": "419611c5ff0713f1f5de2dd684d699f6d77238d5",
+      "git_mode": "100644",
+      "path": "payload/source/remote_skin_jpg.h",
+      "protection": "protected",
+      "worktree_sha256": "04433039af1e263bd88645cb42df40f71c4911bda7dba69d1ab0463c1030eb2b",
+      "worktree_size": 87382,
+      "worktree_type": "text"
+    },
+    {
+      "category": "provenance",
+      "git_blob": "26473b4eee7ab47c57ce49ea1f69ae312b9269d8",
+      "git_mode": "100644",
+      "path": "provenance/box-snapshot-20260818/artifact-map.json",
+      "protection": "protected",
+      "worktree_sha256": "708517b65d67548e0eb39f596a75ab8e1f0e36cdfe6e5cd8eb225b28b2c3cbef",
+      "worktree_size": 158001,
+      "worktree_type": "text"
+    },
+    {
+      "category": "provenance",
+      "git_blob": "e4a73505b890afcdbebb0c2b2c7c59ff70b4dd97",
+      "git_mode": "100644",
+      "path": "provenance/box-snapshot-20260818/public-payload-manifest.json",
+      "protection": "protected",
+      "worktree_sha256": "9b0dcfd5ca4ad48ca5b395574e9b2bb9cafec640037cabaacf5ed2d5d9160ec3",
+      "worktree_size": 5458,
+      "worktree_type": "text"
+    },
+    {
+      "category": "provenance",
+      "git_blob": "1b72f0375d17e27fa26b1d4b4a7b0003c09462f8",
+      "git_mode": "100644",
+      "path": "provenance/box-snapshot-20260818/public-safety-review.json",
+      "protection": "protected",
+      "worktree_sha256": "47690f87c18c575a3402e4501eafc175f4e8cf1495e4f5040309880e5df3e8d9",
+      "worktree_size": 3398,
+      "worktree_type": "text"
+    },
+    {
+      "category": "provenance",
+      "git_blob": "b844286e1b574d872896bd3f2427150884b5bf66",
+      "git_mode": "100644",
+      "path": "provenance/box-snapshot-20260818/reproducibility-status.json",
+      "protection": "protected",
+      "worktree_sha256": "1d58d31c08f147f85ae17e36517f597a6f17d1f361c916ec7ed1d258697f6e81",
+      "worktree_size": 17115,
+      "worktree_type": "text"
+    },
+    {
+      "category": "provenance",
+      "git_blob": "da012d7a76e4a32bf709bf62b8b1d767b5ecca0f",
+      "git_mode": "100644",
+      "path": "provenance/box-snapshot-20260818/staging-contract.json",
+      "protection": "protected",
+      "worktree_sha256": "4ca9c30862d2e53b3cb912ec1e9d51bf2d4fb53a2b87943cea0cc36cb306387a",
+      "worktree_size": 9411,
+      "worktree_type": "text"
+    },
+    {
+      "category": "installer",
+      "git_blob": "113236f8be454141a075090de067927bf5db7078",
+      "git_mode": "100644",
+      "path": "restore_backup.ps1",
+      "protection": "protected",
+      "worktree_sha256": "5b12d05cd022cb322d9be1f890436c04f3eb81c8014d21b24759c799e0786727",
+      "worktree_size": 4214,
+      "worktree_type": "text"
+    },
+    {
+      "category": "third_party",
+      "git_blob": "a3edf7dbb7ef452a5d529eed8dbaa6ad954dfff2",
+      "git_mode": "100644",
+      "path": "third_party/dropbear-2025.89/LICENSE",
+      "protection": "protected",
+      "worktree_sha256": "a99ce657d790b761c132ee7e0de18edb437ae6361e536d991c6a12f36e770445",
+      "worktree_size": 4580,
+      "worktree_type": "text"
+    },
+    {
+      "category": "tool",
+      "git_blob": "b0496b036dca08513401bb146cbfbc9bf3e463f8",
+      "git_mode": "100644",
+      "path": "tools/chrome_ui_smoke.mjs",
+      "protection": "protected",
+      "worktree_sha256": "745fa22d038c101b262944336b93ce5764c057743265e2f77de7bc35f2a1a45e",
+      "worktree_size": 16024,
+      "worktree_type": "text"
+    },
+    {
+      "category": "tool",
+      "git_blob": "43655a62fb5c8deaa78d36b5353ec6a3024c0581",
+      "git_mode": "100644",
+      "path": "tools/ir_database_smoke_test.mjs",
+      "protection": "protected",
+      "worktree_sha256": "1947cbcb46d56ee9bc837548eef05a23590cb47d8a39fb893224bf693c94ab08",
+      "worktree_size": 28015,
+      "worktree_type": "text"
+    },
+    {
+      "category": "reconciliation_tool",
+      "git_blob": "9b04e320a88ff5c5ca73fff2bf9a879d468efe39",
+      "git_mode": "100644",
+      "path": "tools/reconciliation/build_staging.py",
+      "protection": "protected",
+      "worktree_sha256": "8b08006ab72a2a3898fd2273f4cad13ee388d905305a08dfd7a369ef3996843b",
+      "worktree_size": 65824,
+      "worktree_type": "text"
+    },
+    {
+      "category": "reconciliation_tool",
+      "git_blob": "564e7038e821eeffde5b7750e5c2644eac14ad32",
+      "git_mode": "100644",
+      "path": "tools/reconciliation/collect_box_snapshot.py",
+      "protection": "protected",
+      "worktree_sha256": "dc6ad58321adebf6ff878854f7ec5c8a9d79181de105ace14c517c825959a0b0",
+      "worktree_size": 70909,
+      "worktree_type": "text"
+    },
+    {
+      "category": "reconciliation_tool",
+      "git_blob": "34ca81f5f124a8ab17690f3fac14d2d43b39fc22",
+      "git_mode": "100644",
+      "path": "tools/reconciliation/derive_provenance.py",
+      "protection": "protected",
+      "worktree_sha256": "5276d3c4df734328fc3ca460c74c7a8ca79d1eb08ee491c79664239bf7df0d37",
+      "worktree_size": 94708,
+      "worktree_type": "text"
+    },
+    {
+      "category": "reconciliation_tool",
+      "git_blob": "9aaf4ea937b53a356b8e16d5b11ea93574ed98f3",
+      "git_mode": "100644",
+      "path": "tools/reconciliation/test_bt_source_lineage.py",
+      "protection": "protected",
+      "worktree_sha256": "291cfe11c8fc2267550f0cb4921566c2855b2a939c65b7ed7a9bbf7cff9c718b",
+      "worktree_size": 15205,
+      "worktree_type": "text"
+    },
+    {
+      "category": "reconciliation_tool",
+      "git_blob": "a317132195cf322f2b68e425f678ccab678f702a",
+      "git_mode": "100644",
+      "path": "tools/reconciliation/test_build_staging.py",
+      "protection": "protected",
+      "worktree_sha256": "4b873779dbf4ddd98bb97875942a345bee70f77b8eb31d9156093c2b8d76ce54",
+      "worktree_size": 38345,
+      "worktree_type": "text"
+    },
+    {
+      "category": "reconciliation_tool",
+      "git_blob": "95323e6c5a8df5b4fe71ed077dc249178f5545fb",
+      "git_mode": "100644",
+      "path": "tools/reconciliation/test_collect_box_snapshot.py",
+      "protection": "protected",
+      "worktree_sha256": "34a0ef589bc3b0239fb725cccfc3cf1935a8ad436df81dace9dae32a729b6537",
+      "worktree_size": 59762,
+      "worktree_type": "text"
+    },
+    {
+      "category": "reconciliation_tool",
+      "git_blob": "23acf61d072e2636ad5457512ea0844292c5a63f",
+      "git_mode": "100644",
+      "path": "tools/reconciliation/test_derive_provenance.py",
+      "protection": "protected",
+      "worktree_sha256": "4ca87f7ae6d53fb5e83e35a683836e74e007703e48dafd09e5a1f65695dfeef6",
+      "worktree_size": 68463,
+      "worktree_type": "text"
+    },
+    {
+      "category": "reconciliation_tool",
+      "git_blob": "0e66286f16dd2070e78abef357d8a5e6b1faf35d",
+      "git_mode": "100644",
+      "path": "tools/reconciliation/test_text_payload_reconstruction.py",
+      "protection": "protected",
+      "worktree_sha256": "915d32c6e9ced044c5f42cf69d5ae371b4b80655f83863c9400374d9d54ecc56",
+      "worktree_size": 17847,
+      "worktree_type": "text"
+    },
+    {
+      "category": "reconciliation_tool",
+      "git_blob": "ccdbb56f43281150758382767b394b831caed8a4",
+      "git_mode": "100644",
+      "path": "tools/reconciliation/test_webui_source_build.py",
+      "protection": "protected",
+      "worktree_sha256": "d90882fa23a61a33cce114b2210bc00ee9c2d14df83f6867238aee4bfd24d8cf",
+      "worktree_size": 14357,
+      "worktree_type": "text"
+    }
+  ],
+  "entry_count": 62,
+  "mismatched_paths": [],
+  "note": "README.md is an applied_exception (synthesized overlay README); the other 61 base paths are protected and byte-identical to 391e",
+  "protected_equality_verified": true,
+  "schema": "activity-webgui-overlay/protected-paths/1"
+}

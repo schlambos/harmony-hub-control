@@ -30,15 +30,15 @@
 # tools/harmony_shell_smoke.mjs).
 #
 # Run:  sh tools/package_harmony_shell.sh
-# Bun:  defaults to /Users/matt/.bun/bin/bun, override with BUN=/path/to/bun
+# Bun:  discovered from $BUN or PATH; override with BUN=/path/to/bun
 set -eu
 
 SCRIPT_DIR=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
 REPO_ROOT=$(CDPATH= cd -- "$SCRIPT_DIR/.." && pwd)
 
-BUN=${BUN:-/Users/matt/.bun/bin/bun}
-if [ ! -x "$BUN" ]; then
-  echo "package_harmony_shell: bun not found at $BUN (set BUN=/path/to/bun)" >&2
+BUN=${BUN:-$(command -v bun || true)}
+if [ -z "$BUN" ] || [ ! -x "$BUN" ]; then
+  echo "package_harmony_shell: bun not found (install bun or set BUN=/path/to/bun)" >&2
   exit 1
 fi
 
