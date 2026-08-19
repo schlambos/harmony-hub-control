@@ -942,7 +942,7 @@ def seed_step4a_destinations(scenario="upgrade"):
             with open(STEP4A_STUB_SEEDS[path], "rb") as source:
                 content = source.read()
         elif path == "/data/codex/hub_id":
-            content = b"15390924\n"
+            content = b"12345678\n"
         else:
             content = fake_old_content(
                 path, STEP4A_SEED_SIZES.get(path, 2 * 1024))
@@ -1687,7 +1687,7 @@ def reset_step4a_artifacts():
     # above is deliberate; the box state always carries the seed settings).
     os.makedirs(os.path.dirname(HUB_ID_FILE), exist_ok=True)
     with open(HUB_ID_FILE, "w", encoding="utf-8") as output:
-        output.write("15390924\n")
+        output.write("12345678\n")
     for destination, stub in STEP4A_STUB_SEEDS.items():
         os.makedirs(os.path.dirname(destination), exist_ok=True)
         shutil.copyfile(stub, destination)

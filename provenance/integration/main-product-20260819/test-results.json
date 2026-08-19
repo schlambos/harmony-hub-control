@@ -1,0 +1,85 @@
+{
+  "schema": "integration-test-results/1",
+  "integration": "main-product-20260819",
+  "gates": [
+    {
+      "name": "activity_offline_guard",
+      "command": "sh tools/activity_offline_guard.sh",
+      "result": "PASS",
+      "detail": "exit 0, 'offline activity guard passed', no waiver"
+    },
+    {
+      "name": "installer_contract_smoke",
+      "command": "python3 tools/installer_contract_smoke.py",
+      "result": "PASS",
+      "detail": "34 pass, 1 skip (pwsh runtime-parse; allowed)"
+    },
+    {
+      "name": "webui_sim_tests",
+      "command": "node --test tools/webui-sim/test/*.test.mjs",
+      "result": "PASS",
+      "detail": "299/299 pass"
+    },
+    {
+      "name": "activity_ui_model_smoke",
+      "command": "node tools/activity_ui_model_smoke.mjs",
+      "result": "PASS",
+      "detail": "exit 0"
+    },
+    {
+      "name": "docker_manager_tests",
+      "command": "python3 -m unittest docker.tests.test_manager",
+      "result": "PASS",
+      "detail": "9/9 pass"
+    },
+    {
+      "name": "activity_json_semantic_smoke",
+      "command": "sh tools/activity_json_semantic_smoke.sh",
+      "result": "PASS",
+      "detail": "self-contained"
+    },
+    {
+      "name": "bluetooth_hid_smoke",
+      "command": "sh tools/bluetooth_hid_smoke.sh",
+      "result": "PASS",
+      "detail": "self-contained; compiles codex_webui.c locally"
+    },
+    {
+      "name": "hbus_notification_smoke",
+      "command": "python3 tools/hbus_notification_smoke.py",
+      "result": "PASS",
+      "detail": "self-contained local mock"
+    },
+    {
+      "name": "syntax",
+      "command": "node --check / py_compile / sh -n / JSON parse",
+      "result": "PASS",
+      "detail": "all JS/Python/shell/JSON syntax clean"
+    },
+    {
+      "name": "git_diff_check",
+      "command": "git diff --check",
+      "result": "PASS",
+      "detail": "no whitespace errors"
+    },
+    {
+      "name": "docker_compose_config",
+      "command": "docker compose config",
+      "result": "SKIPPED",
+      "detail": "docker CLI present but 'docker compose' plugin absent; truthful skip"
+    }
+  ],
+  "historical_reconciliation_tests": {
+    "result": "NOT_RUN_AS_LIVE_PIN_GATE",
+    "test_method_count": 180,
+    "breakdown": {
+      "test_bt_source_lineage.py": 14,
+      "test_build_staging.py": 39,
+      "test_collect_box_snapshot.py": 40,
+      "test_derive_provenance.py": 54,
+      "test_text_payload_reconstruction.py": 21,
+      "test_webui_source_build.py": 12
+    },
+    "detail": "The historical reconciliation suite comprises 180 test methods (14+39+40+54+21+12). It is NOT run as a product-main live-pin gate: real-evidence tests require a disposable RECON checkout identified by environment variable. The prior verified historical 180/180 result is recorded in the historical ledger (docs/reconciliation/box-snapshot-20260818.md), not re-run here."
+  }
+}

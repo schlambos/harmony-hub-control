@@ -1,0 +1,181 @@
+{
+  "schema": "integration-conflict-ledger/1",
+  "integration": "main-product-20260819",
+  "base": "d87cebafdee36ec33f1e4ea3055239dbfea6aa09",
+  "recovery": "5e1b5520a8293b254ea88b8da725e99d74faf13e",
+  "overlay": "e6d4df1b8ab51c8738e3630a28652fed7418448f",
+  "recon": "391e10e663ced493d1a1dff0afa38530812f32a1",
+  "activity": "41236d8ae8eeca8f3d54bbdc50c86db6ebcb570b",
+  "resolution_policy": "RECOVERY wins for installers, activity plugin, webui/hbus sources, and hub-emu engine/entrypoint (product-test surface); OVERLAY wins for reconciliation docs, provenance records, and webui-sim fixtures/server (historical-reconciliation surface).",
+  "paths": [
+    {
+      "path": "README.md",
+      "base": "32c7be8fc349da7d00fd95a1332eb7576aeb6e60",
+      "recovery": "eba6358ae785be56adc3aadc73dca20b6e134f35",
+      "overlay": "6339e802b70d9bafa07dd2a7aa47aabb9264c274",
+      "final": "eba6358ae785be56adc3aadc73dca20b6e134f35",
+      "winner": "recovery"
+    },
+    {
+      "path": "build/build_harmony_tools_kali.sh",
+      "base": "8915247132ef234ee010d386a76099c6c99be82c",
+      "recovery": "c01fc2a7262b6cef299e15f0851eba6cc5a2e08d",
+      "overlay": "64fd0bf2cfa615ce7f1e1e40e861ae6627edaa81",
+      "final": "c01fc2a7262b6cef299e15f0851eba6cc5a2e08d",
+      "winner": "recovery"
+    },
+    {
+      "path": "docs/FOOTPRINT_AUDIT.md",
+      "base": null,
+      "recovery": "dfe8621840d44a870721b945c5654cb6c3470bb2",
+      "overlay": "37c0e68e1b849b33aeb426b950d0c9ba3002f29e",
+      "final": "37c0e68e1b849b33aeb426b950d0c9ba3002f29e",
+      "winner": "overlay"
+    },
+    {
+      "path": "docs/FRONTEND_REDESIGN_HANDOFF.md",
+      "base": null,
+      "recovery": "13e2b17e0180d683b26466b5411ac93758826a6c",
+      "overlay": "afc7d78d682b2545840ebbda863ecc03fa4c5970",
+      "final": "afc7d78d682b2545840ebbda863ecc03fa4c5970",
+      "winner": "overlay"
+    },
+    {
+      "path": "docs/FULL_FEATURE_ANALYSIS.md",
+      "base": null,
+      "recovery": "4bbb4908b6e8ca4546b99b017cb117638c4109b6",
+      "overlay": "ec51185642eab50ea27a5c9c6002948a72e79483",
+      "final": "ec51185642eab50ea27a5c9c6002948a72e79483",
+      "winner": "overlay"
+    },
+    {
+      "path": "docs/PRODUCTION_PUSH_READINESS.md",
+      "base": null,
+      "recovery": "6a98cc498ce5ba027f29448ee5af8d9b37a1189d",
+      "overlay": "09565de32351993a2cb7b8870b708701eb2e275e",
+      "final": "09565de32351993a2cb7b8870b708701eb2e275e",
+      "winner": "overlay"
+    },
+    {
+      "path": "docs/SESSION_HANDOFF.md",
+      "base": null,
+      "recovery": "213ba6272219a9b226611dc8c40e41a299b48c8a",
+      "overlay": "e421fe09dfe3b4a0661c3d900968ddcad7805e3b",
+      "final": "e421fe09dfe3b4a0661c3d900968ddcad7805e3b",
+      "winner": "overlay"
+    },
+    {
+      "path": "install_webui.ps1",
+      "base": "c1a3e464ca67f70f5e583dd87c9dc385e7f52953",
+      "recovery": "0e20669efb3aa88ba8922c14d8682ac0c13adf54",
+      "overlay": "ed756b1c5ae5b2eff3a29a0a40b2e569e3cc6c72",
+      "final": "0e20669efb3aa88ba8922c14d8682ac0c13adf54",
+      "winner": "recovery",
+      "note": "policy-pinned RECOVERY installer, unchanged"
+    },
+    {
+      "path": "install_webui.py",
+      "base": "f5558ce7bb49c9a06e8b09eed6bbb3a398f6435f",
+      "recovery": "5fff4fdc10f4845c59eca7b783c3940382d5d3b1",
+      "overlay": "a9662d634d3101f9fd1a97ac99ca9eaed843facb",
+      "final": "5fff4fdc10f4845c59eca7b783c3940382d5d3b1",
+      "winner": "recovery"
+    },
+    {
+      "path": "payload/activity/codexactivity.lua",
+      "base": null,
+      "recovery": "abb1579e688742681b5b1dfc927501affe23ee4e",
+      "overlay": "aa97d229207b3e695d694a5be6f9fcb412daf503",
+      "final": "abb1579e688742681b5b1dfc927501affe23ee4e",
+      "winner": "recovery"
+    },
+    {
+      "path": "payload/scripts/netservicestarter.lua",
+      "base": "b04e0286297c075f238751f4a1eb638b9c1b3732",
+      "recovery": "0cf6bb4ba4706e6dd818ca1c832d2b0c585c470c",
+      "overlay": "e9b0f31fb72a1e178762a8d3d78b9f106c42e1c1",
+      "final": "0cf6bb4ba4706e6dd818ca1c832d2b0c585c470c",
+      "winner": "recovery"
+    },
+    {
+      "path": "payload/scripts/offline_egress_guard.sh",
+      "base": null,
+      "recovery": "c949ca8888628a02c446463b5aa47c181dad1fb2",
+      "overlay": "c949ca8888628a02c446463b5aa47c181dad1fb2",
+      "final": "c949ca8888628a02c446463b5aa47c181dad1fb2",
+      "winner": "identical"
+    },
+    {
+      "path": "payload/source/codex_webui.c",
+      "base": "d379d1fee18b1978d79d78fe638f9de4909b3c40",
+      "recovery": "c4ad6b63bfc169edf7e1e7d9305fef83397787bf",
+      "overlay": "aa173f177b8ac10270372a126b5b1d4bab41df9c",
+      "final": "c4ad6b63bfc169edf7e1e7d9305fef83397787bf",
+      "winner": "recovery"
+    },
+    {
+      "path": "payload/source/harmony_shell_assets.h",
+      "base": null,
+      "recovery": "947cafd1a31fbdb843ca228d9c8eec46c4c52466",
+      "overlay": "ba6c4ce95dec58429ed965961904a1ac1cf7755c",
+      "final": "947cafd1a31fbdb843ca228d9c8eec46c4c52466",
+      "winner": "recovery"
+    },
+    {
+      "path": "tools/hub-emu/docker/entrypoint.sh",
+      "base": null,
+      "recovery": "4000fc41e5300997d69b97a56cd047432edbad6c",
+      "overlay": "8d537da63d60960aa0db666a7d057155a1d8d697",
+      "final": "4000fc41e5300997d69b97a56cd047432edbad6c",
+      "winner": "recovery"
+    },
+    {
+      "path": "tools/hub-emu/engine-emu.py",
+      "base": null,
+      "recovery": "7216e145bfac37969b2d691e93e76414c9e4921b",
+      "overlay": "e38ea4f722a065d69caa7ead186b6926b7c862a1",
+      "final": "7216e145bfac37969b2d691e93e76414c9e4921b",
+      "winner": "recovery"
+    },
+    {
+      "path": "tools/hub-emu/seed/resources/MapList.json",
+      "base": null,
+      "recovery": "ee956c92fed2f1c2935a46b120a3b79651fc1bcd",
+      "overlay": "6d6cc47aef5cc92812ecdbd04faf179c05487b70",
+      "final": "6d6cc47aef5cc92812ecdbd04faf179c05487b70",
+      "winner": "overlay"
+    },
+    {
+      "path": "tools/package_harmony_shell.sh",
+      "base": null,
+      "recovery": "46b909e0075b9b8cd8ab5b53142fa6139348fafc",
+      "overlay": "370dab633560688e61a9994a29c7b4dbfe9373c1",
+      "final": "370dab633560688e61a9994a29c7b4dbfe9373c1",
+      "winner": "overlay"
+    },
+    {
+      "path": "tools/webui-sim/fixtures/activity-config.json",
+      "base": null,
+      "recovery": "d30af4551c22fc79a066b9457e3fed0f48345f1d",
+      "overlay": "a15fbf13177941c164ece4683541daa3236f1897",
+      "final": "a15fbf13177941c164ece4683541daa3236f1897",
+      "winner": "overlay"
+    },
+    {
+      "path": "tools/webui-sim/server.mjs",
+      "base": null,
+      "recovery": "e32b427acdc17d0ee70b648b78f64801284e5639",
+      "overlay": "e3e9e23f61860f7d6cd095f929fe0e84d4c4eb0a",
+      "final": "e3e9e23f61860f7d6cd095f929fe0e84d4c4eb0a",
+      "winner": "overlay"
+    }
+  ],
+  "guard_repair": {
+    "path": "tools/activity_offline_guard.sh",
+    "original_blob": "ee391fe4494a8cdc8b32f198fde2de85a971b0a9",
+    "final_blob": "93933cd02fa7a392fbe19cd194aa634bbb1e4c21",
+    "recovery_installer_blob": "0e20669efb3aa88ba8922c14d8682ac0c13adf54",
+    "rationale": "Stale guard repair, not a waived/weak test. The guard required the literal Windows backslash 'activity\\codexactivity.lua' while the policy-pinned RECOVERY installer references the candidate via Join-Path with a portable forward slash. The assertion now accepts either separator for the exact activity/codexactivity.lua candidate via a narrow two-alternative fixed-string check, and still requires the exact activity Lua basename/path and every other guard assertion.",
+    "passing_evidence": "sh tools/activity_offline_guard.sh exits 0 and prints 'offline activity guard passed'. A regression self-check proves the forward-slash candidate passes and a wrong path (activity/codexmqtt.lua) fails."
+  }
+}

@@ -367,8 +367,7 @@ Recorded so they are not re-investigated. Each was disproved on hardware.
   Result must be `ELF 32-bit MSB executable, MIPS, MIPS32 rel2, statically
   linked, stripped`. `activity-ui.js` is embedded, so
   `sh tools/embed_activity_ui.sh` must run first.
-- Node is not on PATH; the bundled runtime is at
-  `/Users/matt/.cache/codex-runtimes/codex-primary-runtime/dependencies/node/bin/node`.
+- Node is not on PATH; use a bundled runtime via `NODE=/path/to/node`.
 - `/api/activity-save` accepts `activityList`, `mapList` and `functionList` only.
   A `deviceList` key is silently ignored and the response still reports success.
 - `POST /import` with `target=devices` is the only path that writes

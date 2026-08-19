@@ -47,7 +47,7 @@ if [ ! -f /etc/version ]; then
 fi
 
 # Identity file the binary expects on the box.
-printf '15390924\n' > /data/codex/hub_id
+printf '12345678\n' > /data/codex/hub_id
 
 # CLI seams: BT tooling stubs on PATH, real codex_hbus (wrapped in qemu) at
 # the exact path codex_webui shells out to. /sbin/reboot is a record-only

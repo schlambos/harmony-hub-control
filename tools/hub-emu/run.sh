@@ -5,7 +5,7 @@ set -eu
 
 HERE=$(cd "$(dirname "$0")" && pwd)
 REPO=$(cd "$HERE/../.." && pwd)
-NODE=${NODE:-$(command -v node || echo /Users/matt/.cache/codex-runtimes/codex-primary-runtime/dependencies/node/bin/node)}
+NODE=${NODE:-$(command -v node || echo node)}
 REBUILD=${1:-}
 
 echo "== seed from webui-sim fixture =="

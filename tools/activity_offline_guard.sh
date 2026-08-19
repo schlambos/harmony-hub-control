@@ -77,7 +77,34 @@ do
 done
 
 rg -F 'PAYLOAD / "activity" / "codexactivity.lua"' "$REPO_ROOT/install_webui.py" >/dev/null
-rg -F 'activity\codexactivity.lua' "$REPO_ROOT/install_webui.ps1" >/dev/null
+
+# Installer-path assertion (stale-guard repair): the RECOVERY installer must
+# reference the exact `activity/codexactivity.lua` candidate. Accept either the
+# Windows backslash separator or the portable forward-slash separator for that
+# same candidate; still require the exact activity Lua basename/path. A narrow
+# two-alternative fixed-string check is used (no broad regex), so a wrong or
+# missing path cannot satisfy it.
+if ! rg -F -e 'activity\codexactivity.lua' -e 'activity/codexactivity.lua' \
+    "$REPO_ROOT/install_webui.ps1" >/dev/null; then
+  echo "install_webui.ps1 does not reference the activity/codexactivity.lua candidate" >&2
+  exit 1
+fi
+
+# Regression self-check: the same two-alternative pattern must accept the
+# forward-slash candidate and must reject a wrong activity path. This proves
+# the assertion is not a vacuous pass.
+_guard_tmp=$(mktemp -d)
+trap 'rm -rf "$_guard_tmp"' EXIT
+printf 'activity/codexactivity.lua\n' > "$_guard_tmp/fwd"
+printf 'activity\\codexactivity.lua\n' > "$_guard_tmp/back"
+printf 'activity/codexmqtt.lua\n' > "$_guard_tmp/wrong"
+rg -F -e 'activity\codexactivity.lua' -e 'activity/codexactivity.lua' "$_guard_tmp/fwd" >/dev/null
+rg -F -e 'activity\codexactivity.lua' -e 'activity/codexactivity.lua' "$_guard_tmp/back" >/dev/null
+if rg -F -e 'activity\codexactivity.lua' -e 'activity/codexactivity.lua' "$_guard_tmp/wrong" >/dev/null; then
+  echo "offline activity guard: wrong-path regression failed" >&2
+  exit 1
+fi
+
 rg -F 'offline_egress_guard.sh monitor' "$INIT" >/dev/null
 rg -F '"gatewayType":"codexactivity"' "$INIT" >/dev/null
 rg -F 'offline_egress_guard.sh' "$REPO_ROOT/install_webui.py" >/dev/null

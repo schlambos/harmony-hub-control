@@ -1,0 +1,40 @@
+{
+  "schema": "integration-build-attestation/1",
+  "integration": "main-product-20260819",
+  "dual_zig_pins": {
+    "WEBUI_ZIG": {
+      "distribution": "Homebrew Zig 0.16.0",
+      "clang_llvm": "clang 21.1.8",
+      "sha256": "0bfa8cb6f5f64c6d645e1d5dfb5c6f62c2b79d7249c3f38a279e118cb49b02ae",
+      "targets": ["codex_webui"]
+    },
+    "OFFICIAL_ZIG": {
+      "distribution": "Official Zig 0.16.0 tarball",
+      "clang_llvm": "clang 21.1.0",
+      "sha256": "e6cd688d25664983833aae272f501d4bceeae304875b8f1741209d15fd13a4ec",
+      "targets": ["codex_hbus", "codex_bt_pair_agent", "codex_bthid_keyboard", "codex_hal_ltcp"]
+    }
+  },
+  "non_interchangeable": true,
+  "commands": {
+    "codex_webui": "\"$WEBUI_ZIG\" cc -target mips-linux-musleabi -Os -static -s -I payload/source -o payload/bin/codex_webui payload/source/codex_webui.c",
+    "codex_hbus": "\"$OFFICIAL_ZIG\" cc -target mips-linux-musleabi -mcpu=mips32 -Os -static -s -o build/output/codex_hbus payload/source/codex_hbus.c",
+    "codex_bt_pair_agent": "\"$OFFICIAL_ZIG\" cc -target mips-linux-musleabi -Os -static -s -o build/output/codex_bt_pair_agent payload/source/codex_bt_pair_agent.c",
+    "codex_bthid_keyboard": "\"$OFFICIAL_ZIG\" cc -target mips-linux-musleabi -Os -static -s -o build/output/codex_bthid_keyboard payload/source/codex_bthid_keyboard.c",
+    "codex_hal_ltcp": "\"$OFFICIAL_ZIG\" cc -target mips-linux-musleabi -Os -static -s -o build/output/codex_hal_ltcp payload/source/codex_hal_ltcp.c"
+  },
+  "bootlin": {
+    "toolchain": "mips32--uclibc--stable-2017.05",
+    "targets": ["codex_dhcpd", "codex_portal"]
+  },
+  "statuses": {
+    "codex_webui": "EXACT_SOURCE_REPRODUCIBLE",
+    "codex_hbus": "EXACT_SOURCE_REPRODUCIBLE",
+    "codex_bt_pair_agent": "EXACT_SOURCE_REPRODUCIBLE",
+    "codex_bthid_keyboard": "EXACT_SOURCE_REPRODUCIBLE",
+    "codex_hal_ltcp": "EXACT_SOURCE_REPRODUCIBLE",
+    "codex_dhcpd": "EXACT_SOURCE_REPRODUCIBLE",
+    "codex_portal": "EXACT_SOURCE_REPRODUCIBLE",
+    "dropbearmulti": "UNVERIFIED_THIRD_PARTY"
+  }
+}

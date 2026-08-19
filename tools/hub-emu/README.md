@@ -46,8 +46,7 @@ node tools/hub-emu/dev-proxy.mjs   # serves the redesigned UI on :8787
 Open http://127.0.0.1:8787/#control
 
 - `run.sh --rebuild` forces a recompile of the MIPS binaries.
-- Node: use PATH node or
-  `/Users/matt/.cache/codex-runtimes/codex-primary-runtime/dependencies/node/bin/node`.
+- Node: use PATH node or set `NODE=/path/to/node`.
 
 ## Ports
 

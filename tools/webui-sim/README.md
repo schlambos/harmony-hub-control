@@ -15,10 +15,10 @@ From the repository root:
 node tools/webui-sim/server.mjs
 ```
 
-If `node` is missing from `PATH` (common on this machine):
+If `node` is missing from `PATH`, point `NODE` at your runtime:
 
 ```sh
-/Users/matt/.cache/codex-runtimes/codex-primary-runtime/dependencies/node/bin/node tools/webui-sim/server.mjs
+NODE=/path/to/node tools/webui-sim/server.mjs
 ```
 
 Open http://127.0.0.1:8787/#control

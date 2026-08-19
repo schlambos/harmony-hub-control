@@ -214,7 +214,7 @@ duplicated, hidden advanced fields preserved).
 - Live hub untouched. Prior hub state in `docs/SESSION_HANDOFF.md` remains
   authoritative.
 - Sim: `node tools/webui-sim/server.mjs` → `http://127.0.0.1:8787/#control`
-  (node path: `/Users/matt/.cache/codex-runtimes/codex-primary-runtime/dependencies/node/bin/node`).
+  (node path: `NODE=/path/to/node`).
   Sim was reset to pristine fixture at handoff.
 - All QA green at handoff: create/edit/delete/reorder flows, remote press
   resolution, mobile 390px, 0 console errors, `node --check` clean on all
