@@ -1,4 +1,5 @@
 local hbus = require("tasks.hal.core.hbus"):instance()
+local http = require("socket.http")
 local connectUtils = require("tasks.connectserver.core.utils")
 local engine = require("tasks.connectserver.core.engine")
 local json = require("json")
@@ -13,6 +14,9 @@ local session = require("tasks.harmonywebservices.core.session")
 local string = require("string")
 local system = require("system")
 local table = require("table")
+local math = require("math")
+local os = require("os")
+local socket = require("socket")
 
 -- luaworks tasks run sandboxed without the io global; stock code opens files
 -- through system.io (the real io, reached via package.seeall).
@@ -29,6 +33,20 @@ local ltcpServerConnector
 local cloudapi
 local pubnubServerConnect
 local packagemgr
+local timeSyncTask
+
+local NTP_SERVERS = {"pool.ntp.org", "time.google.com", "time.cloudflare.com"}
+local NTP_EPOCH_OFFSET = 2208988800 -- seconds from 1900 (NTP) to 1970 (Unix)
+local NTP_MIN_VALID = 1767225600 -- 2026-01-01; anything older is a bad reply
+local NTP_RESYNC_SECONDS = 6 * 60 * 60
+local GATEWAY_STATE = "/var/volatile/codex-default-gateway"
+local CLOUD_HOST_PATTERNS = {
+  "myharmony%.com$",
+  "logitech%.com$",
+  "logitechharmony%.com$",
+  "pubnub%.com$",
+  "pubnub%.net$"
+}
 
 local function cloudBlockerEnabled()
   if not io or not io.open then
@@ -41,6 +59,173 @@ local function cloudBlockerEnabled()
   local value = string.lower(tostring(f:read("*l") or ""))
   f:close()
   return not (value == "0" or value == "off" or value == "false" or value == "disabled" or value == "allow" or value == "allowed")
+end
+
+-- Stock tasks (discovery, TimeManager, crashlog) keep calling Logitech over
+-- HTTPS. Behind the blocker those calls can die inside the TLS client with
+-- "bad argument #1 to '?' (table expected, got number)" and kill the task,
+-- while a DNS failure returns cleanly. Answer cloud hosts with that clean
+-- failure before any socket is opened. require("socket.http") is the shared
+-- works.http table, so patching it covers every stock caller.
+local function isCloudHost(url)
+  local host = type(url) == "string" and string.match(url, "^%a+://([^/:]+)")
+  if not host then
+    return false
+  end
+  host = string.lower(host)
+  for _, pattern in ipairs(CLOUD_HOST_PATTERNS) do
+    if string.find(host, pattern) then
+      return true
+    end
+  end
+  return false
+end
+
+local function installCloudHttpGuard()
+  if http.__codexCloudGuard then
+    return
+  end
+  local request = http.request
+  http.request = function(req, body)
+    local url = type(req) == "table" and req.url or req
+    if isCloudHost(url) and cloudBlockerEnabled() then
+      log.notice("codex cloud blocker refused", url)
+      return nil, "host not found"
+    end
+    return request(req, body)
+  end
+  http.__codexCloudGuard = true
+  log.notice("codex cloud HTTP guard installed")
+end
+
+local function readFirstLine(path)
+  local f = io.open(path, "r")
+  if not f then
+    return nil
+  end
+  local line = f:read("*l")
+  f:close()
+  return line
+end
+
+local function hasDefaultRoute()
+  local f = io.open("/proc/net/route", "r")
+  if not f then
+    return false
+  end
+  local found = false
+  for line in f:lines() do
+    local dest, flags = string.match(line, "^%S+%s+(%x+)%s+%x+%s+(%x+)")
+    -- RTF_GATEWAY is bit 1 of the flags column
+    if dest == "00000000" and flags and math.floor(tonumber(flags, 16) / 2) % 2 == 1 then
+      found = true
+      break
+    end
+  end
+  f:close()
+  return found
+end
+
+local function isIpv4(value)
+  return type(value) == "string" and string.match(value, "^%d+%.%d+%.%d+%.%d+$") ~= nil
+end
+
+local function ntpQuery(ip)
+  local udp = socket.udp()
+  if not udp then
+    return nil, "no udp socket"
+  end
+  udp:settimeout(3)
+  local ok, err = udp:setpeername(ip, 123)
+  if not ok then
+    udp:close()
+    return nil, err
+  end
+  -- LI 0, version 3, mode 3 (client); the rest of the 48 bytes are zero.
+  udp:send(string.char(27) .. string.rep(string.char(0), 47))
+  local reply
+  reply, err = udp:receive()
+  udp:close()
+  if not reply then
+    return nil, err or "no reply"
+  end
+  if #reply < 48 then
+    return nil, "short reply"
+  end
+  local mode = string.byte(reply, 1) % 8
+  local stratum = string.byte(reply, 2)
+  if mode ~= 4 or stratum < 1 or stratum > 15 then
+    return nil, "unsynchronised server"
+  end
+  local b1, b2, b3, b4 = string.byte(reply, 41, 44)
+  local seconds = ((b1 * 256 + b2) * 256 + b3) * 256 + b4 - NTP_EPOCH_OFFSET
+  if seconds < NTP_MIN_VALID then
+    return nil, "implausible time"
+  end
+  return seconds
+end
+
+-- With the blocker on, the egress guard removes the default route. Open a
+-- host route to just this NTP server through the saved gateway for the
+-- length of one query.
+local function ntpQueryRouted(ip)
+  if hasDefaultRoute() then
+    return ntpQuery(ip)
+  end
+  local gateway = readFirstLine(GATEWAY_STATE)
+  if not isIpv4(gateway) then
+    return nil, "no saved gateway"
+  end
+  local route = "-host " .. ip .. " gw " .. gateway .. " dev ath0"
+  os.execute("route add " .. route .. " >/dev/null 2>&1")
+  local seconds, err = ntpQuery(ip)
+  os.execute("route del " .. route .. " >/dev/null 2>&1")
+  return seconds, err
+end
+
+local function syncClockOnce()
+  for _, server in ipairs(NTP_SERVERS) do
+    local ip = socket.dns.toip(server, 10000)
+    if isIpv4(ip) then
+      local seconds, err = ntpQueryRouted(ip)
+      if seconds then
+        local drift = seconds - os.time()
+        if math.abs(drift) > 2 then
+          -- The watchdog reboots the hub when a /var/watchdog file looks
+          -- older than 15 s; touch them all in the same shell as the jump.
+          os.execute("date -u -s \"" .. os.date("!%Y-%m-%d %H:%M:%S", seconds) ..
+            "\" >/dev/null 2>&1; touch /var/watchdog/* 2>/dev/null")
+          system.tiggleWatchDog("codex time sync: clock stepped by " ..
+            tostring(drift) .. " s from " .. server)
+        else
+          log.notice("codex time sync: clock within 2 s of", server)
+        end
+        return true
+      end
+      log.notice("codex time sync:", server, ip, tostring(err))
+    else
+      log.notice("codex time sync: cannot resolve", server)
+    end
+  end
+  return false
+end
+
+local function startTimeSync()
+  if timeSyncTask and system.taskStatus(timeSyncTask) ~= "dead" then
+    return
+  end
+  timeSyncTask = system.addTask("codex time sync", function()
+    local retry = 30
+    while true do
+      if syncClockOnce() then
+        retry = 30
+        system.sleep(NTP_RESYNC_SECONDS * 1000)
+      else
+        system.sleep(retry * 1000)
+        retry = math.min(retry * 2, 900)
+      end
+    end
+  end)
 end
 
 local function localResourceName(params)
@@ -365,6 +550,7 @@ local function handleEvent(event)
     end
 
     if event.label ~= "lo" then
+      startTimeSync()
       maybeStartCloudTasks()
       system.broadcastMessageExceptMeNoWarning(MSG_NETSERVICE_NEW_ADDRESS, {
         label = event.label,
@@ -381,6 +567,7 @@ local function handleEvent(event)
   end
 end
 
+installCloudHttpGuard()
 installOfflineApiGuards()
 
 if mfgData.hasNetwork == true then

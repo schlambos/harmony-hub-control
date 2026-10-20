@@ -12,7 +12,18 @@ if [ -z "$HUB_ID" ]; then
 fi
 
 if [ -x /data/codex/offline_egress_guard.sh ]; then
-  /data/codex/offline_egress_guard.sh monitor >> "$LOG" 2>&1 &
+  # The guard has been seen to exit mid-boot, leaving the default route to
+  # come back on the next DHCP renewal. Respawn it if it ever stops.
+  (
+    while true; do
+      /data/codex/offline_egress_guard.sh monitor
+      # monitor also returns at once when another guard owns the pid file
+      if [ ! -f /var/run/codex-offline-egress.pid ]; then
+        echo "$(date) codex offline egress guard exited; restarting" >> "$LOG"
+      fi
+      sleep 5
+    done
+  ) >> "$LOG" 2>&1 &
 fi
 
 if [ -x /data/codex/bin/dropbear ]; then
