@@ -6483,6 +6483,43 @@ static void render_led_json(int fd, const struct request *req) {
     fclose(f);
 }
 
+/* Cheap state poll.  connect.statedigest?get returns 304 unless the hub's
+ * stateVersion has moved past the client's current_version, so the UI can poll
+ * this often without a full engine round-trip and re-pull detail only when the
+ * state actually changes.  version must be numeric (it is embedded in the hbus
+ * JSON); a missing/invalid version forces a full fetch. */
+static int safe_version(const char *s) {
+    int i = 0;
+    if (!s || !s[0]) return 0;
+    if (s[0] == '-') i = 1;
+    if (!s[i]) return 0;
+    for (; s[i]; i++) {
+        if (s[i] < '0' || s[i] > '9') return 0;
+    }
+    return 1;
+}
+
+static void render_state_json(int fd, const struct request *req) {
+    char version[32], params[96], reply[8192];
+    int rc, code;
+    FILE *f;
+    query_value(req->path, "version", version, sizeof(version));
+    if (!safe_version(version)) {
+        snprintf(version, sizeof(version), "-1");
+    }
+    snprintf(params, sizeof(params),
+        "{\"current_version\":\"%s\",\"format\":\"json\"}", version);
+    rc = harmony_hbus_call("connect.statedigest?get", params, reply, sizeof(reply));
+    code = json_int(reply, "code", -1);
+    f = send_json_start(fd, rc == 0 ? "200 OK" : "502 Bad Gateway");
+    if (!f) return;
+    fprintf(f, "{\"ok\":%s,\"code\":%d,\"changed\":%s,\"reply\":",
+        rc == 0 ? "true" : "false", code, (rc == 0 && code == 200) ? "true" : "false");
+    json_write_string(f, reply);
+    fputs("}\n", f);
+    fclose(f);
+}
+
 static void render_ir_batch_send_json(int fd, const struct request *req) {
     char device_id[64], delay_text[32], dry_text[16], run_id[128], reply[1024], last_reply[1024];
     char *commands, *line, *save;
@@ -8672,6 +8709,10 @@ static void handle_client(int client) {
         render_activity_sync_json(client);
     } else if (strcmp(req.method, "GET") == 0 && strcmp(req.path, "/api/inventory") == 0) {
         render_inventory_json(client);
+    } else if (strcmp(req.method, "GET") == 0 &&
+        strncmp(req.path, "/api/state", 10) == 0 &&
+        (req.path[10] == 0 || req.path[10] == '?')) {
+        render_state_json(client, &req);
     } else if ((strcmp(req.method, "GET") == 0 || strcmp(req.method, "POST") == 0) &&
         strncmp(req.path, "/api/device-commands", 20) == 0 &&
         (req.path[20] == 0 || req.path[20] == '?')) {

@@ -127,6 +127,48 @@ export function refreshState() {
   return stateInflight;
 }
 
+// Lightweight liveness. connect.statedigest?get returns "unchanged" until the
+// hub's stateVersion moves, so we poll it cheaply and pull the full activity
+// state only when something actually changed — a remote starting an activity,
+// or another client making a change — rather than on a fixed expensive timer.
+let lastStateVersion = null;
+let statePollTimer = null;
+
+// Pure: pull the stateVersion out of an /api/state reply (robust to the engine
+// reply being escaped/nested). Exported for unit testing.
+export function extractStateVersion(payload) {
+  if (payload == null) return null;
+  const raw = (typeof payload === "string" ? payload : JSON.stringify(payload)).replace(/\\/g, "");
+  const match = raw.match(/"stateVersion"\s*:\s*"?(\d+)/i);
+  return match ? match[1] : null;
+}
+
+export async function pollStateDigest() {
+  let res;
+  try {
+    res = await api.getStateDigest(lastStateVersion);
+  } catch (_) {
+    return false; // transient; the next tick retries
+  }
+  if (!res || !res.changed) return false;
+  const version = extractStateVersion(res.reply);
+  if (version) lastStateVersion = version;
+  await refreshState();
+  return true;
+}
+
+export function startStatePolling(intervalMs = 5000) {
+  if (statePollTimer) return;
+  statePollTimer = setInterval(pollStateDigest, intervalMs);
+}
+
+export function stopStatePolling() {
+  if (statePollTimer) {
+    clearInterval(statePollTimer);
+    statePollTimer = null;
+  }
+}
+
 export async function setRunning(id) {
   const target = String(id);
   try {

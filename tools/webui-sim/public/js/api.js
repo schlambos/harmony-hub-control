@@ -53,6 +53,14 @@ export function getState() {
   return request("/api/activity-state");
 }
 
+// Cheap liveness check: the hub returns "unchanged" (304) unless its
+// stateVersion has moved past `version`, so this can be polled often without a
+// full engine round-trip. Pass null/"" to force a full read.
+export function getStateDigest(version) {
+  const v = version == null || version === "" ? "" : String(version);
+  return request("/api/state?version=" + encodeURIComponent(v));
+}
+
 export function runActivity(activityId) {
   return request("/api/activity-run", {
     method: "POST",

@@ -117,3 +117,4 @@ show(routeFromHash());
 
 hub.ensureConfig();
 hub.refreshState();
+hub.startStatePolling();

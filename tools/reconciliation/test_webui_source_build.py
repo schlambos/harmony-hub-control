@@ -17,9 +17,9 @@ official Zig 0.16.0 pin:
 The exact source tuples (from the verified webui-repro and
 zig-distribution-sweep pilot reports):
 
-  codex_webui.c          0fd02498e49ee4f20e72592ed3b76b1cc50cd6cd (box 2026-10-20 + LED control endpoint)
+  codex_webui.c          b8279bd4f5811d9145cde693f6f7f3b0f9bd97ef (box 2026-10-20 + LED + state-digest endpoints)
   activity_ui_assets.h   5dad607f7c09a0d5cc0034969b76e6c5df1eb2bc
-  harmony_shell_assets.h 1903dc70c0cb4071ebc7938aeeb7f68dc43af54b (box 2026-10-20)
+  harmony_shell_assets.h a568defb5088ef9828a3cc031c26ce603aa3c8cb (box 2026-10-20 + state-digest liveness)
   remote_skin_jpg.h      419611c5ff0713f1f5de2dd684d699f6d77238d5
   codex_hbus.c           d2bbcdef214369bff3dacf1836d6b5a0057f5ede (309cec3)
 
@@ -76,9 +76,9 @@ BUILD_SCRIPT = os.path.join(REPO_ROOT, "build", "build_harmony_tools_kali.sh")
 #: constants from the verified pilot reports.
 PINNED_SOURCES = {
     "codex_webui.c": (
-        "0fd02498e49ee4f20e72592ed3b76b1cc50cd6cd",
-        "08b9ea50d41d12da9f2bec6050ffb18e4d39783a24f959bc12beb2319e8c392a",
-        527371,
+        "b8279bd4f5811d9145cde693f6f7f3b0f9bd97ef",
+        "c5fc71cd31a7e2ab87209feeda5a80d0665cbfc7c798a9c6246dd39ebe275354",
+        529025,
     ),
     "activity_ui_assets.h": (
         "5dad607f7c09a0d5cc0034969b76e6c5df1eb2bc",
@@ -86,9 +86,9 @@ PINNED_SOURCES = {
         502204,
     ),
     "harmony_shell_assets.h": (
-        "1903dc70c0cb4071ebc7938aeeb7f68dc43af54b",
-        "fbcd4570488713279f6dff720ba16a04160a6eb5ff325614b5870bd2bddea3db",
-        1418280,
+        "a568defb5088ef9828a3cc031c26ce603aa3c8cb",
+        "7eacba584ee06e954a372d411036975762c58f7581ea67afaa97a742f4d8807b",
+        1420735,
     ),
     "remote_skin_jpg.h": (
         "419611c5ff0713f1f5de2dd684d699f6d77238d5",
@@ -105,8 +105,8 @@ PINNED_SOURCES = {
 #: exact live binary targets (verified pilot reports)
 TARGETS = {
     "codex_webui": (
-        "856b4ad3b1460f4c063e3d516cd8398c621691cd2dc7cb9dc21f8e9ca08e981e",
-        970036,
+        "faf0df2c1e5270304d523fb1e1ba78455050e4a683435401fdf7711559a07ef1",
+        971204,
     ),
     "codex_bt_pair_agent": (
         "563c6c58a3629edfebd7ec30ebcf14e6384a2d84e89669b1d7c3d79c75b619c8",

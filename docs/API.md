@@ -457,6 +457,32 @@ only when the hardware daemon replies with code `200`. The LED is a status
 indicator, so the firmware may overwrite the state on its next event (for example
 when an activity starts). See `PROTOCOLS.md` for the `sys.led` command.
 
+## State changes (cheap liveness)
+
+Poll for state changes without a full engine round-trip. The hub keeps a
+`stateVersion` that increments on every state change (an activity starting or
+stopping, from any source — the app, a remote, or another client). Pass the last
+version you saw; the hub answers "unchanged" until it moves.
+
+```text
+GET /api/state?version=<lastStateVersion>
+```
+
+```json
+{ "ok": true, "code": 200, "changed": true,
+  "reply": "{...digest including a new stateVersion...}" }
+```
+
+- `code` is `304` with `changed:false` when nothing has changed since `version`
+  (a cheap response, safe to poll every few seconds).
+- `code` is `200` with `changed:true` when state moved; `reply` carries the full
+  state digest, including the new `stateVersion` to pass on the next poll.
+- Omit `version` (or pass an impossible one) to force a full read.
+
+The web UI uses this to stay live: it polls this endpoint on a short interval and
+only re-reads the full activity state (`/api/activity-state`) when `changed` is
+true. See `PROTOCOLS.md` for the underlying `connect.statedigest?get`.
+
 ## Exports
 
 ```text
