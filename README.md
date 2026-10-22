@@ -28,7 +28,10 @@ personal backups.
 
 1. Root the hub with harmony-hub-root. Keep the SSH key it creates
    (`harmony_owner_*` in `~/.ssh`) and the numeric Hub ID it prints.
-2. From a computer on the same network, install Melodious:
+2. Download `melodious-hub-<version>.zip` from the
+   [latest release](https://github.com/schlambos/harmony-hub-control/releases/latest)
+   and unzip it, or clone this repository. From a computer on the same
+   network, install Melodious:
 
    ```bash
    python3 install_webui.py --hub-host <hub-ip> --hub-id <hub-id>
@@ -261,8 +264,11 @@ hold action fires it after 500 ms. Keys the activity doesn't use are dimmed.
 ## The Android app
 
 The app is in [`Android/`](Android/): Kotlin and Jetpack Compose, package
-`app.melodious`, for Android 8.0 (API 26) and later. You build it from source;
-it isn't in an app store.
+`app.melodious`, for Android 8.0 (API 26) and later. Download
+`melodious-<version>.apk` from the
+[latest release](https://github.com/schlambos/harmony-hub-control/releases/latest)
+and open it on your phone (Android asks you to allow installs from your browser
+or file manager), or build it from source. It isn't in an app store.
 
 ```bash
 Android/deploy_to_phone.sh                               # phone on USB, or already paired with adb
