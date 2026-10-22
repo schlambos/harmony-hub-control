@@ -1,0 +1,72 @@
+Melodious (schlambos/harmony-hub-control)
+=========================================
+
+This repository holds code under two sets of terms. Which terms apply to a
+piece of code depends on who wrote it.
+
+
+1. Upstream code: all rights reserved
+-------------------------------------
+
+This repository is a fork of Ripthulhu/harmony-hub-control. Its history up to
+and including commit d87cebafdee36ec33f1e4ea3055239dbfea6aa09 (9 June 2026)
+was written by that project's author and its contributors.
+
+That code, including every part of it that remains in later versions of the
+files, is copyright its respective authors, with all rights reserved. It is
+not licensed under the MIT License in section 2, and nothing in this file
+grants any right to use, copy, modify or distribute it.
+
+
+2. Melodious code: MIT License
+------------------------------
+
+Every change made to this repository after commit
+d87cebafdee36ec33f1e4ea3055239dbfea6aa09, by Matthew Gibbons (GitHub:
+schlambos; commits authored as Matthew Gibbons, schlambos or Integration
+Agent), is licensed under the MIT License below. This includes the Android
+app in Android/.
+
+MIT License
+
+Copyright (c) 2026 Matthew Gibbons
+
+Permission is hereby granted, free of charge, to any person obtaining a copy
+of this software and associated documentation files (the "Software"), to deal
+in the Software without restriction, including without limitation the rights
+to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+copies of the Software, and to permit persons to whom the Software is
+furnished to do so, subject to the following conditions:
+
+The above copyright notice and this permission notice shall be included in
+all copies or substantial portions of the Software.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+SOFTWARE.
+
+
+3. Third-party components
+-------------------------
+
+These keep their own licences:
+
+- Dropbear SSH 2025.89, built into payload/bin/dropbearmulti:
+  third_party/dropbear-2025.89/LICENSE.
+- Material Icons, whose glyphs are embedded in the web app:
+  Apache License 2.0, third_party/material-icons/LICENSE.
+- The libraries the Android app is built with (AndroidX and Jetpack Compose,
+  Kotlin, kotlinx, OkHttp, JSch), declared in
+  Android/gradle/libs.versions.toml: each under its own licence.
+
+
+4. Trademarks
+-------------
+
+Logitech, Harmony, Harmony Hub and Harmony Touch are trademarks of Logitech.
+This project isn't affiliated with or endorsed by Logitech, and nothing here
+grants any right in Logitech's software or firmware.

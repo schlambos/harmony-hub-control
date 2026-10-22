@@ -557,6 +557,7 @@ dumps or rooting tools. Read [CONTRIBUTING.md](CONTRIBUTING.md) and
   [`third_party/dropbear-2025.89/`](third_party/dropbear-2025.89/), with its
   licence.
 
-**License**: the repository has no license file at its root, so default
-copyright applies. Ask the author before redistributing the code or binaries
-built from it.
+**License**: see [LICENSE](LICENSE). Melodious code, meaning every change
+after this fork's upstream commit `d87ceba`, is under the MIT License. Code
+from the upstream project, Ripthulhu/harmony-hub-control, is all rights
+reserved by its authors. Third-party components keep their own licences.
