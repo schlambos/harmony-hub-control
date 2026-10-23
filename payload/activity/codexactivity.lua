@@ -2,6 +2,7 @@ module(..., package.seeall)
 
 local system = require("system")
 local json = require("json")
+local hbus = require("tasks.hal.core.hbus"):instance()
 local log = require("log").logger("auto.p.codexactivity")
 local resources = require("tasks.harmonywebservices.core.resourcemanager")
 local digest = require("tasks.harmonywebservices.core.statedigest"):instance()
@@ -1145,6 +1146,109 @@ local function commitDeviceSettings(request)
   }
 end
 
+local TOUCH_READ_BODY_FILE = "/var/volatile/codex-touch-read.bin"
+local TOUCH_READ_TIMEOUT = 60000
+local TOUCH_READ_MAX_BYTES = 512 * 1024
+-- Read-only probe of the paired Touch over HOT. Only these exact paths may be
+-- read; the op never issues a write verb. Paths come from the shared stock
+-- resource layout (resourcemanager.lua, mode 4) plus hal status pseudo-files.
+local TOUCH_READ_PATHS = {
+  ["/data/resources/index.json"] = true,
+  ["/data/resources/MapList.json"] = true,
+  ["/data/resources/DeviceList.json"] = true,
+  ["/data/resources/ActivityList.json"] = true,
+  ["/data/resources/Settings.json"] = true,
+  ["/data/resources/Context.json"] = true,
+  ["/data/resources/AutomationConfig.json"] = true,
+  ["/data/resources/ProtocolList.json"] = true,
+  ["/data/resources/CapabilityList.json"] = true,
+  ["/data/resources/FunctionList.json"] = true,
+  ["/data/resources_1/MapList.json"] = true,
+  ["/data/resources_1/index.json"] = true,
+  ["/data/loggly/SyncCounter.json"] = true
+}
+
+local function writeBodyFile(path, data)
+  local temporary = path .. ".new"
+  local f = io.open(temporary, "wb")
+  if not f then
+    return nil, "could not open Touch read body file"
+  end
+  local ok, err = f:write(data)
+  f:close()
+  if not ok then
+    os.remove(temporary)
+    return nil, tostring(err or "could not write Touch read body file")
+  end
+  os.remove(path)
+  local renamed, renameErr = os.rename(temporary, path)
+  if not renamed then
+    os.remove(temporary)
+    return nil, tostring(renameErr or "could not publish Touch read body file")
+  end
+  return true
+end
+
+local function readTouchFile(request)
+  local path = request.path
+  if type(path) ~= "string" or not TOUCH_READ_PATHS[path] then
+    return {
+      ok = false,
+      localOnly = true,
+      error = "path is not on the read-only Touch allowlist"
+    }
+  end
+  if resources.isAnySyncInProgress() then
+    return {
+      ok = false,
+      localOnly = true,
+      error = "a Harmony sync is in progress; try again when it finishes"
+    }
+  end
+  local response, body = hbus:command(
+    "hot.1.data.resource", {file = path}, nil, TOUCH_READ_TIMEOUT
+  )
+  if type(response) ~= "table" then
+    return {
+      ok = false,
+      localOnly = true,
+      error = "no reply from the Touch (is it awake?)"
+    }
+  end
+  local code = tonumber(response.code) or 0
+  if code ~= 200 then
+    return {
+      ok = false,
+      localOnly = true,
+      code = code,
+      error = "Touch returned code " .. tostring(response.code)
+    }
+  end
+  if type(body) ~= "string" then
+    body = ""
+  end
+  if #body > TOUCH_READ_MAX_BYTES then
+    return {
+      ok = false,
+      localOnly = true,
+      error = "Touch reply exceeds the local size cap"
+    }
+  end
+  local wrote, writeError = writeBodyFile(TOUCH_READ_BODY_FILE, body)
+  if not wrote then
+    return {ok = false, localOnly = true, error = writeError}
+  end
+  log.notice("codexactivity: read Touch file", path, #body, "bytes")
+  return {
+    ok = true,
+    localOnly = true,
+    readOnly = true,
+    path = path,
+    bytes = #body,
+    bodyFile = TOUCH_READ_BODY_FILE
+  }
+end
+
 local function processRequest(raw)
   local ok, request = pcall(json.decode, raw)
   if not ok or type(request) ~= "table" then
@@ -1155,6 +1259,8 @@ local function processRequest(raw)
     response = commitActivityResources(request)
   elseif request.op == "CommitDeviceSettings" then
     response = commitDeviceSettings(request)
+  elseif request.op == "ReadTouchFile" then
+    response = readTouchFile(request)
   elseif request.op == "Status" then
     response = statusResponse()
   else
