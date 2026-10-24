@@ -87,6 +87,63 @@ untested.
 - **Activity on-screen buttons and sequences:** these can send its
   commands; set them up in the web editor.
 
+## The Home Assistant integration
+
+`custom_components/melodious/` sets up the devices and answers their
+webhook calls. Install it through HACS: add this repository as a
+custom repository of type Integration.
+
+### Setup
+
+Settings → Devices & services → Add integration → Melodious asks for:
+- the hub's address, its web port (8080), and its web UI login if the
+  web UI has a password;
+- the URL the hub uses to reach Home Assistant. It must be plain
+  `http://` and reachable from the hub, for example
+  `http://<server-ip>:8123`; a Docker-internal address won't do.
+
+Setup sends the hub an empty dry run, which saves nothing, to check
+that the hub has the device writer. Then pick entities under the
+integration's **Configure**. Each one becomes a hub device. Removing one
+takes its device off the hub, unless an activity or button still uses
+it; the hub refuses then, and Home Assistant shows a notification.
+
+### What each entity gets
+
+| Domain | Commands | Power |
+|---|---|---|
+| `media_player` | PowerOn, PowerOff, VolumeUp, VolumeDown, Mute, Play, Pause, PlayPause, Stop, SkipForward, SkipBack (each when the player supports it); one `Input <source>` per source | on/off |
+| `light` | PowerOn, PowerOff, PowerToggle; BrightnessUp/Down (10 %) when dimmable | on/off |
+| `switch`, `input_boolean` | PowerOn, PowerOff, PowerToggle | on/off |
+| `fan` | as `switch`, plus SpeedUp, SpeedDown | on/off |
+| `cover` | Open, Close, Stop | none |
+| `script`, `scene` | Run / Activate | none |
+| `button`, `input_button` | Press | none |
+
+- The names match the activity wizard's key aliases, so its defaults
+  map Volume, Mute and the transport keys by themselves.
+- A media player's sources become device inputs. Activities select
+  them like any other input.
+- A source whose name the hub can't carry exactly (quotes, `%`, braces,
+  over 64 characters) is skipped.
+
+### How it stays in step
+
+- **On every Home Assistant start,** and whenever an option changes, the
+  integration sends the whole set. An unchanged set saves nothing on
+  the hub, so the Touch doesn't sync.
+- **When an entity changes** in a way that changes its device (a new
+  source, for example), the set goes out again after 5 s.
+- **A device keeps every command and input it had.** A player that is off
+  or unavailable often drops its sources or features, and rebuilding
+  from that would rewrite the hub's DeviceList on every power cycle and
+  drop inputs that activities use.
+- **Names stay unique,** and a name another hub device already has gets
+  " (HA)".
+- **A webhook call runs only a command the integration set up for that
+  entity.** It runs it without waiting, and always answers 200.
+- **Deleting the integration** asks the hub to remove its devices.
+
 ## Hardware gate
 
 The owner watches the Touch throughout. Steps run one at a time, and the

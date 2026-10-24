@@ -622,6 +622,8 @@ node tools/harmony_shell_smoke.mjs                # rebuilds the embedded web ap
 node tools/shipped_copy_hygiene.mjs               # no personal names or IDs in shipped files
 python3 tools/installer_contract_smoke.py         # the installers' contract, with a fake hub
 python3 -m unittest discover -s tools/reconciliation -p 'test_*.py'   # provenance; 12 known failures
+python3 -m unittest discover -s tools/ha-integration -p 'test_*.py'   # the Home Assistant integration's device rules
+luajit tools/touch-validator/codexactivity-ha-devices-test.lua         # the hub's Home Assistant device writer
 (cd Android && ./gradlew :core-protocol:test)    # Android protocol and graph tests
 node --test desktop/test/                         # macOS app units
 (cd desktop && npm run test:e2e)                  # macOS app end-to-end, against the simulator

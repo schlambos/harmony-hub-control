@@ -1,0 +1,35 @@
+{
+  "config": {
+    "step": {
+      "user": {
+        "title": "Melodious hub",
+        "description": "Home Assistant entities become devices on your Melodious Harmony hub, for activities and remote buttons. The hub calls Home Assistant back over plain http, so give an address the hub can reach on your network.",
+        "data": {
+          "host": "Hub address",
+          "port": "Hub web port",
+          "username": "Hub username (if the web UI has a password)",
+          "password": "Hub password",
+          "ha_url": "Home Assistant URL for the hub (http://…)"
+        }
+      }
+    },
+    "error": {
+      "cannot_connect": "Could not use the hub: {error}",
+      "http_only": "Use a plain http:// address; the hub can't check https certificates."
+    },
+    "abort": {
+      "already_configured": "This hub is already set up."
+    }
+  },
+  "options": {
+    "step": {
+      "init": {
+        "title": "Devices on the hub",
+        "description": "Each entity becomes a device on the hub. Removing one takes it off the hub, unless an activity or button still uses it.",
+        "data": {
+          "entities": "Entities"
+        }
+      }
+    }
+  }
+}

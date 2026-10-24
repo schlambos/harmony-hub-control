@@ -1,0 +1,13 @@
+{
+  "domain": "melodious",
+  "name": "Melodious",
+  "codeowners": ["@schlambos"],
+  "config_flow": true,
+  "dependencies": ["webhook"],
+  "documentation": "https://github.com/schlambos/harmony-hub-control/blob/main/docs/HOME_ASSISTANT.md",
+  "integration_type": "hub",
+  "iot_class": "local_push",
+  "issue_tracker": "https://github.com/schlambos/harmony-hub-control/issues",
+  "requirements": [],
+  "version": "0.1.0"
+}
