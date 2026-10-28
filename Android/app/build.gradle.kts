@@ -43,8 +43,9 @@ android {
     packaging {
         resources {
             excludes += "/META-INF/{AL2.0,LGPL2.1}"
-            // androidx.browser's jspecify and JSch ship the same multi-release manifest.
-            excludes += "/META-INF/versions/9/OSGI-INF/MANIFEST.MF"
+            // androidx.browser's jspecify, JSch and Bouncy Castle (for JSch's ssh-ed25519) ship
+            // the same multi-release manifests.
+            excludes += "/META-INF/versions/*/OSGI-INF/MANIFEST.MF"
         }
     }
 }

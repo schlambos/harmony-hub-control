@@ -1,6 +1,7 @@
 "use strict";
 
 const crypto = require("node:crypto");
+const os = require("node:os");
 const path = require("node:path");
 const {
   app,
@@ -43,6 +44,7 @@ const {
   prepareUpdate,
   swapInto,
 } = require("./self-update");
+const { findHubKey, updateHub } = require("./hub-update");
 
 // Test hooks (stand-in safeStorage, stub catalog) exist only when running from
 // source; a packaged app ignores MELODIOUS_E2E.
@@ -109,6 +111,7 @@ let lastUnreachableError = null;
 let updateChecker = null;
 let updateStore = null;
 let installingUpdate = false;
+let updatingHub = false;
 
 function getActiveCatalogService() {
   return (E2E && globalThis.__melodiousCatalogService) || catalogService;
@@ -255,12 +258,13 @@ async function announceUpdate(result, { manual }) {
     const { response } = await showMessage({
       type: "info",
       message: `Hub software ${hubVersion} is available`,
-      detail: result.hubNote,
-      buttons: ["Open Release Page", "Later"],
+      detail: `${result.hubNote} Melodious can update the hub for you over SSH, the way the installer does.`,
+      buttons: ["Update Hub…", "Release Page", "Later"],
       defaultId: 0,
-      cancelId: 1,
+      cancelId: 2,
     });
-    if (response === 0) openReleasePage(result.latestHub.url);
+    if (response === 0) await updateHubFlow(result.latestHub);
+    else if (response === 1) openReleasePage(result.latestHub.url);
     else updateStore.write({ dismissedHub: hubVersion });
     return;
   }
@@ -322,6 +326,68 @@ async function installAppUpdate(release) {
     return { ok: false, error: err?.message || String(err) };
   } finally {
     installingUpdate = false;
+  }
+}
+
+function sendHubStep(text) {
+  if (mainWindow && !mainWindow.isDestroyed()) mainWindow.webContents.send("desktop:hub-update-step", { text });
+}
+
+/** Update the hub over SSH with the installer's key; explains every outcome in a dialog. */
+async function updateHubFlow(release) {
+  if (updatingHub || !release) return { ok: false };
+  const hub = settingsStore.getHub();
+  if (!hub) return { ok: false, error: "No hub is set up in this app." };
+  const keyPath = findHubKey();
+  if (!keyPath) {
+    await showMessage({
+      type: "warning",
+      message: "Melodious needs your hub's SSH key",
+      detail:
+        "Updating the hub uses the same SSH key as the installer: ~/.ssh/harmony_owner_…, created when the hub was rooted. " +
+        "Put it in ~/.ssh on this Mac, or run the installer from the release page instead.",
+    });
+    return { ok: false, error: "no key" };
+  }
+  const { response } = await showMessage({
+    type: "question",
+    message: `Update the hub to Melodious ${release.version}?`,
+    detail:
+      `Melodious downloads the hub software from GitHub, checks it, and installs it on ${hub.host} over SSH with ` +
+      `${keyPath.replace(os.homedir(), "~")}, the way the installer does. Remotes and activities ` +
+      "pause for about a minute while the hub restarts. If anything goes wrong, the hub keeps its current software. " +
+      "Keep the hub plugged in.",
+    buttons: ["Update Hub", "Cancel"],
+    defaultId: 0,
+    cancelId: 1,
+  });
+  if (response !== 0) return { ok: false, cancelled: true };
+  updatingHub = true;
+  setDockProgress(2);
+  try {
+    const result = await updateHub({
+      release,
+      host: hub.host,
+      httpPort: hub.port,
+      authHeader: settingsStore.getHubAuthHeader(),
+      keyPath,
+      userAgent: `Melodious/${app.getVersion()} (macOS)`,
+      onStep: sendHubStep,
+    });
+    sendHubStep("");
+    await showMessage({
+      type: result.ok ? "info" : "warning",
+      message: result.ok ? (result.alreadyCurrent ? "The hub is up to date" : "The hub was updated") : "Check the hub",
+      detail: result.message,
+    });
+    return result;
+  } catch (err) {
+    sendHubStep("");
+    await showMessage({ type: "warning", message: "The hub wasn't updated", detail: err?.message || String(err) });
+    return { ok: false, error: err?.message || String(err) };
+  } finally {
+    updatingHub = false;
+    setDockProgress(-1);
   }
 }
 
@@ -542,6 +608,12 @@ function registerIpcHandlers() {
     checkSender(event);
     const status = await updateChecker.status();
     return installAppUpdate(status.app);
+  });
+
+  ipcMain.handle("desktop:updates-update-hub", async (event) => {
+    checkSender(event);
+    const status = await updateChecker.status();
+    return updateHubFlow(status.latestHub);
   });
 
   ipcMain.handle("desktop:updates-open-release", (event, args = {}) => {

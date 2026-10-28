@@ -40,6 +40,7 @@
   let snackTimer = null;
   let updates = null; // desktop:updates-get / -check result
   let updatesBusy = false;
+  let hubStep = ""; // progress of a hub update, from the main process
 
   function escapeHtml(value) {
     return String(value ?? "").replace(/[&<>"']/g, (c) =>
@@ -265,7 +266,7 @@
     let hubRow = "";
     if (u && u.hub) {
       const hubTitle = u.hub.legacy ? "Hub: Melodious 1.2 or older" : `Hub: Melodious ${u.hub.version}`;
-      const hubSub = u.hubNote || (u.latestHub ? "Up to date" : "");
+      const hubSub = hubStep || u.hubNote || (u.latestHub ? "Up to date" : "");
       hubRow = `
         <div class="m-row">
           <span class="m-row-text">
@@ -274,7 +275,10 @@
           </span>
           ${
             u.hubNote && u.latestHub
-              ? `<button type="button" class="btn btn-tonal btn-sm" data-release-url="${escapeHtml(u.latestHub.url)}">Release page</button>`
+              ? `<span style="display:flex;gap:var(--space-2)">
+                   <button type="button" class="btn btn-text btn-sm" data-release-url="${escapeHtml(u.latestHub.url)}">Release page</button>
+                   <button type="button" class="btn btn-tonal btn-sm" id="updatesHubBtn" ${updatesBusy || hubStep ? "disabled" : ""}>Update hub…</button>
+                 </span>`
               : ""
           }
         </div>`;
@@ -308,7 +312,7 @@
             : ""
         }
       </div>
-      <p class="m-field-hint">Checks ask GitHub (api.github.com) for Melodious's releases. GitHub sees your IP address and this app's version; nothing about your hub or devices is sent. Nothing downloads unless you open the release page.</p>
+      <p class="m-field-hint">Checks ask GitHub (api.github.com) for Melodious's releases. GitHub sees your IP address and this app's version; nothing about your hub or devices is sent. Nothing downloads until you choose Install and Restart or Update hub.</p>
     `;
   }
 
@@ -446,6 +450,19 @@
     const releaseBtn = target.closest("[data-release-url]");
     if (releaseBtn && updatesBridge) {
       await updatesBridge.openRelease(releaseBtn.dataset.releaseUrl);
+      return;
+    }
+    if (target.closest("#updatesHubBtn") && updatesBridge && !updatesBusy) {
+      updatesBusy = true;
+      render();
+      try {
+        // The main process confirms, shows progress here and reports the outcome in a dialog.
+        await updatesBridge.updateHub();
+      } finally {
+        updatesBusy = false;
+        hubStep = "";
+        await loadUpdates();
+      }
       return;
     }
     if (target.closest("#updatesInstallBtn") && updatesBridge && !updatesBusy) {
@@ -615,6 +632,11 @@
     await bridge.openShell();
     window.location.hash = "#remote";
     window.location.reload();
+  });
+
+  updatesBridge?.onHubStep?.((text) => {
+    hubStep = text;
+    render();
   });
 
   async function init() {

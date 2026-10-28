@@ -312,6 +312,11 @@ bundle copy, catalog package or token is ever committed.
   Install and Restart, which fetches this Mac's zip and `SHA256SUMS.txt` from
   that GitHub release (redirects only within GitHub). Turn checks off in
   Settings → Updates.
+- **Update hub…** (Settings → Updates, when a newer hub release is out)
+  downloads `melodious-hub-<v>.zip` and `SHA256SUMS.txt` from that release.
+  It then talks to your hub over SSH with `~/.ssh/harmony_owner_*`, the
+  installer's key, using your `~/.ssh/known_hosts`. Nothing about the update
+  goes anywhere but GitHub and your hub.
 - Otherwise the app makes no network request on its own except the SSDP
   search when the connect screen opens, and `/api/system-status` checks of
   hubs that answer it.

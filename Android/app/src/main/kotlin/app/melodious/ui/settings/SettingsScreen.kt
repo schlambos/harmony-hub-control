@@ -204,10 +204,21 @@ private fun UpdatesSection(state: MelodiousUiState, viewModel: MelodiousViewMode
                         HubSoftware.Legacy -> "Hub: Melodious 1.2 or older"
                         is HubSoftware.Known -> "Hub: Melodious ${hub.version}"
                     },
-                    subtitle = note.ifEmpty { if (latestHub != null) "Up to date" else "" }.ifEmpty { null },
+                    subtitle = (state.hubUpdateStep ?: note).ifEmpty { if (latestHub != null) "Up to date" else "" }.ifEmpty { null },
                     trailing = if (note.isNotEmpty() && latestHub != null) {
-                        { OutlinedButton(onClick = { open(latestHub.url) }) { Text("Open") } }
+                        {
+                            if (state.hubUpdateStep != null) CircularProgressIndicator(Modifier.size(20.dp), strokeWidth = 2.dp)
+                            else OutlinedButton(onClick = viewModel::startHubUpdate, enabled = state.isConnected) { Text("Update") }
+                        }
                     } else null,
+                )
+            }
+            if (state.hubKeySaved) {
+                GroupDivider()
+                ListRow(
+                    title = "Hub SSH key",
+                    subtitle = "Saved on this phone, encrypted. Used only to update the hub.",
+                    trailing = { OutlinedButton(onClick = viewModel::forgetHubKey) { Text("Forget") } },
                 )
             }
             GroupDivider()

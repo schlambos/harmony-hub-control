@@ -104,10 +104,10 @@ function latestHubRelease(releases, allowUrl = isGitHubUrl) {
 function hubUpdateNote(hub, latestHub) {
   if (!hub || !latestHub) return "";
   if (hub.legacy) {
-    return `Your hub runs Melodious 1.2 or older. Hub ${latestHub.version} is out; update it with the installer from the release page.`;
+    return `Your hub runs Melodious 1.2 or older. Hub ${latestHub.version} is out.`;
   }
   if (parseVersion(hub.version) && compareVersions(latestHub.version, hub.version) > 0) {
-    return `Your hub runs Melodious ${hub.version}. Hub ${latestHub.version} is out; update it with the installer from the release page.`;
+    return `Your hub runs Melodious ${hub.version}. Hub ${latestHub.version} is out.`;
   }
   return "";
 }

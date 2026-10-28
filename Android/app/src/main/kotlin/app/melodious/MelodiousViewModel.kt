@@ -61,6 +61,8 @@ import app.melodious.protocol.update.LatestRelease
 import app.melodious.protocol.update.ReleaseDownloader
 import app.melodious.protocol.update.ReleaseFetch
 import app.melodious.system.AppUpdater
+import app.melodious.system.HubKeyStore
+import app.melodious.ssh.HubSshUpdater
 import app.melodious.protocol.update.ReleaseVersion
 import app.melodious.ssh.HubSshProvisioner
 import kotlinx.coroutines.Job
@@ -198,6 +200,15 @@ data class MelodiousUiState(
     val appUpdateProgress: AppUpdateProgress? = null,
     /** Android needs "Install unknown apps" allowed for Melodious before the update can install. */
     val installPermissionNeeded: Boolean = false,
+
+    // Hub update over SSH (the installer's way, with the owner's hub key)
+    /** Progress text while the hub is being updated; null otherwise. */
+    val hubUpdateStep: String? = null,
+    val hubKeyNeeded: Boolean = false,
+    val hubKeySaved: Boolean = false,
+    val hubUpdateConfirm: LatestRelease? = null,
+    val hubUpdateOutcome: String? = null,
+    val hubUpdateOk: Boolean = false,
 ) {
     val hubUpdateNote: String get() = GitHubReleases.hubNote(hubSoftware, latestHub)
 
@@ -293,17 +304,19 @@ class MelodiousViewModel(application: Application) : AndroidViewModel(applicatio
     private val discovery = HubDiscovery()
     private val hbusClient = HBusWebSocketClient(viewModelScope)
     private val sshProvisioner = HubSshProvisioner()
-    /* Debug builds may point update checks at a test server (HubPrefs.updateTestBase); release
-       builds only ever talk to GitHub. */
-    private val updateTestBase: String = prefs.updateTestBase.takeIf {
-        it.isNotBlank() && (application.applicationInfo.flags and android.content.pm.ApplicationInfo.FLAG_DEBUGGABLE) != 0
-    }.orEmpty()
+    /* Debug builds may point update checks at a test server (HubPrefs.updateTestBase) and the hub
+       update at another SSH port; release builds only ever talk to GitHub and port 22. */
+    private val debuggable = (application.applicationInfo.flags and android.content.pm.ApplicationInfo.FLAG_DEBUGGABLE) != 0
+    private val updateTestBase: String = prefs.updateTestBase.takeIf { it.isNotBlank() && debuggable }.orEmpty()
+    private val hubSshPort: Int = prefs.updateTestSshPort.takeIf { it > 0 && debuggable } ?: 22
+    private val hubKeyStore = HubKeyStore(application)
     private val releaseClient = if (updateTestBase.isEmpty()) GitHubReleaseClient()
     else GitHubReleaseClient(releasesUrl = "$updateTestBase/releases")
     private val allowUpdateUrl: (String) -> Boolean =
         { url -> GitHubReleases.isGitHubUrl(url) || (updateTestBase.isNotEmpty() && url.startsWith("$updateTestBase/")) }
     private val releaseDownloader = ReleaseDownloader(isAllowed = allowUpdateUrl)
     private var appUpdateJob: Job? = null
+    private val hubUpdater = HubSshUpdater(downloader = releaseDownloader, hostKeys = prefs)
     private val appVersion: String = runCatching {
         application.packageManager.getPackageInfo(application.packageName, 0).versionName
     }.getOrNull() ?: "0.0.0"
@@ -329,6 +342,7 @@ class MelodiousViewModel(application: Application) : AndroidViewModel(applicatio
             updateLastChecked = prefs.updateLastChecked,
             latestApp = newerThanThisApp(prefs.updateLatestApp),
             latestHub = prefs.updateLatestHub,
+            hubKeySaved = hubKeyStore.load() != null,
         )
     )
     val uiState: StateFlow<MelodiousUiState> = _uiState.asStateFlow()
@@ -1098,6 +1112,76 @@ class MelodiousViewModel(application: Application) : AndroidViewModel(applicatio
 
     fun dismissInstallPermission() {
         _uiState.update { it.copy(installPermissionNeeded = false) }
+    }
+
+    /** "Update hub": ask for the SSH key once, then confirm. */
+    fun startHubUpdate() {
+        val state = _uiState.value
+        val release = state.latestHub ?: return
+        if (state.hubUpdateStep != null || state.activeEndpoint == null) return
+        _uiState.update {
+            if (hubKeyStore.load() == null) it.copy(updatePrompt = null, hubKeyNeeded = true)
+            else it.copy(updatePrompt = null, hubUpdateConfirm = release)
+        }
+    }
+
+    /** The installer's private key (harmony_owner_…), pasted or read from a file; kept encrypted. */
+    fun saveHubKey(privateKeyPem: String): Boolean {
+        val pem = privateKeyPem.trim()
+        if (!pem.startsWith("-----BEGIN") || !pem.contains("PRIVATE KEY")) {
+            showMessage("That isn't a private key. Use the harmony_owner_… file, not the .pub one.", isError = true)
+            return false
+        }
+        if (!hubKeyStore.save("$pem\n")) {
+            showMessage("This phone couldn't store the key securely, so it wasn't saved.", isError = true)
+            return false
+        }
+        _uiState.update { it.copy(hubKeyNeeded = false, hubKeySaved = true, hubUpdateConfirm = it.latestHub) }
+        return true
+    }
+
+    fun forgetHubKey() {
+        hubKeyStore.clear()
+        _uiState.update { it.copy(hubKeySaved = false) }
+    }
+
+    fun cancelHubUpdate() {
+        _uiState.update { it.copy(hubKeyNeeded = false, hubUpdateConfirm = null) }
+    }
+
+    fun confirmHubUpdate() {
+        val release = _uiState.value.hubUpdateConfirm ?: return
+        val endpoint = _uiState.value.activeEndpoint ?: return
+        val key = hubKeyStore.load() ?: run {
+            _uiState.update { it.copy(hubUpdateConfirm = null, hubKeyNeeded = true) }
+            return
+        }
+        _uiState.update { it.copy(hubUpdateConfirm = null, hubUpdateStep = "Starting…") }
+        viewModelScope.launch {
+            val app = getApplication<Application>()
+            val (ok, text) = try {
+                val result = hubUpdater.update(
+                    release = release,
+                    host = endpoint.host,
+                    privateKeyPem = key,
+                    workDir = java.io.File(app.cacheDir, "hub-update").apply { deleteRecursively(); mkdirs() },
+                    sshPort = hubSshPort,
+                    onStep = { step -> _uiState.update { it.copy(hubUpdateStep = step) } },
+                    versionProbe = { restClient.getHubSoftware(endpoint) },
+                )
+                result.ok to result.message
+            } catch (e: kotlinx.coroutines.CancellationException) {
+                throw e
+            } catch (e: Exception) {
+                false to (e.message ?: "The hub wasn't updated.")
+            }
+            _uiState.update { it.copy(hubUpdateStep = null, hubUpdateOutcome = text, hubUpdateOk = ok) }
+            refreshHubSoftware(endpoint)
+        }
+    }
+
+    fun dismissHubUpdateOutcome() {
+        _uiState.update { it.copy(hubUpdateOutcome = null) }
     }
 
     private fun refreshHubSoftware(endpoint: HubEndpoint) = viewModelScope.launch {

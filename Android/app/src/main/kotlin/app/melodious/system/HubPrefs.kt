@@ -10,7 +10,7 @@ import kotlinx.serialization.json.Json
  * Single source of truth for the hub the user last connected to plus phone-side preferences.
  * Shared by the app UI and the Quick Settings tile so both talk to the same host, port and auth.
  */
-class HubPrefs(context: Context) {
+class HubPrefs(context: Context) : app.melodious.ssh.HostKeyStore {
     private val prefs: SharedPreferences =
         context.applicationContext.getSharedPreferences("melodious_prefs", Context.MODE_PRIVATE)
 
@@ -123,6 +123,17 @@ class HubPrefs(context: Context) {
     val updateTestBase: String
         get() = prefs.getString(KEY_UPDATE_TEST_BASE, "").orEmpty()
 
+    /** Debug builds only: the hub's SSH port for the emulator hub-update test. Release builds use 22. */
+    val updateTestSshPort: Int
+        get() = prefs.getInt(KEY_UPDATE_TEST_SSH_PORT, 0)
+
+    /** Each hub's SSH host key fingerprint, pinned on first use (as `ssh` accept-new does). */
+    override fun get(host: String): String? = prefs.getString(KEY_SSH_HOST_PREFIX + host, null)
+
+    override fun put(host: String, fingerprint: String) {
+        prefs.edit().putString(KEY_SSH_HOST_PREFIX + host, fingerprint).apply()
+    }
+
     private fun readRelease(key: String): LatestRelease? =
         prefs.getString(key, null)?.let { runCatching { Json.decodeFromString(LatestRelease.serializer(), it) }.getOrNull() }
 
@@ -152,5 +163,7 @@ class HubPrefs(context: Context) {
         const val KEY_UPDATE_DISMISSED = "update_dismissed"
         const val KEY_UPDATE_DISMISSED_HUB = "update_dismissed_hub"
         const val KEY_UPDATE_TEST_BASE = "update_test_base"
+        const val KEY_UPDATE_TEST_SSH_PORT = "update_test_ssh_port"
+        const val KEY_SSH_HOST_PREFIX = "ssh_host_key_"
     }
 }

@@ -337,6 +337,54 @@ private fun UpdateDialogs(state: MelodiousUiState, viewModel: MelodiousViewModel
         return
     }
     val context = androidx.compose.ui.platform.LocalContext.current
+    state.hubUpdateStep?.let { step ->
+        androidx.compose.material3.AlertDialog(
+            onDismissRequest = {},
+            title = { Text("Updating the hub") },
+            text = {
+                Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
+                    Text(step)
+                    androidx.compose.material3.LinearProgressIndicator(modifier = Modifier.fillMaxWidth())
+                    Text(
+                        "Keep the hub plugged in. Once the files are on the hub it finishes by itself, even if this phone drops off Wi-Fi.",
+                        style = MaterialTheme.typography.bodySmall,
+                    )
+                }
+            },
+            confirmButton = {},
+        )
+        return
+    }
+    state.hubUpdateOutcome?.let { text ->
+        androidx.compose.material3.AlertDialog(
+            onDismissRequest = viewModel::dismissHubUpdateOutcome,
+            title = { Text(if (state.hubUpdateOk) "The hub was updated" else "The hub wasn't updated") },
+            text = { Text(text) },
+            confirmButton = { androidx.compose.material3.TextButton(onClick = viewModel::dismissHubUpdateOutcome) { Text("OK") } },
+        )
+        return
+    }
+    if (state.hubKeyNeeded) {
+        HubKeyDialog(viewModel)
+        return
+    }
+    state.hubUpdateConfirm?.let { release ->
+        androidx.compose.material3.AlertDialog(
+            onDismissRequest = viewModel::cancelHubUpdate,
+            title = { Text("Update the hub to Melodious ${release.version}?") },
+            text = {
+                Text(
+                    "Melodious downloads the hub software from GitHub, checks it, and installs it on " +
+                        "${state.activeEndpoint?.host ?: "the hub"} over SSH with your hub key, the way the installer does. " +
+                        "Remotes and activities pause for about a minute while the hub restarts. If anything goes wrong, " +
+                        "the hub keeps its current software. Keep the hub plugged in."
+                )
+            },
+            confirmButton = { androidx.compose.material3.TextButton(onClick = viewModel::confirmHubUpdate) { Text("Update hub") } },
+            dismissButton = { androidx.compose.material3.TextButton(onClick = viewModel::cancelHubUpdate) { Text("Cancel") } },
+        )
+        return
+    }
     state.appUpdateProgress?.let { progress ->
         val percent = if (progress.total > 0) (progress.done * 100 / progress.total).toInt() else -1
         androidx.compose.material3.AlertDialog(
@@ -392,14 +440,55 @@ private fun UpdateDialogs(state: MelodiousUiState, viewModel: MelodiousViewModel
         confirmButton = {
             if (prompt.forHub) {
                 androidx.compose.material3.TextButton(onClick = {
-                    if (app.melodious.protocol.update.GitHubReleases.isGitHubUrl(prompt.url)) uriHandler.openUri(prompt.url)
                     viewModel.dismissUpdatePrompt()
-                }) { Text("Open release page") }
+                    viewModel.startHubUpdate()
+                }) { Text("Update hub") }
             } else {
                 androidx.compose.material3.TextButton(onClick = viewModel::installAppUpdate) { Text("Install") }
             }
         },
         dismissButton = { androidx.compose.material3.TextButton(onClick = viewModel::dismissUpdatePrompt) { Text("Later") } },
+    )
+}
+
+/** Asks once for the installer's SSH key (harmony_owner_…): paste it or pick the file. */
+@Composable
+private fun HubKeyDialog(viewModel: MelodiousViewModel) {
+    val context = androidx.compose.ui.platform.LocalContext.current
+    var text by remember { mutableStateOf("") }
+    val pick = androidx.activity.compose.rememberLauncherForActivityResult(
+        androidx.activity.result.contract.ActivityResultContracts.OpenDocument(),
+    ) { uri ->
+        if (uri != null) {
+            runCatching {
+                context.contentResolver.openInputStream(uri)?.use { it.readBytes().take(16384).toByteArray().toString(Charsets.UTF_8) }
+            }.getOrNull()?.let { if (!viewModel.saveHubKey(it)) text = "" }
+        }
+    }
+    androidx.compose.material3.AlertDialog(
+        onDismissRequest = viewModel::cancelHubUpdate,
+        title = { Text("Your hub's SSH key") },
+        text = {
+            Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
+                Text(
+                    "Updating the hub uses the installer's SSH key: the harmony_owner_… file (not the .pub) made when " +
+                        "the hub was rooted. Pick the file or paste it. It stays on this phone, encrypted."
+                )
+                androidx.compose.material3.OutlinedButton(onClick = { pick.launch(arrayOf("*/*")) }) { Text("Choose file") }
+                androidx.compose.material3.OutlinedTextField(
+                    value = text,
+                    onValueChange = { text = it },
+                    label = { Text("Or paste the key") },
+                    minLines = 3,
+                    maxLines = 6,
+                    modifier = Modifier.fillMaxWidth(),
+                )
+            }
+        },
+        confirmButton = {
+            androidx.compose.material3.TextButton(onClick = { viewModel.saveHubKey(text) }, enabled = text.isNotBlank()) { Text("Save key") }
+        },
+        dismissButton = { androidx.compose.material3.TextButton(onClick = viewModel::cancelHubUpdate) { Text("Cancel") } },
     )
 }
 
