@@ -1,5 +1,5 @@
 #!/bin/sh
-# Melodious hub update, run ON THE HUB by the Android or macOS app over SSH.
+# Melodious hub update, run ON THE HUB by the macOS app over SSH.
 # The app has already downloaded the hub release from GitHub, checked it
 # against the release's SHA256SUMS.txt, and copied the changed files into a
 # private RAM staging folder with a plan. This script is the installer's

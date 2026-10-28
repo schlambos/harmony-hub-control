@@ -36,23 +36,12 @@ function makeHubZip(dir, version, { extra = {}, badManifest = false } = {}) {
   return zip;
 }
 
-test("the destination map matches tools/releases/release.py and the Android app", () => {
+test("the destination map matches tools/releases/release.py", () => {
   const py = fs.readFileSync(path.join(ROOT, "tools/releases/release.py"), "utf8");
   const pyMap = Object.fromEntries([...py.matchAll(/^\s+"(payload\/[^"]+)": \("([^"]+)", "(\d+)", \d\),$/gm)].map((m) => [m[1], [m[2], m[3]]]));
   assert.deepEqual(
     Object.fromEntries(Object.entries(HUB_FILES).map(([rel, [dest, mode]]) => [rel, [dest, mode]])),
     pyMap,
-  );
-  const kt = fs.readFileSync(path.join(ROOT, "Android/core-ssh/src/main/kotlin/app/melodious/ssh/HubSshUpdater.kt"), "utf8");
-  const ktMap = Object.fromEntries([...kt.matchAll(/"(payload\/[^"]+)" to HubFile\("([^"]+)", "(\d+)", reboot = (true|false)\)/g)]
-    .map((m) => [m[1], [m[2], m[3], m[4] === "true" ? 1 : 0]]));
-  assert.deepEqual(ktMap, HUB_FILES);
-});
-
-test("the hub script shipped in the Android app is the same file", () => {
-  assert.deepEqual(
-    fs.readFileSync(path.join(ROOT, "Android/core-ssh/src/main/resources/hub_update.sh")),
-    fs.readFileSync(path.join(ROOT, "desktop/src/hub-update/hub_update.sh")),
   );
 });
 

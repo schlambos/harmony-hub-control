@@ -22,7 +22,7 @@ const SCRIPT_PATH = path.join(__dirname, "hub-update", "hub_update.sh");
 
 // Where each hub payload file goes (as install_webui.py installs it) and
 // whether it needs a reboot to take effect. Must match HUB_FILES in
-// tools/releases/release.py and the Android app (checked by a test).
+// tools/releases/release.py (checked by a test).
 const HUB_FILES = {
   "payload/bin/codex_webui": ["/data/codex/bin/codex_webui", "755", 0],
   "payload/bin/codex_hbus": ["/data/codex/bin/codex_hbus", "755", 0],

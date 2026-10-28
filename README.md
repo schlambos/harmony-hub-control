@@ -627,20 +627,20 @@ Each run:
 `python3 install_webui.py --help` lists every option.
 
 - **Updating.** Get the latest release or the latest copy of this repository,
-  and run the installer again. Or let the Android or macOS app do it: when a
-  newer hub release is out, Settings → Updates offers **Update hub**.
+  and run the installer again. Or let the macOS app do it: when a newer hub
+  release is out, Settings → Updates offers **Update hub…**. The Android app
+  only tells you a hub update is out; it never holds the hub's SSH key.
   - **Download:** the app fetches the hub zip from the GitHub release, checks
     it against the release's `SHA256SUMS.txt`, and sends only the files that
     differ.
-  - **Key:** it connects over SSH with the same key as the installer. The Mac
-    app finds `~/.ssh/harmony_owner_*`; the Android app asks for the key once
-    and keeps it encrypted.
+  - **Key:** it connects over SSH with the same key as the installer, the
+    newest `~/.ssh/harmony_owner_*`, and your `~/.ssh/known_hosts`.
   - **On the hub:** a short script does the installer's steps from a RAM
     folder: check every file, copies in RAM, a handoff backup, `.codex-new`
     then rename with `codex_webui` last, then a restart and a check that the
     web app answers. If that check fails, it puts the old files back. It
     reboots when the boot scripts or plugins changed. Because it runs on the
-    hub, it finishes even if the phone drops off Wi-Fi.
+    hub, it finishes even if the Mac drops off the network.
   - **A new hub** still needs the installer once; the app only updates a hub
     that already has Melodious.
   - **Doesn't change:** the hub's settings (the Hub ID, cloud blocker, MQTT)

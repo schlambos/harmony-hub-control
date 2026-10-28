@@ -100,11 +100,11 @@ object GitHubReleases {
         val latest = ReleaseVersion.parse(latestHub.version) ?: return ""
         return when (hub) {
             HubSoftware.Legacy ->
-                "Your hub runs Melodious 1.2 or older. Hub ${latestHub.version} is out."
+                "Your hub runs Melodious 1.2 or older. Hub ${latestHub.version} is out; update it from Melodious for Mac or with the installer from the release page."
             is HubSoftware.Known -> {
                 val running = ReleaseVersion.parse(hub.version)
                 if (running != null && latest > running)
-                    "Your hub runs Melodious ${hub.version}. Hub ${latestHub.version} is out."
+                    "Your hub runs Melodious ${hub.version}. Hub ${latestHub.version} is out; update it from Melodious for Mac or with the installer from the release page."
                 else ""
             }
         }

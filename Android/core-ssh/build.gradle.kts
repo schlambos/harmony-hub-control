@@ -17,7 +17,4 @@ dependencies {
     implementation(project(":core-protocol"))
     implementation(libs.kotlinx.coroutines.core)
     implementation(libs.jsch)
-    implementation(libs.bouncycastle.bcprov)
-
-    testImplementation(libs.junit)
 }
