@@ -58,7 +58,7 @@ function isGitHubUrl(rawUrl) {
  * prefixes and which carries the asset `assetFor(version)` names. Drafts and
  * prereleases never count.
  */
-function latestRelease(releases, { prefixes, assetFor }) {
+function latestRelease(releases, { prefixes, assetFor, allowUrl = isGitHubUrl }) {
   let best = null;
   for (const rel of Array.isArray(releases) ? releases : []) {
     if (!rel || rel.draft || rel.prerelease) continue;
@@ -67,30 +67,34 @@ function latestRelease(releases, { prefixes, assetFor }) {
     if (prefix === undefined) continue;
     const version = tag.slice(prefix.length);
     if (!parseVersion(version)) continue;
-    const assetName = assetFor(version);
-    const asset = (rel.assets ?? []).find((a) => a && a.name === assetName);
-    if (!asset || !isGitHubUrl(asset.browser_download_url)) continue;
+    const assets = {};
+    for (const a of rel.assets ?? []) {
+      if (a && typeof a.name === "string" && allowUrl(a.browser_download_url)) assets[a.name] = a.browser_download_url;
+    }
+    if (!assets[assetFor(version)]) continue;
     const url = String(rel.html_url ?? "");
     if (!url.startsWith(RELEASE_PAGE_PREFIX) || !isGitHubUrl(url)) continue;
     if (best && compareVersions(version, best.version) <= 0) continue;
-    best = { version, tag, url, publishedAt: String(rel.published_at ?? "") };
+    best = { version, tag, url, publishedAt: String(rel.published_at ?? ""), assets };
   }
   return best;
 }
 
 /** The Mac app's newest release: a full `v*` release or a Mac-only `desktop-v*`. */
-function latestMacRelease(releases, arch) {
+function latestMacRelease(releases, arch, allowUrl = isGitHubUrl) {
   return latestRelease(releases, {
     prefixes: ["desktop-v", "v"],
     assetFor: (v) => `Melodious-${v}-${arch}.zip`,
+    allowUrl,
   });
 }
 
 /** The hub's newest release: only full `v*` releases carry the hub zip. */
-function latestHubRelease(releases) {
+function latestHubRelease(releases, allowUrl = isGitHubUrl) {
   return latestRelease(releases, {
     prefixes: ["v"],
     assetFor: (v) => `melodious-hub-${v}.zip`,
+    allowUrl,
   });
 }
 
@@ -185,6 +189,8 @@ function createUpdateChecker({
   fetchImpl = globalThis.fetch,
   now = Date.now,
   getHubVersion = async () => null,
+  releasesUrl = RELEASES_URL,
+  allowUrl = isGitHubUrl,
 }) {
   let checking = null;
 
@@ -221,7 +227,7 @@ function createUpdateChecker({
     const hub = await getHubVersion();
     let res;
     try {
-      res = await fetchImpl(RELEASES_URL, { headers, redirect: "error" });
+      res = await fetchImpl(releasesUrl, { headers, redirect: "error" });
     } catch (err) {
       return summarize(before, hub, { state: "error", error: "Couldn't reach GitHub." });
     }
@@ -247,8 +253,8 @@ function createUpdateChecker({
     const s = store.write({
       lastCheckedAt: now(),
       etag: res.headers.get("etag") || "",
-      latestApp: latestMacRelease(releases, arch),
-      latestHub: latestHubRelease(releases),
+      latestApp: latestMacRelease(releases, arch, allowUrl),
+      latestHub: latestHubRelease(releases, allowUrl),
     });
     return summarize(s, hub, { state: "checked" });
   }

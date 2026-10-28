@@ -260,7 +260,7 @@
     const appSub = !u
       ? ""
       : u.app
-        ? `You have ${u.appVersion}. Download the new version from the release page.`
+        ? `You have ${u.appVersion}. Install and Restart downloads it from GitHub and replaces this app.`
         : `${u.checks ? "Checks once a day" : "Daily checks are off"} · ${formatCheckedAt(u.lastCheckedAt)}`;
     let hubRow = "";
     if (u && u.hub) {
@@ -289,7 +289,10 @@
           </span>
           ${
             u && u.app
-              ? `<button type="button" class="btn btn-filled btn-sm" data-release-url="${escapeHtml(u.app.url)}">Release page</button>`
+              ? `<span style="display:flex;gap:var(--space-2)">
+                   <button type="button" class="btn btn-text btn-sm" data-release-url="${escapeHtml(u.app.url)}">Release page</button>
+                   <button type="button" class="btn btn-filled btn-sm" id="updatesInstallBtn" ${updatesBusy ? "disabled" : ""}>Install and Restart</button>
+                 </span>`
               : ""
           }
         </div>
@@ -443,6 +446,19 @@
     const releaseBtn = target.closest("[data-release-url]");
     if (releaseBtn && updatesBridge) {
       await updatesBridge.openRelease(releaseBtn.dataset.releaseUrl);
+      return;
+    }
+    if (target.closest("#updatesInstallBtn") && updatesBridge && !updatesBusy) {
+      updatesBusy = true;
+      render();
+      showSnackbar("Downloading the update from GitHub…");
+      try {
+        // On success the app relaunches; on failure the main process explains in a dialog.
+        await updatesBridge.install();
+      } finally {
+        updatesBusy = false;
+        render();
+      }
       return;
     }
     if (target.closest("#updatesCheckBtn") && updatesBridge && !updatesBusy) {

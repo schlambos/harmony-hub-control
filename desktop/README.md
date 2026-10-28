@@ -78,7 +78,13 @@ npm run test:dist
   no notarisation, so macOS asks before the first launch (see below).
 - No update feed, no URL scheme, no login item and no helper beyond
   Electron's own. Update checks (opt-in, `src/updates.js`) read GitHub's
-  release list and only open the release page; they install nothing.
+  release list. Install and Restart (`src/self-update.js`) downloads this
+  Mac's zip from the release, checks it against the release's
+  `SHA256SUMS.txt`, unpacks it next to the app, checks the bundle id,
+  version and code seal, swaps the two apps by rename (rolling back on
+  failure) and relaunches. It only works for an app in a folder your account
+  can write, such as /Applications for an admin. It doesn't work from the
+  disk image or a translocated copy, and the app says so.
 - `scripts/after-pack.js` gives the main executable its own LC_UUID before
   signing, derived from the bundle id and arch (`scripts/macho-uuid.js`).
   macOS Local Network privacy identifies apps by that UUID, and Electron's

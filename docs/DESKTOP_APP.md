@@ -308,8 +308,10 @@ bundle copy, catalog package or token is ever committed.
   click Check now / Melodious → Check for Updates…. A check is one request
   to `api.github.com/repos/schlambos/harmony-hub-control/releases`, which
   shows GitHub your IP address and the app's version, plus
-  `GET /api/version` on your hub. Nothing downloads; the app only opens the
-  release page on github.com. Turn checks off in Settings → Updates.
+  `GET /api/version` on your hub. Nothing downloads until you choose
+  Install and Restart, which fetches this Mac's zip and `SHA256SUMS.txt` from
+  that GitHub release (redirects only within GitHub). Turn checks off in
+  Settings → Updates.
 - Otherwise the app makes no network request on its own except the SSDP
   search when the connect screen opens, and `/api/system-status` checks of
   hubs that answer it.

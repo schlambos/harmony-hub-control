@@ -37,6 +37,7 @@ contextBridge.exposeInMainWorld("melodiousDesktop", {
     get: () => ipcRenderer.invoke("desktop:updates-get"),
     setEnabled: (enabled) => ipcRenderer.invoke("desktop:updates-set-enabled", { enabled }),
     check: () => ipcRenderer.invoke("desktop:updates-check"),
+    install: () => ipcRenderer.invoke("desktop:updates-install"),
     openRelease: (url) => ipcRenderer.invoke("desktop:updates-open-release", { url }),
   },
   catalog: {
