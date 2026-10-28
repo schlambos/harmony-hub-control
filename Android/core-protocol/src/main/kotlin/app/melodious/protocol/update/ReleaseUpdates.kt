@@ -58,7 +58,11 @@ object GitHubReleases {
      * Newest published `v<x.y.z>` release that carries [assetFor]'s asset on GitHub.
      * Drafts and prereleases never count.
      */
-    fun latest(releases: JsonArray, assetFor: (String) -> String): LatestRelease? {
+    fun latest(
+        releases: JsonArray,
+        allowUrl: (String) -> Boolean = ::isGitHubUrl,
+        assetFor: (String) -> String,
+    ): LatestRelease? {
         var best: LatestRelease? = null
         for (element in releases) {
             val rel = element as? JsonObject ?: continue
@@ -68,23 +72,27 @@ object GitHubReleases {
             val version = tag.removePrefix("v")
             val parsed = ReleaseVersion.parse(version) ?: continue
             val wanted = assetFor(version)
-            val hasAsset = (rel["assets"] as? JsonArray).orEmpty().any {
-                val asset = it as? JsonObject
-                asset?.str("name") == wanted && isGitHubUrl(asset.str("browser_download_url"))
-            }
-            if (!hasAsset) continue
+            val assets = (rel["assets"] as? JsonArray).orEmpty().mapNotNull {
+                val asset = it as? JsonObject ?: return@mapNotNull null
+                val name = asset.str("name") ?: return@mapNotNull null
+                val link = asset.str("browser_download_url")?.takeIf(allowUrl) ?: return@mapNotNull null
+                name to link
+            }.toMap()
+            if (wanted !in assets) continue
             val url = rel.str("html_url") ?: continue
             if (!url.startsWith(RELEASE_PAGE_PREFIX) || !isGitHubUrl(url)) continue
             val current = best?.let { ReleaseVersion.parse(it.version) }
             if (current != null && parsed <= current) continue
-            best = LatestRelease(version, tag, url, rel.str("published_at").orEmpty())
+            best = LatestRelease(version, tag, url, rel.str("published_at").orEmpty(), assets)
         }
         return best
     }
 
-    fun latestAndroid(releases: JsonArray): LatestRelease? = latest(releases) { "melodious-$it.apk" }
+    fun latestAndroid(releases: JsonArray, allowUrl: (String) -> Boolean = ::isGitHubUrl): LatestRelease? =
+        latest(releases, allowUrl) { "melodious-$it.apk" }
 
-    fun latestHub(releases: JsonArray): LatestRelease? = latest(releases) { "melodious-hub-$it.zip" }
+    fun latestHub(releases: JsonArray, allowUrl: (String) -> Boolean = ::isGitHubUrl): LatestRelease? =
+        latest(releases, allowUrl) { "melodious-hub-$it.zip" }
 
     /** One line about the hub, or "" when there is nothing to say. */
     fun hubNote(hub: HubSoftware?, latestHub: LatestRelease?): String {
@@ -122,7 +130,14 @@ data class ReleaseVersion(val major: Int, val minor: Int, val patch: Int) : Comp
 }
 
 @Serializable
-data class LatestRelease(val version: String, val tag: String, val url: String, val publishedAt: String = "")
+data class LatestRelease(
+    val version: String,
+    val tag: String,
+    val url: String,
+    val publishedAt: String = "",
+    /** Asset name to its GitHub download link (only links on GitHub are kept). */
+    val assets: Map<String, String> = emptyMap(),
+)
 
 /** What the hub says about its own software (`GET /api/version`). */
 sealed interface HubSoftware {

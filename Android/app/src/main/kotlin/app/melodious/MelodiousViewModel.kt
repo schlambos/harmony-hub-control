@@ -58,7 +58,9 @@ import app.melodious.protocol.update.GitHubReleaseClient
 import app.melodious.protocol.update.GitHubReleases
 import app.melodious.protocol.update.HubSoftware
 import app.melodious.protocol.update.LatestRelease
+import app.melodious.protocol.update.ReleaseDownloader
 import app.melodious.protocol.update.ReleaseFetch
+import app.melodious.system.AppUpdater
 import app.melodious.protocol.update.ReleaseVersion
 import app.melodious.ssh.HubSshProvisioner
 import kotlinx.coroutines.Job
@@ -96,6 +98,11 @@ data class SendLogEntry(
 )
 
 data class UiMessage(val id: Long, val text: String, val isError: Boolean)
+
+enum class AppUpdateStage { DOWNLOADING, CHECKING, INSTALLING }
+
+/** The in-app update while it runs; [total] is -1 when GitHub didn't say. */
+data class AppUpdateProgress(val stage: AppUpdateStage, val done: Long = 0, val total: Long = -1)
 
 /** "A newer version is out" dialog: for this app, or for the hub when the app is current. */
 data class UpdatePrompt(val title: String, val text: String, val url: String, val version: String, val forHub: Boolean)
@@ -188,6 +195,9 @@ data class MelodiousUiState(
     val latestHub: LatestRelease? = null,
     val hubSoftware: HubSoftware? = null,
     val updatePrompt: UpdatePrompt? = null,
+    val appUpdateProgress: AppUpdateProgress? = null,
+    /** Android needs "Install unknown apps" allowed for Melodious before the update can install. */
+    val installPermissionNeeded: Boolean = false,
 ) {
     val hubUpdateNote: String get() = GitHubReleases.hubNote(hubSoftware, latestHub)
 
@@ -283,7 +293,17 @@ class MelodiousViewModel(application: Application) : AndroidViewModel(applicatio
     private val discovery = HubDiscovery()
     private val hbusClient = HBusWebSocketClient(viewModelScope)
     private val sshProvisioner = HubSshProvisioner()
-    private val releaseClient = GitHubReleaseClient()
+    /* Debug builds may point update checks at a test server (HubPrefs.updateTestBase); release
+       builds only ever talk to GitHub. */
+    private val updateTestBase: String = prefs.updateTestBase.takeIf {
+        it.isNotBlank() && (application.applicationInfo.flags and android.content.pm.ApplicationInfo.FLAG_DEBUGGABLE) != 0
+    }.orEmpty()
+    private val releaseClient = if (updateTestBase.isEmpty()) GitHubReleaseClient()
+    else GitHubReleaseClient(releasesUrl = "$updateTestBase/releases")
+    private val allowUpdateUrl: (String) -> Boolean =
+        { url -> GitHubReleases.isGitHubUrl(url) || (updateTestBase.isNotEmpty() && url.startsWith("$updateTestBase/")) }
+    private val releaseDownloader = ReleaseDownloader(isAllowed = allowUpdateUrl)
+    private var appUpdateJob: Job? = null
     private val appVersion: String = runCatching {
         application.packageManager.getPackageInfo(application.packageName, 0).versionName
     }.getOrNull() ?: "0.0.0"
@@ -352,6 +372,15 @@ class MelodiousViewModel(application: Application) : AndroidViewModel(applicatio
                     prefs.widgetPendingActivityId = null
                     WidgetRenderer.updateAll(getApplication())
                 }
+        }
+        viewModelScope.launch {
+            AppUpdater.events.collect { event ->
+                _uiState.update { it.copy(appUpdateProgress = null) }
+                when (event) {
+                    AppUpdater.Event.Installed -> showMessage("Melodious is up to date.")
+                    is AppUpdater.Event.Failed -> showMessage(event.message, isError = true)
+                }
+            }
         }
         start()
         checkForUpdatesIfDue()
@@ -550,6 +579,8 @@ class MelodiousViewModel(application: Application) : AndroidViewModel(applicatio
         if (inForeground) return
         inForeground = true
         checkForUpdatesIfDue()
+        // Back from Android's "Install unknown apps" page: carry on if the user allowed it.
+        if (_uiState.value.installPermissionNeeded && AppUpdater.canInstall(getApplication())) installAppUpdate()
         val state = _uiState.value
         val endpoint = state.activeEndpoint
         if (endpoint == null || !state.isConnected) {
@@ -964,8 +995,8 @@ class MelodiousViewModel(application: Application) : AndroidViewModel(applicatio
             val result = releaseClient.fetch(etag, "Melodious/$appVersion (Android)")
             when (result) {
                 is ReleaseFetch.Fresh -> {
-                    prefs.updateLatestApp = GitHubReleases.latestAndroid(result.releases)
-                    prefs.updateLatestHub = GitHubReleases.latestHub(result.releases)
+                    prefs.updateLatestApp = GitHubReleases.latestAndroid(result.releases, allowUpdateUrl)
+                    prefs.updateLatestHub = GitHubReleases.latestHub(result.releases, allowUpdateUrl)
                     prefs.updateEtag = result.etag
                     prefs.updateLastChecked = System.currentTimeMillis()
                 }
@@ -989,7 +1020,7 @@ class MelodiousViewModel(application: Application) : AndroidViewModel(applicatio
             val prompt = when {
                 latestApp != null && (manual || latestApp.version != prefs.updateDismissed) -> UpdatePrompt(
                     title = "Melodious ${latestApp.version} is available",
-                    text = "You have $appVersion. Download the new version from the release page on GitHub." +
+                    text = "You have $appVersion. Install downloads it from GitHub, checks it, and updates this app; your settings stay." +
                         state.hubUpdateNote.takeIf { it.isNotEmpty() }?.let { "\n\n$it" }.orEmpty(),
                     url = latestApp.url,
                     version = latestApp.version,
@@ -1017,6 +1048,56 @@ class MelodiousViewModel(application: Application) : AndroidViewModel(applicatio
         val prompt = _uiState.value.updatePrompt ?: return
         if (prompt.forHub) prefs.updateDismissedHub = prompt.version else prefs.updateDismissed = prompt.version
         _uiState.update { it.copy(updatePrompt = null) }
+    }
+
+    /**
+     * Download the newer APK from the GitHub release, check it against the release's SHA256SUMS and
+     * this app's signing key, then let Android install it over this app.
+     */
+    fun installAppUpdate() {
+        val release = _uiState.value.latestApp ?: return
+        if (appUpdateJob?.isActive == true) return
+        val app = getApplication<Application>()
+        if (!AppUpdater.canInstall(app)) {
+            _uiState.update { it.copy(updatePrompt = null, installPermissionNeeded = true) }
+            return
+        }
+        _uiState.update {
+            it.copy(updatePrompt = null, installPermissionNeeded = false, appUpdateProgress = AppUpdateProgress(AppUpdateStage.DOWNLOADING))
+        }
+        appUpdateJob = viewModelScope.launch {
+            try {
+                val dir = java.io.File(app.cacheDir, "updates").apply { deleteRecursively() }
+                var lastPercent = -1L
+                val apk = releaseDownloader.fetchVerified(release, "melodious-${release.version}.apk", dir) { done, total ->
+                    val percent = if (total > 0) done * 100 / total else -1
+                    if (percent != lastPercent) {
+                        lastPercent = percent
+                        _uiState.update { it.copy(appUpdateProgress = AppUpdateProgress(AppUpdateStage.DOWNLOADING, done, total)) }
+                    }
+                }
+                _uiState.update { it.copy(appUpdateProgress = AppUpdateProgress(AppUpdateStage.CHECKING)) }
+                AppUpdater.check(app, apk)?.let { reason -> throw IllegalStateException(reason) }
+                _uiState.update { it.copy(appUpdateProgress = AppUpdateProgress(AppUpdateStage.INSTALLING)) }
+                kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.IO) { AppUpdater.install(app, apk) }
+            } catch (e: kotlinx.coroutines.CancellationException) {
+                _uiState.update { it.copy(appUpdateProgress = null) }
+                throw e
+            } catch (e: Exception) {
+                _uiState.update { it.copy(appUpdateProgress = null) }
+                showMessage(e.message ?: "The update didn't install.", isError = true)
+            }
+        }
+    }
+
+    fun cancelAppUpdate() {
+        if (_uiState.value.appUpdateProgress?.stage != AppUpdateStage.DOWNLOADING) return
+        appUpdateJob?.cancel()
+        _uiState.update { it.copy(appUpdateProgress = null) }
+    }
+
+    fun dismissInstallPermission() {
+        _uiState.update { it.copy(installPermissionNeeded = false) }
     }
 
     private fun refreshHubSoftware(endpoint: HubEndpoint) = viewModelScope.launch {
