@@ -186,10 +186,13 @@ private fun UpdatesSection(state: MelodiousUiState, viewModel: MelodiousViewMode
             val app = state.latestApp
             ListRow(
                 title = if (app != null) "Melodious ${app.version} is available" else "Melodious ${state.appVersion}",
-                subtitle = if (app != null) "You have ${state.appVersion}. Download the new version from the release page."
+                subtitle = if (app != null) "You have ${state.appVersion}. Install downloads it from GitHub and updates this app."
                 else lastChecked,
                 trailing = if (app != null) {
-                    { OutlinedButton(onClick = { open(app.url) }) { Text("Open") } }
+                    {
+                        if (state.appUpdateProgress != null) CircularProgressIndicator(Modifier.size(20.dp), strokeWidth = 2.dp)
+                        else OutlinedButton(onClick = viewModel::installAppUpdate) { Text("Install") }
+                    }
                 } else null,
             )
             state.hubSoftware?.let { hub ->

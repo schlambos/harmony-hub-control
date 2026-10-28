@@ -343,4 +343,5 @@ or codes.
 listed above, each started by a tap or, for the model check, by typing, plus
 the update check if you turn it on: once a day (when the app opens), one
 request to `api.github.com` for Melodious's releases, which shows GitHub your
-IP address and the app's version.
+IP address and the app's version. Tapping Install downloads the APK and its
+checksum list from that GitHub release.

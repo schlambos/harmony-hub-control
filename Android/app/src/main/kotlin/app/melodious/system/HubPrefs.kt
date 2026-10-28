@@ -116,6 +116,13 @@ class HubPrefs(context: Context) {
         get() = prefs.getString(KEY_UPDATE_DISMISSED_HUB, "").orEmpty()
         set(value) = prefs.edit().putString(KEY_UPDATE_DISMISSED_HUB, value).apply()
 
+    /**
+     * Debug builds only: a release-list base URL to use instead of GitHub (set with adb for the
+     * emulator self-update test). Release builds never read it.
+     */
+    val updateTestBase: String
+        get() = prefs.getString(KEY_UPDATE_TEST_BASE, "").orEmpty()
+
     private fun readRelease(key: String): LatestRelease? =
         prefs.getString(key, null)?.let { runCatching { Json.decodeFromString(LatestRelease.serializer(), it) }.getOrNull() }
 
@@ -144,5 +151,6 @@ class HubPrefs(context: Context) {
         const val KEY_UPDATE_HUB = "update_latest_hub"
         const val KEY_UPDATE_DISMISSED = "update_dismissed"
         const val KEY_UPDATE_DISMISSED_HUB = "update_dismissed_hub"
+        const val KEY_UPDATE_TEST_BASE = "update_test_base"
     }
 }
