@@ -38,6 +38,11 @@ contextBridge.exposeInMainWorld("melodiousDesktop", {
     setEnabled: (enabled) => ipcRenderer.invoke("desktop:updates-set-enabled", { enabled }),
     check: () => ipcRenderer.invoke("desktop:updates-check"),
     install: () => ipcRenderer.invoke("desktop:updates-install"),
+    updateHub: () => ipcRenderer.invoke("desktop:updates-update-hub"),
+    onHubStep: (callback) => {
+      if (typeof callback !== "function") return;
+      ipcRenderer.on("desktop:hub-update-step", (_event, info) => callback(String(info?.text ?? "")));
+    },
     openRelease: (url) => ipcRenderer.invoke("desktop:updates-open-release", { url }),
   },
   catalog: {
