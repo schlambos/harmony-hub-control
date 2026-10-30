@@ -46,7 +46,7 @@ Needs macOS 13 or later and a hub running Melodious 1.2.0 or newer. The app carr
 ## Known limits
 
 - **Slow saves:** with an activity running, a save can take up to two minutes. If the hub still hasn't finished, the app says so; reload a minute later to check before saving again.
-- **Updates:** the app tells you when a new version is out (if you turn on checks) and opens the release page; download and install it from there. Each build has a new signature, so macOS may ask once more to let Melodious use "Melodious Safe Storage" in your Keychain. Choose Always Allow.
+- **Updates:** when a new version is out (if you turn on checks), Install and Restart downloads it from GitHub, checks it and replaces the app. It needs the app in a folder you can write, such as Applications. Each build has a new signature, so after an update macOS may ask once more to let Melodious use "Melodious Safe Storage" in your Keychain. Choose Always Allow.
 - **Protocols:** catalog codes import only if the hub already has their IR protocol. The others are listed as skipped.
 - **Sign-in:** Google sign-in is tested. Logitech email-and-password sign-in uses the same page but hasn't been run.
 - **Logitech's service:** this uses your own Logitech account. If Logitech closes this path, IRDB search, code files and learning still work.

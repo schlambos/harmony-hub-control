@@ -36,6 +36,13 @@ const {
   fetchHubVersion,
   isGitHubUrl,
 } = require("./updates");
+const {
+  bundlePathFromExec,
+  cleanupStages,
+  installLocationProblem,
+  prepareUpdate,
+  swapInto,
+} = require("./self-update");
 
 // Test hooks (stand-in safeStorage, stub catalog) exist only when running from
 // source; a packaged app ignores MELODIOUS_E2E.
@@ -101,6 +108,7 @@ let pageMode = "connect";
 let lastUnreachableError = null;
 let updateChecker = null;
 let updateStore = null;
+let installingUpdate = false;
 
 function getActiveCatalogService() {
   return (E2E && globalThis.__melodiousCatalogService) || catalogService;
@@ -230,12 +238,15 @@ async function announceUpdate(result, { manual }) {
     const { response } = await showMessage({
       type: "info",
       message: `Melodious ${result.app.version} is available`,
-      detail: `You have ${result.appVersion}. Download the new version from the release page on GitHub.${hubLine}`,
-      buttons: ["Open Release Page", "Later"],
+      detail:
+        `You have ${result.appVersion}. Install and Restart downloads it from GitHub, checks it, ` +
+        `replaces this app and opens the new version.${hubLine}`,
+      buttons: ["Install and Restart", "Release Page", "Later"],
       defaultId: 0,
-      cancelId: 1,
+      cancelId: 2,
     });
-    if (response === 0) openReleasePage(result.app.url);
+    if (response === 0) await installAppUpdate(result.app);
+    else if (response === 1) openReleasePage(result.app.url);
     else updateChecker.dismiss(result.app.version);
     return;
   }
@@ -261,6 +272,56 @@ async function announceUpdate(result, { manual }) {
     await showMessage({ type: "warning", message: "Couldn't check for updates", detail: result.error });
   } else {
     await showMessage({ type: "info", message: "Melodious is up to date", detail: `You have ${result.appVersion}, the newest version.` });
+  }
+}
+
+function setDockProgress(value) {
+  if (mainWindow && !mainWindow.isDestroyed()) mainWindow.setProgressBar(value);
+}
+
+/** Replace this app with `release` from GitHub and relaunch; on any failure the app is unchanged. */
+async function installAppUpdate(release) {
+  if (installingUpdate || !release) return { ok: false };
+  const appPath = bundlePathFromExec(process.execPath);
+  const problem = installLocationProblem(appPath, { packaged: app.isPackaged });
+  if (problem) {
+    const { response } = await showMessage({
+      type: "warning",
+      message: "Melodious can't update itself here",
+      detail: problem,
+      buttons: ["Open Release Page", "OK"],
+      defaultId: 0,
+      cancelId: 1,
+    });
+    if (response === 0) openReleasePage(release.url);
+    return { ok: false, error: problem };
+  }
+  installingUpdate = true;
+  setDockProgress(2); // indeterminate until the size is known
+  try {
+    const { stageDir, newApp } = await prepareUpdate({
+      release,
+      arch: process.arch,
+      appPath,
+      userAgent: `Melodious/${app.getVersion()} (macOS)`,
+      onProgress: (done, total) => {
+        if (total > 0) setDockProgress(done / total);
+      },
+    });
+    swapInto({ appPath, newApp, stageDir });
+    app.relaunch();
+    app.exit(0);
+    return { ok: true };
+  } catch (err) {
+    setDockProgress(-1);
+    await showMessage({
+      type: "warning",
+      message: "The update didn't install",
+      detail: `${err?.message || err} Melodious is unchanged.`,
+    });
+    return { ok: false, error: err?.message || String(err) };
+  } finally {
+    installingUpdate = false;
   }
 }
 
@@ -477,6 +538,12 @@ function registerIpcHandlers() {
     return updateChecker.check();
   });
 
+  ipcMain.handle("desktop:updates-install", async (event) => {
+    checkSender(event);
+    const status = await updateChecker.status();
+    return installAppUpdate(status.app);
+  });
+
   ipcMain.handle("desktop:updates-open-release", (event, args = {}) => {
     checkSender(event);
     return { ok: openReleasePage(args.url) };
@@ -541,6 +608,8 @@ app.whenReady().then(() => {
       }),
   });
 
+  // A relaunch after an update leaves the previous version next to the app.
+  if (app.isPackaged) cleanupStages(bundlePathFromExec(process.execPath));
   updateStore = createUpdateStore({ dir: app.getPath("userData") });
   updateChecker = createUpdateChecker({
     store: updateStore,
