@@ -108,6 +108,8 @@ class FakeHub:
         # Flash bytes left for phase-1 copies; there is no way to query it.
         self.available_bytes = available_bytes
         self.ram_free_kb = 26_000
+        self.ram_inactive_file_kb = 0
+        self.ram_slab_reclaimable_kb = 0
         self.backup_listing = [FAKE_EXISTING_GENERATION]
         self.handoff_stamp = FAKE_HANDOFF_STAMP
         self.fail_rename_dest: str | None = None
@@ -163,7 +165,11 @@ class FakeHub:
 
         if c == "cat /proc/meminfo":
             self.events.append(("meminfo",))
-            return 0, f"MemTotal:          62524 kB\nMemFree:           {self.ram_free_kb} kB\n", ""
+            return 0, (
+                f"MemTotal:          62524 kB\nMemFree:           {self.ram_free_kb} kB\n"
+                f"Inactive(file):    {self.ram_inactive_file_kb} kB\n"
+                f"SReclaimable:      {self.ram_slab_reclaimable_kb} kB\n"
+            ), ""
 
         if c.startswith("mkdir " + INST.STAGE_PREFIX):
             path = shlex.split(c)[1]
@@ -584,6 +590,21 @@ class PythonInstallerPreflight(unittest.TestCase):
         self._stdout = stdout
         self.assertEqual(code, 2, stdout)
         self.assertEqual(kv_value(stdout, "verdict"), INST.VERDICT_ROLLBACK_CAPACITY)
+        self.assert_no_persistent_mutation()
+        self.assert_stage_removed_only()
+
+    def test_preflight_credits_reclaimable_ram(self):
+        """[PYTHON BEHAVIORAL] the hub kernel has no MemAvailable, so usable
+        RAM is MemFree plus inactive file cache plus reclaimable slab. A 32 MB
+        hub after staging (about 1 MiB free, 8 MiB reclaimable) is allowed."""
+        self.hub.ram_free_kb = 1176
+        self.hub.ram_inactive_file_kb = 7312
+        self.hub.ram_slab_reclaimable_kb = 988
+        code, stdout, _ = self.harness.run(self.harness.base_argv("--preflight-only"))
+        self._stdout = stdout
+        self.assertEqual(code, 0, stdout)
+        self.assertEqual(int(kv_value(stdout, "ram_free_bytes")), (1176 + 7312 + 988) * 1024)
+        self.assertEqual(kv_value(stdout, "verdict"), INST.VERDICT_ALLOWED)
         self.assert_no_persistent_mutation()
         self.assert_stage_removed_only()
 

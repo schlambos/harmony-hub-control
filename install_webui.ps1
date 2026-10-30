@@ -667,10 +667,16 @@ function Get-ActiveCandidates() {
 }
 
 function Get-RamStatus() {
-    # Free RAM from /proc/meminfo; staging and rollback copies live in tmpfs.
+    # Usable RAM from /proc/meminfo; staging and rollback copies live in tmpfs.
+    # The hub kernel has no MemAvailable, so credit what the kernel reclaims for
+    # tmpfs on demand: inactive file cache and reclaimable slab (see install_webui.py).
     $out = Invoke-Remote "cat /proc/meminfo" $null 30000
     if ($out -cnotmatch '(?m)^MemFree:\s+(\d+) kB\s*$') { Stop-WithValidation "could not read MemFree from /proc/meminfo" }
-    $script:RamFreeBytes = [long]$Matches[1] * 1024
+    $kb = [long]$Matches[1]
+    foreach ($field in 'Inactive\(file\)', 'SReclaimable') {
+        if ($out -cmatch "(?m)^${field}:\s+(\d+) kB\s*$") { $kb += [long]$Matches[1] }
+    }
+    $script:RamFreeBytes = $kb * 1024
 }
 
 function Build-Plans() {

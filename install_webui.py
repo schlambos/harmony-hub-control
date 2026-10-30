@@ -710,12 +710,18 @@ class Installer:
         return [c for c in self.candidates if c.action in ("replace", "create")]
 
     def ram_status(self) -> None:
-        """Free RAM from /proc/meminfo; staging and rollback copies live in tmpfs."""
+        """Usable RAM from /proc/meminfo; staging and rollback copies live in tmpfs.
+
+        The hub kernel has no MemAvailable, so credit what the kernel reclaims for
+        tmpfs on demand: inactive file cache and reclaimable slab. On a 32 MB hub
+        MemFree alone is about 1 MiB after staging while about 8 MiB is reclaimable.
+        """
         out = self.run_remote("cat /proc/meminfo", timeout=30, quiet=True)
-        match = re.search(r"^MemFree:\s+(\d+) kB$", out, re.M)
-        if not match:
+        fields = dict(re.findall(r"^(\S+):\s+(\d+) kB$", out, re.M))
+        if "MemFree" not in fields:
             self.fail_validation("could not read MemFree from /proc/meminfo")
-        self.ram_free_bytes = int(match.group(1)) * 1024
+        kb = sum(int(fields.get(name, 0)) for name in ("MemFree", "Inactive(file)", "SReclaimable"))
+        self.ram_free_bytes = kb * 1024
 
     def build_plans(self) -> None:
         step("Planning changed destinations")
