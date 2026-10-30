@@ -32,13 +32,18 @@ HEALTH_WAIT=${HEALTH_WAIT:-60}
 HANDOFF_PATHS="/etc/init.d/rcS.local /opt/luaworks/tasks/connectserver/netservicestarter.lua /usr/sbin/dropbear /usr/sbin/dropbearkey /data/codex/hub_id /data/codex/cloud_blocker.conf /data/codex/offline_egress_guard.sh /data/codexmqtt/config.json /pkg/codexactivity/codexactivity.lua /pkg/codexactivity/manifest.json"
 
 md5_of() { md5sum "$1" 2>/dev/null | cut -d' ' -f1; }
+# Usable RAM in kB, as install_webui.py counts it. The hub's 2.6.31 kernel has
+# no MemAvailable. Cached would also count the tmpfs files this update stages,
+# so credit only free memory plus what the kernel can reclaim: inactive file
+# cache and reclaimable slab.
+usable_kb() { awk '/^MemFree:|^Inactive\(file\):|^SReclaimable:/ {s += $2} END {print s + 0}' /proc/meminfo; }
 size_of() { ls -l "$1" 2>/dev/null | awk '{print $5}'; }
 
 status() {
   for d in "$@"; do
     if [ -f "$d" ]; then echo "file $(md5_of "$d") $d"; else echo "file absent $d"; fi
   done
-  echo "memfree_kb $(awk '/^MemFree:|^Cached:/ {s += $2} END {print s + 0}' /proc/meminfo)"
+  echo "memfree_kb $(usable_kb)"
   if [ -f /data/codex/hub_id ]; then echo "hub_id yes"; else echo "hub_id no"; fi
 }
 
@@ -115,7 +120,7 @@ apply() {
   while read md5 mode reboot name dest; do
     [ -f "$dest" ] && need=$((need + $(size_of "$dest")))
   done < "$PLAN"
-  free=$(awk '/^MemFree:|^Cached:/ {s += $2} END {print s + 0}' /proc/meminfo)
+  free=$(usable_kb)
   if [ $((need / 1024 + 4096)) -gt "$free" ]; then
     result nothing-changed "The hub doesn't have enough free memory for a safe update (${free} kB free). Nothing changed."
     return 1
