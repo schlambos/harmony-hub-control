@@ -570,6 +570,8 @@ export function createTouchScreenView(section) {
     let pressMode = existing?.pressMode ?? (pick ? recommendedPressMode(pick.command) : "standard");
     let longPick = existing?.longPress ? { ...existing.longPress } : null;
     let deviceId = devices.some((d) => d.id === pick?.deviceId) ? pick.deviceId : devices[0]?.id ?? "";
+    let longDeviceId = devices.some((d) => d.id === longPick?.deviceId) ? longPick.deviceId : deviceId;
+    let longQuery = "";
 
     const opened = openSheet({
       label: existing ? `Hard key ${key}` : "New hard key",
@@ -589,11 +591,12 @@ export function createTouchScreenView(section) {
             <label class="search-field">Key <select data-h-key>${TOUCH_HARD_KEYS.map((k) => `<option value="${k}"${k === key ? " selected" : ""}${hardRows.some((r) => r.buttonKey === k && k !== existing?.buttonKey) ? " disabled" : ""}>${k}</option>`).join("")}</select></label>
             <div class="pick-chips" data-h-devices></div>
             <label class="search-field">${icon("search", { size: 22 })}<input type="search" data-h-search placeholder="Search commands"></label>
-          </div><div class="pick-list" data-h-list></div>`;
+          </div><div class="pick-list" data-h-list></div>
+          <div class="pick-long" data-h-long style="display:none"></div>`;
         const $ = (s) => content.querySelector(s);
         let q = "";
         function draw() {
-          $("[data-h-now]").textContent = pick ? `${key}: ${pick.deviceId} · ${pick.command}${pressMode === "oneShot" ? " (One-shot)" : ""}` : `${key}: not set`;
+          $("[data-h-now]").textContent = pick ? `${key}: ${pick.deviceId} · ${pick.command}${pressMode === "oneShot" ? " (One-shot)" : pressMode === "custom" && longPick ? ` + Hold ${longPick.command}` : ""}` : `${key}: not set`;
           $("[data-h-mode]").innerHTML = pick ? [["standard", "Standard"], ["oneShot", "One-shot"], ["custom", "Custom Hold"]].map(([v, t]) => `<button type="button" class="chip" data-h-modebtn="${v}" aria-pressed="${pressMode === v}">${t}</button>`).join("") : "";
           $("[data-h-devices]").innerHTML = devices.map((d) => `<button type="button" class="chip" data-h-dev="${escapeHtml(d.id)}" aria-pressed="${d.id === deviceId}">${escapeHtml(d.name)}${ids.includes(String(d.id)) ? "" : " · extra"}</button>`).join("");
           const dev = devices.find((d) => d.id === deviceId);
@@ -601,7 +604,19 @@ export function createTouchScreenView(section) {
             const on = pick?.deviceId === deviceId && pick?.command === c.name;
             return `<button type="button" class="pick-row${on ? " is-current" : ""}" data-h-cmd="${escapeHtml(c.name)}"><span>${escapeHtml(c.name)}${isOneShotCommand(c.name) ? " · 1-shot" : ""}</span></button>`;
           }).join("") || `<p class="list-note">No commands.</p>`;
-          $('[data-h="done"]').disabled = !pick;
+          $('[data-h="done"]').disabled = !pick || (pressMode === "custom" && !longPick);
+          const longBox = $("[data-h-long]");
+          if (pressMode === "custom" && pick) {
+            longBox.style.display = "";
+            const ldev = devices.find((d) => d.id === longDeviceId);
+            longBox.innerHTML = `<p class="wiz-hint">Hold action (fires when held ≥600ms):</p>
+              <div class="pick-chips">${devices.map((d) => `<button type="button" class="chip" data-h-long-device="${escapeHtml(d.id)}" aria-pressed="${d.id === longDeviceId}">${escapeHtml(d.name)}${ids.includes(String(d.id)) ? "" : " · extra"}</button>`).join("")}</div>
+              <label class="search-field">${icon("search", { size: 22 })}<input type="search" data-h-long-search placeholder="Search hold commands" autocomplete="off"></label>
+              <div data-h-long-list>${(ldev?.commands ?? []).filter((c) => !longQuery || c.name.toLowerCase().includes(longQuery.toLowerCase())).map((c) => {
+                const on = longPick?.deviceId === longDeviceId && longPick?.command === c.name;
+                return `<button type="button" class="pick-row${on ? " is-current" : ""}" data-h-long-command="${escapeHtml(c.name)}"><span>${escapeHtml(c.name)}</span></button>`;
+              }).join("") || `<p class="list-note">No commands.</p>`}</div>`;
+          } else longBox.style.display = "none";
         }
         content.addEventListener("click", (ev) => {
           const mb = ev.target.closest("[data-h-modebtn]");
@@ -614,6 +629,15 @@ export function createTouchScreenView(section) {
           }
           const dc = ev.target.closest("[data-h-dev]");
           if (dc) { deviceId = dc.dataset.hDev; draw(); return; }
+          const ldc = ev.target.closest("[data-h-long-device]");
+          if (ldc) { longDeviceId = ldc.dataset.hLongDevice; draw(); return; }
+          const lcmd = ev.target.closest("[data-h-long-command]");
+          if (lcmd) {
+            const dev = devices.find((d) => d.id === longDeviceId);
+            const c = dev?.commands.find((x) => x.name === lcmd.dataset.hLongCommand);
+            if (c) { longPick = { kind: "command", deviceId: dev.id, command: c.name, functionId: c.functionId ?? 0 }; pressMode = "custom"; draw(); }
+            return;
+          }
           const cmd = ev.target.closest("[data-h-cmd]");
           if (cmd) {
             const dev = devices.find((d) => d.id === deviceId);
@@ -650,6 +674,7 @@ export function createTouchScreenView(section) {
         });
         content.addEventListener("input", (ev) => {
           if (ev.target.matches("[data-h-search]")) { q = ev.target.value; draw(); }
+          else if (ev.target.matches("[data-h-long-search]")) { longQuery = ev.target.value; draw(); }
         });
         content.addEventListener("change", (ev) => {
           if (ev.target.matches("[data-h-key]")) { key = ev.target.value; draw(); }
