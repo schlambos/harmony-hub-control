@@ -336,16 +336,68 @@ private fun UpdateDialogs(state: MelodiousUiState, viewModel: MelodiousViewModel
         )
         return
     }
+    val context = androidx.compose.ui.platform.LocalContext.current
+    state.appUpdateProgress?.let { progress ->
+        val percent = if (progress.total > 0) (progress.done * 100 / progress.total).toInt() else -1
+        androidx.compose.material3.AlertDialog(
+            onDismissRequest = {},
+            title = { Text("Updating Melodious") },
+            text = {
+                Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
+                    Text(
+                        when (progress.stage) {
+                            AppUpdateStage.DOWNLOADING -> if (percent >= 0) "Downloading from GitHub… $percent%" else "Downloading from GitHub…"
+                            AppUpdateStage.CHECKING -> "Checking the download…"
+                            AppUpdateStage.INSTALLING -> "Installing. Melodious restarts when it's done."
+                        }
+                    )
+                    if (progress.stage == AppUpdateStage.DOWNLOADING && percent >= 0) {
+                        androidx.compose.material3.LinearProgressIndicator(progress = { percent / 100f }, modifier = Modifier.fillMaxWidth())
+                    } else {
+                        androidx.compose.material3.LinearProgressIndicator(modifier = Modifier.fillMaxWidth())
+                    }
+                }
+            },
+            confirmButton = {},
+            dismissButton = if (progress.stage == AppUpdateStage.DOWNLOADING) {
+                { androidx.compose.material3.TextButton(onClick = viewModel::cancelAppUpdate) { Text("Cancel") } }
+            } else null,
+        )
+        return
+    }
+    if (state.installPermissionNeeded) {
+        androidx.compose.material3.AlertDialog(
+            onDismissRequest = viewModel::dismissInstallPermission,
+            title = { Text("Allow Melodious to install updates") },
+            text = {
+                Text(
+                    "Android asks once. Turn on \u201cAllow from this source\u201d for Melodious, then come back: " +
+                        "the update carries on by itself."
+                )
+            },
+            confirmButton = {
+                androidx.compose.material3.TextButton(onClick = {
+                    context.startActivity(app.melodious.system.AppUpdater.unknownSourcesIntent(context))
+                }) { Text("Open settings") }
+            },
+            dismissButton = { androidx.compose.material3.TextButton(onClick = viewModel::dismissInstallPermission) { Text("Cancel") } },
+        )
+        return
+    }
     val prompt = state.updatePrompt ?: return
     androidx.compose.material3.AlertDialog(
         onDismissRequest = viewModel::dismissUpdatePrompt,
         title = { Text(prompt.title) },
         text = { Text(prompt.text) },
         confirmButton = {
-            androidx.compose.material3.TextButton(onClick = {
-                if (app.melodious.protocol.update.GitHubReleases.isGitHubUrl(prompt.url)) uriHandler.openUri(prompt.url)
-                viewModel.dismissUpdatePrompt()
-            }) { Text("Open release page") }
+            if (prompt.forHub) {
+                androidx.compose.material3.TextButton(onClick = {
+                    if (app.melodious.protocol.update.GitHubReleases.isGitHubUrl(prompt.url)) uriHandler.openUri(prompt.url)
+                    viewModel.dismissUpdatePrompt()
+                }) { Text("Open release page") }
+            } else {
+                androidx.compose.material3.TextButton(onClick = viewModel::installAppUpdate) { Text("Install") }
+            }
         },
         dismissButton = { androidx.compose.material3.TextButton(onClick = viewModel::dismissUpdatePrompt) { Text("Later") } },
     )

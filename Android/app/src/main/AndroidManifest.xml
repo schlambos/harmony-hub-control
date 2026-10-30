@@ -9,6 +9,12 @@
     <uses-permission android:name="android.permission.VIBRATE" />
     <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
 
+    <!-- Self-update from the GitHub release: install the downloaded APK over
+         this app; on Android 12+ without a system dialog once the user allows
+         "Install unknown apps" for Melodious. -->
+    <uses-permission android:name="android.permission.REQUEST_INSTALL_PACKAGES" />
+    <uses-permission android:name="android.permission.UPDATE_PACKAGES_WITHOUT_USER_ACTION" />
+
     <!-- Package visibility for Chrome Auth Tab support checks (Android 11+).
          No intent filter is declared for com.logitech.harmony. -->
     <queries>
@@ -59,6 +65,11 @@
                 <action android:name="android.service.quicksettings.action.QS_TILE" />
             </intent-filter>
         </service>
+
+        <!-- PackageInstaller's answer for a self-update; explicit intents only -->
+        <receiver
+            android:name=".system.AppUpdateReceiver"
+            android:exported="false" />
 
         <!-- Notification remote + widget taps; explicit intents only -->
         <receiver
