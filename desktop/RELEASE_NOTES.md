@@ -4,12 +4,12 @@ Melodious for macOS is the Melodious web app in a Mac window, plus one thing the
 
 | File | What it is |
 | --- | --- |
-| `Melodious-1.2.0-arm64.dmg` | Apple silicon (M1 and later) |
-| `Melodious-1.2.0-x64.dmg` | Intel |
-| `Melodious-1.2.0-arm64.zip`, `Melodious-1.2.0-x64.zip` | The same apps, zipped |
+| `Melodious-1.3.0-arm64.dmg` | Apple silicon (M1 and later) |
+| `Melodious-1.3.0-x64.dmg` | Intel |
+| `Melodious-1.3.0-arm64.zip`, `Melodious-1.3.0-x64.zip` | The same apps, zipped |
 | `SHA256SUMS.txt` | SHA-256 checksums of the four files |
 
-Needs macOS 13 or later and a hub running Melodious 1.2.0 or newer. The app carries this release's web app, and its Touch & HA controls editor needs hub software 1.2.0; catalog import needs the hub's catalog route (an older hub says "update the hub"). The app ships Electron 45.0.0 (Chromium 156).
+Needs macOS 13 or later and a hub running Melodious 1.2.0 or newer. The app carries this release's web app, and its Touch & HA controls editor needs hub software 1.2.0; catalog import needs the hub's catalog route (an older hub says "update the hub"). **Update hub…** works on any hub the installer can reach, and brings it to 1.3.0. The app ships Electron 45.0.0 (Chromium 156).
 
 ## Install
 
@@ -19,6 +19,13 @@ Needs macOS 13 or later and a hub running Melodious 1.2.0 or newer. The app carr
    - Or in Terminal: `xattr -dr com.apple.quarantine /Applications/Melodious.app`
 3. macOS asks whether Melodious may find and connect to devices on your local network. Choose **Allow**: without it the app can't reach the hub. (Change it later in System Settings → Privacy & Security → Local Network.)
 4. Melodious looks for your hub on the network, or you type its address. If your hub has a sign-in, enter it once; it's kept encrypted in your Keychain.
+
+## What's new in 1.3
+
+- **Update checks (opt-in):** the app asks once whether to check GitHub for new releases. If you say yes, it checks once a day and tells you when a newer app or hub is out. **Check now** in Settings → Updates checks right away.
+- **Install and Restart:** the app downloads a new version from this repository's GitHub releases, checks it against the release's `SHA256SUMS.txt`, replaces itself and relaunches. Your settings and sign-ins stay.
+- **Update hub…:** when a newer hub release is out, the app updates the hub for you over SSH with the installer's key (the newest `~/.ssh/harmony_owner_*`) and your `~/.ssh/known_hosts`. It sends only the files that changed and does the installer's steps on the hub: copies in RAM, a handoff backup, a health check, and the old files put back if the check fails.
+- **The web app from hub 1.3.0:** System shows the hub's Melodious version and points to the installer for updates.
 
 ## What's new in 1.2
 
