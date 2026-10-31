@@ -12,6 +12,7 @@ import { parseTextStatus } from "./bluetooth-model.js";
 const SIM = globalThis.HARMONY_SIM === true;
 
 const PAGES = [
+  ["remotes", "Remotes", "Pair a Harmony remote and set its buttons"],
   ["bluetooth", "Bluetooth keyboard", ""],
   ["mqtt", "MQTT", "Home Assistant bridge"],
   ["wifi", "Wi-Fi", "The network your hub joins"],

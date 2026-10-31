@@ -1763,6 +1763,65 @@ details > summary {
   }
 }
 
+/* -- Remotes page ---------------------------------------------------------- */
+
+.remotes-loading {
+  min-height: 96px;
+}
+
+.remotes-pairing p {
+  margin: var(--space-2) 0;
+}
+
+.remotes-window {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  margin: 0;
+}
+
+.remotes-window select {
+  width: auto;
+}
+
+.remotes-buttons {
+  display: grid;
+  grid-template-columns: minmax(56px, auto) 1fr 1fr;
+  align-items: center;
+  gap: var(--space-2) var(--space-3);
+  margin-top: var(--space-3);
+}
+
+.remotes-buttons-head {
+  color: var(--on-surface-variant);
+  font-size: var(--fs-caption);
+  font-weight: 500;
+}
+
+.remotes-buttons-key {
+  font-weight: 500;
+}
+
+/* Phones: each button's name on its own row, its two choices side by side. */
+@media (max-width: 640px) {
+  .remotes-buttons {
+    grid-template-columns: 1fr 1fr;
+  }
+
+  .remotes-buttons-head:first-child {
+    display: none;
+  }
+
+  .remotes-buttons-key {
+    grid-column: 1 / -1;
+    margin-top: var(--space-2);
+  }
+
+  .remotes-buttons select {
+    padding-left: var(--space-3);
+  }
+}
+
 /* ============================================================
    Host classes expected by the vendored activity-ui markup/CSS
    ============================================================ */

@@ -9,6 +9,7 @@ import { createTouchScreenView } from "./views/touch-screen.js";
 import { createDevicesView } from "./views/devices.js";
 import { createSettingsView } from "./views/settings.js";
 import { createBluetoothView } from "./views/bluetooth.js";
+import { createRemotesView } from "./views/remotes.js";
 import { createMqttView } from "./views/mqtt.js";
 import { createWifiView } from "./views/wifi.js";
 import { createBackupView } from "./views/backup.js";
@@ -31,6 +32,7 @@ const ROUTES = {
   touch: { parent: "activities", section: "view-touch", factory: createTouchScreenView, title: "On-screen buttons" },
   devices: { section: "view-devices", factory: createDevicesView, title: "Devices" },
   settings: { section: "view-settings", factory: createSettingsView, title: "Settings" },
+  remotes: { parent: "settings", section: "view-remotes", factory: createRemotesView, title: "Remotes" },
   bluetooth: { parent: "settings", section: "view-bluetooth", factory: createBluetoothView, title: "Bluetooth" },
   mqtt: { parent: "settings", section: "view-mqtt", factory: createMqttView, title: "MQTT" },
   wifi: { parent: "settings", section: "view-wifi", factory: createWifiView, title: "Wi-Fi" },
