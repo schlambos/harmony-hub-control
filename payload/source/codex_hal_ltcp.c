@@ -14,6 +14,7 @@
 #include <unistd.h>
 
 #define HAL_PORT 16716
+#define HAL_WAIT_SECONDS 8
 #define LTCP_FRAME_SIZE 64
 #define MAX_JSON_SIZE 16383
 #define MAX_RESPONSE_SIZE 32768
@@ -95,7 +96,20 @@ static int send_all(int fd, const unsigned char *buf, size_t len) {
     return 0;
 }
 
-static int connect_hal(void) {
+/*
+ * hal answers rf.pairing only when its pairing window closes (up to 120 s).
+ * Hang up before then and hal's pairing thread still finishes, then writes
+ * its reply for a client hal has already dropped, so that one command waits
+ * as long as its caller asks.  Every other command keeps the 8 s wait.
+ */
+static int hal_wait_seconds(const char *cmd, int timeout) {
+    if (strcmp(cmd, "rf.pairing") == 0 && timeout > HAL_WAIT_SECONDS) {
+        return timeout;
+    }
+    return HAL_WAIT_SECONDS;
+}
+
+static int connect_hal(int wait_seconds) {
     int fd = socket(AF_INET, SOCK_STREAM, 0);
     struct sockaddr_in addr;
     struct timeval tv;
@@ -105,10 +119,11 @@ static int connect_hal(void) {
         return -1;
     }
 
-    tv.tv_sec = 8;
+    tv.tv_sec = HAL_WAIT_SECONDS;
     tv.tv_usec = 0;
-    setsockopt(fd, SOL_SOCKET, SO_RCVTIMEO, &tv, sizeof(tv));
     setsockopt(fd, SOL_SOCKET, SO_SNDTIMEO, &tv, sizeof(tv));
+    tv.tv_sec = wait_seconds;
+    setsockopt(fd, SOL_SOCKET, SO_RCVTIMEO, &tv, sizeof(tv));
 
     memset(&addr, 0, sizeof(addr));
     addr.sin_family = AF_INET;
@@ -400,7 +415,7 @@ static int run_ltcp_once_unguarded(const char *cmd, const char *data, int timeou
         memcpy(request + json_len, binary, binary_len);
     }
 
-    fd = connect_hal();
+    fd = connect_hal(hal_wait_seconds(cmd, timeout));
     if (fd < 0) {
         perror("connect_hal");
         free(request);

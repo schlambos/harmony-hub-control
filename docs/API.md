@@ -729,6 +729,76 @@ code `200`. The LED is a status indicator, so the firmware may overwrite
 the state on its next event (for example when an activity starts). See
 `PROTOCOLS.md` for the `sys.led` command.
 
+## RF remotes
+
+List the Harmony remotes paired with the hub's radio, and pair one more,
+with no cloud (`render_remotes_json()`, `render_remote_pair_json()`). hal
+pairs remotes itself: `rf.info` lists the radio's pairing slots and
+`rf.pairing` opens its pairing window.
+
+```powershell
+Invoke-RestMethod "http://<hub-ip>:8080/api/remotes"
+```
+
+```json
+{"ok":true,"pairing":false,
+ "reply":"{\"id\":1,\"data\":{\"EquadID\":\"34827\",\"RFID\":\"…\",\"Devices\":[{\"EquadID\":\"16414\",\"SkinId\":\"\",\"DeviceIndex\":\"1\",\"RFID\":\"…\"},{\"EquadID\":\"16417\",\"SkinId\":\"99\",\"DeviceIndex\":\"2\",\"RFID\":\"…\"}],\"DeviceCount\":2},\"code\":200}"}
+```
+
+- `reply` is hal's `rf.info` answer as text. `DeviceIndex` is the radio
+  slot. `EquadID` is the kind of remote: 16414 Harmony Smart Control,
+  16417 a remote with a screen (`SkinId` 99 is the Harmony Touch), 16420
+  a keyboard, 16422/16423 Companion.
+- While a pairing window is open the answer is `{"ok":true,"pairing":true}`
+  with no `reply`: during the window hal reads the same slot registers to
+  decide what to unpair, and a second reader can take its answers.
+- `502` when the radio doesn't answer.
+
+```powershell
+Invoke-RestMethod "http://<hub-ip>:8080/api/remote-pair" -Method Post `
+  -ContentType "application/json" -Body '{"seconds":60}'
+```
+
+```json
+{"ok":true,"seconds":60,"elapsedMs":21480,"pairCode":200,
+ "pair":"{\"id\":1,\"data\":{\"DeviceIndex\":\"3\",\"EquadID\":\"16414\",\"RFID\":\"…\",\"SkinId\":\"\"},\"code\":200}",
+ "before":"<rf.info text>","after":"<rf.info text>"}
+```
+
+- Opens the radio's pairing window for `seconds` (10–120, default 60) and
+  answers when it closes: as soon as a remote pairs, or when the time runs
+  out. On a Harmony Smart Control, hold **Menu** and **Mute** for about
+  5 seconds while it's open.
+- Only the RF window opens. The button on the hub also starts Bluetooth
+  advertising; this route doesn't.
+- After a pair hal unpairs any older remote of the **same kind** (it keeps
+  one per EquadID). Remotes of other kinds are never touched, so a Smart
+  Control joins a Touch but replaces an older Smart Control. `before` and
+  `after` are the slot tables either side of the window; compare them to
+  see what changed (`pairOutcome()` in `views/remotes-model.js`).
+- `pairCode` is hal's code for `rf.pairing`: `200` when a remote paired,
+  anything else (`500` when the window timed out, `-1` for no answer) when
+  none did. A remote that was already this hub's pairs back into its own
+  slot: hal answers `200` with no `data`, and `before` and `after` are the
+  same (seen on hardware, 2026-10-31). A window nobody used also leaves
+  them the same, with `500`.
+- One window at a time: a second request gets `409`. If the "before" read
+  fails the window doesn't open (`502`).
+- After a pair the engine tries to report it to Logitech
+  (`RemoteManager/SavePairings`); behind the cloud blocker that fails at
+  once and changes nothing.
+
+The Smart Control keeps no setup and never syncs: it sends key codes and
+the hub answers them from MapList. `16414Activity<id>` answers keys while
+that activity runs; without it the remote does nothing in that activity.
+`16414Root` holds the three activity buttons (`WatchTVActivity`,
+`MovieActivity`, `MusicActivity`), each with a `ButtonActivityAction` on
+press (`EventType` 1) and long press (`EventType` 2), and answers keys
+while everything is off. The engine adds `PowerOffActivity` to the root
+map itself. The web app's Remotes page edits the activity buttons and
+copies the Touch's hard keys onto the Smart Control through
+`/api/activity-save`.
+
 ## State changes (cheap liveness)
 
 Poll for state changes without a full engine round-trip
@@ -809,7 +879,8 @@ Invoke-RestMethod "http://<hub-ip>:8080/api/version"
 ```json
 {"ok":true,"product":"melodious","version":"1.3.0","api":1,"update":{"protocol":0},
  "features":["activity-save","activity-sync","catalog-import","device-commands",
-             "device-screen","device-settings","ha-devices","irdb-import"]}
+             "device-screen","device-settings","ha-devices","irdb-import",
+             "remote-pair"]}
 ```
 
 - `version` is the release the hub software belongs to (`MELODIOUS_VERSION`).
@@ -904,6 +975,8 @@ carries.
 | GET, POST | `/api/capture` | `render_capture_json()` |
 | POST | `/api/ir-send` | `render_ir_send_json()` |
 | POST | `/api/led` | `render_led_json()` |
+| GET | `/api/remotes` | `render_remotes_json()` |
+| POST | `/api/remote-pair` | `render_remote_pair_json()` |
 | POST | `/api/ir-test-learned` | `render_ir_test_learned_json()` |
 | POST | `/api/ir-batch-send` | `render_ir_batch_send_json()` |
 | POST | `/api/ir-cancel` | `render_ir_cancel_json()` |

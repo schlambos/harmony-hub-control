@@ -749,9 +749,11 @@ object ActivityGraphBuilder {
             .mapNotNull { it as? JsonObject }
             .filterNot { it["Id-"]?.jsonPrimitive?.content == activityId }
 
+        val now = "/Date(${System.currentTimeMillis()}+0000)/"
         val remainingMaps = ((snapshot.mapList["ButtonMaps"] as? JsonArray) ?: JsonArray(emptyList()))
             .mapNotNull { it as? JsonObject }
             .filterNot { it["ActivityId-"]?.jsonPrimitive?.content == activityId }
+            .map { clearActivityActions(it, activityId, now) }
 
         val remainingFunctions = ((snapshot.functionList["FunctionMaps"] as? JsonArray) ?: JsonArray(emptyList()))
             .mapNotNull { it as? JsonObject }
@@ -778,6 +780,38 @@ object ActivityGraphBuilder {
                     put("FunctionMaps", JsonArray(remainingFunctions))
                 }
             ),
+        )
+    }
+
+    private val ACTION_FIELDS = listOf("ButtonAction", "ButtonLongPressAction", "ButtonDoublePressAction")
+
+    /**
+     * The hub refuses a MapList that still starts a deleted activity anywhere (a Smart Control
+     * activity button, say), so those actions become null. A button left with no action goes,
+     * except in a root map: an action-less button in an activity map stops the paired remote,
+     * while Logitech's root maps keep empty ones. Same rule as `deleteActivityResources` in
+     * `wizard-model.js`.
+     */
+    private fun clearActivityActions(map: JsonObject, activityId: String, now: String): JsonObject {
+        val buttons = map["Buttons"] as? JsonArray ?: return map
+        val isRoot = map["__type"]?.jsonPrimitive?.contentOrNull?.contains("RootButtonMap") == true
+        var changed = false
+        val kept = buttons.mapNotNull { element ->
+            val button = element as? JsonObject ?: return@mapNotNull element
+            val cleared = ACTION_FIELDS.filter { field ->
+                (button[field] as? JsonObject)?.get("ActivityId-")?.jsonPrimitive?.contentOrNull == activityId
+            }
+            if (cleared.isEmpty()) return@mapNotNull element
+            changed = true
+            val updated = JsonObject(button.toMutableMap().apply { cleared.forEach { put(it, JsonNull) } })
+            if (isRoot || ACTION_FIELDS.any { updated[it] is JsonObject }) updated else null
+        }
+        if (!changed) return map
+        return JsonObject(
+            map.toMutableMap().apply {
+                put("Buttons", JsonArray(kept))
+                if (containsKey("DateModified")) put("DateModified", JsonPrimitive(now))
+            }
         )
     }
 

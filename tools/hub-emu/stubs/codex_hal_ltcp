@@ -2,15 +2,44 @@
 # hub-emu stub: HAL local-TCP helper. Real HAL drives the CC2544/BT silicon;
 # here every call reports a healthy, connected Bluetooth runtime so the
 # webui's BT status paths behave like the live hub's steady state.
+#
+# RF remotes: a Smart Control in slot 1 and a Touch in slot 2 (made-up radio
+# IDs). rf.pairing waits a few seconds, then a new Smart Control joins the
+# next slot and, as hal does, the older one of its kind is unpaired.
 CMD="${1:-}"
 ADDR=$(grep -o '"BTAddress":"[^"]*"' /data/resources/DeviceList.json 2>/dev/null \
     | cut -d'"' -f4 | grep -v '^00:00:00:00:00:00$' | head -1)
+RF_STATE=/tmp/hub-emu-rf-devices
+[ -f "$RF_STATE" ] || printf '%s\n' \
+    '{"EquadID":"16414","SkinId":"","DeviceIndex":"1","RFID":"1000000001"}' \
+    '{"EquadID":"16417","SkinId":"99","DeviceIndex":"2","RFID":"2000000001"}' > "$RF_STATE"
+
+rf_info() {
+    devices=$(paste -sd, "$RF_STATE")
+    count=$(grep -c . "$RF_STATE")
+    printf '{"id":1,"data":{"EquadID":"34827","RFID":"9000000001","Devices":[%s],"DeviceCount":%s},"code":200}\n' \
+        "$devices" "$count"
+}
+
 case "$CMD" in
     bthid.status)
         printf '{"id":1,"code":200,"connected":true,"type":"btkeyboard","bdaddr":"%s"}\n' "${ADDR:-}"
         ;;
     bthid.connect|bthid.disconnect)
         printf '{"id":1,"code":200,"connected":true}\n'
+        ;;
+    rf.info)
+        rf_info
+        ;;
+    rf.pairing)
+        sleep 3
+        slot=$(sed -n 's/.*"DeviceIndex":"\([0-9]*\)".*/\1/p' "$RF_STATE" | sort -n | tail -1)
+        slot=$((slot + 1))
+        rfid=$((3000000000 + slot))
+        grep -v '"EquadID":"16414"' "$RF_STATE" > "$RF_STATE.new"
+        printf '{"EquadID":"16414","SkinId":"","DeviceIndex":"%s","RFID":"%s"}\n' "$slot" "$rfid" >> "$RF_STATE.new"
+        mv "$RF_STATE.new" "$RF_STATE"
+        printf '{"id":1,"data":{"DeviceIndex":"%s","EquadID":"16414","RFID":"%s","SkinId":""},"code":200}\n' "$slot" "$rfid"
         ;;
     *)
         printf '{"id":1,"code":200}\n'
