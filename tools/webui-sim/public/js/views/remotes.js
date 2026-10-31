@@ -3,9 +3,9 @@
    built the same way: rows that open a page. Every remote with keys gets
    "Buttons for each activity", one row per activity opening the same editor
    (#touch/<id>/<remote>); the Smart Control also gets its activity buttons
-   (#activitybuttons). When two remotes with keys are paired, "Keys on both
-   remotes" compares them with neither as the reference and copies either
-   way. Models in remotes-model.js.
+   (#activitybuttons). The two remotes' keys stay alike (the editor changes
+   both unless a key is set for one remote only), so each activity row only
+   says where they differ. Models in remotes-model.js.
 
    Pairing never touches a remote of another kind: hal keeps one remote per
    kind and replaces only an older one of the same kind. The page reads the
@@ -19,13 +19,11 @@ import {
   PAIRING_STEPS,
   SMART_CONTROL_EQUAD,
   TOUCH_EQUAD,
-  buildKeyCopyMapList,
   keyComparison,
   pairOutcome,
   parseRfInfo,
   readActivityButtons,
 } from "./remotes-model.js";
-import { saveMapList } from "./map-save.js";
 
 const SMART_CONTROL_STEPS = `On a Harmony Smart Control, ${PAIRING_STEPS[SMART_CONTROL_EQUAD]}.`;
 
@@ -43,13 +41,12 @@ export function createRemotesView(section) {
   let windowSeconds = DEFAULT_WINDOW;
   let pairing = null; // { endsAt } while this page holds a window open
   let outcome = null; // pairOutcome of the last window
-  let saving = false; // copying keys between remotes
   let timer = null;
 
   section.innerHTML = `<div class="page" id="remotesRoot"></div>`;
   const root = section.querySelector("#remotesRoot");
 
-  const busy = () => Boolean(pairing) || saving;
+  const busy = () => Boolean(pairing);
   const paired = () => remotes?.remotes ?? [];
   const pairedByRole = (role) => paired().find((r) => r.role === role) ?? null;
 
@@ -131,24 +128,48 @@ export function createRemotesView(section) {
       </div>`;
   }
 
+  /* Where this remote's keys differ from the other paired remote's in an
+     activity, in this remote's words; "" when they're alike. */
+  function keyDifference(remote, other, p) {
+    if (!p) return "";
+    const mine = remote.role === "smart-control";
+    if (!(mine ? p.smartMap : p.touchMap)) return "No keys here yet";
+    if (!other || !(mine ? p.touchMap : p.smartMap)) return "";
+    const mineOnly = mine ? p.onlySmart : p.onlyTouch;
+    const theirsOnly = mine ? p.onlyTouch : p.onlySmart;
+    return [
+      p.differ.length && `different on the ${other.short}: ${p.differ.map((k) => (mine ? k : k === "Dvr" ? "DVR" : k)).join(", ")}`,
+      mineOnly.length && `not on the ${other.short}: ${mineOnly.join(", ")}`,
+      theirsOnly.length && `only on the ${other.short}: ${theirsOnly.join(", ")}`,
+    ].filter(Boolean).join(" · ");
+  }
+
   /* The same card for every remote with keys: a row per activity opening
      that remote's keys (and, for the Touch, its screen and gestures). */
   function activitiesCard(remote) {
     const acts = hub.activities();
     const what = remote.role === "screen" ? "On-screen buttons, hard keys and gestures" : "Its keys";
-    const note = remote.role === "screen" && remote.short !== "Touch"
-      ? `<p class="list-note">The editor was built and tested with the Harmony Touch. Other remotes with a screen answer from the same maps.</p>`
-      : "";
+    const other = pairedByRole(remote.role === "smart-control" ? "screen" : "smart-control");
+    const byActivity = new Map(keyComparison(hub.state.config).map((p) => [p.activityId, p]));
+    const notes = [
+      other && `<p class="list-note">Keys work the same on the ${escapeHtml(remote.short)} and the ${escapeHtml(other.short)}: a key you change goes on both unless you set it for one remote only.</p>`,
+      remote.role === "screen" && remote.short !== "Touch"
+        && `<p class="list-note">The editor was built and tested with the Harmony Touch. Other remotes with a screen answer from the same maps.</p>`,
+    ].filter(Boolean).join("");
     return `<div class="m-card">
         <div class="m-card-head"><span>Buttons for each activity</span></div>
         <p class="list-note">${what}, set per activity.</p>
-        ${note}
+        ${notes}
         ${acts.length
-          ? `<div class="m-list">${acts.map((a) => listRow({
-              title: hub.activityName(a),
-              href: `#touch/${encodeURIComponent(String(a["Id-"]))}/${KEY_REMOTES[remote.role]}`,
-              chevron: true,
-            })).join("")}</div>`
+          ? `<div class="m-list">${acts.map((a) => {
+              const id = String(a["Id-"]);
+              return listRow({
+                title: hub.activityName(a),
+                subtitle: keyDifference(remote, other, byActivity.get(id)) || undefined,
+                href: `#touch/${encodeURIComponent(id)}/${KEY_REMOTES[remote.role]}`,
+                chevron: true,
+              });
+            }).join("")}</div>`
           : `<p class="list-note">This hub has no activities yet.</p>`}
       </div>`;
   }
@@ -181,72 +202,13 @@ export function createRemotesView(section) {
     return `${sectionLabel(remote.name)}<div class="remotes-section">${body}</div>`;
   }
 
-  /* How many keys each copy would write, worked out once per hub revision
-     (the page redraws every second while a pairing window is open). */
-  let counts = { revision: null };
-  function copyCounts() {
-    const config = hub.state.config;
-    if (counts.revision !== config.revision) {
-      counts = {
-        revision: config.revision,
-        toTouch: buildKeyCopyMapList(config, SMART_CONTROL_EQUAD).copied,
-        toSmart: buildKeyCopyMapList(config, TOUCH_EQUAD).copied,
-      };
-    }
-    return counts;
-  }
-
-  /* Keys on both remotes: the Smart Control against the screen remote, with
-     neither as the reference. */
-  function bothKeysSection(smart, screen) {
-    const rows = keyComparison(hub.state.config);
-    if (!rows.length) return "";
-    const s = smart.short;
-    const t = screen.short;
-    const line = (p) => {
-      const missingMap = !p.smartMap ? smart : !p.touchMap ? screen : null;
-      if (missingMap) {
-        return listRow({
-          title: p.name,
-          subtitle: `The ${missingMap.short} has no keys here yet.`,
-          href: `#touch/${encodeURIComponent(p.activityId)}/${KEY_REMOTES[missingMap.role]}`,
-          chevron: true,
-        });
-      }
-      const parts = [];
-      if (p.differ.length) parts.push(`different: ${p.differ.join(", ")}`);
-      if (p.onlySmart.length) parts.push(`only on the ${s}: ${p.onlySmart.join(", ")}`);
-      if (p.onlyTouch.length) parts.push(`only on the ${t}: ${p.onlyTouch.join(", ")}`);
-      return listRow({ title: p.name, subtitle: parts.length ? parts.join(" · ") : "Same keys on both" });
-    };
-    const { toTouch, toSmart } = copyCounts();
-    const uncopyable = [...new Set(rows.flatMap((p) => [...p.noCopyToSmart, ...p.noCopyToTouch]))];
-    const button = (from, count, label) => `<button type="button" class="btn btn-outlined" data-copy="${from}"${busy() || !count ? " disabled" : ""}>${escapeHtml(label)}</button>`;
-    return `${sectionLabel("Keys on both remotes")}
-      <div class="m-card">
-        <p class="list-note">Each remote has its own key map, so a key changed for one leaves the other on the old command. Only keys both remotes have are compared.</p>
-        <div class="m-list">${rows.map(line).join("")}</div>
-        ${uncopyable.length ? `<p class="list-note">Keys that run a sequence aren't copied (${escapeHtml(uncopyable.join(", "))}); set those in Activity setup.</p>` : ""}
-        <div class="actions remotes-copy">
-          ${button(SMART_CONTROL_EQUAD, toTouch, `Copy the ${s}'s keys to the ${t}`)}
-          ${button(TOUCH_EQUAD, toSmart, `Copy the ${t}'s keys to the ${s}`)}
-        </div>
-      </div>`;
-  }
-
   function render() {
     if (section.hidden) return;
     if (!hub.state.config && !hub.state.configError) {
       root.innerHTML = `${remotesCard()}${pairCard()}<div class="m-center">${spinner("Loading")}</div>`;
       return;
     }
-    let sections = "";
-    if (hub.state.config) {
-      sections = paired().map(remoteSection).join("");
-      const smart = pairedByRole("smart-control");
-      const screen = pairedByRole("screen");
-      if (smart && screen) sections += bothKeysSection(smart, screen);
-    }
+    const sections = hub.state.config ? paired().map(remoteSection).join("") : "";
     root.innerHTML = `${remotesCard()}${pairCard()}${sections}`;
   }
 
@@ -298,29 +260,6 @@ export function createRemotesView(section) {
     render();
   }
 
-  async function copyKeys(from) {
-    if (busy()) return;
-    const source = pairedByRole(from === SMART_CONTROL_EQUAD ? "smart-control" : "screen");
-    const target = pairedByRole(from === SMART_CONTROL_EQUAD ? "screen" : "smart-control");
-    if (!source || !target) return;
-    const { mapList, copied } = buildKeyCopyMapList(hub.state.config, from);
-    if (!copied) return;
-    const ok = await confirmDialog({
-      title: `Copy the ${source.short}'s keys to the ${target.short}?`,
-      text: `${copied} key${copied === 1 ? "" : "s"} on the ${target.short} will do what they do on the ${source.short}. Keys only the ${target.short} has stay as they are.`,
-      confirmLabel: "Copy",
-    });
-    if (!ok) return;
-    saving = true;
-    render();
-    await saveMapList(mapList, {
-      done: `Copied ${copied} key${copied === 1 ? "" : "s"} from the ${source.short} to the ${target.short}.`,
-      check: (config) => (buildKeyCopyMapList(config, from).copied === 0 ? "saved" : "unchanged"),
-    });
-    saving = false;
-    render();
-  }
-
   root.addEventListener("change", (event) => {
     if (event.target.matches("select[data-window]")) {
       windowSeconds = Number(event.target.value) || DEFAULT_WINDOW;
@@ -328,11 +267,6 @@ export function createRemotesView(section) {
   });
 
   root.addEventListener("click", (event) => {
-    const copy = event.target.closest("[data-copy]");
-    if (copy) {
-      copyKeys(copy.dataset.copy);
-      return;
-    }
     const act = event.target.closest("[data-act]")?.dataset.act;
     if (act === "refresh") {
       remotes = undefined;
@@ -345,10 +279,6 @@ export function createRemotesView(section) {
   hub.subscribe(() => render());
 
   async function confirmLeave() {
-    if (saving) {
-      snackbar("Saving to the hub… one moment");
-      return false;
-    }
     if (!pairing) return true;
     return confirmDialog({
       title: "Leave while the window is open?",

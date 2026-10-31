@@ -53,12 +53,53 @@ export const SMART_CONTROL_HARD_KEYS = Object.freeze([
 
 /* The hard keys can be edited for either remote with keys per activity: the
    Touch (16417, also every other remote with a screen) or the Smart Control
-   (16414). The on-screen buttons and gestures are the Touch's alone. */
+   (16414). The on-screen buttons and gestures are the Touch's alone.
+   The hub keeps a key map per remote, but Logitech fills both with the same
+   keys, so the editor keeps them alike: a key edit goes to both unless the
+   owner sets it for one remote only (an override). */
 export const TOUCH_REMOTE = "16417";
 export const SMART_CONTROL_REMOTE = "16414";
 
 export function hardKeysFor(remote = TOUCH_REMOTE) {
   return remote === SMART_CONTROL_REMOTE ? SMART_CONTROL_HARD_KEYS : TOUCH_HARD_KEYS;
+}
+
+/** The other remote with keys per activity. */
+export function otherRemote(remote = TOUCH_REMOTE) {
+  return remote === SMART_CONTROL_REMOTE ? TOUCH_REMOTE : SMART_CONTROL_REMOTE;
+}
+
+/** A key's name on `remote` (the Smart Control spells DVR "Dvr"), or "" when that remote has no such key. */
+export function keyOn(remote, key) {
+  const name = String(key ?? "");
+  const spelled = remote === SMART_CONTROL_REMOTE
+    ? (name === "DVR" ? "Dvr" : name)
+    : (name === "Dvr" ? "DVR" : name);
+  return hardKeysFor(remote).includes(spelled) ? spelled : "";
+}
+
+/* What a hard-key row does on press, hold and double press, ignoring ids. */
+function keyShape(row) {
+  if (!row) return null;
+  const action = row.action;
+  if (action?.kind !== "command") return ["other", action?.type ?? action?.kind ?? ""];
+  const command = (a) => (a ? [String(a.deviceId), String(a.command)] : null);
+  const double = row.doublePress
+    ? [row.doublePress.__type ?? "", String(row.doublePress["DeviceId-"] ?? ""), row.doublePress.CommandName ?? null]
+    : null;
+  const mode = row.pressMode ?? "standard";
+  return [command(action), mode, mode === "custom" ? command(row.longPress) : null, double];
+}
+
+/** Whether two hard-key rows (one per remote) do the same thing; two missing keys match. */
+export function sameKey(a, b) {
+  return JSON.stringify(keyShape(a)) === JSON.stringify(keyShape(b));
+}
+
+/** Whether two lists of hard-key rows differ in what any key does. */
+export function keyRowsChanged(before, after) {
+  const shape = (rows) => JSON.stringify((rows ?? []).map((r) => [r.buttonKey, keyShape(r)]).sort());
+  return shape(before) !== shape(after);
 }
 
 export function touchMapIdentifier(activityId, remote = TOUCH_REMOTE) {
@@ -462,11 +503,15 @@ function controlsShape(map) {
  * saveOutcome for a save of on-screen buttons, hard keys and gestures
  * together: `base` is the map text the editor read, `mapList` what it sent.
  */
-export function controlsSaveOutcome(config, activityId, base, mapList, { remote = TOUCH_REMOTE } = {}) {
-  const now = touchMap(config, String(activityId), remote);
-  if (JSON.stringify(now) === base) return "unchanged";
-  const sent = (mapList?.ButtonMaps ?? []).find((m) => m?.ButtonMapIdentifier === touchMapIdentifier(activityId, remote));
-  return JSON.stringify(controlsShape(now)) === JSON.stringify(controlsShape(sent)) ? "saved" : "changed";
+export function controlsSaveOutcome(config, activityId, base, mapList, { remote = TOUCH_REMOTE, twin = null } = {}) {
+  // `twin` ({ remote, base }) is the other remote's map when the save wrote its keys too.
+  const checks = [{ remote, base }, ...(twin ? [twin] : [])];
+  const now = checks.map((c) => touchMap(config, String(activityId), c.remote));
+  if (checks.every((c, i) => JSON.stringify(now[i]) === c.base)) return "unchanged";
+  const sent = (r) => (mapList?.ButtonMaps ?? []).find((m) => m?.ButtonMapIdentifier === touchMapIdentifier(activityId, r));
+  return checks.every((c, i) => JSON.stringify(controlsShape(now[i])) === JSON.stringify(controlsShape(sent(c.remote))))
+    ? "saved"
+    : "changed";
 }
 
 /* -- Hard keys (the activity map's hard buttons, for the Touch or the Smart
@@ -625,21 +670,84 @@ export function buildTouchMapList(config, draft, { now = Date.now() } = {}) {
   return buildTouchControlsMapList(config, { soft: draft }, { now });
 }
 
+/* A map's buttons with its hard keys set to `rows` (the remote's spelling):
+   a key not in the rows is dropped, a changed key keeps its ButtonId and
+   unknown fields, a new key is added. Other buttons are untouched. */
+function writeHardKeys(map, rows, alloc, remote) {
+  const byKey = new Map(rows.map((r) => [String(r.buttonKey || r.key), r]));
+  const buttons = [];
+  const seen = new Set();
+  for (const button of map.Buttons) {
+    if (!isHardButton(button)) {
+      buttons.push(button);
+      continue;
+    }
+    const key = String(button.ButtonKey ?? "");
+    const row = byKey.get(key);
+    if (!row) {
+      // Removed hard key: drop it (explicit remove leaves no gap; keys are fixed).
+      continue;
+    }
+    seen.add(key);
+    if (row.action?.kind === "command") {
+      if (typeOf(button.ButtonAction).includes("ButtonCommandAction")) {
+        button.ButtonAction["DeviceId-"] = Number(row.action.deviceId);
+        button.ButtonAction.CommandName = row.action.command;
+        button.ButtonAction["FunctionId-"] = Number(row.action.functionId) || 0;
+        button.ButtonAction.EventType = 1;
+      } else {
+        button.ButtonAction = commandAction(row.action, 1);
+      }
+      if (row.pressMode != null) {
+        if (row.pressMode === "standard") button.ButtonLongPressAction = null;
+        else if (row.pressMode === "oneShot") button.ButtonLongPressAction = commandAction(row.action, 2);
+        else if (row.pressMode === "custom" && row.longPress) button.ButtonLongPressAction = commandAction(row.longPress, 2);
+        if (row.doublePress !== undefined) button.ButtonDoublePressAction = row.doublePress;
+      }
+    }
+    buttons.push(button);
+  }
+  for (const row of rows) {
+    const key = String(row.buttonKey || row.key);
+    if (seen.has(key) || !row.action || row.action.kind !== "command") continue;
+    // New hard key: check if map already had it (should have been seen); else add.
+    const exists = map.Buttons.some((b) => isHardButton(b) && String(b.ButtonKey) === key);
+    if (exists) continue;
+    buttons.push({
+      ButtonId: alloc.id(),
+      __type: "HardRemoteButton",
+      ButtonAction: commandAction(row.action, 1),
+      ButtonDoublePressAction: row.doublePress ?? null,
+      // Logitech's Smart Control maps keep their number keys in the number-pad group.
+      FunctionGroupType: remote === SMART_CONTROL_REMOTE && /^Number\d$/.test(key) ? NUMPAD_GROUP : 0,
+      ButtonState: 1,
+      ButtonKey: key,
+      ButtonLongPressAction: row.pressMode === "oneShot"
+        ? commandAction(row.action, 2)
+        : row.pressMode === "custom" && row.longPress
+          ? commandAction(row.longPress, 2)
+          : null,
+    });
+  }
+  return buttons;
+}
+
 /**
  * Write soft rows, hard keys and gestures together.
  * `edits` may contain { soft, hard, gestures } drafts; missing sections pass through.
  * - soft: draft from readTouchScreen (rows with pressMode/longPress).
  * - hard: { rows: [{ buttonKey, action, pressMode, longPress }] } or array; null buttonId adds.
  * - gestures: { rows: [{ gestureKey, action, longPress, doublePress }] }.
+ * - twin: { remote, rows, base }: the other remote's hard keys, when the
+ *   editor changed them too (keys mirror unless set for one remote only).
  * `remote` picks the map: the Touch's (16417, default) or the Smart
- * Control's (16414, hard keys only). Only that remote's map changes; the
- * wizard mirrors 16414 onto 16417, and the Remotes page copies keys either
- * way. Never writes ButtonHomeControlAction.
+ * Control's (16414, hard keys only). Never writes ButtonHomeControlAction.
  */
 export function buildTouchControlsMapList(config, edits, { now = Date.now(), remote = TOUCH_REMOTE } = {}) {
   const softDraft = edits?.soft ?? edits;
   const hardEdits = edits?.hard ?? null;
   const gestureEdits = edits?.gestures ?? null;
+  const twinEdits = edits?.twin?.rows ? edits.twin : null;
   const activityId = softDraft.activityId ?? hardEdits?.activityId ?? gestureEdits?.activityId;
   if (!activityId) throw new Error("No activity for this Touch screen.");
   if (!(config?.activityList?.Activities ?? []).some((a) => String(a?.["Id-"]) === activityId)) {
@@ -694,64 +802,7 @@ export function buildTouchControlsMapList(config, edits, { now = Date.now(), rem
     map.Buttons = buttons;
   }
   // --- hard keys ---
-  if (hardEdits?.rows) {
-    const byKey = new Map(hardEdits.rows.map((r) => [String(r.buttonKey || r.key), r]));
-    const buttons = [];
-    const seen = new Set();
-    for (const button of map.Buttons) {
-      if (!isHardButton(button)) {
-        buttons.push(button);
-        continue;
-      }
-      const key = String(button.ButtonKey ?? "");
-      const row = byKey.get(key);
-      if (!row) {
-        // Removed hard key: drop it (explicit remove leaves no gap; keys are fixed).
-        continue;
-      }
-      seen.add(key);
-      if (row.action?.kind === "command") {
-        if (typeOf(button.ButtonAction).includes("ButtonCommandAction")) {
-          button.ButtonAction["DeviceId-"] = Number(row.action.deviceId);
-          button.ButtonAction.CommandName = row.action.command;
-          button.ButtonAction["FunctionId-"] = Number(row.action.functionId) || 0;
-          button.ButtonAction.EventType = 1;
-        } else {
-          button.ButtonAction = commandAction(row.action, 1);
-        }
-        if (row.pressMode != null) {
-          if (row.pressMode === "standard") button.ButtonLongPressAction = null;
-          else if (row.pressMode === "oneShot") button.ButtonLongPressAction = commandAction(row.action, 2);
-          else if (row.pressMode === "custom" && row.longPress) button.ButtonLongPressAction = commandAction(row.longPress, 2);
-          if (row.doublePress !== undefined) button.ButtonDoublePressAction = row.doublePress;
-        }
-      }
-      buttons.push(button);
-    }
-    for (const row of hardEdits.rows) {
-      const key = String(row.buttonKey || row.key);
-      if (seen.has(key) || !row.action || row.action.kind !== "command") continue;
-      // New hard key: check if map already had it (should have been seen); else add.
-      const exists = map.Buttons.some((b) => isHardButton(b) && String(b.ButtonKey) === key);
-      if (exists) continue;
-      buttons.push({
-        ButtonId: alloc.id(),
-        __type: "HardRemoteButton",
-        ButtonAction: commandAction(row.action, 1),
-        ButtonDoublePressAction: row.doublePress ?? null,
-        // Logitech's Smart Control maps keep their number keys in the number-pad group.
-        FunctionGroupType: remote === SMART_CONTROL_REMOTE && /^Number\d$/.test(key) ? NUMPAD_GROUP : 0,
-        ButtonState: 1,
-        ButtonKey: key,
-        ButtonLongPressAction: row.pressMode === "oneShot"
-          ? commandAction(row.action, 2)
-          : row.pressMode === "custom" && row.longPress
-            ? commandAction(row.longPress, 2)
-            : null,
-      });
-    }
-    map.Buttons = buttons;
-  }
+  if (hardEdits?.rows) map.Buttons = writeHardKeys(map, hardEdits.rows, alloc, remote);
   // --- gestures ---
   if (gestureEdits?.rows) {
     const byKey = new Map(gestureEdits.rows.map((r) => [String(r.gestureKey || r.key), r]));
@@ -806,6 +857,20 @@ export function buildTouchControlsMapList(config, edits, { now = Date.now(), rem
     map.Buttons = buttons;
   }
   map.DateModified = harmonyDate(now);
+  // --- the other remote's hard keys ---
+  if (twinEdits) {
+    if (JSON.stringify(touchMap(config, activityId, twinEdits.remote)) !== twinEdits.base) {
+      throw new Error("These keys changed on the hub since you opened them. Reopen to see the latest.");
+    }
+    const twinId = touchMapIdentifier(activityId, twinEdits.remote);
+    let twin = mapList.ButtonMaps.find((m) => m?.ButtonMapIdentifier === twinId);
+    if (!twin) {
+      twin = newMap(config, activityId, alloc, twinEdits.remote);
+      mapList.ButtonMaps.push(twin);
+    }
+    twin.Buttons = writeHardKeys(twin, twinEdits.rows, alloc, twinEdits.remote);
+    twin.DateModified = harmonyDate(now);
+  }
   const errors = validateMapList(mapList);
   if (errors.length) {
     throw new Error(remote === SMART_CONTROL_REMOTE

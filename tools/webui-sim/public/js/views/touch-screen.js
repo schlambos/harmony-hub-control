@@ -3,7 +3,10 @@
    for one activity. With remote 16414 it edits the Harmony Smart Control's
    hard keys for the activity instead (it has no screen or gestures); a
    remote in the address means the page was opened from Settings → Remotes,
-   which its back arrow returns to. Saves go through /api/activity-save like every activity
+   which its back arrow returns to.
+   Both remotes' keys stay alike: a key edit goes to the other remote's map
+   too unless the owner sets it for this remote only, and a key already set
+   differently stays that way unless they choose both. Saves go through /api/activity-save like every activity
    edit (touch-model). See docs/TOUCH_EDITOR.md and docs/HOME_ASSISTANT.md.
    Press modes (P11): Standard (hold repeats), One-shot self-long (exactly
    once), Short + Separate Long. Gestures resolve locally on the Touch
@@ -23,6 +26,9 @@ import {
   hardKeysFor,
   hasRemoteMaps,
   isChanged,
+  keyOn,
+  keyRowsChanged,
+  otherRemote,
   isOneShotCommand,
   moveButton,
   neighbourOf,
@@ -31,6 +37,7 @@ import {
   readTouchScreen,
   recommendedPressMode,
   removeButton,
+  sameKey,
   saveOutcome,
   setCommand,
   setLabel,
@@ -38,12 +45,14 @@ import {
   setPressMode,
   touchSavePayload,
 } from "./touch-model.js";
+import { parseRfInfo } from "./remotes-model.js";
 import {
   confirmDialog,
   escapeHtml,
   icon,
   iconTile,
   openSheet,
+  sectionLabel,
   setAppBar,
   snackbar,
   spinner,
@@ -60,6 +69,7 @@ import {
 const SYNC_NOTE = "The Touch picks up the change by itself. Until it does, a button you moved or changed can run its new action under its old label.";
 /* The Smart Control keeps nothing: the hub answers its keys from the saved map. */
 const SMART_CONTROL_NOTE = "The Smart Control uses the change at once.";
+const REMOTE_NAMES = { [SMART_CONTROL_REMOTE]: "Smart Control", [TOUCH_REMOTE]: "Touch" };
 
 export function createTouchScreenView(section) {
   let activityId = "";
@@ -70,6 +80,9 @@ export function createTouchScreenView(section) {
   let remote = TOUCH_REMOTE; // whose map: the Touch's or the Smart Control's
   let fromRemotes = false; // opened from Settings → Remotes
   let hardBase = ""; // the hard-key map text as read, for the save check
+  let twin = null; // the other remote's keys { remote, rows, readRows, base }; null when the hub has no maps for it
+  let twinPaired; // that remote as the radio lists it; null when not paired, undefined when unknown
+  let savedTouch = false; // the last save changed the Touch's map
   let activeTab = "soft"; // soft | hard | gestures
   let dirty = false;
   let saving = false;
@@ -83,7 +96,14 @@ export function createTouchScreenView(section) {
 
   const activityName = () => hub.activityName(hub.activityById(activityId));
   const isSmart = () => remote === SMART_CONTROL_REMOTE;
-  const syncNote = () => (isSmart() ? SMART_CONTROL_NOTE : SYNC_NOTE);
+  const twinChanged = () => Boolean(twin) && keyRowsChanged(twin.readRows, twin.rows);
+  const touchChanged = () => !isSmart() || (twinChanged() && twin.remote === TOUCH_REMOTE);
+  const syncNote = () => ((saved && !dirty ? savedTouch : touchChanged()) ? SYNC_NOTE : SMART_CONTROL_NOTE);
+  const thisName = () => REMOTE_NAMES[remote];
+  const twinName = () => twinPaired?.short ?? REMOTE_NAMES[twin.remote];
+  // The other remote's side shows when it's paired (or the radio couldn't say);
+  // its keys follow edits either way, so they stay alike if it's paired later.
+  const twinShown = () => Boolean(twin) && twinPaired !== null;
   // The Smart Control's keys need a 16414 map on the hub to model a new one on.
   const canEdit = () => (isSmart() ? hasRemoteMaps(hub.state.config, remote) : softDraft?.canCreate);
 
@@ -91,6 +111,64 @@ export function createTouchScreenView(section) {
     const read = readHardKeys(hub.state.config, activityId, { remote });
     hardRows = read.rows;
     hardBase = read.base;
+    const other = otherRemote(remote);
+    if (hasRemoteMaps(hub.state.config, other)) {
+      const theirs = readHardKeys(hub.state.config, activityId, { remote: other });
+      twin = { remote: other, rows: theirs.rows, readRows: structuredClone(theirs.rows), base: theirs.base };
+    } else {
+      twin = null;
+    }
+  }
+
+  /* The other remote's row for one of this remote's keys. */
+  function twinRow(key) {
+    const name = twin ? keyOn(twin.remote, key) : "";
+    return name ? twin.rows.find((r) => r.buttonKey === name) ?? null : null;
+  }
+
+  /* Whether a key is alike on both remotes (neither having it counts), so
+     an edit to it goes to both. A key the other remote lacks never mirrors. */
+  function mirrors(key) {
+    if (!twin || !keyOn(twin.remote, key)) return false;
+    return sameKey(hardRows.find((r) => r.buttonKey === key), twinRow(key));
+  }
+
+  /* Set (or with null, remove) a key on the other remote, keeping its ButtonId. */
+  function setTwinKey(key, row) {
+    const name = keyOn(twin.remote, key);
+    if (!name) return;
+    const kept = twin.rows.find((r) => r.buttonKey === name);
+    twin.rows = twin.rows.filter((r) => r.buttonKey !== name);
+    if (row) twin.rows.push({ ...structuredClone(row), key: name, buttonKey: name, buttonId: kept?.buttonId ?? null });
+  }
+
+  function removeKey(key, both) {
+    if (both) setTwinKey(key, null);
+    hardRows = hardRows.filter((r) => r.buttonKey !== key);
+    markDirty();
+  }
+
+  /* Keys only the other remote has set that this remote has too. */
+  function twinOnlyRows() {
+    if (!twinShown()) return [];
+    return twin.rows
+      .map((r) => ({ row: r, key: keyOn(remote, r.buttonKey) }))
+      .filter(({ key }) => key && !hardRows.some((h) => h.buttonKey === key));
+  }
+
+  async function loadTwinPaired(token) {
+    if (!twin) return;
+    try {
+      const reply = await api.getRemotes();
+      if (token !== showToken || reply.pairing) return; // a pairing window is open: unknown
+      const parsed = parseRfInfo(reply.reply);
+      if (!parsed) return;
+      const role = twin.remote === SMART_CONTROL_REMOTE ? "smart-control" : "screen";
+      twinPaired = parsed.remotes.find((r) => r.role === role) ?? null;
+    } catch (_) {
+      return; // unknown: the other remote's side stays shown
+    }
+    if (!section.hidden) render();
   }
   const roleIds = () => (hub.activityById(activityId)?.Roles ?? []).map((r) => String(r["DeviceId-"]));
 
@@ -214,7 +292,9 @@ export function createTouchScreenView(section) {
 
   function hardBody() {
     const intro = `<div class="wiz-intro"><h2 tabindex="-1">${escapeHtml(activityName())}</h2>
-        <p>${isSmart() ? "The Smart Control's keys in this activity" : "Physical hard keys on the Touch (mirrored from the activity)"}. Any device works — <strong>Extra</strong> keys are not powered by the activity. Toggles default to One-shot.</p></div>`;
+        <p>${twinShown()
+          ? `Keys work the same on the ${escapeHtml(thisName())} and the ${escapeHtml(twinName())} unless you set one for this remote only`
+          : isSmart() ? "The Smart Control's keys in this activity" : "Physical hard keys on the Touch"}. Any device works — <strong>Extra</strong> keys are not powered by the activity. Toggles default to One-shot.</p></div>`;
     const savedNote = saved
       ? `<div class="notice notice-warn touch-sync" role="status"><strong>Saved to the hub.</strong> ${escapeHtml(syncNote())}</div>`
       : "";
@@ -224,22 +304,46 @@ export function createTouchScreenView(section) {
       ? `<div class="m-list">${hardRows.map((r) => {
         const extra = !ids.includes(String(r.action?.deviceId));
         const mode = r.pressMode === "oneShot" ? " · One-shot" : r.pressMode === "custom" && r.longPress ? ` · Hold: ${r.longPress.command}` : "";
+        // A key both remotes have but set differently is this remote's alone.
+        const own = twinShown() && keyOn(twin.remote, r.buttonKey) && !mirrors(r.buttonKey);
+        const theirs = own ? twinRow(r.buttonKey) : null;
+        const twinNote = own
+          ? ` · ${theirs ? `On the ${twinName()}: ${theirs.action?.kind === "command" ? actionSummary(theirs.action) + pressModeSummary(theirs) : "something else"}` : `Not on the ${twinName()}`}`
+          : "";
         return `<div class="m-row touch-row">
             <button type="button" class="touch-main" data-hedit="${escapeHtml(r.buttonKey)}" aria-haspopup="dialog">
               <span class="m-row-text">
-                <span class="m-row-title">${escapeHtml(r.buttonKey)}${extra ? ` <span class="chip">Extra</span>` : ""}</span>
-                <span class="m-row-sub">${escapeHtml(r.action?.kind === "command" ? actionSummary(r.action) + mode : "Not set")}${extra ? " · extra control" : ""}</span>
+                <span class="m-row-title">${escapeHtml(r.buttonKey)}${extra ? ` <span class="chip">Extra</span>` : ""}${own ? ` <span class="chip">This remote only</span>` : ""}</span>
+                <span class="m-row-sub">${escapeHtml(r.action?.kind === "command" ? actionSummary(r.action) + mode : "Not set")}${extra ? " · extra control" : ""}${escapeHtml(twinNote)}</span>
               </span>
             </button>
             <button type="button" class="icon-btn" data-hremove="${escapeHtml(r.buttonKey)}" aria-label="Remove ${escapeHtml(r.buttonKey)}" ${saving ? " disabled" : ""}>${icon("delete_outlined")}</button>
           </div>`;
       }).join("")}</div>`
-      : `<p class="list-note">No keys mapped on the ${isSmart() ? "Smart Control" : "Touch"} yet. Add the ones this activity uses.</p>`;
+      : `<p class="list-note">No keys mapped on the ${escapeHtml(thisName())} yet. Add the ones this activity uses.</p>`;
     const missing = hardKeysFor(remote).filter((k) => !hardRows.some((r) => r.buttonKey === k));
-    const addHint = missing.length ? `<p class="wiz-hint">Unmapped: ${missing.slice(0, 8).join(", ")}${missing.length > 8 ? ` +${missing.length - 8} more` : ""}. Keys added here are for the ${isSmart() ? "Smart Control" : "Touch"} only.</p>` : "";
+    const addHint = missing.length
+      ? `<p class="wiz-hint">Unmapped: ${missing.slice(0, 8).join(", ")}${missing.length > 8 ? ` +${missing.length - 8} more` : ""}.${twinShown() ? ` Keys you add go on both remotes unless you choose this remote only.` : ""}</p>`
+      : "";
+    const numbersNote = twinShown() && hardRows.some((r) => !keyOn(twin.remote, r.buttonKey))
+      ? `<p class="wiz-hint">The ${escapeHtml(twinName())} has no number keys, so those are the ${escapeHtml(thisName())}'s alone.</p>`
+      : "";
+    const theirsOnly = twinOnlyRows();
+    const theirsList = theirsOnly.length
+      ? `${sectionLabel(`Only on the ${twinName()}`)}
+        <div class="m-list">${theirsOnly.map(({ row, key }) => row.action?.kind === "command"
+          ? `<div class="m-row touch-row"><button type="button" class="touch-main" data-htwin="${escapeHtml(key)}" aria-haspopup="dialog">
+              <span class="m-row-text"><span class="m-row-title">${escapeHtml(key)}</span>
+              <span class="m-row-sub">${escapeHtml(`${actionSummary(row.action)}${pressModeSummary(row)} · not on the ${thisName()}`)}</span></span></button></div>`
+          : `<div class="m-row touch-row is-locked"><span class="m-row-text"><span class="m-row-title">${escapeHtml(key)}</span>
+              <span class="m-row-sub">${escapeHtml(`${actionSummary(row.action)} · set it on the ${twinName()}`)}</span></span></div>`).join("")}</div>
+        ${theirsOnly.some(({ row }) => row.action?.kind === "command")
+          ? `<button type="button" class="btn btn-outlined" data-act="htake"${saving ? " disabled" : ""}>Add these here too</button>`
+          : ""}`
+      : "";
     return `${intro}${savedNote}${tabMarkup()}${list}
       <button type="button" class="wiz-add" data-act="hadd" aria-haspopup="dialog"${saving ? " disabled" : ""}>${icon("add")}<span>Add a key</span></button>
-      ${addHint}
+      ${addHint}${numbersNote}${theirsList}
       ${dirty ? `<p class="wiz-hint">${escapeHtml(`Nothing reaches the hub until you save. ${syncNote()}`)}</p>` : ""}`;
   }
 
@@ -358,12 +462,14 @@ export function createTouchScreenView(section) {
   }
 
   function currentPayload() {
+    const twinEdits = twinChanged() ? { remote: twin.remote, rows: twin.rows, base: twin.base } : null;
     const mapList = isSmart()
-      ? buildTouchControlsMapList(hub.state.config, { hard: { activityId, rows: hardRows, base: hardBase } }, { remote })
+      ? buildTouchControlsMapList(hub.state.config, { hard: { activityId, rows: hardRows, base: hardBase }, twin: twinEdits }, { remote })
       : buildTouchControlsMapList(hub.state.config, {
         soft: softDraft,
         hard: { rows: hardRows },
         gestures: { rows: gestureRows },
+        twin: twinEdits,
       });
     return {
       baseRevision: hub.state.config.revision,
@@ -590,17 +696,23 @@ export function createTouchScreenView(section) {
     opened.content.querySelector(".pick-row.is-current")?.scrollIntoView({ block: "center" });
   }
 
-  function openHardSheet(buttonKey) {
+  /* `from` (a new key only): start from the other remote's setting for `buttonKey`. */
+  function openHardSheet(buttonKey, { from = null } = {}) {
     sheet?.close();
-    const existing = buttonKey ? hardRows.find((r) => r.buttonKey === buttonKey) : null;
+    const existing = buttonKey && !from ? hardRows.find((r) => r.buttonKey === buttonKey) : null;
+    const start = existing ?? from;
     const devices = pickerDevices();
     const ids = roleIds();
     const keys = hardKeysFor(remote);
-    let key = existing?.buttonKey ?? keys.find((k) => !hardRows.some((r) => r.buttonKey === k)) ?? "VolumeUp";
-    let pick = existing?.action?.kind === "command" ? { ...existing.action } : null;
-    let pressMode = existing?.pressMode ?? (pick ? recommendedPressMode(pick.command) : "standard");
-    let longPick = existing?.longPress ? { ...existing.longPress } : null;
+    let key = (from && buttonKey) || existing?.buttonKey || keys.find((k) => !hardRows.some((r) => r.buttonKey === k)) || "VolumeUp";
+    let pick = start?.action?.kind === "command" ? { ...start.action } : null;
+    let pressMode = start?.pressMode ?? (pick ? recommendedPressMode(pick.command) : "standard");
+    let longPick = start?.longPress ? { ...start.longPress } : null;
     let deviceId = devices.some((d) => d.id === pick?.deviceId) ? pick.deviceId : devices[0]?.id ?? "";
+    // Both remotes when the key is alike on both now; this one only when it already differs.
+    let both = mirrors(key);
+    let bothChosen = false;
+    const twinHas = () => Boolean(twin && keyOn(twin.remote, key));
 
     const opened = openSheet({
       label: existing ? `Hard key ${key}` : "New hard key",
@@ -616,6 +728,7 @@ export function createTouchScreenView(section) {
             <button type="button" class="btn btn-filled btn-sm" data-h="done">Done</button></div>
             <p class="pick-now" data-h-now></p>
             <div class="m-chips" data-h-mode></div>
+            <div data-h-twin></div>
             <p class="wiz-hint">Keys target any device — non-members are Extra (never powered). One-shot prevents hold double-toggle.</p>
             <label class="search-field">Key <select data-h-key>${keys.map((k) => `<option value="${k}"${k === key ? " selected" : ""}${hardRows.some((r) => r.buttonKey === k && k !== existing?.buttonKey) ? " disabled" : ""}>${k}</option>`).join("")}</select></label>
             <div class="pick-chips" data-h-devices></div>
@@ -633,6 +746,20 @@ export function createTouchScreenView(section) {
             return `<button type="button" class="pick-row${on ? " is-current" : ""}" data-h-cmd="${escapeHtml(c.name)}"><span>${escapeHtml(c.name)}${isOneShotCommand(c.name) ? " · 1-shot" : ""}</span></button>`;
           }).join("") || `<p class="list-note">No commands.</p>`;
           $('[data-h="done"]').disabled = !pick;
+          $("[data-h-twin]").innerHTML = twinMarkup();
+        }
+        function twinMarkup() {
+          if (!twinShown()) return "";
+          if (!twinHas()) return `<p class="wiz-hint">The ${escapeHtml(twinName())} has no ${escapeHtml(key)} key, so this one is the ${escapeHtml(thisName())}'s alone.</p>`;
+          const theirs = twinRow(key);
+          const alike = sameKey(pick ? { action: pick, pressMode, longPress: longPick, doublePress: start?.doublePress ?? null } : null, theirs);
+          const now = theirs
+            ? `On the ${twinName()}: ${theirs.action?.kind === "command" ? actionSummary(theirs.action) + pressModeSummary(theirs) : "something else"}`
+            : `Not set on the ${twinName()}`;
+          const scope = [["both", "Both remotes"], ["this", `Only the ${thisName()}`]]
+            .map(([v, t]) => `<button type="button" class="chip" data-h-scope="${v}" aria-pressed="${(v === "both") === both}">${escapeHtml(t)}</button>`).join("");
+          return `<div class="m-chips" role="group" aria-label="Which remotes">${scope}</div>
+            <p class="wiz-hint">${escapeHtml(now)}.${!alike && theirs?.action?.kind === "command" ? ` <button type="button" class="btn btn-text btn-sm" data-h="theirs">Use it here</button>` : ""}</p>`;
         }
         content.addEventListener("click", (ev) => {
           const mb = ev.target.closest("[data-h-modebtn]");
@@ -645,6 +772,8 @@ export function createTouchScreenView(section) {
           }
           const dc = ev.target.closest("[data-h-dev]");
           if (dc) { deviceId = dc.dataset.hDev; draw(); return; }
+          const sc = ev.target.closest("[data-h-scope]");
+          if (sc) { both = sc.dataset.hScope === "both"; bothChosen = true; draw(); return; }
           const cmd = ev.target.closest("[data-h-cmd]");
           if (cmd) {
             const dev = devices.find((d) => d.id === deviceId);
@@ -658,8 +787,22 @@ export function createTouchScreenView(section) {
             return;
           }
           const act = ev.target.closest("[data-h]")?.dataset.h;
+          if (act === "theirs") {
+            const theirs = twinRow(key);
+            pick = { ...theirs.action };
+            pressMode = theirs.pressMode ?? "standard";
+            longPick = theirs.longPress ? { ...theirs.longPress } : null;
+            if (devices.some((d) => d.id === pick.deviceId)) deviceId = pick.deviceId;
+            draw();
+            return;
+          }
           if (act === "done" && pick) {
-            const row = { buttonKey: key, buttonId: existing?.buttonId ?? null, action: pick, pressMode, longPress: longPick, doublePress: existing?.doublePress ?? null, extra: !ids.includes(String(pick.deviceId)), locked: false };
+            const row = { key, buttonKey: key, buttonId: existing?.buttonId ?? null, action: pick, pressMode, longPress: longPick, doublePress: start?.doublePress ?? null, extra: !ids.includes(String(pick.deviceId)), locked: false };
+            if (twin && both) {
+              // A renamed key leaves the other remote's old key only if they were alike.
+              if (existing && key !== buttonKey && mirrors(buttonKey)) setTwinKey(buttonKey, null);
+              setTwinKey(key, row);
+            }
             if (existing) {
               hardRows = hardRows.map((r) => r.buttonKey === buttonKey ? { ...row, buttonId: r.buttonId } : r);
               // Key rename: if key changed, replace.
@@ -674,8 +817,7 @@ export function createTouchScreenView(section) {
             markDirty();
             close();
           } else if (act === "remove") {
-            hardRows = hardRows.filter((r) => r.buttonKey !== buttonKey);
-            markDirty();
+            removeKey(buttonKey, Boolean(twin) && both);
             close();
           }
         });
@@ -683,7 +825,11 @@ export function createTouchScreenView(section) {
           if (ev.target.matches("[data-h-search]")) { q = ev.target.value; draw(); }
         });
         content.addEventListener("change", (ev) => {
-          if (ev.target.matches("[data-h-key]")) { key = ev.target.value; draw(); }
+          if (ev.target.matches("[data-h-key]")) {
+            key = ev.target.value;
+            if (!bothChosen) both = mirrors(key);
+            draw();
+          }
         });
         draw();
       },
@@ -788,6 +934,8 @@ export function createTouchScreenView(section) {
       return;
     }
     const base = isSmart() ? hardBase : softDraft.base;
+    const twinCheck = twinChanged() ? { remote: twin.remote, base: twin.base } : null;
+    savedTouch = touchChanged();
     saving = true;
     render();
     const reread = () => {
@@ -808,7 +956,7 @@ export function createTouchScreenView(section) {
       await hub.reloadConfig();
       const outcome = hub.state.configError
         ? "unknown"
-        : controlsSaveOutcome(hub.state.config, activityId, base, payload.mapList, { remote });
+        : controlsSaveOutcome(hub.state.config, activityId, base, payload.mapList, { remote, twin: twinCheck });
       if (error.status === 504 && outcome !== "saved") {
         // The hub's writer hasn't answered yet and may still apply this save.
         snackbar("The hub is still saving. Your changes are still here; reload in a minute to see whether they landed before you save again.", { error: true });
@@ -886,8 +1034,13 @@ export function createTouchScreenView(section) {
     }
     const hremove = event.target.closest("[data-hremove]");
     if (hremove) {
-      hardRows = hardRows.filter((r) => r.buttonKey !== hremove.dataset.hremove);
-      markDirty();
+      // A key alike on both goes from both; one set for this remote only goes from this one.
+      removeKey(hremove.dataset.hremove, mirrors(hremove.dataset.hremove));
+      return;
+    }
+    const htwin = event.target.closest("[data-htwin]");
+    if (htwin) {
+      openHardSheet(htwin.dataset.htwin, { from: twinRow(htwin.dataset.htwin) });
       return;
     }
     const gedit = event.target.closest("[data-gedit]");
@@ -908,6 +1061,7 @@ export function createTouchScreenView(section) {
       if (sim.reason === "hard-gate-blocked" && sim.hardKey && sim.deviceId && sim.command) {
         // One-click fix: add the missing hard key to this activity.
         if (!hardRows.some((r) => r.buttonKey === sim.hardKey)) {
+          const both = mirrors(sim.hardKey);
           hardRows.push({
             buttonKey: sim.hardKey,
             buttonId: null,
@@ -918,6 +1072,7 @@ export function createTouchScreenView(section) {
             extra: !roleIds().includes(String(sim.deviceId)),
             locked: false,
           });
+          if (both) setTwinKey(sim.hardKey, hardRows.at(-1));
           markDirty();
           snackbar(`Added hard key ${sim.hardKey} so ${gkey} can resolve. Save to apply.`);
         }
@@ -927,6 +1082,14 @@ export function createTouchScreenView(section) {
     const act = event.target.closest("[data-act]")?.dataset.act;
     if (act === "add") openSoftButtonSheet(null);
     else if (act === "hadd") openHardSheet(null);
+    else if (act === "htake") {
+      for (const { row, key } of twinOnlyRows()) {
+        if (row.action?.kind !== "command") continue;
+        hardRows.push({ ...structuredClone(row), key, buttonKey: key, buttonId: null });
+      }
+      hardRows.sort((a, b) => a.buttonKey.localeCompare(b.buttonKey));
+      markDirty();
+    }
     else if (act === "gadd") openGestureSheet(null);
     else if (act === "save") save();
     else if (act === "undo") undo();
@@ -959,6 +1122,8 @@ export function createTouchScreenView(section) {
       remote = args[1] === SMART_CONTROL_REMOTE ? SMART_CONTROL_REMOTE : TOUCH_REMOTE;
       activeTab = isSmart() ? "hard" : "soft";
       hardBase = "";
+      twin = null;
+      twinPaired = undefined;
       root.innerHTML = `<div class="m-center">${spinner("Loading")}</div>`;
       updateBar();
       await hub.ensureConfig();
@@ -980,6 +1145,7 @@ export function createTouchScreenView(section) {
       } catch (_) { gestureRows = []; }
       baseMapText = JSON.stringify(hub.state.config.mapList.ButtonMaps.find((m) => m.ButtonMapIdentifier === `${remote}Activity${activityId}`));
       render();
+      loadTwinPaired(token);
       root.querySelector(".wiz-intro h2")?.focus({ preventScroll: true });
     },
     onHide() {

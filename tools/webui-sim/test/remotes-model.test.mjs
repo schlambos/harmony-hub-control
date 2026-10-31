@@ -6,9 +6,7 @@ import {
   ROOT_MAP_ID,
   activityButtonsSaveOutcome,
   buildActivityButtonsMapList,
-  buildKeyCopyMapList,
   keyComparison,
-  keyOn,
   pairOutcome,
   parseRfInfo,
   readActivityButtons,
@@ -286,66 +284,13 @@ describe("keys on both remotes", () => {
       ],
     },
   });
-  const byKey = (mapList, id) => Object.fromEntries(mapList.ButtonMaps.find((m) => m.ButtonMapIdentifier === id).Buttons.map((b) => [b.ButtonKey, b]));
 
-  it("names keys each remote's way, and only keys it has", () => {
-    assert.equal(keyOn("16414", "DVR"), "Dvr");
-    assert.equal(keyOn("16417", "Dvr"), "DVR");
-    assert.equal(keyOn("16414", "Select"), "Select");
-    assert.equal(keyOn("16417", "Number1"), "", "the Touch has no number keys");
-    assert.equal(keyOn("16414", "Home"), "");
-  });
-
-  it("compares both ways with neither remote as the reference", () => {
+  it("lists, per activity, the keys where the two remotes differ", () => {
     const [radio, lounge] = keyComparison(graph());
     assert.deepEqual([radio.name, radio.smartMap, radio.touchMap], ["Radio", false, true]);
     assert.deepEqual(lounge.differ, ["Play"]);
     assert.deepEqual(lounge.onlySmart.sort(), ["Exit", "Info"], "Number1 isn't compared: the Touch has no number keys");
     assert.deepEqual(lounge.onlyTouch.sort(), ["DVR", "Guide", "Select"]);
-    assert.deepEqual(lounge.noCopyToTouch, ["Exit"]);
-    assert.deepEqual(lounge.noCopyToSmart, ["Guide"]);
-  });
-
-  it("copies the Touch's keys to the Smart Control, keeping its IDs and groups", () => {
-    const cfg = graph();
-    const { mapList, copied, skipped } = buildKeyCopyMapList(cfg, "16417");
-    assert.equal(copied, 3);
-    assert.equal(skipped, 1, "the Guide sequence");
-    const smart = byKey(mapList, "16414Activity7");
-    assert.equal(smart.Play.ButtonId, 1878030003, "a replaced key keeps its ButtonId");
-    assert.equal(smart.Play.ButtonAction["DeviceId-"], 2);
-    assert.equal(smart.Dvr.ButtonAction.CommandName, "Recordings");
-    assert.ok(smart.Select.ButtonId > 1878030201, "a new key gets a fresh ButtonId");
-    assert.equal(smart.Number1.FunctionGroupType, 2);
-    assert.equal(smart.Guide, undefined, "a Touch sequence is never copied");
-    assert.equal(smart.Info.ButtonAction.CommandName, "Info", "keys only the Smart Control has stay");
-    assert.deepEqual(mapList.ButtonMaps.filter((m) => m.ButtonMapIdentifier.startsWith("16417")), graph().mapList.ButtonMaps.filter((m) => m.ButtonMapIdentifier.startsWith("16417")));
-    assert.deepEqual(validateMapList(mapList), []);
-    assert.equal(buildKeyCopyMapList({ ...cfg, mapList }, "16417").copied, 0, "nothing left to copy that way");
-  });
-
-  it("copies the Smart Control's keys to the Touch, the same way", () => {
-    const cfg = graph();
-    const { mapList, copied, skipped } = buildKeyCopyMapList(cfg, "16414");
-    assert.equal(copied, 2, "Play and Info; Number1 has no Touch key");
-    assert.equal(skipped, 1, "the Exit sequence");
-    const touch = byKey(mapList, "16417Activity7");
-    assert.equal(touch.Play.ButtonId, 1878030102);
-    assert.equal(touch.Play.ButtonAction["DeviceId-"], 1);
-    assert.equal(touch.Info.FunctionGroupType, 0);
-    assert.equal(touch.Number1, undefined);
-    assert.equal(touch.Exit, undefined);
-    assert.equal(touch.Select.ButtonAction.CommandName, "OK", "keys only the Touch has stay");
-    assert.ok(mapList.ButtonMaps.find((m) => m.ButtonMapIdentifier === "16417Activity7").Buttons.some((b) => b.__type === "SoftRemoteButton"), "on-screen buttons stay");
-    assert.deepEqual(mapList.ButtonMaps.filter((m) => m.ButtonMapIdentifier.startsWith("16414")), graph().mapList.ButtonMaps.filter((m) => m.ButtonMapIdentifier.startsWith("16414")));
-    assert.deepEqual(validateMapList(mapList), []);
-    const after = keyComparison({ ...cfg, mapList }).find((p) => p.name === "Lounge");
-    assert.deepEqual([after.differ, after.onlySmart], [[], ["Exit"]]);
-  });
-
-  it("copies only the activities asked for", () => {
-    assert.equal(buildKeyCopyMapList(graph(), "16417", ["8"]).copied, 0);
-    assert.equal(buildKeyCopyMapList(graph(), "16417", ["7"]).copied, 3);
   });
 
   it("finds the live fixture's maps", () => {

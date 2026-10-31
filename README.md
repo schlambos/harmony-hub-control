@@ -440,8 +440,9 @@ so you can bookmark it.
   Control joins a Touch but replaces an older Smart Control. Each paired
   remote gets the same section: its buttons for each activity, opening the
   same editor for either remote (the Smart Control also has its activity
-  buttons). "Keys on both remotes" compares their keys and copies them
-  either way.
+  buttons). Both remotes' keys stay the same: a key you change goes on both
+  unless you set it for one remote only, and each activity row says where
+  they differ.
 - **Bluetooth keyboard**: pairing and saved devices.
 - **MQTT**: the broker, Home Assistant discovery and the topics.
 - **Wi-Fi**: the network the hub joins. Changes take effect after a reboot.

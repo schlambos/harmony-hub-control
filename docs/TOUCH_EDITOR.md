@@ -132,9 +132,14 @@ The activity wizard (web and Android) owns each activity's
 The Touch & HA Control Studio (`#touch/<id>`) owns the on-screen rows, hard
 keys and gestures of `16417Activity<id>` directly. Opened for the Smart
 Control (`#touch/<id>/16414`, from Settings → Remotes), the same page edits
-only the hard keys of `16414Activity<id>`. Each saves only its own remote's
-map; Settings → Remotes → "Keys on both remotes" compares the two and copies
-keys either way. The Touch answers its
+only the hard keys of `16414Activity<id>`. Either way the two remotes' hard
+keys stay alike: a key edit is written to both maps in one save, unless the
+owner picks "Only the <remote>" for it (an override). A key already set
+differently on the two remotes stays that way unless they pick "Both
+remotes", and the page shows the other remote's setting next to it. Keys
+only the other remote has set are listed with "Add these here too". The
+number keys are the Smart Control's alone. Settings → Remotes notes, per
+activity, where the two differ. The Touch answers its
 hard keys from its own `16417` map only; Logitech's configs carry the same
 hard buttons on both maps, minus the number keys (which are on screen on
 the Touch) and with `Dvr` spelled `DVR`.
