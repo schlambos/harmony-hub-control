@@ -161,6 +161,7 @@ the Harmony Touch.**
 | Remote | Status |
 | --- | --- |
 | Harmony Touch | Validated, with stock remote firmware: offline sync, hard keys, on-screen buttons, the number pad, gestures, device screens and press modes. |
+| Harmony Smart Control remote | Pairs on the hub with no cloud (Settings → Remotes), next to the Touch. It keeps no setup of its own: its activity buttons and keys live on the hub. Not yet validated on hardware. |
 | Other remotes that pair with the hub, such as the Harmony Companion, Ultimate, Elite or 950 | Expected to work, but not yet tested. Features that need a screen apply only to remotes that have one. |
 | Phones, tablets and computers | The web, Android and macOS apps. |
 
@@ -432,6 +433,10 @@ so you can bookmark it.
 
 **Settings**
 - **Hub**: whether the hub is connected, and its activity and device counts.
+- **Remotes**: the remotes paired with the hub and a pairing window for one
+  more, with no cloud. The hub keeps one remote of each kind, so a Smart
+  Control joins a Touch but replaces an older Smart Control. Also the Smart
+  Control's activity buttons, and its keys compared with the Touch's.
 - **Bluetooth keyboard**: pairing and saved devices.
 - **MQTT**: the broker, Home Assistant discovery and the topics.
 - **Wi-Fi**: the network the hub joins. Changes take effect after a reboot.
