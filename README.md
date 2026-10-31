@@ -155,14 +155,16 @@ an account.
 ### Remotes
 
 Melodious does its work on the hub, so it's designed for any Harmony remote
-that pairs with the hub. **So far it has been validated on hardware only with
-the Harmony Touch.**
+that pairs with the hub. **It has been validated on hardware with the Harmony
+Touch and the Harmony Smart Control remote, and a user reports that the
+Harmony Elite works.**
 
 | Remote | Status |
 | --- | --- |
 | Harmony Touch | Validated, with stock remote firmware: offline sync, hard keys, on-screen buttons, the number pad, gestures, device screens and press modes. |
-| Harmony Smart Control remote | Pairs on the hub with no cloud (Settings → Remotes), next to the Touch. It keeps no setup of its own: its activity buttons and keys live on the hub. Not yet validated on hardware. |
-| Other remotes that pair with the hub, such as the Harmony Companion, Ultimate, Elite or 950 | Expected to work, but not yet tested. Features that need a screen apply only to remotes that have one. |
+| Harmony Smart Control remote | Validated, paired next to a Touch: pairing on the hub with no cloud (Settings → Remotes), its keys driving the same devices as the Touch's, and its activity buttons. It keeps no setup of its own; its buttons live on the hub. If it stops responding, take its coin cell out for 10 seconds, then pair it again. |
+| Harmony Elite | Works, per a user report; not yet tested here. |
+| Other remotes that pair with the hub, such as the Harmony Companion, Ultimate or 950 | Expected to work, but not yet tested. Features that need a screen apply only to remotes that have one. |
 | Phones, tablets and computers | The web, Android and macOS apps. |
 
 No remote needs modified firmware. If you run Melodious with another remote,
