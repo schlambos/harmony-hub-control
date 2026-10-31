@@ -1957,6 +1957,17 @@ class PowerShellStaticContract(unittest.TestCase):
         assert match, f"missing ${variable} array"
         return re.findall(r'"([^"]+)"', match.group(1))
 
+    def test_ps1_scripts_are_ascii(self):
+        """[PS1 STATIC] Windows PowerShell 5.1 reads BOM-less scripts as
+        Windows-1252. There a UTF-8 em dash ends in byte 0x94, a closing
+        curly quote, so the script fails to parse. Keep the scripts ASCII."""
+        for script in sorted(REPO_ROOT.glob("*.ps1")):
+            data = script.read_bytes()
+            bad = [i for i, byte in enumerate(data) if byte > 0x7F]
+            self.assertEqual(
+                bad, [], f"{script.name} has non-ASCII bytes at offsets {bad[:5]}"
+            )
+
     def test_contract_switches_present(self):
         """[PS1 STATIC] -PreflightOnly and -CleanInstall switches exist."""
         self.assertIn("[switch]$PreflightOnly", self.text)
