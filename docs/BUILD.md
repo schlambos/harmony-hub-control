@@ -261,6 +261,17 @@ that the installer references the exact `activity/codexactivity.lua` candidate
 tools/activity_offline_guard.sh
 ```
 
+The pair agent's SDP battery-collection removal has a host-side test
+against a fake BlueZ `sdpd` on a unix socket. It covers the descriptor
+edits, continuation states, and `SDP_SVC_UPDATE_REQ`. To run it on the
+MIPS build too, use qemu user mode:
+
+```sh
+python3 tools/bt_sdp_battery_smoke.py
+AGENT_RUNNER=qemu-mips-static python3 tools/bt_sdp_battery_smoke.py \
+  "$OFFICIAL_ZIG cc -target mips-linux-musleabi -static"
+```
+
 The build script does not run these tests; run them yourself before
 rebuilding.
 

@@ -88,5 +88,10 @@ grep -q 'codex-bt-hid-control.pid' \
   "$ROOT/payload/scripts/init.sh"
 grep -q 'codex_bt_pair_agent.c' \
   "$ROOT/build/build_harmony_tools_kali.sh"
+grep -q 'sdp_strip_hid_battery' \
+  "$ROOT/payload/source/codex_bt_pair_agent.c"
+grep -q 'sdp_watch_check' \
+  "$ROOT/payload/source/codex_bt_pair_agent.c"
+python3 "$ROOT/tools/bt_sdp_battery_smoke.py" "$CC_BIN"
 
-echo "PASS Bluetooth HID authenticated-link, local pairing, and GET_REPORT guards"
+echo "PASS Bluetooth HID authenticated-link, local pairing, GET_REPORT, and SDP battery guards"
