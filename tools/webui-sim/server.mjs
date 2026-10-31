@@ -1270,6 +1270,20 @@ async function handleApi(req, res, pathname, url) {
     case "POST /api/remote-pair":
       await handleRemotePair(res, params);
       return;
+    case "POST /api/sim/remotes":
+      // Sim only: set the radio's slot table, e.g. {"devices":[{"EquadID":"16417","SkinId":"5","DeviceIndex":"1"}]}.
+      if (!Array.isArray(params.devices)) {
+        sendError(res, 400, "body must contain a devices array");
+        return;
+      }
+      simRemotes = params.devices.map((d, i) => ({
+        EquadID: String(d.EquadID ?? ""),
+        SkinId: String(d.SkinId ?? ""),
+        DeviceIndex: String(d.DeviceIndex ?? i + 1),
+        RFID: String(d.RFID ?? 1000000001 + i)
+      }));
+      sendJson(res, 200, { ok: true, reply: simRfInfo() });
+      return;
     case "GET /api/bt-call":
     case "POST /api/bt-call":
       sendJson(res, 200, { ok: true, action: String(params.action || ""), reply: "sim stub: no bluetooth hardware" });

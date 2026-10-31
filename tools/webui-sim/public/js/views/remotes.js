@@ -1,6 +1,8 @@
 /* Remotes (#remotes, under Settings): the remotes paired with the hub, a
-   pairing window for one more, the Harmony Smart Control's activity buttons,
-   and the keys it shares with the Touch. Models in remotes-model.js.
+   pairing window for one more, then a section for each paired remote with
+   what can be set for it here: a Smart Control's activity buttons and the
+   keys it shares with a screen remote; a screen remote's per-activity
+   editor. Models in remotes-model.js.
 
    Pairing never touches a remote of another kind: hal keeps one remote per
    kind and replaces only an older one of the same kind. The page reads the
@@ -10,6 +12,7 @@ import * as api from "../api.js";
 import * as hub from "../state.js";
 import { confirmDialog, escapeHtml, iconTile, listRow, sectionLabel, snackbar, spinner } from "../ui/shell.js";
 import {
+  PAIRING_STEPS,
   SMART_CONTROL_EQUAD,
   activityButtonsSaveOutcome,
   buildActivityButtonsMapList,
@@ -18,8 +21,9 @@ import {
   pairOutcome,
   parseRfInfo,
   readActivityButtons,
-  remoteKindName,
 } from "./remotes-model.js";
+
+const SMART_CONTROL_STEPS = `On a Harmony Smart Control, ${PAIRING_STEPS[SMART_CONTROL_EQUAD]}.`;
 
 /* The hub allows up to 120 s, but the request lasts the whole window plus
    hal's clean-up, and the macOS app gives up on a request after 120 s. */
@@ -45,12 +49,16 @@ export function createRemotesView(section) {
   // A button left on a deleted activity needs a save even when nothing was picked.
   const needsSave = () => dirty || Boolean(rows?.some((r) => r.missing.length));
 
+  const paired = () => remotes?.remotes ?? [];
+  const screenRemote = () => paired().find((r) => r.role === "screen") ?? null;
+
   function remoteRow(r) {
-    const smart = r.equadId === SMART_CONTROL_EQUAD;
+    // A screen remote other than the Touch shows its skin, which tells which model it is.
+    const skin = r.role === "screen" && r.short === "screen remote" && r.skinId ? ` · skin ${r.skinId}` : "";
     return listRow({
       title: r.name,
-      subtitle: `Slot ${r.slot}`,
-      leading: iconTile(smart ? "settings_remote" : "settings_remote_outlined", { size: 44, tone: smart ? "hub" : "" }),
+      subtitle: `Slot ${r.slot}${skin}`,
+      leading: iconTile("settings_remote", { size: 44, tone: "hub" }),
     });
   }
 
@@ -105,15 +113,15 @@ export function createRemotesView(section) {
       return `${sectionLabel("Pair a remote")}
         <div class="m-card remotes-pairing" aria-live="polite">
           <div class="m-card-head"><span>Pairing window open</span>${spinner("Pairing")}</div>
-          <p><strong>On a Harmony Smart Control, hold Menu and Mute together for about 5 seconds.</strong></p>
+          <p><strong>Put the remote in pairing mode now.</strong> ${escapeHtml(SMART_CONTROL_STEPS)}</p>
           <p class="list-note">${left > 0 ? `${left} s left.` : "Closing the window…"} Don't press the button on the hub while it's open.</p>
         </div>`;
     }
     const options = WINDOWS.map((s) => `<option value="${s}"${s === windowSeconds ? " selected" : ""}>${s} seconds</option>`).join("");
     return `${sectionLabel("Pair a remote")}
       <div class="m-card">
-        <p>The hub opens its pairing window. While it's open, hold <strong>Menu</strong> and <strong>Mute</strong> on a Harmony Smart Control for about 5 seconds. Other remotes use their own pairing steps.</p>
-        <p class="list-note">The hub keeps one remote of each kind, so pairing a Smart Control replaces an older Smart Control. Remotes of other kinds, like a Harmony Touch, stay paired. Nothing goes through Logitech's servers.</p>
+        <p>The hub opens its pairing window. While it's open, put the remote in pairing mode. ${escapeHtml(SMART_CONTROL_STEPS)} Other remotes use their own pairing steps.</p>
+        <p class="list-note">The hub keeps one remote of each kind: a new remote replaces an older one of the same kind, and remotes of other kinds stay paired. Nothing goes through Logitech's servers.</p>
         ${outcomeNotice()}
         <div class="actions">
           <label class="remotes-window">Window <select data-window${busy() ? " disabled" : ""}>${options}</select></label>
@@ -145,10 +153,9 @@ export function createRemotesView(section) {
   }
 
   function buttonsCard() {
-    if (!hub.state.config) return "";
     const missing = rows.some((r) => r.missing.length);
-    return `${sectionLabel("Smart Control activity buttons")}
-      <div class="m-card">
+    return `<div class="m-card">
+        <div class="m-card-head"><span>Activity buttons</span></div>
         <p class="list-note">Each button starts one activity on a press and another on a long press. Off turns everything off by itself.</p>
         ${missing ? `<div class="notice notice-warn" role="status">A button still names an activity that was deleted. Saving sets it to Nothing, or pick another activity first.</div>` : ""}
         <div class="remotes-buttons" role="group" aria-label="Activity buttons">
@@ -162,10 +169,12 @@ export function createRemotesView(section) {
       </div>`;
   }
 
-  function parityCard() {
-    if (!hub.state.config) return "";
+  /* The Smart Control's keys against a paired screen remote's (both answer
+     from their own map; the screen remote's is the 16417 one). */
+  function parityCard(screen) {
     const parity = keyParity(hub.state.config);
     if (!parity.length) return "";
+    const other = screen.short;
     const fixable = parity.some((p) => p.missing.length || p.differs.length);
     const line = (p) => {
       if (!p.smartMap) {
@@ -181,16 +190,51 @@ export function createRemotesView(section) {
       if (p.differs.length) parts.push(`different ${p.differs.join(", ")}`);
       if (p.skipped.length) parts.push(`set in Activity setup: ${p.skipped.join(", ")}`);
       const subtitle = !p.touchMap
-        ? "No Touch keys to compare"
-        : parts.length ? `Unlike the Touch: ${parts.join("; ")}` : "Same keys as the Touch";
+        ? `No ${other} keys to compare`
+        : parts.length ? `Unlike the ${other}: ${parts.join("; ")}` : `Same keys as the ${other}`;
       return listRow({ title: p.name, subtitle });
     };
-    return `${sectionLabel("Same keys as the Touch")}
-      <div class="m-card">
-        <p class="list-note">Each remote has its own key map. A key changed only for the Touch leaves the Smart Control on the old command.</p>
+    return `<div class="m-card">
+        <div class="m-card-head"><span>Same keys as the ${escapeHtml(other)}</span></div>
+        <p class="list-note">Each remote has its own key map. A key changed only for the ${escapeHtml(other)} leaves the Smart Control on the old command.</p>
         <div class="m-list">${parity.map(line).join("")}</div>
-        ${fixable ? `<div class="actions"><button type="button" class="btn btn-filled" data-act="parity"${busy() || dirty ? " disabled" : ""}>Copy the Touch's keys to the Smart Control</button></div>` : ""}
+        ${fixable ? `<div class="actions"><button type="button" class="btn btn-filled" data-act="parity"${busy() || dirty ? " disabled" : ""}>Copy the ${escapeHtml(other)}'s keys to the Smart Control</button></div>` : ""}
       </div>`;
+  }
+
+  /* Screen remotes set their on-screen buttons, hard keys and gestures per
+     activity in the Touch editor; every screen remote answers from the same
+     16417 maps. */
+  function screenCard(remote) {
+    const acts = hub.activities();
+    const note = remote.short === "Touch"
+      ? ""
+      : `<p class="list-note">The editor was built and tested with the Harmony Touch. Other remotes with a screen answer from the same maps.</p>`;
+    return `<div class="m-card">
+        <div class="m-card-head"><span>Buttons for each activity</span></div>
+        <p class="list-note">On-screen buttons, hard keys and gestures are set per activity.</p>
+        ${note}
+        ${acts.length
+          ? `<div class="m-list">${acts.map((a) => listRow({
+              title: hub.activityName(a),
+              href: `#touch/${encodeURIComponent(String(a["Id-"]))}`,
+              chevron: true,
+            })).join("")}</div>`
+          : `<p class="list-note">This hub has no activities yet.</p>`}
+      </div>`;
+  }
+
+  function remoteSection(remote) {
+    let body;
+    if (remote.role === "smart-control") {
+      const screen = screenRemote();
+      body = `${buttonsCard()}${screen ? parityCard(screen) : ""}`;
+    } else if (remote.role === "screen") {
+      body = screenCard(remote);
+    } else {
+      body = `<div class="m-card"><p class="list-note">Nothing to set for this remote here yet.</p></div>`;
+    }
+    return `${sectionLabel(remote.name)}<div class="remotes-section">${body}</div>`;
   }
 
   function render() {
@@ -203,7 +247,8 @@ export function createRemotesView(section) {
       baseRows = readActivityButtons(hub.state.config).rows;
       rows = structuredClone(baseRows);
     }
-    root.innerHTML = `${remotesCard()}${pairCard()}${buttonsCard()}${parityCard()}`;
+    const sections = hub.state.config ? paired().map(remoteSection).join("") : "";
+    root.innerHTML = `${remotesCard()}${pairCard()}${sections}`;
   }
 
   async function loadRemotes() {
@@ -220,12 +265,12 @@ export function createRemotesView(section) {
 
   async function pair() {
     if (busy()) return;
-    const smart = remotes?.remotes?.find((r) => r.equadId === SMART_CONTROL_EQUAD);
+    const now = paired().map((r) => `${r.name} (slot ${r.slot})`).join(", ");
     const ok = await confirmDialog({
       title: "Open the pairing window?",
-      text: smart
-        ? `This hub already has a ${remoteKindName(smart.equadId)} in slot ${smart.slot}. If you pair a different Smart Control, the hub replaces that one. Remotes of other kinds stay paired.`
-        : "Remotes already paired stay paired, unless the new one is the same kind as one of them: the hub keeps one remote of each kind.",
+      text: now
+        ? `Paired now: ${now}. A new remote of one of those kinds replaces that one; a remote of any other kind joins alongside them.`
+        : "The hub keeps one remote of each kind. No remotes are paired with it now.",
       confirmLabel: "Open window",
     });
     if (!ok) return;
@@ -321,7 +366,7 @@ export function createRemotesView(section) {
     const { mapList, copied } = buildKeyParityMapList(hub.state.config);
     if (!copied) return;
     await saveMapList(mapList, {
-      done: `Copied ${copied} key${copied === 1 ? "" : "s"} from the Touch to the Smart Control.`,
+      done: `Copied ${copied} key${copied === 1 ? "" : "s"} from the ${screenRemote()?.short ?? "screen remote"} to the Smart Control.`,
       check: (config) => {
         const left = keyParity(config).reduce((n, p) => n + p.missing.length + p.differs.length, 0);
         return left === 0 ? "saved" : "unchanged";

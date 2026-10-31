@@ -2,6 +2,7 @@ import { describe, it } from "node:test";
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import {
+  PAIRING_STEPS,
   ROOT_MAP_ID,
   activityButtonsSaveOutcome,
   buildActivityButtonsMapList,
@@ -50,11 +51,27 @@ const pairReply = (slot, equad) => JSON.stringify({ id: 1, data: { DeviceIndex: 
 describe("parseRfInfo", () => {
   it("lists remotes by slot with their kind", () => {
     const parsed = parseRfInfo(rfInfo([TOUCH, SMART]));
-    assert.deepEqual(parsed.remotes.map((r) => [r.slot, r.equadId, r.name]), [
-      [1, "16414", "Harmony Smart Control remote"],
-      [2, "16417", "Harmony Touch"],
+    assert.deepEqual(parsed.remotes.map((r) => [r.slot, r.equadId, r.name, r.short, r.role]), [
+      [1, "16414", "Harmony Smart Control remote", "Smart Control", "smart-control"],
+      [2, "16417", "Harmony Touch", "Touch", "screen"],
     ]);
     assert.equal(parsed.hub.equadId, "34827");
+  });
+
+  it("gives every kind a role, so the page offers only what fits it", () => {
+    const parsed = parseRfInfo(rfInfo([[1, "16417", "5", "104"], [2, "16422", "6"], [3, "16420", "7"], [4, "16999", "8"]]));
+    assert.deepEqual(parsed.remotes.map((r) => [r.name, r.short, r.role]), [
+      ["Harmony remote with a screen", "screen remote", "screen"],
+      ["Harmony Companion remote", "Companion", "other"],
+      ["Harmony keyboard", "keyboard", "other"],
+      ["Unknown remote (EquadID 16999)", "remote", "other"],
+    ]);
+    assert.equal(parsed.remotes[0].skinId, "104");
+  });
+
+  it("knows the Smart Control's pairing steps and no unproven ones", () => {
+    assert.deepEqual(Object.keys(PAIRING_STEPS), ["16414"]);
+    assert.match(PAIRING_STEPS[16414], /Menu and Mute/);
   });
 
   it("reads codex_hal_ltcp output with noise before the JSON", () => {

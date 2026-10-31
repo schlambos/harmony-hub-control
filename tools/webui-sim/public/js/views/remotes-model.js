@@ -20,21 +20,33 @@ export const TOUCH_EQUAD = "16417";
 export const ROOT_MAP_ID = `${SMART_CONTROL_EQUAD}Root`;
 
 /* hal accepts only these EquadIDs (others are unpaired at once). 16417 is
-   every remote with a screen; its skin tells them apart. */
+   every remote with a screen (Touch, Elite, Ultimate…); its skin tells them
+   apart, and only the Touch's skin is known. `role` decides what the
+   Remotes page offers for that remote. */
 const KINDS = {
-  16414: "Harmony Smart Control remote",
-  16417: "Harmony remote with a screen",
-  16420: "Harmony keyboard",
-  16422: "Harmony Companion remote",
-  16423: "Harmony Companion remote",
-  34830: "Harmony USB dongle",
+  16414: { name: "Harmony Smart Control remote", short: "Smart Control", role: "smart-control" },
+  16417: { name: "Harmony remote with a screen", short: "screen remote", role: "screen" },
+  16420: { name: "Harmony keyboard", short: "keyboard", role: "other" },
+  16422: { name: "Harmony Companion remote", short: "Companion", role: "other" },
+  16423: { name: "Harmony Companion remote", short: "Companion", role: "other" },
+  34830: { name: "Harmony USB dongle", short: "dongle", role: "other" },
 };
-const SKINS = { 99: "Harmony Touch" };
+const SKINS = { 99: { name: "Harmony Touch", short: "Touch" } };
+
+/* How to put a remote in pairing mode, for the kinds proven on hardware. */
+export const PAIRING_STEPS = {
+  16414: "hold Menu and Mute together for about 5 seconds",
+};
+
+function remoteKind(equadId, skinId = "") {
+  const id = String(equadId ?? "");
+  const kind = KINDS[id] ?? { name: `Unknown remote (EquadID ${id || "?"})`, short: "remote", role: "other" };
+  const skin = id === TOUCH_EQUAD ? SKINS[String(skinId)] : null;
+  return skin ? { ...kind, ...skin } : kind;
+}
 
 export function remoteKindName(equadId, skinId = "") {
-  const id = String(equadId ?? "");
-  if (id === TOUCH_EQUAD && SKINS[String(skinId)]) return SKINS[String(skinId)];
-  return KINDS[id] ?? `Unknown remote (EquadID ${id || "?"})`;
+  return remoteKind(equadId, skinId).name;
 }
 
 /* hal's JSON reply, given as the raw text codex_hal_ltcp printed or as an
@@ -51,7 +63,7 @@ function halReply(reply) {
   }
 }
 
-/** rf.info -> { hub, remotes: [{ slot, equadId, rfid, skinId, name }] }, or null. */
+/** rf.info -> { hub, remotes: [{ slot, equadId, rfid, skinId, name, short, role }] }, or null. */
 export function parseRfInfo(reply) {
   const json = halReply(reply);
   if (!json || Number(json.code) !== 200 || !json.data || typeof json.data !== "object") return null;
@@ -64,7 +76,7 @@ export function parseRfInfo(reply) {
       skinId: String(d?.SkinId ?? ""),
     }))
     .filter((r) => r.slot > 0 && r.equadId && r.equadId !== "0")
-    .map((r) => ({ ...r, name: remoteKindName(r.equadId, r.skinId) }))
+    .map((r) => ({ ...r, ...remoteKind(r.equadId, r.skinId) }))
     .sort((a, b) => a.slot - b.slot);
   return {
     hub: { equadId: String(json.data.EquadID ?? ""), rfid: String(json.data.RFID ?? "") },
