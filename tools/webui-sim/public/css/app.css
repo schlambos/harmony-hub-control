@@ -1774,6 +1774,18 @@ details > summary {
   gap: var(--space-3);
 }
 
+.remotes-copy .btn {
+  white-space: normal;
+  text-align: center;
+}
+
+@media (max-width: 640px) {
+  .remotes-copy {
+    flex-direction: column;
+    align-items: stretch;
+  }
+}
+
 .remotes-pairing p {
   margin: var(--space-2) 0;
 }

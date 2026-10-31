@@ -1,8 +1,11 @@
 /* Remotes (#remotes, under Settings): the remotes paired with the hub, a
-   pairing window for one more, then a section for each paired remote with
-   what can be set for it here: a Smart Control's activity buttons and the
-   keys it shares with a screen remote; a screen remote's per-activity
-   editor. Models in remotes-model.js.
+   pairing window for one more, then a section for each paired remote, all
+   built the same way: rows that open a page. Every remote with keys gets
+   "Buttons for each activity", one row per activity opening the same editor
+   (#touch/<id>/<remote>); the Smart Control also gets its activity buttons
+   (#activitybuttons). When two remotes with keys are paired, "Keys on both
+   remotes" compares them with neither as the reference and copies either
+   way. Models in remotes-model.js.
 
    Pairing never touches a remote of another kind: hal keeps one remote per
    kind and replaces only an older one of the same kind. The page reads the
@@ -12,16 +15,17 @@ import * as api from "../api.js";
 import * as hub from "../state.js";
 import { confirmDialog, escapeHtml, iconTile, listRow, sectionLabel, snackbar, spinner } from "../ui/shell.js";
 import {
+  ACTIVITY_BUTTONS,
   PAIRING_STEPS,
   SMART_CONTROL_EQUAD,
-  activityButtonsSaveOutcome,
-  buildActivityButtonsMapList,
-  buildKeyParityMapList,
-  keyParity,
+  TOUCH_EQUAD,
+  buildKeyCopyMapList,
+  keyComparison,
   pairOutcome,
   parseRfInfo,
   readActivityButtons,
 } from "./remotes-model.js";
+import { saveMapList } from "./map-save.js";
 
 const SMART_CONTROL_STEPS = `On a Harmony Smart Control, ${PAIRING_STEPS[SMART_CONTROL_EQUAD]}.`;
 
@@ -30,27 +34,24 @@ const SMART_CONTROL_STEPS = `On a Harmony Smart Control, ${PAIRING_STEPS[SMART_C
 const WINDOWS = [30, 60];
 const DEFAULT_WINDOW = 60;
 
+/* Remotes whose keys this page can open per activity, and the map each uses. */
+const KEY_REMOTES = { "smart-control": SMART_CONTROL_EQUAD, screen: TOUCH_EQUAD };
+
 export function createRemotesView(section) {
   let remotes = undefined; // parsed rf.info; null when it couldn't be read
   let remotesBusy = false; // the hub says a pairing window is open
   let windowSeconds = DEFAULT_WINDOW;
   let pairing = null; // { endsAt } while this page holds a window open
   let outcome = null; // pairOutcome of the last window
-  let rows = null; // activity-button draft
-  let baseRows = null;
-  let dirty = false;
-  let saving = false;
+  let saving = false; // copying keys between remotes
   let timer = null;
 
   section.innerHTML = `<div class="page" id="remotesRoot"></div>`;
   const root = section.querySelector("#remotesRoot");
 
   const busy = () => Boolean(pairing) || saving;
-  // A button left on a deleted activity needs a save even when nothing was picked.
-  const needsSave = () => dirty || Boolean(rows?.some((r) => r.missing.length));
-
   const paired = () => remotes?.remotes ?? [];
-  const screenRemote = () => paired().find((r) => r.role === "screen") ?? null;
+  const pairedByRole = (role) => paired().find((r) => r.role === role) ?? null;
 
   function remoteRow(r) {
     // A screen remote other than the Touch shows its skin, which tells which model it is.
@@ -130,111 +131,107 @@ export function createRemotesView(section) {
       </div>`;
   }
 
-  function activityOptions(selected) {
+  /* The same card for every remote with keys: a row per activity opening
+     that remote's keys (and, for the Touch, its screen and gestures). */
+  function activitiesCard(remote) {
     const acts = hub.activities();
-    const known = acts.some((a) => String(a["Id-"]) === selected);
-    return [
-      `<option value=""${selected === "" ? " selected" : ""}>Nothing</option>`,
-      selected && !known ? `<option value="${escapeHtml(selected)}" selected>Deleted activity</option>` : "",
-      ...acts.map((a) => {
-        const id = String(a["Id-"]);
-        return `<option value="${escapeHtml(id)}"${id === selected ? " selected" : ""}>${escapeHtml(hub.activityName(a))}</option>`;
-      }),
-    ].join("");
-  }
-
-  function buttonSelect(row, field) {
-    const value = row[field];
-    const label = `${row.label} ${field === "press" ? "press" : "long press"}`;
-    if (value === null) {
-      return `<select aria-label="${escapeHtml(label)}" disabled><option>Set elsewhere (kept)</option></select>`;
-    }
-    return `<select aria-label="${escapeHtml(label)}" data-key="${row.key}" data-field="${field}"${busy() ? " disabled" : ""}>${activityOptions(value)}</select>`;
-  }
-
-  function buttonsCard() {
-    const missing = rows.some((r) => r.missing.length);
-    return `<div class="m-card">
-        <div class="m-card-head"><span>Activity buttons</span></div>
-        <p class="list-note">Each button starts one activity on a press and another on a long press. Off turns everything off by itself.</p>
-        ${missing ? `<div class="notice notice-warn" role="status">A button still names an activity that was deleted. Saving sets it to Nothing, or pick another activity first.</div>` : ""}
-        <div class="remotes-buttons" role="group" aria-label="Activity buttons">
-          <span class="remotes-buttons-head">Button</span><span class="remotes-buttons-head">Press</span><span class="remotes-buttons-head">Long press</span>
-          ${rows.map((row) => `<span class="remotes-buttons-key">${escapeHtml(row.label)}</span>${buttonSelect(row, "press")}${buttonSelect(row, "longPress")}`).join("")}
-        </div>
-        <div class="actions">
-          <button type="button" class="btn btn-text" data-act="undo"${!dirty || busy() ? " disabled" : ""}>Undo</button>
-          <button type="button" class="btn btn-filled" data-act="save"${!needsSave() || busy() ? " disabled" : ""}>${saving ? "Saving…" : "Save"}</button>
-        </div>
-      </div>`;
-  }
-
-  /* The Smart Control's keys against a paired screen remote's (both answer
-     from their own map; the screen remote's is the 16417 one). */
-  function parityCard(screen) {
-    const parity = keyParity(hub.state.config);
-    if (!parity.length) return "";
-    const other = screen.short;
-    const fixable = parity.some((p) => p.missing.length || p.differs.length);
-    const line = (p) => {
-      if (!p.smartMap) {
-        return listRow({
-          title: p.name,
-          subtitle: "The Smart Control does nothing here yet. Open Activity setup and save to give it keys.",
-          href: `#wizard/${encodeURIComponent(p.activityId)}`,
-          chevron: true,
-        });
-      }
-      const parts = [];
-      if (p.missing.length) parts.push(`missing ${p.missing.join(", ")}`);
-      if (p.differs.length) parts.push(`different ${p.differs.join(", ")}`);
-      if (p.skipped.length) parts.push(`set in Activity setup: ${p.skipped.join(", ")}`);
-      const subtitle = !p.touchMap
-        ? `No ${other} keys to compare`
-        : parts.length ? `Unlike the ${other}: ${parts.join("; ")}` : `Same keys as the ${other}`;
-      return listRow({ title: p.name, subtitle });
-    };
-    return `<div class="m-card">
-        <div class="m-card-head"><span>Same keys as the ${escapeHtml(other)}</span></div>
-        <p class="list-note">Each remote has its own key map. A key changed only for the ${escapeHtml(other)} leaves the Smart Control on the old command.</p>
-        <div class="m-list">${parity.map(line).join("")}</div>
-        ${fixable ? `<div class="actions"><button type="button" class="btn btn-filled" data-act="parity"${busy() || dirty ? " disabled" : ""}>Copy the ${escapeHtml(other)}'s keys to the Smart Control</button></div>` : ""}
-      </div>`;
-  }
-
-  /* Screen remotes set their on-screen buttons, hard keys and gestures per
-     activity in the Touch editor; every screen remote answers from the same
-     16417 maps. */
-  function screenCard(remote) {
-    const acts = hub.activities();
-    const note = remote.short === "Touch"
-      ? ""
-      : `<p class="list-note">The editor was built and tested with the Harmony Touch. Other remotes with a screen answer from the same maps.</p>`;
+    const what = remote.role === "screen" ? "On-screen buttons, hard keys and gestures" : "Its keys";
+    const note = remote.role === "screen" && remote.short !== "Touch"
+      ? `<p class="list-note">The editor was built and tested with the Harmony Touch. Other remotes with a screen answer from the same maps.</p>`
+      : "";
     return `<div class="m-card">
         <div class="m-card-head"><span>Buttons for each activity</span></div>
-        <p class="list-note">On-screen buttons, hard keys and gestures are set per activity.</p>
+        <p class="list-note">${what}, set per activity.</p>
         ${note}
         ${acts.length
           ? `<div class="m-list">${acts.map((a) => listRow({
               title: hub.activityName(a),
-              href: `#touch/${encodeURIComponent(String(a["Id-"]))}`,
+              href: `#touch/${encodeURIComponent(String(a["Id-"]))}/${KEY_REMOTES[remote.role]}`,
               chevron: true,
             })).join("")}</div>`
           : `<p class="list-note">This hub has no activities yet.</p>`}
       </div>`;
   }
 
+  function activityButtonsCard() {
+    const rows = readActivityButtons(hub.state.config).rows;
+    const name = (id) => {
+      if (id === null) return "set elsewhere";
+      if (!id) return "nothing";
+      const activity = hub.activityById(id);
+      return activity ? hub.activityName(activity) : "deleted activity";
+    };
+    const summary = rows.map((r) => `${r.label}: ${name(r.press)}`).join(" · ");
+    return `<div class="m-card">
+        <div class="m-card-head"><span>Activity buttons</span></div>
+        <div class="m-list">${listRow({
+          title: ACTIVITY_BUTTONS.map((b) => b.label).join(", "),
+          subtitle: summary,
+          href: "#activitybuttons",
+          chevron: true,
+        })}</div>
+      </div>`;
+  }
+
   function remoteSection(remote) {
     let body;
-    if (remote.role === "smart-control") {
-      const screen = screenRemote();
-      body = `${buttonsCard()}${screen ? parityCard(screen) : ""}`;
-    } else if (remote.role === "screen") {
-      body = screenCard(remote);
-    } else {
-      body = `<div class="m-card"><p class="list-note">Nothing to set for this remote here yet.</p></div>`;
-    }
+    if (remote.role === "smart-control") body = `${activityButtonsCard()}${activitiesCard(remote)}`;
+    else if (remote.role === "screen") body = activitiesCard(remote);
+    else body = `<div class="m-card"><p class="list-note">Nothing to set for this remote here yet.</p></div>`;
     return `${sectionLabel(remote.name)}<div class="remotes-section">${body}</div>`;
+  }
+
+  /* How many keys each copy would write, worked out once per hub revision
+     (the page redraws every second while a pairing window is open). */
+  let counts = { revision: null };
+  function copyCounts() {
+    const config = hub.state.config;
+    if (counts.revision !== config.revision) {
+      counts = {
+        revision: config.revision,
+        toTouch: buildKeyCopyMapList(config, SMART_CONTROL_EQUAD).copied,
+        toSmart: buildKeyCopyMapList(config, TOUCH_EQUAD).copied,
+      };
+    }
+    return counts;
+  }
+
+  /* Keys on both remotes: the Smart Control against the screen remote, with
+     neither as the reference. */
+  function bothKeysSection(smart, screen) {
+    const rows = keyComparison(hub.state.config);
+    if (!rows.length) return "";
+    const s = smart.short;
+    const t = screen.short;
+    const line = (p) => {
+      const missingMap = !p.smartMap ? smart : !p.touchMap ? screen : null;
+      if (missingMap) {
+        return listRow({
+          title: p.name,
+          subtitle: `The ${missingMap.short} has no keys here yet.`,
+          href: `#touch/${encodeURIComponent(p.activityId)}/${KEY_REMOTES[missingMap.role]}`,
+          chevron: true,
+        });
+      }
+      const parts = [];
+      if (p.differ.length) parts.push(`different: ${p.differ.join(", ")}`);
+      if (p.onlySmart.length) parts.push(`only on the ${s}: ${p.onlySmart.join(", ")}`);
+      if (p.onlyTouch.length) parts.push(`only on the ${t}: ${p.onlyTouch.join(", ")}`);
+      return listRow({ title: p.name, subtitle: parts.length ? parts.join(" · ") : "Same keys on both" });
+    };
+    const { toTouch, toSmart } = copyCounts();
+    const uncopyable = [...new Set(rows.flatMap((p) => [...p.noCopyToSmart, ...p.noCopyToTouch]))];
+    const button = (from, count, label) => `<button type="button" class="btn btn-outlined" data-copy="${from}"${busy() || !count ? " disabled" : ""}>${escapeHtml(label)}</button>`;
+    return `${sectionLabel("Keys on both remotes")}
+      <div class="m-card">
+        <p class="list-note">Each remote has its own key map, so a key changed for one leaves the other on the old command. Only keys both remotes have are compared.</p>
+        <div class="m-list">${rows.map(line).join("")}</div>
+        ${uncopyable.length ? `<p class="list-note">Keys that run a sequence aren't copied (${escapeHtml(uncopyable.join(", "))}); set those in Activity setup.</p>` : ""}
+        <div class="actions remotes-copy">
+          ${button(SMART_CONTROL_EQUAD, toTouch, `Copy the ${s}'s keys to the ${t}`)}
+          ${button(TOUCH_EQUAD, toSmart, `Copy the ${t}'s keys to the ${s}`)}
+        </div>
+      </div>`;
   }
 
   function render() {
@@ -243,11 +240,13 @@ export function createRemotesView(section) {
       root.innerHTML = `${remotesCard()}${pairCard()}<div class="m-center">${spinner("Loading")}</div>`;
       return;
     }
-    if (hub.state.config && !rows) {
-      baseRows = readActivityButtons(hub.state.config).rows;
-      rows = structuredClone(baseRows);
+    let sections = "";
+    if (hub.state.config) {
+      sections = paired().map(remoteSection).join("");
+      const smart = pairedByRole("smart-control");
+      const screen = pairedByRole("screen");
+      if (smart && screen) sections += bothKeysSection(smart, screen);
     }
-    const sections = hub.state.config ? paired().map(remoteSection).join("") : "";
     root.innerHTML = `${remotesCard()}${pairCard()}${sections}`;
   }
 
@@ -299,136 +298,62 @@ export function createRemotesView(section) {
     render();
   }
 
-  /* The hub can apply a save and still report a failure (a slow engine), so
-     look at what it has before saying what happened. */
-  async function saveMapList(mapList, { done, check }) {
+  async function copyKeys(from) {
+    if (busy()) return;
+    const source = pairedByRole(from === SMART_CONTROL_EQUAD ? "smart-control" : "screen");
+    const target = pairedByRole(from === SMART_CONTROL_EQUAD ? "screen" : "smart-control");
+    if (!source || !target) return;
+    const { mapList, copied } = buildKeyCopyMapList(hub.state.config, from);
+    if (!copied) return;
+    const ok = await confirmDialog({
+      title: `Copy the ${source.short}'s keys to the ${target.short}?`,
+      text: `${copied} key${copied === 1 ? "" : "s"} on the ${target.short} will do what they do on the ${source.short}. Keys only the ${target.short} has stay as they are.`,
+      confirmLabel: "Copy",
+    });
+    if (!ok) return;
     saving = true;
     render();
-    const payload = {
-      baseRevision: hub.state.config.revision,
-      activityList: structuredClone(hub.state.config.activityList),
-      mapList,
-      functionList: structuredClone(hub.state.config.functionList),
-    };
-    // A save that didn't land keeps the changes on screen to try again.
-    const draft = { rows, baseRows, dirty };
-    let keep = false;
-    try {
-      await api.saveActivity(payload);
-      await hub.reloadConfig();
-      snackbar(done);
-    } catch (error) {
-      await hub.reloadConfig();
-      const result = hub.state.configError ? "unknown" : check(hub.state.config);
-      if (result === "saved") snackbar(`${done} The hub was slow to confirm.`);
-      else if (error.status === 504) {
-        keep = true;
-        snackbar("The hub is still saving. Your changes are still here; reload in a minute to see whether they landed before you save again.", { error: true });
-      } else if (result === "unchanged") {
-        keep = true;
-        snackbar(`Not saved — ${error.message || "hub error"}. Nothing changed on the hub; your changes are still here.`, { error: true });
-      } else snackbar(`Couldn't save — ${error.message || "hub error"}. This shows what the hub has now.`, { error: true });
-    } finally {
-      saving = false;
-      if (keep) ({ rows, baseRows, dirty } = draft);
-      else {
-        rows = null;
-        dirty = false;
-      }
-      render();
-    }
-  }
-
-  async function saveButtons() {
-    if (busy() || !needsSave()) return;
-    let built;
-    try {
-      built = buildActivityButtonsMapList(hub.state.config, rows);
-    } catch (error) {
-      snackbar(`Not saved — ${error.message}`, { error: true });
-      return;
-    }
-    if (!built.changed) {
-      dirty = false;
-      render();
-      return;
-    }
-    const base = baseRows;
-    const sent = rows;
-    await saveMapList(built.mapList, {
-      done: "Saved. The Smart Control uses the new buttons at once.",
-      check: (config) => activityButtonsSaveOutcome(config, base, sent),
-    });
-  }
-
-  async function copyTouchKeys() {
-    if (busy() || dirty) return;
-    const { mapList, copied } = buildKeyParityMapList(hub.state.config);
-    if (!copied) return;
     await saveMapList(mapList, {
-      done: `Copied ${copied} key${copied === 1 ? "" : "s"} from the ${screenRemote()?.short ?? "screen remote"} to the Smart Control.`,
-      check: (config) => {
-        const left = keyParity(config).reduce((n, p) => n + p.missing.length + p.differs.length, 0);
-        return left === 0 ? "saved" : "unchanged";
-      },
+      done: `Copied ${copied} key${copied === 1 ? "" : "s"} from the ${source.short} to the ${target.short}.`,
+      check: (config) => (buildKeyCopyMapList(config, from).copied === 0 ? "saved" : "unchanged"),
     });
+    saving = false;
+    render();
   }
 
   root.addEventListener("change", (event) => {
-    const select = event.target.closest("select[data-key]");
-    if (select) {
-      const row = rows.find((r) => r.key === select.dataset.key);
-      if (!row) return;
-      row[select.dataset.field] = select.value;
-      row.missing = [row.press, row.longPress].filter((id) => id && !hub.activityById(id));
-      dirty = rows.some((r, i) => r.press !== baseRows[i].press || r.longPress !== baseRows[i].longPress);
-      render();
-      return;
-    }
     if (event.target.matches("select[data-window]")) {
       windowSeconds = Number(event.target.value) || DEFAULT_WINDOW;
     }
   });
 
   root.addEventListener("click", (event) => {
+    const copy = event.target.closest("[data-copy]");
+    if (copy) {
+      copyKeys(copy.dataset.copy);
+      return;
+    }
     const act = event.target.closest("[data-act]")?.dataset.act;
     if (act === "refresh") {
       remotes = undefined;
       render();
       loadRemotes();
-      hub.reloadConfig().then(() => {
-        rows = null;
-        dirty = false;
-        render();
-      });
+      hub.reloadConfig();
     } else if (act === "pair") pair();
-    else if (act === "save") saveButtons();
-    else if (act === "undo") {
-      rows = structuredClone(baseRows);
-      dirty = false;
-      render();
-    } else if (act === "parity") copyTouchKeys();
   });
 
-  hub.subscribe(() => {
-    if (!dirty && !saving) rows = null;
-    render();
-  });
+  hub.subscribe(() => render());
 
   async function confirmLeave() {
-    if (pairing) {
-      return confirmDialog({
-        title: "Leave while the window is open?",
-        text: "The hub keeps its pairing window open until it closes by itself. You won't see what changed here; Remotes shows the list again afterwards.",
-        confirmLabel: "Leave",
-      });
+    if (saving) {
+      snackbar("Saving to the hub… one moment");
+      return false;
     }
-    if (!dirty) return true;
+    if (!pairing) return true;
     return confirmDialog({
-      title: "Discard your changes?",
-      text: "The activity buttons you changed aren't saved.",
-      confirmLabel: "Discard",
-      destructive: true,
+      title: "Leave while the window is open?",
+      text: "The hub keeps its pairing window open until it closes by itself. You won't see what changed here; Remotes shows the list again afterwards.",
+      confirmLabel: "Leave",
     });
   }
 

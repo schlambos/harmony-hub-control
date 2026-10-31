@@ -1,6 +1,9 @@
-/* Touch & Home Assistant Control Studio (#touch/<activityId>):
+/* Touch & Home Assistant Control Studio (#touch/<activityId>[/<remote>]):
    On-screen buttons, physical hard keys (16417 mirror) and swipe/tap gestures
-   for one activity. Saves go through /api/activity-save like every activity
+   for one activity. With remote 16414 it edits the Harmony Smart Control's
+   hard keys for the activity instead (it has no screen or gestures); a
+   remote in the address means the page was opened from Settings → Remotes,
+   which its back arrow returns to. Saves go through /api/activity-save like every activity
    edit (touch-model). See docs/TOUCH_EDITOR.md and docs/HOME_ASSISTANT.md.
    Press modes (P11): Standard (hold repeats), One-shot self-long (exactly
    once), Short + Separate Long. Gestures resolve locally on the Touch
@@ -11,11 +14,14 @@ import * as hub from "../state.js";
 import {
   GESTURE_KEYS,
   LABEL_MAX,
-  TOUCH_HARD_KEYS,
+  SMART_CONTROL_REMOTE,
+  TOUCH_REMOTE,
   addButton,
   buildTouchControlsMapList,
   controlsSaveOutcome,
   gestureSimulation,
+  hardKeysFor,
+  hasRemoteMaps,
   isChanged,
   isOneShotCommand,
   moveButton,
@@ -52,6 +58,8 @@ import {
 /* A save publishes a new revision, and the Touch syncs by itself when it
    sees it. Its own Sync menu asks the cloud and fails offline. */
 const SYNC_NOTE = "The Touch picks up the change by itself. Until it does, a button you moved or changed can run its new action under its old label.";
+/* The Smart Control keeps nothing: the hub answers its keys from the saved map. */
+const SMART_CONTROL_NOTE = "The Smart Control uses the change at once.";
 
 export function createTouchScreenView(section) {
   let activityId = "";
@@ -59,6 +67,9 @@ export function createTouchScreenView(section) {
   let hardRows = [];
   let gestureRows = [];
   let baseMapText = "";
+  let remote = TOUCH_REMOTE; // whose map: the Touch's or the Smart Control's
+  let fromRemotes = false; // opened from Settings → Remotes
+  let hardBase = ""; // the hard-key map text as read, for the save check
   let activeTab = "soft"; // soft | hard | gestures
   let dirty = false;
   let saving = false;
@@ -71,6 +82,16 @@ export function createTouchScreenView(section) {
   const root = section.querySelector("#touchRoot");
 
   const activityName = () => hub.activityName(hub.activityById(activityId));
+  const isSmart = () => remote === SMART_CONTROL_REMOTE;
+  const syncNote = () => (isSmart() ? SMART_CONTROL_NOTE : SYNC_NOTE);
+  // The Smart Control's keys need a 16414 map on the hub to model a new one on.
+  const canEdit = () => (isSmart() ? hasRemoteMaps(hub.state.config, remote) : softDraft?.canCreate);
+
+  function readKeys() {
+    const read = readHardKeys(hub.state.config, activityId, { remote });
+    hardRows = read.rows;
+    hardBase = read.base;
+  }
   const roleIds = () => (hub.activityById(activityId)?.Roles ?? []).map((r) => String(r["DeviceId-"]));
 
   function actionSummary(action) {
@@ -98,10 +119,16 @@ export function createTouchScreenView(section) {
 
   function updateBar() {
     if (section.hidden) return;
-    setAppBar({ title: "Touch & HA controls", back: "activities", close: dirty, onBack: requestClose });
+    setAppBar({
+      title: isSmart() ? "Smart Control & HA controls" : "Touch & HA controls",
+      back: fromRemotes ? "remotes" : "activities",
+      close: dirty,
+      onBack: requestClose,
+    });
   }
 
   function tabMarkup() {
+    if (isSmart()) return ""; // keys only: no screen, no gestures
     const tabs = [["soft", "On-screen"], ["hard", `Hard keys (${hardRows.length})`], ["gestures", `Gestures (${gestureRows.length})`]];
     return `<div class="seg-tabs" role="tablist" aria-label="Control type">${tabs.map(([v, t]) => `<button type="button" role="tab" class="seg-tab" data-tab="${v}" aria-selected="${activeTab === v}">${t}</button>`).join("")}</div>`;
   }
@@ -187,11 +214,11 @@ export function createTouchScreenView(section) {
 
   function hardBody() {
     const intro = `<div class="wiz-intro"><h2 tabindex="-1">${escapeHtml(activityName())}</h2>
-        <p>Physical hard keys on the Touch (mirrored from the activity). Any device works — <strong>Extra</strong> keys are not powered by the activity. Toggles default to One-shot.</p></div>`;
-    const syncNote = saved
-      ? `<div class="notice notice-warn touch-sync" role="status"><strong>Saved to the hub.</strong> ${escapeHtml(SYNC_NOTE)}</div>`
+        <p>${isSmart() ? "The Smart Control's keys in this activity" : "Physical hard keys on the Touch (mirrored from the activity)"}. Any device works — <strong>Extra</strong> keys are not powered by the activity. Toggles default to One-shot.</p></div>`;
+    const savedNote = saved
+      ? `<div class="notice notice-warn touch-sync" role="status"><strong>Saved to the hub.</strong> ${escapeHtml(syncNote())}</div>`
       : "";
-    if (!softDraft.canCreate) return `${intro}<p class="list-note">No Touch screen on this hub.</p>`;
+    if (!canEdit()) return `${intro}<p class="list-note">${isSmart() ? "No Smart Control keys on this hub." : "No Touch screen on this hub."}</p>`;
     const ids = roleIds();
     const list = hardRows.length
       ? `<div class="m-list">${hardRows.map((r) => {
@@ -207,13 +234,13 @@ export function createTouchScreenView(section) {
             <button type="button" class="icon-btn" data-hremove="${escapeHtml(r.buttonKey)}" aria-label="Remove ${escapeHtml(r.buttonKey)}" ${saving ? " disabled" : ""}>${icon("delete_outlined")}</button>
           </div>`;
       }).join("")}</div>`
-      : `<p class="list-note">No hard keys mapped on the Touch yet. Add the ones this activity uses.</p>`;
-    const missing = TOUCH_HARD_KEYS.filter((k) => !hardRows.some((r) => r.buttonKey === k));
-    const addHint = missing.length ? `<p class="wiz-hint">Unmapped: ${missing.slice(0, 8).join(", ")}${missing.length > 8 ? ` +${missing.length - 8} more` : ""}. Adding a hard key here mirrors it for the Touch.</p>` : "";
-    return `${intro}${syncNote}${tabMarkup()}${list}
-      <button type="button" class="wiz-add" data-act="hadd" aria-haspopup="dialog"${saving ? " disabled" : ""}>${icon("add")}<span>Add a hard key</span></button>
+      : `<p class="list-note">No keys mapped on the ${isSmart() ? "Smart Control" : "Touch"} yet. Add the ones this activity uses.</p>`;
+    const missing = hardKeysFor(remote).filter((k) => !hardRows.some((r) => r.buttonKey === k));
+    const addHint = missing.length ? `<p class="wiz-hint">Unmapped: ${missing.slice(0, 8).join(", ")}${missing.length > 8 ? ` +${missing.length - 8} more` : ""}. Keys added here are for the ${isSmart() ? "Smart Control" : "Touch"} only.</p>` : "";
+    return `${intro}${savedNote}${tabMarkup()}${list}
+      <button type="button" class="wiz-add" data-act="hadd" aria-haspopup="dialog"${saving ? " disabled" : ""}>${icon("add")}<span>Add a key</span></button>
       ${addHint}
-      ${dirty ? `<p class="wiz-hint">${escapeHtml(`Nothing reaches the hub until you save. ${SYNC_NOTE}`)}</p>` : ""}`;
+      ${dirty ? `<p class="wiz-hint">${escapeHtml(`Nothing reaches the hub until you save. ${syncNote()}`)}</p>` : ""}`;
   }
 
   function gestureBody() {
@@ -281,7 +308,7 @@ export function createTouchScreenView(section) {
   }
 
   function footMarkup() {
-    if (!softDraft?.canCreate) return "";
+    if (!canEdit()) return "";
     return `<div class="wiz-foot">
         <button type="button" class="btn btn-outlined" data-act="undo"${dirty && !saving ? "" : " disabled"}>Undo changes</button>
         <button type="button" class="btn btn-filled${saving ? " is-busy" : ""}" data-act="save"${dirty && !saving ? "" : " disabled"}${saving ? ' aria-busy="true"' : ""}>
@@ -331,14 +358,17 @@ export function createTouchScreenView(section) {
   }
 
   function currentPayload() {
-    return {
-      baseRevision: hub.state.config.revision,
-      activityList: JSON.parse(JSON.stringify(hub.state.config.activityList)),
-      mapList: buildTouchControlsMapList(hub.state.config, {
+    const mapList = isSmart()
+      ? buildTouchControlsMapList(hub.state.config, { hard: { activityId, rows: hardRows, base: hardBase } }, { remote })
+      : buildTouchControlsMapList(hub.state.config, {
         soft: softDraft,
         hard: { rows: hardRows },
         gestures: { rows: gestureRows },
-      }),
+      });
+    return {
+      baseRevision: hub.state.config.revision,
+      activityList: JSON.parse(JSON.stringify(hub.state.config.activityList)),
+      mapList,
       functionList: JSON.parse(JSON.stringify(hub.state.config.functionList)),
     };
   }
@@ -565,7 +595,8 @@ export function createTouchScreenView(section) {
     const existing = buttonKey ? hardRows.find((r) => r.buttonKey === buttonKey) : null;
     const devices = pickerDevices();
     const ids = roleIds();
-    let key = existing?.buttonKey ?? TOUCH_HARD_KEYS.find((k) => !hardRows.some((r) => r.buttonKey === k)) ?? "VolumeUp";
+    const keys = hardKeysFor(remote);
+    let key = existing?.buttonKey ?? keys.find((k) => !hardRows.some((r) => r.buttonKey === k)) ?? "VolumeUp";
     let pick = existing?.action?.kind === "command" ? { ...existing.action } : null;
     let pressMode = existing?.pressMode ?? (pick ? recommendedPressMode(pick.command) : "standard");
     let longPick = existing?.longPress ? { ...existing.longPress } : null;
@@ -586,7 +617,7 @@ export function createTouchScreenView(section) {
             <p class="pick-now" data-h-now></p>
             <div class="m-chips" data-h-mode></div>
             <p class="wiz-hint">Keys target any device — non-members are Extra (never powered). One-shot prevents hold double-toggle.</p>
-            <label class="search-field">Key <select data-h-key>${TOUCH_HARD_KEYS.map((k) => `<option value="${k}"${k === key ? " selected" : ""}${hardRows.some((r) => r.buttonKey === k && k !== existing?.buttonKey) ? " disabled" : ""}>${k}</option>`).join("")}</select></label>
+            <label class="search-field">Key <select data-h-key>${keys.map((k) => `<option value="${k}"${k === key ? " selected" : ""}${hardRows.some((r) => r.buttonKey === k && k !== existing?.buttonKey) ? " disabled" : ""}>${k}</option>`).join("")}</select></label>
             <div class="pick-chips" data-h-devices></div>
             <label class="search-field">${icon("search", { size: 22 })}<input type="search" data-h-search placeholder="Search commands"></label>
           </div><div class="pick-list" data-h-list></div>`;
@@ -756,12 +787,12 @@ export function createTouchScreenView(section) {
       snackbar(`Not saved — ${error.message}`, { error: true });
       return;
     }
-    const base = softDraft.base;
+    const base = isSmart() ? hardBase : softDraft.base;
     saving = true;
     render();
     const reread = () => {
       softDraft = readTouchScreen(hub.state.config, activityId);
-      hardRows = readHardKeys(hub.state.config, activityId).rows;
+      readKeys();
       gestureRows = readGestures(hub.state.config, activityId).rows;
     };
     try {
@@ -770,14 +801,14 @@ export function createTouchScreenView(section) {
       saved = true;
       await hub.reloadConfig();
       reread();
-      snackbar("Saved. The Touch picks up the change by itself.");
+      snackbar(`Saved. ${syncNote()}`);
     } catch (error) {
       // The hub can apply a save and still report a failure (a slow engine),
       // so look at what it has now before saying what happened.
       await hub.reloadConfig();
       const outcome = hub.state.configError
         ? "unknown"
-        : controlsSaveOutcome(hub.state.config, activityId, base, payload.mapList);
+        : controlsSaveOutcome(hub.state.config, activityId, base, payload.mapList, { remote });
       if (error.status === 504 && outcome !== "saved") {
         // The hub's writer hasn't answered yet and may still apply this save.
         snackbar("The hub is still saving. Your changes are still here; reload in a minute to see whether they landed before you save again.", { error: true });
@@ -785,7 +816,7 @@ export function createTouchScreenView(section) {
         dirty = false;
         saved = true;
         reread();
-        snackbar("Saved, though the hub was slow to confirm. The Touch picks up the change by itself.");
+        snackbar(`Saved, though the hub was slow to confirm. ${syncNote()}`);
       } else if (outcome === "unchanged") {
         snackbar(`Not saved — ${error.message || "hub error"}. Nothing changed on the hub; your changes are still here, so you can try again.`, { error: true });
       } else if (outcome === "changed") {
@@ -804,7 +835,7 @@ export function createTouchScreenView(section) {
 
   function undo() {
     softDraft = readTouchScreen(hub.state.config, activityId);
-    hardRows = readHardKeys(hub.state.config, activityId).rows;
+    readKeys();
     gestureRows = readGestures(hub.state.config, activityId).rows;
     dirty = false;
     render();
@@ -827,7 +858,7 @@ export function createTouchScreenView(section) {
   }
 
   async function requestClose() {
-    if (await confirmDiscard()) location.hash = "#activities";
+    if (await confirmDiscard()) location.hash = fromRemotes ? "#remotes" : "#activities";
   }
 
   root.addEventListener("click", (event) => {
@@ -919,12 +950,15 @@ export function createTouchScreenView(section) {
       saving = false;
       saved = false;
       blocked = "";
-      activeTab = "soft";
       try {
         activityId = decodeURIComponent(args[0] ?? "");
       } catch (_) {
         activityId = "";
       }
+      fromRemotes = args[1] === SMART_CONTROL_REMOTE || args[1] === TOUCH_REMOTE;
+      remote = args[1] === SMART_CONTROL_REMOTE ? SMART_CONTROL_REMOTE : TOUCH_REMOTE;
+      activeTab = isSmart() ? "hard" : "soft";
+      hardBase = "";
       root.innerHTML = `<div class="m-center">${spinner("Loading")}</div>`;
       updateBar();
       await hub.ensureConfig();
@@ -939,12 +973,12 @@ export function createTouchScreenView(section) {
       }
       softDraft = readTouchScreen(hub.state.config, activityId);
       try {
-        hardRows = readHardKeys(hub.state.config, activityId).rows;
+        readKeys();
       } catch (_) { hardRows = []; }
       try {
         gestureRows = readGestures(hub.state.config, activityId).rows;
       } catch (_) { gestureRows = []; }
-      baseMapText = JSON.stringify(hub.state.config.mapList.ButtonMaps.find((m) => m.ButtonMapIdentifier === `16417Activity${activityId}`));
+      baseMapText = JSON.stringify(hub.state.config.mapList.ButtonMaps.find((m) => m.ButtonMapIdentifier === `${remote}Activity${activityId}`));
       render();
       root.querySelector(".wiz-intro h2")?.focus({ preventScroll: true });
     },

@@ -438,9 +438,10 @@ so you can bookmark it.
 - **Remotes**: the remotes paired with the hub and a pairing window for one
   more, with no cloud. The hub keeps one remote of each kind, so a Smart
   Control joins a Touch but replaces an older Smart Control. Each paired
-  remote gets a section with what can be set for it: a Smart Control's
-  activity buttons and its keys compared with a screen remote's; a screen
-  remote's buttons for each activity.
+  remote gets the same section: its buttons for each activity, opening the
+  same editor for either remote (the Smart Control also has its activity
+  buttons). "Keys on both remotes" compares their keys and copies them
+  either way.
 - **Bluetooth keyboard**: pairing and saved devices.
 - **MQTT**: the broker, Home Assistant discovery and the topics.
 - **Wi-Fi**: the network the hub joins. Changes take effect after a reboot.

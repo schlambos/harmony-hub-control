@@ -6,13 +6,13 @@ import {
   ROOT_MAP_ID,
   activityButtonsSaveOutcome,
   buildActivityButtonsMapList,
-  buildKeyParityMapList,
-  keyParity,
+  buildKeyCopyMapList,
+  keyComparison,
+  keyOn,
   pairOutcome,
   parseRfInfo,
   readActivityButtons,
   remoteKindName,
-  smartControlKey,
 } from "../public/js/views/remotes-model.js";
 import { validateMapList } from "../public/js/views/remote-model.js";
 import { deleteActivityResources } from "../public/js/wizard-model.js";
@@ -247,7 +247,7 @@ describe("activity buttons", () => {
   });
 });
 
-describe("keys shared with the Touch", () => {
+describe("keys on both remotes", () => {
   const command = (device, name) => ({ "DeviceId-": device, __type: "ButtonCommandAction", "FunctionId-": 0, Order: 0, CommandName: name, EventType: 1, Id: 0 });
   const hard = (key, action, extra = {}) => ({ ButtonId: 0, __type: "HardRemoteButton", ButtonAction: action, ButtonDoublePressAction: null, FunctionGroupType: 0, ButtonState: 1, ButtonKey: key, ButtonLongPressAction: null, ...extra });
   const activityMap = (equad, activityId, buttons, sequences = []) => ({
@@ -270,63 +270,87 @@ describe("keys shared with the Touch", () => {
           hard("Menu", command(1, "Menu"), { ButtonId: 1878030001 }),
           hard("Number1", command(1, "1"), { ButtonId: 1878030002, FunctionGroupType: 2 }),
           hard("Play", command(1, "Play"), { ButtonId: 1878030003 }),
-        ]),
+          hard("Info", command(1, "Info"), { ButtonId: 1878030004 }),
+          hard("Exit", { __type: "ButtonSequenceAction", SequenceId: 9, Order: 0 }, { ButtonId: 1878030005 }),
+        ], [{ SequenceId: 9, Name: "Exit twice", Actions: [] }]),
         activityMap("16417", 7, [
           hard("Menu", command(1, "Menu"), { ButtonId: 1878030101 }),
           hard("Play", command(2, "Play"), { ButtonId: 1878030102 }),
           hard("Select", command(1, "OK"), { ButtonId: 1878030103 }),
           hard("DVR", command(1, "Recordings"), { ButtonId: 1878030104 }),
           hard("Guide", { __type: "ButtonSequenceAction", SequenceId: 5, Order: 0 }, { ButtonId: 1878030105 }),
-          hard("Exit", null, { ButtonId: 1878030106 }),
+          hard("Stop", null, { ButtonId: 1878030106 }),
           { ButtonId: 1878030107, __type: "SoftRemoteButton", ButtonAction: command(1, "Netflix"), MenuItem: { IndexInMenu: 0, MenuName: "Activity.7" } },
         ], [{ SequenceId: 5, Name: "Guide twice", Actions: [] }]),
         activityMap("16417", 8, [hard("Play", command(3, "Play"), { ButtonId: 1878030201 })]),
       ],
     },
   });
+  const byKey = (mapList, id) => Object.fromEntries(mapList.ButtonMaps.find((m) => m.ButtonMapIdentifier === id).Buttons.map((b) => [b.ButtonKey, b]));
 
-  it("maps Touch key names to the Smart Control's", () => {
-    assert.equal(smartControlKey("DVR"), "Dvr");
-    assert.equal(smartControlKey("Select"), "Select");
-    assert.equal(smartControlKey("Home"), "");
+  it("names keys each remote's way, and only keys it has", () => {
+    assert.equal(keyOn("16414", "DVR"), "Dvr");
+    assert.equal(keyOn("16417", "Dvr"), "DVR");
+    assert.equal(keyOn("16414", "Select"), "Select");
+    assert.equal(keyOn("16417", "Number1"), "", "the Touch has no number keys");
+    assert.equal(keyOn("16414", "Home"), "");
   });
 
-  it("lists missing, different and uncopyable keys per activity", () => {
-    const [radio, lounge] = keyParity(graph());
+  it("compares both ways with neither remote as the reference", () => {
+    const [radio, lounge] = keyComparison(graph());
     assert.deepEqual([radio.name, radio.smartMap, radio.touchMap], ["Radio", false, true]);
-    assert.deepEqual(lounge.missing, ["Select", "Dvr"]);
-    assert.deepEqual(lounge.differs, ["Play"]);
-    assert.deepEqual(lounge.skipped, ["Guide"]);
+    assert.deepEqual(lounge.differ, ["Play"]);
+    assert.deepEqual(lounge.onlySmart.sort(), ["Exit", "Info"], "Number1 isn't compared: the Touch has no number keys");
+    assert.deepEqual(lounge.onlyTouch.sort(), ["DVR", "Guide", "Select"]);
+    assert.deepEqual(lounge.noCopyToTouch, ["Exit"]);
+    assert.deepEqual(lounge.noCopyToSmart, ["Guide"]);
   });
 
-  it("copies Touch keys onto the Smart Control, keeping its IDs and groups", () => {
+  it("copies the Touch's keys to the Smart Control, keeping its IDs and groups", () => {
     const cfg = graph();
-    const { mapList, copied } = buildKeyParityMapList(cfg);
+    const { mapList, copied, skipped } = buildKeyCopyMapList(cfg, "16417");
     assert.equal(copied, 3);
-    const smart = mapList.ButtonMaps.find((m) => m.ButtonMapIdentifier === "16414Activity7");
-    const byKey = Object.fromEntries(smart.Buttons.map((b) => [b.ButtonKey, b]));
-    assert.equal(byKey.Play.ButtonId, 1878030003, "replaced key keeps its ButtonId");
-    assert.equal(byKey.Play.ButtonAction["DeviceId-"], 2);
-    assert.equal(byKey.Dvr.ButtonAction.CommandName, "Recordings");
-    assert.ok(byKey.Select.ButtonId > 1878030201, "new key gets a fresh ButtonId");
-    assert.notEqual(byKey.Select.ButtonId, byKey.Dvr.ButtonId);
-    assert.equal(byKey.Number1.FunctionGroupType, 2);
-    assert.equal(byKey.Guide, undefined, "a Touch sequence is never copied");
-    assert.equal(byKey.Menu.ButtonId, 1878030001);
+    assert.equal(skipped, 1, "the Guide sequence");
+    const smart = byKey(mapList, "16414Activity7");
+    assert.equal(smart.Play.ButtonId, 1878030003, "a replaced key keeps its ButtonId");
+    assert.equal(smart.Play.ButtonAction["DeviceId-"], 2);
+    assert.equal(smart.Dvr.ButtonAction.CommandName, "Recordings");
+    assert.ok(smart.Select.ButtonId > 1878030201, "a new key gets a fresh ButtonId");
+    assert.equal(smart.Number1.FunctionGroupType, 2);
+    assert.equal(smart.Guide, undefined, "a Touch sequence is never copied");
+    assert.equal(smart.Info.ButtonAction.CommandName, "Info", "keys only the Smart Control has stay");
     assert.deepEqual(mapList.ButtonMaps.filter((m) => m.ButtonMapIdentifier.startsWith("16417")), graph().mapList.ButtonMaps.filter((m) => m.ButtonMapIdentifier.startsWith("16417")));
     assert.deepEqual(validateMapList(mapList), []);
-    const after = keyParity({ ...cfg, mapList }).find((p) => p.name === "Lounge");
-    assert.deepEqual([after.missing, after.differs, after.skipped], [[], [], ["Guide"]]);
+    assert.equal(buildKeyCopyMapList({ ...cfg, mapList }, "16417").copied, 0, "nothing left to copy that way");
+  });
+
+  it("copies the Smart Control's keys to the Touch, the same way", () => {
+    const cfg = graph();
+    const { mapList, copied, skipped } = buildKeyCopyMapList(cfg, "16414");
+    assert.equal(copied, 2, "Play and Info; Number1 has no Touch key");
+    assert.equal(skipped, 1, "the Exit sequence");
+    const touch = byKey(mapList, "16417Activity7");
+    assert.equal(touch.Play.ButtonId, 1878030102);
+    assert.equal(touch.Play.ButtonAction["DeviceId-"], 1);
+    assert.equal(touch.Info.FunctionGroupType, 0);
+    assert.equal(touch.Number1, undefined);
+    assert.equal(touch.Exit, undefined);
+    assert.equal(touch.Select.ButtonAction.CommandName, "OK", "keys only the Touch has stay");
+    assert.ok(mapList.ButtonMaps.find((m) => m.ButtonMapIdentifier === "16417Activity7").Buttons.some((b) => b.__type === "SoftRemoteButton"), "on-screen buttons stay");
+    assert.deepEqual(mapList.ButtonMaps.filter((m) => m.ButtonMapIdentifier.startsWith("16414")), graph().mapList.ButtonMaps.filter((m) => m.ButtonMapIdentifier.startsWith("16414")));
+    assert.deepEqual(validateMapList(mapList), []);
+    const after = keyComparison({ ...cfg, mapList }).find((p) => p.name === "Lounge");
+    assert.deepEqual([after.differ, after.onlySmart], [[], ["Exit"]]);
   });
 
   it("copies only the activities asked for", () => {
-    assert.equal(buildKeyParityMapList(graph(), ["8"]).copied, 0);
-    assert.equal(buildKeyParityMapList(graph(), ["7"]).copied, 3);
+    assert.equal(buildKeyCopyMapList(graph(), "16417", ["8"]).copied, 0);
+    assert.equal(buildKeyCopyMapList(graph(), "16417", ["7"]).copied, 3);
   });
 
-  it("finds the live fixture's Smart Control maps", () => {
-    const parity = keyParity(config());
-    assert.equal(parity.length, fixture.activityList.Activities.length);
-    assert.ok(parity.filter((p) => p.smartMap).length >= 4);
+  it("finds the live fixture's maps", () => {
+    const rows = keyComparison(config());
+    assert.equal(rows.length, fixture.activityList.Activities.length);
+    assert.ok(rows.filter((p) => p.smartMap && p.touchMap).length >= 4);
   });
 });
