@@ -777,9 +777,11 @@ Invoke-RestMethod "http://<hub-ip>:8080/api/remote-pair" -Method Post `
   `after` are the slot tables either side of the window; compare them to
   see what changed (`pairOutcome()` in `views/remotes-model.js`).
 - `pairCode` is hal's code for `rf.pairing`: `200` when a remote paired,
-  anything else (`-1` for no answer) when none did. A window nobody used,
-  or a remote that was already paired, leaves `before` and `after` the
-  same.
+  anything else (`500` when the window timed out, `-1` for no answer) when
+  none did. A remote that was already this hub's pairs back into its own
+  slot: hal answers `200` with no `data`, and `before` and `after` are the
+  same (seen on hardware, 2026-10-31). A window nobody used also leaves
+  them the same, with `500`.
 - One window at a time: a second request gets `409`. If the "before" read
   fails the window doesn't open (`502`).
 - After a pair the engine tries to report it to Logitech

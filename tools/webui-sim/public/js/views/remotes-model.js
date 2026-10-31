@@ -79,7 +79,7 @@ const remoteIdentity = (r) => `${r.slot}:${r.equadId}:${r.rfid}`;
  * it. `status`:
  *   "paired"    a remote joined (`replaced` lists older ones of its kind hal dropped)
  *   "lost"      a remote of another kind is gone; the page must say so loudly
- *   "already"   hal reported a pair but no slot changed (the remote was paired already)
+ *   "already"   a remote paired but no slot changed: it was this hub's already and kept its slot
  *   "timeout"   nothing joined in the window
  *   "unknown"   the table couldn't be read afterwards
  */
@@ -87,7 +87,9 @@ export function pairOutcome({ before, after, pair } = {}) {
   const was = parseRfInfo(before);
   const now = parseRfInfo(after);
   const reported = halReply(pair);
-  const halPaired = Number(reported?.code) === 200 && Boolean(reported?.data?.EquadID);
+  // A remote that pairs into the slot it already had gets code 200 with no
+  // data (seen on hardware 2026-10-31); a window nobody used gets 500.
+  const halPaired = Number(reported?.code) === 200;
   if (!was || !now) {
     return { status: "unknown", added: [], removed: [], replaced: [], lost: [], halPaired };
   }

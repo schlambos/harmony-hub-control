@@ -97,6 +97,8 @@ describe("pairOutcome", () => {
   it("tells an already-paired remote from a window nobody used", () => {
     const same = { before: rfInfo([SMART, TOUCH]), after: rfInfo([SMART, TOUCH]) };
     assert.equal(pairOutcome({ ...same, pair: pairReply(1, "16414") }).status, "already");
+    // hal's answer when a remote re-pairs into its own slot (hardware, 2026-10-31).
+    assert.equal(pairOutcome({ ...same, pair: JSON.stringify({ id: 1, code: 200 }) }).status, "already");
     assert.equal(pairOutcome({ ...same, pair: "decode_ltcp_payload failed" }).status, "timeout");
     assert.equal(pairOutcome({ ...same, pair: JSON.stringify({ id: 1, code: 500 }) }).status, "timeout");
   });

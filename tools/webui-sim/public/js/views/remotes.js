@@ -91,7 +91,7 @@ export function createRemotesView(section) {
       case "lost":
         return `<div class="notice notice-error" role="alert"><strong>A remote of another kind is no longer paired:</strong> ${list(outcome.lost)}.${outcome.added.length ? ` Joined: ${list(outcome.added)}.` : ""} Pair it again with its own steps.</div>`;
       case "already":
-        return `<div class="notice notice-info" role="status">The hub reported a pair, but no slot changed: that remote was already paired.${keptText}</div>`;
+        return `<div class="notice notice-ok" role="status"><strong>Paired:</strong> that remote was already this hub's, so it kept its slot and nothing else changed.${keptText}</div>`;
       case "timeout":
         return `<div class="notice notice-warn" role="status">No remote joined while the window was open. Check the remote's battery, keep it near the hub, and hold the keys until the window closes.</div>`;
       default:
