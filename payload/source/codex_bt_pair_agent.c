@@ -10,8 +10,10 @@
 #include <strings.h>
 #include <sys/socket.h>
 #include <sys/stat.h>
+#include <sys/time.h>
 #include <sys/types.h>
 #include <sys/uio.h>
+#include <sys/un.h>
 #include <sys/wait.h>
 #include <time.h>
 #include <unistd.h>
@@ -79,6 +81,31 @@ static const char *const hcitool_clients[] = {
 #define L2CAP_CONN_RESPONSE 0x03
 #define HID_TRANS_GET_REPORT 0x04
 #define HID_REPORT_INPUT 0x01
+
+/*
+ * BlueZ 4's bluetoothd serves the local SDP database on this unix socket.
+ * Logitech's HAL registers the HID record through it with libbluetooth.
+ * The PDU ids below are BlueZ 4 lib/sdp.h; 0x75..0x80 are the local-only
+ * register/update/remove requests.
+ */
+#ifndef SDP_LOCAL_SOCKET_PATH
+#define SDP_LOCAL_SOCKET_PATH "/var/run/sdp"
+#endif
+#define BT_PROFILE_FILE "/data/codex/bthid_profile"
+#define SDP_ERROR_RSP 0x01
+#define SDP_SVC_SEARCH_ATTR_REQ 0x06
+#define SDP_SVC_SEARCH_ATTR_RSP 0x07
+#define SDP_SVC_UPDATE_REQ 0x77
+#define SDP_SVC_UPDATE_RSP 0x78
+#define SDP_ATTR_RECORD_HANDLE 0x0000
+#define SDP_ATTR_HID_DESCRIPTOR_LIST 0x0206
+#define SDP_UUID_HID 0x1124
+#define SDP_MAX_RESPONSE 8192
+#define SDP_IO_TIMEOUT_MS 700
+#define SDP_CHECK_INTERVAL_SECONDS 3
+#define HID_USAGE_PAGE_GENERIC_DEVICE 0x06
+#define HID_USAGE_BATTERY_STRENGTH 0x20
+#define HID_MAX_BLOCKS 32
 
 struct sockaddr_hci {
     sa_family_t hci_family;
@@ -506,6 +533,757 @@ static int send_hid_input_report_reply(int fd, unsigned int handle,
         report_size + 1);
 }
 
+/*
+ * HID battery report removal.
+ *
+ * The btkeyboard descriptor that Logitech's HAL publishes in the SDP
+ * HIDDescriptorList (attribute 0x0206) has a top-level collection whose
+ * only input is Generic Device Controls / Battery Strength (report 0xAC).
+ * Linux hid-input on the host turns that into a power supply, and Android
+ * polls it with GET_REPORT.  HAL answers on the control channel with a
+ * truncated one-byte DATA reply before the daemon's complete reply below.
+ * Some hosts (an Amlogic Android 14 box) then time the request out and
+ * retry forever without registering the keyboard.
+ *
+ * Removing that collection from the published record means the host never
+ * creates the battery and never asks.  Hosts cache the descriptor when they
+ * bond, so a host that bonded earlier must forget the keyboard and pair
+ * again.  The GET_REPORT reply stays as a fallback.
+ */
+struct hid_block {
+    size_t start;
+    size_t end;
+    int closed;
+    int seen_collection;
+    int application;
+    int battery;
+    int report_id;              /* -1 until the block sets one */
+    int mixed_report_ids;
+    int output_or_feature;
+    unsigned int inputs;
+    unsigned int report_id_items;
+    unsigned int globals_set;       /* one bit per global item tag */
+    unsigned int globals_pre_local; /* set before the first local/main item */
+    unsigned int globals_pre_io;    /* set before the first Input/Output/Feature */
+    int seen_local_or_main;
+    int seen_io;
+};
+
+static int hid_short_item(const unsigned char *d, size_t len, size_t pos,
+                          unsigned int *type, unsigned int *tag,
+                          uint32_t *value, size_t *item_len) {
+    unsigned int prefix;
+    size_t size, i;
+    uint32_t v = 0;
+
+    if (pos >= len) return -1;
+    prefix = d[pos];
+    if (prefix == 0xfe) return -1; /* long items: not expected here */
+    size = prefix & 3;
+    if (size == 3) size = 4;
+    if (size > len - pos - 1) return -1;
+    for (i = 0; i < size; i++) v |= (uint32_t)d[pos + 1 + i] << (8 * i);
+    *type = (prefix >> 2) & 3;
+    *tag = prefix >> 4;
+    *value = v;
+    *item_len = 1 + size;
+    return 0;
+}
+
+/*
+ * Finds a top-level collection that exists only to report battery strength
+ * and can be cut out without changing how the rest of the descriptor parses.
+ * Returns 1 and the byte range [start, end) if found, 0 if not, and -1 if
+ * the descriptor uses something this parser does not model (long items,
+ * Push/Pop, unbalanced collections).
+ */
+static int hid_find_battery_block(const unsigned char *d, size_t len,
+                                  size_t *out_start, size_t *out_end,
+                                  unsigned int *out_report_id) {
+    struct hid_block blocks[HID_MAX_BLOCKS];
+    unsigned int report_id_items[256];
+    struct hid_block *b = NULL;
+    size_t count = 0, pos = 0, i;
+    uint32_t usage_page = 0;
+    int depth = 0;
+
+    memset(report_id_items, 0, sizeof(report_id_items));
+    while (pos < len) {
+        unsigned int type, tag;
+        uint32_t value;
+        size_t item_len;
+
+        if (hid_short_item(d, len, pos, &type, &tag, &value, &item_len) != 0) {
+            return -1;
+        }
+        if (!b) {
+            if (count >= HID_MAX_BLOCKS) return -1;
+            b = &blocks[count++];
+            memset(b, 0, sizeof(*b));
+            b->start = pos;
+            b->report_id = -1;
+        }
+        if (type == 1) { /* global */
+            if (tag >= 0x0a) return -1; /* Push, Pop, reserved */
+            b->globals_set |= 1U << tag;
+            if (!b->seen_local_or_main) b->globals_pre_local |= 1U << tag;
+            if (!b->seen_io) b->globals_pre_io |= 1U << tag;
+            if (tag == 0x00) usage_page = value;
+            if (tag == 0x08) {
+                if (value == 0 || value > 0xff) return -1;
+                report_id_items[value]++;
+                b->report_id_items++;
+                if (b->report_id < 0) b->report_id = (int)value;
+                else if (b->report_id != (int)value) b->mixed_report_ids = 1;
+            }
+        } else if (type == 2) { /* local */
+            uint32_t page = item_len == 5 ? value >> 16 : usage_page;
+            uint32_t usage = item_len == 5 ? value & 0xffff : value;
+            b->seen_local_or_main = 1;
+            if (tag == 0x00 && page == HID_USAGE_PAGE_GENERIC_DEVICE &&
+                usage == HID_USAGE_BATTERY_STRENGTH) {
+                b->battery = 1;
+            }
+        } else if (type == 0) { /* main */
+            b->seen_local_or_main = 1;
+            if (tag == 0x0a) { /* Collection */
+                if (depth == 0 && !b->seen_collection) {
+                    b->seen_collection = 1;
+                    b->application = value == 0x01;
+                }
+                depth++;
+            } else if (tag == 0x0c) { /* End Collection */
+                if (depth == 0) return -1;
+                depth--;
+                if (depth == 0) {
+                    b->end = pos + item_len;
+                    b->closed = 1;
+                    b = NULL;
+                }
+            } else if (tag == 0x08) { /* Input */
+                b->seen_io = 1;
+                b->inputs++;
+            } else if (tag == 0x09 || tag == 0x0b) { /* Output, Feature */
+                b->seen_io = 1;
+                b->output_or_feature = 1;
+            } else {
+                return -1;
+            }
+        } else {
+            return -1;
+        }
+        pos += item_len;
+    }
+    if (depth != 0) return -1;
+    if (b) b->end = len;
+    if (count < 2) return 0;
+
+    for (i = 0; i < count; i++) {
+        const struct hid_block *c = &blocks[i];
+        if (!c->closed || !c->application || !c->battery ||
+            c->report_id < 0 || c->mixed_report_ids ||
+            c->output_or_feature || c->inputs == 0 ||
+            report_id_items[c->report_id] != c->report_id_items) {
+            continue;
+        }
+        /*
+         * Global items persist into the next collection.  Only cut the
+         * block if the next one sets again every global the block changed
+         * (the usage page before its first usage, the rest before its
+         * first report field), so its meaning cannot change.
+         */
+        if (i + 1 < count) {
+            const struct hid_block *n = &blocks[i + 1];
+            if ((c->globals_set & 1U) && !(n->globals_pre_local & 1U)) continue;
+            if ((c->globals_set & ~1U) & ~n->globals_pre_io) continue;
+        }
+        *out_start = c->start;
+        *out_end = c->end;
+        *out_report_id = (unsigned int)c->report_id;
+        return 1;
+    }
+    return 0;
+}
+
+/* SDP data element header: type, size index, header length, data length. */
+static int sdp_element(const unsigned char *p, size_t avail,
+                       unsigned int *type, size_t *header_len,
+                       size_t *data_len) {
+    static const size_t fixed[5] = {1, 2, 4, 8, 16};
+    unsigned int t, s;
+    size_t h = 1, n;
+
+    if (avail < 1) return -1;
+    t = p[0] >> 3;
+    s = p[0] & 7;
+    switch (t) {
+    case 0: /* nil */
+        if (s != 0) return -1;
+        n = 0;
+        break;
+    case 1: case 2: case 3: case 5: /* uint, int, UUID, bool */
+        if (s > 4) return -1;
+        n = fixed[s];
+        break;
+    case 4: case 6: case 7: case 8: /* text, sequence, alternative, URL */
+        if (s == 5) {
+            if (avail < 2) return -1;
+            n = p[1];
+            h = 2;
+        } else if (s == 6) {
+            if (avail < 3) return -1;
+            n = ((size_t)p[1] << 8) | p[2];
+            h = 3;
+        } else if (s == 7) {
+            if (avail < 5) return -1;
+            n = ((size_t)p[1] << 24) | ((size_t)p[2] << 16) |
+                ((size_t)p[3] << 8) | p[4];
+            h = 5;
+        } else {
+            return -1;
+        }
+        break;
+    default:
+        return -1;
+    }
+    if (n > avail - h) return -1;
+    *type = t;
+    *header_len = h;
+    *data_len = n;
+    return 0;
+}
+
+/* Shrinks a variable-length element's length field in place. */
+static void sdp_element_shrink(unsigned char *p, size_t removed) {
+    unsigned int s = p[0] & 7;
+    size_t n;
+
+    if (s == 5) {
+        p[1] = (unsigned char)(p[1] - removed);
+    } else if (s == 6) {
+        n = (((size_t)p[1] << 8) | p[2]) - removed;
+        p[1] = (unsigned char)(n >> 8);
+        p[2] = (unsigned char)n;
+    } else if (s == 7) {
+        n = (((size_t)p[1] << 24) | ((size_t)p[2] << 16) |
+            ((size_t)p[3] << 8) | p[4]) - removed;
+        p[1] = (unsigned char)(n >> 24);
+        p[2] = (unsigned char)(n >> 16);
+        p[3] = (unsigned char)(n >> 8);
+        p[4] = (unsigned char)n;
+    }
+}
+
+struct sdp_strip_result {
+    uint32_t handle;
+    int have_handle;
+    unsigned int report_id;
+    size_t removed;
+    int descriptors;
+};
+
+/*
+ * rec is one service record: a sequence of (uint16 attribute id, value)
+ * pairs, as a ServiceSearchAttributeResponse returns it and as
+ * SDP_SVC_UPDATE_REQ takes it.  Removes the first battery-only collection
+ * from the HIDDescriptorList.  Returns 1 if removed, 0 if there is none,
+ * -1 if the record is malformed, -2 if a descriptor cannot be parsed.
+ */
+static int sdp_record_strip_hid_battery(unsigned char *rec, size_t *rec_len,
+                                        struct sdp_strip_result *result) {
+    unsigned int type;
+    size_t header, body, pos, end;
+    int unparsed = 0;
+
+    memset(result, 0, sizeof(*result));
+    if (sdp_element(rec, *rec_len, &type, &header, &body) != 0 || type != 6) {
+        return -1;
+    }
+    pos = header;
+    end = header + body;
+    while (pos < end) {
+        unsigned int id_type, value_type, attr_id;
+        size_t id_header, id_len, value_pos, value_header, value_len;
+
+        if (sdp_element(rec + pos, end - pos, &id_type, &id_header,
+                &id_len) != 0 || id_type != 1 || id_len != 2) {
+            return -1;
+        }
+        attr_id = ((unsigned int)rec[pos + id_header] << 8) |
+            rec[pos + id_header + 1];
+        value_pos = pos + id_header + id_len;
+        if (sdp_element(rec + value_pos, end - value_pos, &value_type,
+                &value_header, &value_len) != 0) {
+            return -1;
+        }
+        if (attr_id == SDP_ATTR_RECORD_HANDLE && value_type == 1 &&
+            value_len == 4) {
+            const unsigned char *h = rec + value_pos + value_header;
+            result->handle = ((uint32_t)h[0] << 24) | ((uint32_t)h[1] << 16) |
+                ((uint32_t)h[2] << 8) | h[3];
+            result->have_handle = 1;
+        } else if (attr_id == SDP_ATTR_HID_DESCRIPTOR_LIST &&
+                   value_type == 6) {
+            size_t list_pos = value_pos + value_header;
+            size_t list_end = list_pos + value_len;
+            while (list_pos < list_end) {
+                unsigned int class_type;
+                size_t class_header, class_len, item_pos, item_end;
+
+                if (sdp_element(rec + list_pos, list_end - list_pos,
+                        &class_type, &class_header, &class_len) != 0) {
+                    return -1;
+                }
+                item_pos = list_pos + class_header;
+                item_end = item_pos + class_len;
+                while (class_type == 6 && item_pos < item_end) {
+                    unsigned int item_type;
+                    size_t item_header, item_len;
+
+                    if (sdp_element(rec + item_pos, item_end - item_pos,
+                            &item_type, &item_header, &item_len) != 0) {
+                        return -1;
+                    }
+                    if (item_type == 4) {
+                        unsigned char *desc = rec + item_pos + item_header;
+                        size_t cut_start, cut_end, removed;
+                        unsigned int report_id;
+                        int found;
+
+                        result->descriptors++;
+                        found = hid_find_battery_block(desc, item_len,
+                            &cut_start, &cut_end, &report_id);
+                        if (found < 0) unparsed = 1;
+                        if (found > 0) {
+                            if (!result->have_handle) return -1;
+                            removed = cut_end - cut_start;
+                            memmove(desc + cut_start, desc + cut_end,
+                                *rec_len - (size_t)(desc + cut_end - rec));
+                            *rec_len -= removed;
+                            sdp_element_shrink(rec + item_pos, removed);
+                            sdp_element_shrink(rec + list_pos, removed);
+                            sdp_element_shrink(rec + value_pos, removed);
+                            sdp_element_shrink(rec, removed);
+                            result->report_id = report_id;
+                            result->removed = removed;
+                            return 1;
+                        }
+                    }
+                    item_pos += item_header + item_len;
+                }
+                list_pos = item_end;
+            }
+        }
+        pos = value_pos + value_header + value_len;
+    }
+    return unparsed ? -2 : 0;
+}
+
+static void print_hex(const char *label, const unsigned char *p, size_t len) {
+    size_t i;
+    printf("%s", label);
+    for (i = 0; i < len; i++) printf("%s%02X", i ? " " : "", p[i]);
+    printf("\n");
+}
+
+static int sdp_local_open(char *err, size_t errlen) {
+    struct sockaddr_un address;
+    struct timeval timeout;
+    int fd;
+
+    fd = socket(AF_UNIX, SOCK_STREAM, 0);
+    if (fd < 0) {
+        snprintf(err, errlen, "socket: %s", strerror(errno));
+        return -1;
+    }
+    timeout.tv_sec = SDP_IO_TIMEOUT_MS / 1000;
+    timeout.tv_usec = (SDP_IO_TIMEOUT_MS % 1000) * 1000;
+    setsockopt(fd, SOL_SOCKET, SO_RCVTIMEO, &timeout, sizeof(timeout));
+    setsockopt(fd, SOL_SOCKET, SO_SNDTIMEO, &timeout, sizeof(timeout));
+    memset(&address, 0, sizeof(address));
+    address.sun_family = AF_UNIX;
+    snprintf(address.sun_path, sizeof(address.sun_path), "%s",
+        SDP_LOCAL_SOCKET_PATH);
+    if (connect(fd, (struct sockaddr *)&address, sizeof(address)) != 0) {
+        snprintf(err, errlen, "connect %s: %s", SDP_LOCAL_SOCKET_PATH,
+            strerror(errno));
+        close(fd);
+        return -1;
+    }
+    return fd;
+}
+
+static int sdp_read_exact(int fd, unsigned char *buf, size_t len) {
+    size_t done = 0;
+    while (done < len) {
+        ssize_t got = read(fd, buf + done, len - done);
+        if (got < 0 && errno == EINTR) continue;
+        if (got <= 0) {
+            if (got == 0) errno = ECONNRESET;
+            return -1;
+        }
+        done += (size_t)got;
+    }
+    return 0;
+}
+
+/*
+ * One request/response.  bluetoothd's sdpd peeks the 5-byte header and then
+ * expects the whole PDU from a single recv(), dropping the session on a
+ * short read, so the request goes out in one write.
+ */
+static int sdp_transact(int fd, unsigned int pdu_id,
+                        const unsigned char *params, size_t params_len,
+                        unsigned int *rsp_pdu, unsigned char *rsp,
+                        size_t rsp_cap, size_t *rsp_len,
+                        char *err, size_t errlen) {
+    static unsigned char request[5 + SDP_MAX_RESPONSE];
+    static unsigned int transaction;
+    unsigned char header[5];
+    unsigned int rsp_tid;
+    size_t plen;
+    ssize_t written;
+
+    if (params_len > SDP_MAX_RESPONSE) {
+        snprintf(err, errlen, "request too large");
+        return -1;
+    }
+    transaction = (transaction + 1) & 0xffff;
+    request[0] = (unsigned char)pdu_id;
+    request[1] = (unsigned char)(transaction >> 8);
+    request[2] = (unsigned char)transaction;
+    request[3] = (unsigned char)(params_len >> 8);
+    request[4] = (unsigned char)params_len;
+    memcpy(request + 5, params, params_len);
+    do {
+        written = send(fd, request, 5 + params_len, MSG_NOSIGNAL);
+    } while (written < 0 && errno == EINTR);
+    if (written != (ssize_t)(5 + params_len)) {
+        snprintf(err, errlen, "write: %s",
+            written < 0 ? strerror(errno) : "short write");
+        return -1;
+    }
+    if (sdp_read_exact(fd, header, sizeof(header)) != 0) {
+        snprintf(err, errlen, "read: %s", strerror(errno));
+        return -1;
+    }
+    rsp_tid = ((unsigned int)header[1] << 8) | header[2];
+    plen = ((size_t)header[3] << 8) | header[4];
+    if (rsp_tid != transaction || plen > rsp_cap) {
+        snprintf(err, errlen, "bad response tid=0x%04x len=%u",
+            rsp_tid, (unsigned int)plen);
+        return -1;
+    }
+    if (sdp_read_exact(fd, rsp, plen) != 0) {
+        snprintf(err, errlen, "read: %s", strerror(errno));
+        return -1;
+    }
+    *rsp_pdu = header[0];
+    *rsp_len = plen;
+    return 0;
+}
+
+/* All HID records (UUID 0x1124, every attribute), following continuations. */
+static int sdp_fetch_hid_records(int fd, unsigned char *out, size_t out_cap,
+                                 size_t *out_len, char *err, size_t errlen) {
+    static unsigned char rsp[SDP_MAX_RESPONSE];
+    unsigned char request[64];
+    unsigned char cont[17];
+    size_t cont_len = 1, total = 0;
+    int rounds;
+
+    cont[0] = 0;
+    for (rounds = 0; rounds < 32; rounds++) {
+        size_t n = 0, rsp_len, chunk;
+        unsigned int rsp_pdu;
+
+        request[n++] = 0x35; request[n++] = 0x03; /* pattern: UUID16 0x1124 */
+        request[n++] = 0x19;
+        request[n++] = (unsigned char)(SDP_UUID_HID >> 8);
+        request[n++] = (unsigned char)SDP_UUID_HID;
+        request[n++] = 0xff; request[n++] = 0xf0; /* max attribute bytes */
+        request[n++] = 0x35; request[n++] = 0x05; /* range 0x0000-0xffff */
+        request[n++] = 0x0a;
+        request[n++] = 0x00; request[n++] = 0x00;
+        request[n++] = 0xff; request[n++] = 0xff;
+        memcpy(request + n, cont, cont_len);
+        n += cont_len;
+        if (sdp_transact(fd, SDP_SVC_SEARCH_ATTR_REQ, request, n, &rsp_pdu,
+                rsp, sizeof(rsp), &rsp_len, err, errlen) != 0) {
+            return -1;
+        }
+        if (rsp_pdu == SDP_ERROR_RSP) {
+            snprintf(err, errlen, "search error 0x%04x",
+                rsp_len >= 2 ? ((unsigned int)rsp[0] << 8) | rsp[1] : 0xffff);
+            return -1;
+        }
+        if (rsp_pdu != SDP_SVC_SEARCH_ATTR_RSP || rsp_len < 3) {
+            snprintf(err, errlen, "unexpected search response 0x%02x",
+                rsp_pdu);
+            return -1;
+        }
+        chunk = ((size_t)rsp[0] << 8) | rsp[1];
+        if (chunk + 3 > rsp_len || rsp[2 + chunk] > 16 ||
+            chunk + 3 + rsp[2 + chunk] != rsp_len) {
+            snprintf(err, errlen, "malformed search response");
+            return -1;
+        }
+        if (chunk > out_cap - total) {
+            snprintf(err, errlen, "HID records exceed %u bytes",
+                (unsigned int)out_cap);
+            return -1;
+        }
+        memcpy(out + total, rsp + 2, chunk);
+        total += chunk;
+        cont_len = 1 + rsp[2 + chunk];
+        memcpy(cont, rsp + 2 + chunk, cont_len);
+        if (cont_len == 1) {
+            *out_len = total;
+            return 0;
+        }
+    }
+    snprintf(err, errlen, "too many continuation rounds");
+    return -1;
+}
+
+static int sdp_update_record(int fd, uint32_t handle,
+                             const unsigned char *rec, size_t rec_len,
+                             char *err, size_t errlen) {
+    static unsigned char request[SDP_MAX_RESPONSE];
+    unsigned char rsp[64];
+    size_t rsp_len;
+    unsigned int rsp_pdu, status;
+
+    if (rec_len + 4 > sizeof(request)) {
+        snprintf(err, errlen, "record too large");
+        return -1;
+    }
+    request[0] = (unsigned char)(handle >> 24);
+    request[1] = (unsigned char)(handle >> 16);
+    request[2] = (unsigned char)(handle >> 8);
+    request[3] = (unsigned char)handle;
+    memcpy(request + 4, rec, rec_len);
+    if (sdp_transact(fd, SDP_SVC_UPDATE_REQ, request, rec_len + 4, &rsp_pdu,
+            rsp, sizeof(rsp), &rsp_len, err, errlen) != 0) {
+        return -1;
+    }
+    status = rsp_len >= 2 ? ((unsigned int)rsp[0] << 8) | rsp[1] : 0xffff;
+    if (rsp_pdu != SDP_SVC_UPDATE_RSP || status != 0) {
+        snprintf(err, errlen, "update refused pdu=0x%02x status=0x%04x",
+            rsp_pdu, status);
+        return -1;
+    }
+    return 0;
+}
+
+#define SDP_STRIP_APPLY 1
+#define SDP_STRIP_VERBOSE 2
+
+/*
+ * Checks every HID record in the local SDP database and, with
+ * SDP_STRIP_APPLY, rewrites the ones that carry a battery-only collection.
+ * Returns the number of records stripped (or, without APPLY, that would
+ * be), or -1 with a reason in err.
+ */
+static int sdp_strip_hid_battery(int flags, char *err, size_t errlen) {
+    static unsigned char lists[SDP_MAX_RESPONSE];
+    static unsigned char rec[SDP_MAX_RESPONSE];
+    size_t lists_len = 0, header, body, pos, end;
+    unsigned int type;
+    int fd, changed = 0, records = 0;
+
+    err[0] = 0;
+    fd = sdp_local_open(err, errlen);
+    if (fd < 0) return -1;
+    if (sdp_fetch_hid_records(fd, lists, sizeof(lists), &lists_len,
+            err, errlen) != 0) {
+        close(fd);
+        return -1;
+    }
+    if (sdp_element(lists, lists_len, &type, &header, &body) != 0 ||
+        type != 6) {
+        snprintf(err, errlen, "malformed attribute lists");
+        close(fd);
+        return -1;
+    }
+    pos = header;
+    end = header + body;
+    while (pos < end) {
+        struct sdp_strip_result result;
+        size_t rec_header, rec_body, rec_len;
+        int stripped;
+
+        if (sdp_element(lists + pos, end - pos, &type, &rec_header,
+                &rec_body) != 0 || type != 6) {
+            snprintf(err, errlen, "malformed record");
+            close(fd);
+            return -1;
+        }
+        rec_len = rec_header + rec_body;
+        memcpy(rec, lists + pos, rec_len);
+        pos += rec_len;
+        records++;
+        stripped = sdp_record_strip_hid_battery(rec, &rec_len, &result);
+        if (flags & SDP_STRIP_VERBOSE) {
+            printf("pair-agent sdp-hid record=%d handle=0x%08lx descriptors=%d result=%s\n",
+                records, (unsigned long)result.handle, result.descriptors,
+                stripped > 0 ? "battery-collection" :
+                (stripped == 0 ? "clean" :
+                (stripped == -2 ? "descriptor-unparsed" : "malformed")));
+            print_hex("pair-agent sdp-hid record-hex ",
+                lists + pos - (rec_header + rec_body), rec_header + rec_body);
+        }
+        if (stripped == -1) {
+            snprintf(err, errlen, "malformed HID record %d", records);
+            close(fd);
+            return -1;
+        }
+        if (stripped <= 0) continue;
+        if (flags & SDP_STRIP_VERBOSE) {
+            printf("pair-agent sdp-hid would-remove report=0x%02x bytes=%u\n",
+                result.report_id, (unsigned int)result.removed);
+            print_hex("pair-agent sdp-hid patched-hex ", rec, rec_len);
+        }
+        if (flags & SDP_STRIP_APPLY) {
+            if (sdp_update_record(fd, result.handle, rec, rec_len,
+                    err, errlen) != 0) {
+                close(fd);
+                return -1;
+            }
+            printf("pair-agent sdp-hid battery-report-removed handle=0x%08lx report=0x%02x bytes=%u\n",
+                (unsigned long)result.handle, result.report_id,
+                (unsigned int)result.removed);
+        }
+        changed++;
+    }
+    close(fd);
+    if (records == 0) {
+        snprintf(err, errlen, "no HID record registered");
+    }
+    return changed;
+}
+
+/* The profile the WebGUI last selected; it defaults to btkeyboard too. */
+static void read_saved_profile(char *out, size_t outlen) {
+    char raw[64];
+    const char *value = raw;
+    FILE *input;
+
+    snprintf(out, outlen, "btkeyboard");
+    input = fopen(BT_PROFILE_FILE, "r");
+    if (!input) return;
+    if (fgets(raw, sizeof(raw), input)) {
+        raw[strcspn(raw, "\r\n")] = 0;
+        if (strncmp(raw, "type=", 5) == 0) value = raw + 5;
+        if (safe_profile(value)) snprintf(out, outlen, "%s", value);
+    }
+    fclose(input);
+}
+
+/*
+ * Periodic check from the daemon and the pairing helper.  HAL registers
+ * the record again whenever it (re)starts the HID profile, so this keeps
+ * looking.  Only the plain btkeyboard profile is touched.  Logs changes of
+ * state, not every check, because the log lives in RAM.
+ */
+struct sdp_watch {
+    time_t next_check;
+    int consecutive_patches;
+    char last_state[160];
+};
+
+static void sdp_watch_check(struct sdp_watch *watch, const char *profile,
+                            time_t now) {
+    char state[160], err[128];
+    int rc, interval = SDP_CHECK_INTERVAL_SECONDS;
+
+    if (strcmp(profile, "btkeyboard") != 0) {
+        snprintf(state, sizeof(state), "skip profile=%s", profile);
+        watch->consecutive_patches = 0;
+    } else {
+        rc = sdp_strip_hid_battery(SDP_STRIP_APPLY, err, sizeof(err));
+        if (rc < 0) {
+            snprintf(state, sizeof(state), "error %s", err);
+        } else if (rc == 0) {
+            snprintf(state, sizeof(state), "%s",
+                err[0] ? "no-hid-record" : "clean");
+            watch->consecutive_patches = 0;
+        } else {
+            snprintf(state, sizeof(state), "patched");
+            /*
+             * If the record keeps coming back, the update is not taking
+             * effect; stop rewriting it every few seconds.
+             */
+            if (++watch->consecutive_patches >= 3) {
+                interval = 60;
+                snprintf(state, sizeof(state), "patched-repeatedly");
+            }
+        }
+    }
+    if (strcmp(state, watch->last_state) != 0 &&
+        strcmp(state, "patched") != 0) {
+        printf("pair-agent sdp-hid state=%s\n", state);
+    }
+    snprintf(watch->last_state, sizeof(watch->last_state), "%s", state);
+    watch->next_check = now + interval;
+}
+
+static int hex_value(int c) {
+    if (c >= '0' && c <= '9') return c - '0';
+    if (c >= 'a' && c <= 'f') return c - 'a' + 10;
+    if (c >= 'A' && c <= 'F') return c - 'A' + 10;
+    return -1;
+}
+
+/*
+ * Offline: read one record as hex on stdin (separators ignored), print the
+ * result.  Lets a captured record be checked on a PC, and drives the
+ * host-side test.
+ */
+static int sdp_filter_stdin(void) {
+    static unsigned char rec[SDP_MAX_RESPONSE];
+    struct sdp_strip_result result;
+    size_t len = 0;
+    int c, high = -1, rc;
+
+    while ((c = getchar()) != EOF) {
+        int v = hex_value(c);
+        if (v < 0) continue;
+        if (high < 0) {
+            high = v;
+            continue;
+        }
+        if (len >= sizeof(rec)) {
+            fprintf(stderr, "record too large\n");
+            return 1;
+        }
+        rec[len++] = (unsigned char)((high << 4) | v);
+        high = -1;
+    }
+    if (high >= 0) {
+        fprintf(stderr, "odd number of hex digits\n");
+        return 1;
+    }
+    rc = sdp_record_strip_hid_battery(rec, &len, &result);
+    if (rc == -1) {
+        printf("malformed\n");
+        return 1;
+    }
+    if (rc == -2) {
+        printf("descriptor-unparsed\n");
+        return 0;
+    }
+    if (rc == 0) {
+        printf("clean\n");
+        return 0;
+    }
+    printf("removed handle=0x%08lx report=0x%02x bytes=%u\n",
+        (unsigned long)result.handle, result.report_id,
+        (unsigned int)result.removed);
+    print_hex("", rec, len);
+    return 0;
+}
+
 static ssize_t receive_hci_packet(int fd, unsigned char *buf, size_t buflen,
                                   int *incoming) {
     struct msghdr message;
@@ -622,6 +1400,8 @@ int main(int argc, char **argv) {
         hid_control_daemon ||
         (argc > 3 && strcmp(argv[3], "--observe") == 0);
     int direct_only = argc > 3 && strcmp(argv[3], "--direct-only") == 0;
+    const char *sdp_mode = argc > 3 && strncmp(argv[3], "--sdp-hid-", 10) == 0 ?
+        argv[3] : NULL;
     int enable_hid_control = hid_control_shim || hid_control_daemon;
     int use_pin_fifo = !observe_only && !direct_only;
     int allow_direct_reconnect = direct_only;
@@ -639,6 +1419,8 @@ int main(int argc, char **argv) {
     unsigned int local_control_cid = 0;
     unsigned int remote_control_cid = 0;
     char last_address[24] = "";
+    struct sdp_watch sdp_watch;
+    int watch_sdp = hid_control_daemon || use_pin_fifo;
 
     /*
      * The WebGUI can start this helper while serving an HTTP request.  Do not
@@ -655,6 +1437,37 @@ int main(int argc, char **argv) {
 
     setvbuf(stdout, NULL, _IOLBF, 0);
     setvbuf(stderr, NULL, _IOLBF, 0);
+    memset(&sdp_watch, 0, sizeof(sdp_watch));
+
+    if (sdp_mode) {
+        char err[128];
+        int rc;
+
+        if (strcmp(sdp_mode, "--sdp-hid-filter") == 0) {
+            return sdp_filter_stdin();
+        }
+        if (strcmp(sdp_mode, "--sdp-hid-check") == 0) {
+            rc = sdp_strip_hid_battery(SDP_STRIP_VERBOSE, err, sizeof(err));
+        } else if (strcmp(sdp_mode, "--sdp-hid-strip-battery") == 0) {
+            if (strcmp(profile, "btkeyboard") != 0) {
+                fprintf(stderr,
+                    "pair-agent sdp-hid only the btkeyboard profile is patched\n");
+                return 2;
+            }
+            rc = sdp_strip_hid_battery(SDP_STRIP_APPLY | SDP_STRIP_VERBOSE,
+                err, sizeof(err));
+        } else {
+            fprintf(stderr, "unknown mode: %s\n", sdp_mode);
+            return 2;
+        }
+        if (rc < 0) {
+            fprintf(stderr, "pair-agent sdp-hid failed: %s\n", err);
+            return 1;
+        }
+        printf("pair-agent sdp-hid records-with-battery-collection=%d%s\n",
+            rc, err[0] ? " (no HID record registered)" : "");
+        return 0;
+    }
     signal(SIGTERM, on_signal);
     signal(SIGINT, on_signal);
     signal(SIGCHLD, SIG_DFL);
@@ -757,6 +1570,15 @@ int main(int argc, char **argv) {
         int incoming = -1;
 
         reap_children();
+        if (watch_sdp && now >= sdp_watch.next_check) {
+            char saved_profile[64];
+            if (hid_control_daemon) {
+                read_saved_profile(saved_profile, sizeof(saved_profile));
+            } else {
+                snprintf(saved_profile, sizeof(saved_profile), "%s", profile);
+            }
+            sdp_watch_check(&sdp_watch, saved_profile, now);
+        }
         if (!observe_only && paired_at && current_connected &&
             connected_at && now - connected_at >= 10) {
             printf("pair-agent complete\n");
@@ -861,6 +1683,8 @@ int main(int argc, char **argv) {
             unsigned int link_type = payload[9];
             format_addr(payload, peer, sizeof(peer));
             printf("pair-agent connection-request peer=%s linkType=%u\n", peer, link_type);
+            /* Recheck before the host can query SDP on this link. */
+            sdp_watch.next_check = 0;
             if (link_type == 1) {
                 snprintf(last_address, sizeof(last_address), "%s", peer);
             }

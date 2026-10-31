@@ -707,6 +707,33 @@ zero-valued report through the local HCI control channel. It also reloads
 saved link keys at startup, so this compatibility path survives a Hub
 reboot without cloud access.
 
+That reply can still lose the race: the stock handler answers first, and
+some hosts (seen on an Amlogic Android 14 box) then time the request out
+and retry forever without creating the keyboard. Report `0xAC` exists only
+because the `btkeyboard` HID descriptor has a top-level collection whose
+sole input is Battery Strength. So for the `btkeyboard` profile the daemon,
+and the pairing helper while pairing mode is on, also remove that
+collection from the HID record in the Hub's local SDP database
+(`/var/run/sdp`, BlueZ `SDP_SVC_UPDATE_REQ`). The host then never sees a
+battery and never asks for the report. The check repeats every few
+seconds and on each incoming connection, because HAL registers the record
+again whenever it starts the profile. It only cuts a collection when the
+rest of the descriptor parses the same without it; other profiles are left
+alone. Hosts cache the descriptor when they bond, so a host that bonded
+before this change must forget "Harmony Keyboard" and pair again.
+
+To inspect or apply this by hand on the Hub:
+
+```sh
+/data/codex/bin/codex_bt_pair_agent btkeyboard 10 --sdp-hid-check
+/data/codex/bin/codex_bt_pair_agent btkeyboard 10 --sdp-hid-strip-battery
+```
+
+`--sdp-hid-check` prints each HID record, as hex, and what would be
+removed. It changes nothing. The daemon logs to
+`/var/volatile/codex-bt-hid-control.log`, as `sdp-hid state=…` and
+`sdp-hid battery-report-removed …` lines.
+
 The WebGUI remote-control endpoint also recognizes DeviceList entries
 whose transport is Bluetooth HID (`Transport: 32`). When one of those
 devices is disconnected, `/api/ir-send` first establishes and verifies a
