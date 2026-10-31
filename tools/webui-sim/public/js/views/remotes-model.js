@@ -14,27 +14,40 @@
    and while everything is off. The engine adds Off to the root map itself. */
 
 import { cloneJsonResource, createAllocator, sameButton } from "../wizard-model.js";
+import { keyOn } from "./touch-model.js";
 
 export const SMART_CONTROL_EQUAD = "16414";
 export const TOUCH_EQUAD = "16417";
 export const ROOT_MAP_ID = `${SMART_CONTROL_EQUAD}Root`;
 
 /* hal accepts only these EquadIDs (others are unpaired at once). 16417 is
-   every remote with a screen; its skin tells them apart. */
+   every remote with a screen (Touch, Elite, Ultimate…); its skin tells them
+   apart, and only the Touch's skin is known. `role` decides what the
+   Remotes page offers for that remote. */
 const KINDS = {
-  16414: "Harmony Smart Control remote",
-  16417: "Harmony remote with a screen",
-  16420: "Harmony keyboard",
-  16422: "Harmony Companion remote",
-  16423: "Harmony Companion remote",
-  34830: "Harmony USB dongle",
+  16414: { name: "Harmony Smart Control remote", short: "Smart Control", role: "smart-control" },
+  16417: { name: "Harmony remote with a screen", short: "screen remote", role: "screen" },
+  16420: { name: "Harmony keyboard", short: "keyboard", role: "other" },
+  16422: { name: "Harmony Companion remote", short: "Companion", role: "other" },
+  16423: { name: "Harmony Companion remote", short: "Companion", role: "other" },
+  34830: { name: "Harmony USB dongle", short: "dongle", role: "other" },
 };
-const SKINS = { 99: "Harmony Touch" };
+const SKINS = { 99: { name: "Harmony Touch", short: "Touch" } };
+
+/* How to put a remote in pairing mode, for the kinds proven on hardware. */
+export const PAIRING_STEPS = {
+  16414: "hold Menu and Mute together for about 5 seconds",
+};
+
+function remoteKind(equadId, skinId = "") {
+  const id = String(equadId ?? "");
+  const kind = KINDS[id] ?? { name: `Unknown remote (EquadID ${id || "?"})`, short: "remote", role: "other" };
+  const skin = id === TOUCH_EQUAD ? SKINS[String(skinId)] : null;
+  return skin ? { ...kind, ...skin } : kind;
+}
 
 export function remoteKindName(equadId, skinId = "") {
-  const id = String(equadId ?? "");
-  if (id === TOUCH_EQUAD && SKINS[String(skinId)]) return SKINS[String(skinId)];
-  return KINDS[id] ?? `Unknown remote (EquadID ${id || "?"})`;
+  return remoteKind(equadId, skinId).name;
 }
 
 /* hal's JSON reply, given as the raw text codex_hal_ltcp printed or as an
@@ -51,7 +64,7 @@ function halReply(reply) {
   }
 }
 
-/** rf.info -> { hub, remotes: [{ slot, equadId, rfid, skinId, name }] }, or null. */
+/** rf.info -> { hub, remotes: [{ slot, equadId, rfid, skinId, name, short, role }] }, or null. */
 export function parseRfInfo(reply) {
   const json = halReply(reply);
   if (!json || Number(json.code) !== 200 || !json.data || typeof json.data !== "object") return null;
@@ -64,7 +77,7 @@ export function parseRfInfo(reply) {
       skinId: String(d?.SkinId ?? ""),
     }))
     .filter((r) => r.slot > 0 && r.equadId && r.equadId !== "0")
-    .map((r) => ({ ...r, name: remoteKindName(r.equadId, r.skinId) }))
+    .map((r) => ({ ...r, ...remoteKind(r.equadId, r.skinId) }))
     .sort((a, b) => a.slot - b.slot);
   return {
     hub: { equadId: String(json.data.EquadID ?? ""), rfid: String(json.data.RFID ?? "") },
@@ -275,70 +288,33 @@ export function activityButtonsSaveOutcome(config, baseRows, sentRows) {
   return "changed";
 }
 
-/* -- Keys the Smart Control shares with the Touch ----------------------------
-   Both remotes answer from their own map, so a key changed in the Touch
-   editor (16417 only) leaves the Smart Control on the old command. */
-
-/* The Smart Control's keys besides the activity buttons, as Logitech's
-   16414 maps name them. */
-const SMART_CONTROL_KEYS = new Set([
-  "Blue", "ChannelDown", "ChannelUp", "DirectionDown", "DirectionLeft",
-  "DirectionRight", "DirectionUp", "Dvr", "Exit", "FastForward", "Green",
-  "Guide", "Info", "Menu", "Number0", "Number1", "Number2", "Number3",
-  "Number4", "Number5", "Number6", "Number7", "Number8", "Number9", "Pause",
-  "Play", "PrevChannel", "Record", "Red", "Rewind", "Select", "Stop",
-  "VolumeDown", "VolumeMute", "VolumeUp", "Yellow",
-]);
-
-/** The Smart Control's name for a Touch hard key, or "" when it has no such key. */
-export function smartControlKey(touchKey) {
-  const key = touchKey === "DVR" ? "Dvr" : String(touchKey ?? "");
-  return SMART_CONTROL_KEYS.has(key) ? key : "";
-}
+/* -- Keys on both remotes -----------------------------------------------------
+   The Smart Control (16414) and the Touch or other screen remote (16417)
+   each have their own key map per activity, which Logitech fills alike and
+   the editor keeps alike unless the owner sets a key for one remote only.
+   This lists, per activity, the keys where they differ. Only keys both
+   remotes physically have are compared (the Touch has no number keys). */
 
 const ACTION_FIELDS = [PRESS, LONG_PRESS, "ButtonDoublePressAction"];
 
-function hasAction(button) {
-  return ACTION_FIELDS.some((field) => button?.[field]);
+function hardButtons(map) {
+  return (map?.Buttons ?? []).filter((b) => b?.__type === "HardRemoteButton" && ACTION_FIELDS.some((f) => b?.[f]));
 }
 
-/* A sequence lives in its own map's Sequences, so a key that runs one can't
-   be copied to another map as it is. */
-function copyable(button) {
-  return ACTION_FIELDS.every((field) => {
-    const type = String(button?.[field]?.__type ?? "");
-    return !button?.[field] || type.includes("ButtonCommandAction") || type.includes("ButtonActivityAction");
-  });
-}
-
-/* Touch hard keys that the Smart Control map lacks or maps differently;
-   `skipped` are ones that run something only the Touch map holds. */
-function keyGaps(touchMap, smartMap) {
-  const missing = [];
-  const differs = [];
-  const skipped = [];
-  const seen = new Set();
-  for (const button of touchMap?.Buttons ?? []) {
-    if (button?.__type !== "HardRemoteButton" || !hasAction(button)) continue;
-    const key = smartControlKey(button.ButtonKey);
-    if (!key || seen.has(key)) continue;
-    seen.add(key);
-    const smart = smartMap?.Buttons?.find((b) => b?.ButtonKey === key);
-    const gap = !smart || !hasAction(smart) ? missing : sameButton(button, smart) ? null : differs;
-    if (!gap) continue;
-    if (copyable(button)) gap.push({ key, touch: button });
-    else skipped.push({ key, touch: button });
-  }
-  return { missing, differs, skipped };
+/* One remote's hard key with an action, by the other remote's spelling. */
+function keyButton(map, remote, key) {
+  const name = keyOn(remote, key);
+  return name ? hardButtons(map).find((b) => b.ButtonKey === name) ?? null : null;
 }
 
 /**
- * Per activity: { activityId, name, smartMap, touchMap, missing, differs,
- * skipped }, where the lists are Smart Control key names (skipped: keys the
- * page can't copy, set them in Activity setup). `smartMap` false means the
- * Smart Control does nothing in that activity.
+ * Per activity: { activityId, name, smartMap, touchMap, onlySmart,
+ * onlyTouch, differ }. The lists hold key names in each remote's spelling
+ * (DVR on the Touch, Dvr on the Smart Control; `differ` uses the Smart
+ * Control's). `smartMap`/`touchMap` false means that remote has no keys in
+ * the activity.
  */
-export function keyParity(config) {
+export function keyComparison(config) {
   const byId = new Map(maps(config).map((m) => [m?.ButtonMapIdentifier, m]));
   return (config?.activityList?.Activities ?? [])
     .slice()
@@ -347,54 +323,27 @@ export function keyParity(config) {
       const id = String(activity["Id-"]);
       const smartMap = byId.get(`${SMART_CONTROL_EQUAD}Activity${id}`) ?? null;
       const touchMap = byId.get(`${TOUCH_EQUAD}Activity${id}`) ?? null;
-      const gaps = smartMap && touchMap ? keyGaps(touchMap, smartMap) : { missing: [], differs: [], skipped: [] };
-      return {
+      const result = {
         activityId: id,
         name: activity.Name || activity.ActivityDisplayName || `Activity ${id}`,
         smartMap: Boolean(smartMap),
         touchMap: Boolean(touchMap),
-        missing: gaps.missing.map((g) => g.key),
-        differs: gaps.differs.map((g) => g.key),
-        skipped: gaps.skipped.map((g) => g.key),
+        onlySmart: [],
+        onlyTouch: [],
+        differ: [],
       };
+      if (!smartMap || !touchMap) return result;
+      const keys = new Set([...hardButtons(smartMap), ...hardButtons(touchMap)]
+        .map((b) => keyOn(SMART_CONTROL_EQUAD, b.ButtonKey))
+        .filter((k) => k && keyOn(TOUCH_EQUAD, k)));
+      for (const key of keys) {
+        const smart = keyButton(smartMap, SMART_CONTROL_EQUAD, key);
+        const touch = keyButton(touchMap, TOUCH_EQUAD, key);
+        if (smart && touch && sameButton(smart, touch)) continue;
+        if (smart && touch) result.differ.push(key);
+        else if (smart) result.onlySmart.push(key);
+        else result.onlyTouch.push(keyOn(TOUCH_EQUAD, key));
+      }
+      return result;
     });
-}
-
-/**
- * MapList with the Touch's hard keys copied onto the Smart Control maps,
- * for the given activities (all when omitted): missing keys are added and
- * differing ones take the Touch's actions. A Smart Control button keeps its
- * ButtonId and number-pad group; nothing is removed. Returns
- * { mapList, copied } with the number of keys written.
- */
-export function buildKeyParityMapList(config, onlyActivityIds = null) {
-  const mapList = cloneJsonResource(config?.mapList ?? { ButtonMaps: [] });
-  if (!Array.isArray(mapList.ButtonMaps)) mapList.ButtonMaps = [];
-  const alloc = createAllocator(config);
-  const wanted = onlyActivityIds ? new Set(onlyActivityIds.map(String)) : null;
-  const byId = new Map(mapList.ButtonMaps.map((m) => [m?.ButtonMapIdentifier, m]));
-  let copied = 0;
-  for (const activity of config?.activityList?.Activities ?? []) {
-    const id = String(activity["Id-"]);
-    if (wanted && !wanted.has(id)) continue;
-    const smartMap = byId.get(`${SMART_CONTROL_EQUAD}Activity${id}`);
-    const touchMap = byId.get(`${TOUCH_EQUAD}Activity${id}`);
-    if (!smartMap || !touchMap) continue;
-    const { missing, differs } = keyGaps(touchMap, smartMap);
-    if (!missing.length && !differs.length) continue;
-    if (!Array.isArray(smartMap.Buttons)) smartMap.Buttons = [];
-    for (const { key, touch } of [...missing, ...differs]) {
-      const index = smartMap.Buttons.findIndex((b) => b?.ButtonKey === key);
-      const existing = index === -1 ? null : smartMap.Buttons[index];
-      const copy = cloneJsonResource(touch);
-      copy.ButtonId = existing?.ButtonId ?? alloc.id();
-      copy.ButtonKey = key;
-      copy.FunctionGroupType = existing?.FunctionGroupType ?? (/^Number\d$/.test(key) ? 2 : 0);
-      if (index === -1) smartMap.Buttons.push(copy);
-      else smartMap.Buttons[index] = copy;
-      copied += 1;
-    }
-    smartMap.DateModified = harmonyDate();
-  }
-  return { mapList, copied };
 }

@@ -795,9 +795,11 @@ that activity runs; without it the remote does nothing in that activity.
 `MovieActivity`, `MusicActivity`), each with a `ButtonActivityAction` on
 press (`EventType` 1) and long press (`EventType` 2), and answers keys
 while everything is off. The engine adds `PowerOffActivity` to the root
-map itself. The web app's Remotes page edits the activity buttons and
-copies the Touch's hard keys onto the Smart Control through
-`/api/activity-save`.
+map itself. The web app's Remotes page edits the activity buttons and each
+remote's keys per activity (`#touch/<id>/16414` for the Smart Control,
+`#touch/<id>/16417` for the Touch), all through `/api/activity-save`. A key
+edit writes both remotes' maps in one save unless the owner sets that key
+for one remote only.
 
 ## State changes (cheap liveness)
 

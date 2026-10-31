@@ -123,12 +123,23 @@ only. Editors work to these rules:
 | `16417Activity<id>` | On-screen buttons, their sequences, hard keys, gestures (Touch & HA Control Studio, `#touch/<id>`) | Number pad, Touch-only actions |
 | `16417Device<id>` made on the hub | The whole map, built from the device's commands (`POST /api/device-screen` or `POST /api/ha-devices`), with self-long on one-shot commands | Map and button IDs |
 | `16417Device<id>` made by Logitech | Nothing | The whole map |
-| `16414*`, any root map | Nothing (wizard writes `16414Activity<id>`; advanced editor mirrors hard keys to `16417`) | The whole map |
+| `16414Activity<id>` | Hard keys (the same editor from Settings → Remotes, `#touch/<id>/16414`) | Everything else |
+| `16414Root` | The three activity buttons (Settings → Remotes → Activity buttons) | Other buttons |
+| Any other root map | Nothing | The whole map |
 
 The activity wizard (web and Android) owns each activity's
 `16414Activity<id>` map and the hard buttons of its `16417Activity<id>` map.
 The Touch & HA Control Studio (`#touch/<id>`) owns the on-screen rows, hard
-keys and gestures of `16417Activity<id>` directly. The Touch answers its
+keys and gestures of `16417Activity<id>` directly. Opened for the Smart
+Control (`#touch/<id>/16414`, from Settings → Remotes), the same page edits
+only the hard keys of `16414Activity<id>`. Either way the two remotes' hard
+keys stay alike: a key edit is written to both maps in one save, unless the
+owner picks "Only the <remote>" for it (an override). A key already set
+differently on the two remotes stays that way unless they pick "Both
+remotes", and the page shows the other remote's setting next to it. Keys
+only the other remote has set are listed with "Add these here too". The
+number keys are the Smart Control's alone. Settings → Remotes notes, per
+activity, where the two differ. The Touch answers its
 hard keys from its own `16417` map only; Logitech's configs carry the same
 hard buttons on both maps, minus the number keys (which are on screen on
 the Touch) and with `Dvr` spelled `DVR`.

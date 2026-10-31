@@ -1769,6 +1769,12 @@ details > summary {
   min-height: 96px;
 }
 
+.remotes-section {
+  display: grid;
+  gap: var(--space-3);
+}
+
+
 .remotes-pairing p {
   margin: var(--space-2) 0;
 }
