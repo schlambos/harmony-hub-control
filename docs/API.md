@@ -745,6 +745,26 @@ reports. This is a one-shot edit and the daemon does not repeat it. Run it
 after "Pairing & link" has registered the profile and before the host
 pairs. HAL's next profile registration restores the full record.
 
+The same Android 14 box also stops its whole Bluetooth stack about 10 ms
+after it runs GATT discovery over BR/EDR against the Hub. A Google
+service on the box connects GATT to the newly paired keyboard, the box
+reads the Hub's ATT records from SDP, and its Bluetooth main thread then
+spins without sending a single ATT request. Every Bluetooth device on the
+box stays dead until it reboots. To check whether those records are the
+trigger:
+
+```sh
+/data/codex/bin/codex_bt_pair_agent btkeyboard 10 --sdp-att-check
+/data/codex/bin/codex_bt_pair_agent btkeyboard 10 --sdp-att-hide
+```
+
+`--sdp-att-check` lists every record that an ATT (UUID `0x0007`) search
+returns, with its service class and ATT handle range. `--sdp-att-hide`
+removes the ones with an ATT element (not the HID record) from SDP. LE
+GATT and bluetoothd's ATT listener are untouched. This is a one-shot
+experiment and is undone when bluetoothd restarts, for example at a Hub
+reboot.
+
 The WebGUI remote-control endpoint also recognizes DeviceList entries
 whose transport is Bluetooth HID (`Transport: 32`). When one of those
 devices is disconnected, `/api/ir-send` first establishes and verifies a

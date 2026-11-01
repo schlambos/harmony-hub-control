@@ -92,6 +92,8 @@ grep -q 'sdp_strip_hid(' \
   "$ROOT/payload/source/codex_bt_pair_agent.c"
 grep -q -- '--sdp-hid-keyboard-only' \
   "$ROOT/payload/source/codex_bt_pair_agent.c"
+grep -q -- '--sdp-att-hide' \
+  "$ROOT/payload/source/codex_bt_pair_agent.c"
 grep -q 'sdp_watch_check' \
   "$ROOT/payload/source/codex_bt_pair_agent.c"
 python3 "$ROOT/tools/bt_sdp_battery_smoke.py" "$CC_BIN"

@@ -97,9 +97,15 @@ static const char *const hcitool_clients[] = {
 #define SDP_SVC_SEARCH_ATTR_RSP 0x07
 #define SDP_SVC_UPDATE_REQ 0x77
 #define SDP_SVC_UPDATE_RSP 0x78
+#define SDP_SVC_REMOVE_REQ 0x79
+#define SDP_SVC_REMOVE_RSP 0x80
 #define SDP_ATTR_RECORD_HANDLE 0x0000
 #define SDP_ATTR_HID_DESCRIPTOR_LIST 0x0206
 #define SDP_UUID_HID 0x1124
+#define SDP_UUID_ATT 0x0007
+#define SDP_UUID_L2CAP 0x0100
+#define SDP_ATTR_SERVICE_CLASS_ID_LIST 0x0001
+#define SDP_ATTR_PROTOCOL_DESCRIPTOR_LIST 0x0004
 #define SDP_MAX_RESPONSE 8192
 #define SDP_IO_TIMEOUT_MS 700
 #define SDP_CHECK_INTERVAL_SECONDS 30
@@ -1088,9 +1094,10 @@ static int sdp_transact(int fd, unsigned int pdu_id,
     return 0;
 }
 
-/* All HID records (UUID 0x1124, every attribute), following continuations. */
-static int sdp_fetch_hid_records(int fd, unsigned char *out, size_t out_cap,
-                                 size_t *out_len, char *err, size_t errlen) {
+/* All records matching uuid16, every attribute, following continuations. */
+static int sdp_fetch_records(int fd, unsigned int uuid16, unsigned char *out,
+                             size_t out_cap, size_t *out_len,
+                             char *err, size_t errlen) {
     static unsigned char rsp[SDP_MAX_RESPONSE];
     unsigned char request[64];
     unsigned char cont[17];
@@ -1102,10 +1109,10 @@ static int sdp_fetch_hid_records(int fd, unsigned char *out, size_t out_cap,
         size_t n = 0, rsp_len, chunk;
         unsigned int rsp_pdu;
 
-        request[n++] = 0x35; request[n++] = 0x03; /* pattern: UUID16 0x1124 */
+        request[n++] = 0x35; request[n++] = 0x03; /* pattern: one UUID16 */
         request[n++] = 0x19;
-        request[n++] = (unsigned char)(SDP_UUID_HID >> 8);
-        request[n++] = (unsigned char)SDP_UUID_HID;
+        request[n++] = (unsigned char)(uuid16 >> 8);
+        request[n++] = (unsigned char)uuid16;
         request[n++] = 0xff; request[n++] = 0xf0; /* max attribute bytes */
         request[n++] = 0x35; request[n++] = 0x05; /* range 0x0000-0xffff */
         request[n++] = 0x0a;
@@ -1134,7 +1141,7 @@ static int sdp_fetch_hid_records(int fd, unsigned char *out, size_t out_cap,
             return -1;
         }
         if (chunk > out_cap - total) {
-            snprintf(err, errlen, "HID records exceed %u bytes",
+            snprintf(err, errlen, "records exceed %u bytes",
                 (unsigned int)out_cap);
             return -1;
         }
@@ -1200,8 +1207,8 @@ static int sdp_strip_hid(int policy, int flags, char *err, size_t errlen) {
     err[0] = 0;
     fd = sdp_local_open(err, errlen);
     if (fd < 0) return -1;
-    if (sdp_fetch_hid_records(fd, lists, sizeof(lists), &lists_len,
-            err, errlen) != 0) {
+    if (sdp_fetch_records(fd, SDP_UUID_HID, lists, sizeof(lists),
+            &lists_len, err, errlen) != 0) {
         close(fd);
         return -1;
     }
@@ -1272,6 +1279,216 @@ static int sdp_strip_hid(int policy, int flags, char *err, size_t errlen) {
         snprintf(err, errlen, "no HID record registered");
     }
     return changed;
+}
+
+/*
+ * GATT over BR/EDR.
+ *
+ * bluetoothd's attribute server publishes SDP records for its GATT
+ * services over BR/EDR (ATT on PSM 0x1F).  An Android 14 box (Homatics Box
+ * R 4K Plus) runs GATT discovery against them once a Google service
+ * connects GATT to the newly paired keyboard.  Its Bluetooth main thread
+ * then spins and never sends the first ATT request, which freezes every
+ * Bluetooth device on the box until it reboots.  Hiding these records is a
+ * manual experiment: it removes them from SDP only (LE GATT and the ATT
+ * listener are untouched) until bluetoothd restarts.
+ */
+struct sdp_att_record {
+    uint32_t handle;
+    int have_handle;
+    unsigned int service_uuid16;    /* 0 if none or not 16-bit */
+    char service[40];               /* first service class, as text */
+    int has_att;
+    unsigned int att_start;
+    unsigned int att_end;
+};
+
+/* Reads a UUID element into text and, if 16-bit, a number. */
+static void sdp_uuid_text(const unsigned char *p, size_t len, char *out,
+                          size_t outlen, unsigned int *uuid16) {
+    size_t i, used = 0;
+    *uuid16 = len == 2 ? ((unsigned int)p[0] << 8) | p[1] : 0;
+    out[0] = 0;
+    for (i = 0; i < len && used + 3 < outlen; i++) {
+        used += (size_t)snprintf(out + used, outlen - used, "%02x", p[i]);
+    }
+}
+
+/*
+ * Finds the first UUID in the service class list and an ATT element (UUID
+ * 0x0007 followed by two uint16 handles) in the protocol descriptor list.
+ */
+static int sdp_record_att_info(const unsigned char *rec, size_t rec_len,
+                               struct sdp_att_record *info) {
+    unsigned int type;
+    size_t header, body, pos, end;
+
+    memset(info, 0, sizeof(*info));
+    if (sdp_element(rec, rec_len, &type, &header, &body) != 0 || type != 6) {
+        return -1;
+    }
+    pos = header;
+    end = header + body;
+    while (pos < end) {
+        unsigned int id_type, value_type, attr_id;
+        size_t id_header, id_len, value_pos, value_header, value_len;
+
+        if (sdp_element(rec + pos, end - pos, &id_type, &id_header,
+                &id_len) != 0 || id_type != 1 || id_len != 2) {
+            return -1;
+        }
+        attr_id = ((unsigned int)rec[pos + id_header] << 8) |
+            rec[pos + id_header + 1];
+        value_pos = pos + id_header + id_len;
+        if (sdp_element(rec + value_pos, end - value_pos, &value_type,
+                &value_header, &value_len) != 0) {
+            return -1;
+        }
+        if (attr_id == SDP_ATTR_RECORD_HANDLE && value_type == 1 &&
+            value_len == 4) {
+            const unsigned char *h = rec + value_pos + value_header;
+            info->handle = ((uint32_t)h[0] << 24) | ((uint32_t)h[1] << 16) |
+                ((uint32_t)h[2] << 8) | h[3];
+            info->have_handle = 1;
+        } else if (attr_id == SDP_ATTR_SERVICE_CLASS_ID_LIST &&
+                   value_type == 6 && value_len > 0) {
+            unsigned int t;
+            size_t h, n;
+            const unsigned char *first = rec + value_pos + value_header;
+            if (sdp_element(first, value_len, &t, &h, &n) == 0 && t == 3) {
+                sdp_uuid_text(first + h, n, info->service,
+                    sizeof(info->service), &info->service_uuid16);
+            }
+        } else if (attr_id == SDP_ATTR_PROTOCOL_DESCRIPTOR_LIST &&
+                   value_type == 6) {
+            size_t lpos = value_pos + value_header;
+            size_t lend = lpos + value_len;
+            while (lpos < lend) {
+                unsigned int t, ut, ht;
+                size_t h, n, ipos, uh, un, hh, hn;
+
+                if (sdp_element(rec + lpos, lend - lpos, &t, &h, &n) != 0) {
+                    return -1;
+                }
+                ipos = lpos + h;
+                if (t == 6 && n > 0 &&
+                    sdp_element(rec + ipos, n, &ut, &uh, &un) == 0 &&
+                    ut == 3 && un == 2 &&
+                    (((unsigned int)rec[ipos + uh] << 8) |
+                        rec[ipos + uh + 1]) == SDP_UUID_ATT) {
+                    size_t ppos = ipos + uh + un;
+                    size_t pend = ipos + n;
+                    info->has_att = 1;
+                    if (ppos < pend &&
+                        sdp_element(rec + ppos, pend - ppos, &ht, &hh,
+                            &hn) == 0 && ht == 1 && hn == 2) {
+                        info->att_start = ((unsigned int)rec[ppos + hh] << 8) |
+                            rec[ppos + hh + 1];
+                        ppos += hh + hn;
+                        if (ppos < pend &&
+                            sdp_element(rec + ppos, pend - ppos, &ht, &hh,
+                                &hn) == 0 && ht == 1 && hn == 2) {
+                            info->att_end =
+                                ((unsigned int)rec[ppos + hh] << 8) |
+                                rec[ppos + hh + 1];
+                        }
+                    }
+                }
+                lpos += h + n;
+            }
+        }
+        pos = value_pos + value_header + value_len;
+    }
+    return 0;
+}
+
+static int sdp_remove_record(int fd, uint32_t handle, char *err,
+                             size_t errlen) {
+    unsigned char request[4], rsp[64];
+    size_t rsp_len;
+    unsigned int rsp_pdu, status;
+
+    request[0] = (unsigned char)(handle >> 24);
+    request[1] = (unsigned char)(handle >> 16);
+    request[2] = (unsigned char)(handle >> 8);
+    request[3] = (unsigned char)handle;
+    if (sdp_transact(fd, SDP_SVC_REMOVE_REQ, request, sizeof(request),
+            &rsp_pdu, rsp, sizeof(rsp), &rsp_len, err, errlen) != 0) {
+        return -1;
+    }
+    status = rsp_len >= 2 ? ((unsigned int)rsp[0] << 8) | rsp[1] : 0xffff;
+    if (rsp_pdu != SDP_SVC_REMOVE_RSP || status != 0) {
+        snprintf(err, errlen, "remove refused pdu=0x%02x status=0x%04x",
+            rsp_pdu, status);
+        return -1;
+    }
+    return 0;
+}
+
+/*
+ * Lists every record an ATT (UUID 0x0007) search returns, as a remote GATT
+ * client sees it.  With apply, removes those that carry an ATT protocol
+ * element, except HID records.  Returns the number of such records, or -1.
+ */
+static int sdp_att_records(int apply, char *err, size_t errlen) {
+    static unsigned char lists[SDP_MAX_RESPONSE];
+    size_t lists_len = 0, header, body, pos, end;
+    unsigned int type;
+    int fd, matched = 0, records = 0;
+
+    err[0] = 0;
+    fd = sdp_local_open(err, errlen);
+    if (fd < 0) return -1;
+    if (sdp_fetch_records(fd, SDP_UUID_ATT, lists, sizeof(lists),
+            &lists_len, err, errlen) != 0 ||
+        sdp_element(lists, lists_len, &type, &header, &body) != 0 ||
+        type != 6) {
+        if (!err[0]) snprintf(err, errlen, "malformed attribute lists");
+        close(fd);
+        return -1;
+    }
+    pos = header;
+    end = header + body;
+    while (pos < end) {
+        struct sdp_att_record info;
+        size_t rec_header, rec_body;
+        const char *action = "keep";
+
+        if (sdp_element(lists + pos, end - pos, &type, &rec_header,
+                &rec_body) != 0 || type != 6 ||
+            sdp_record_att_info(lists + pos, rec_header + rec_body,
+                &info) != 0) {
+            snprintf(err, errlen, "malformed record");
+            close(fd);
+            return -1;
+        }
+        pos += rec_header + rec_body;
+        records++;
+        if (info.has_att && info.service_uuid16 != SDP_UUID_HID &&
+            info.have_handle) {
+            matched++;
+            action = apply ? "removed" : "would-remove";
+            if (apply && sdp_remove_record(fd, info.handle, err,
+                    errlen) != 0) {
+                close(fd);
+                return -1;
+            }
+        }
+        if (info.has_att) {
+            printf("pair-agent sdp-att record handle=0x%08lx service=%s att=0x%04x-0x%04x %s\n",
+                (unsigned long)info.handle,
+                info.service[0] ? info.service : "?",
+                info.att_start, info.att_end, action);
+        } else {
+            printf("pair-agent sdp-att record handle=0x%08lx service=%s att=none %s\n",
+                (unsigned long)info.handle,
+                info.service[0] ? info.service : "?", action);
+        }
+    }
+    close(fd);
+    printf("pair-agent sdp-att records=%d gatt-records=%d\n", records,
+        matched);
+    return matched;
 }
 
 /* The profile the WebGUI last selected; it defaults to btkeyboard too. */
@@ -1512,7 +1729,7 @@ int main(int argc, char **argv) {
         hid_control_daemon ||
         (argc > 3 && strcmp(argv[3], "--observe") == 0);
     int direct_only = argc > 3 && strcmp(argv[3], "--direct-only") == 0;
-    const char *sdp_mode = argc > 3 && strncmp(argv[3], "--sdp-hid-", 10) == 0 ?
+    const char *sdp_mode = argc > 3 && strncmp(argv[3], "--sdp-", 6) == 0 ?
         argv[3] : NULL;
     int enable_hid_control = hid_control_shim || hid_control_daemon;
     int use_pin_fifo = !observe_only && !direct_only;
@@ -1559,6 +1776,20 @@ int main(int argc, char **argv) {
             return sdp_filter_stdin(argc > 4 &&
                 strcmp(argv[4], "keyboard-only") == 0 ?
                 HID_STRIP_KEYBOARD_ONLY : HID_STRIP_BATTERY);
+        }
+        if (strcmp(sdp_mode, "--sdp-att-check") == 0 ||
+            strcmp(sdp_mode, "--sdp-att-hide") == 0) {
+            int apply = strcmp(sdp_mode, "--sdp-att-hide") == 0;
+            if (apply && strcmp(profile, "btkeyboard") != 0) {
+                fprintf(stderr,
+                    "pair-agent sdp-att only used with the btkeyboard profile\n");
+                return 2;
+            }
+            if (sdp_att_records(apply, err, sizeof(err)) < 0) {
+                fprintf(stderr, "pair-agent sdp-att failed: %s\n", err);
+                return 1;
+            }
+            return 0;
         }
         if (strcmp(sdp_mode, "--sdp-hid-check") == 0) {
             rc = sdp_strip_hid(HID_STRIP_BATTERY, SDP_STRIP_VERBOSE,
