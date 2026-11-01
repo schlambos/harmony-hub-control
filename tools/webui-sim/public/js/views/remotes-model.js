@@ -32,7 +32,8 @@ const KINDS = {
   16423: { name: "Harmony Companion remote", short: "Companion", role: "other" },
   34830: { name: "Harmony USB dongle", short: "dongle", role: "other" },
 };
-const SKINS = { 99: { name: "Harmony Touch", short: "Touch" } };
+/* `tested`: the screen-remote editor has been proven on this model. */
+const SKINS = { 99: { name: "Harmony Touch", short: "Touch", tested: true } };
 
 /* How to put a remote in pairing mode, for the kinds proven on hardware. */
 export const PAIRING_STEPS = {

@@ -138,9 +138,9 @@ export function createRemotesView(section) {
     const mineOnly = mine ? p.onlySmart : p.onlyTouch;
     const theirsOnly = mine ? p.onlyTouch : p.onlySmart;
     return [
-      p.differ.length && `different on the ${other.short}: ${p.differ.map((k) => (mine ? k : k === "Dvr" ? "DVR" : k)).join(", ")}`,
-      mineOnly.length && `not on the ${other.short}: ${mineOnly.join(", ")}`,
-      theirsOnly.length && `only on the ${other.short}: ${theirsOnly.join(", ")}`,
+      p.differ.length && `different on the other remote: ${p.differ.map((k) => (mine ? k : k === "Dvr" ? "DVR" : k)).join(", ")}`,
+      mineOnly.length && `not on the other remote: ${mineOnly.join(", ")}`,
+      theirsOnly.length && `only on the other remote: ${theirsOnly.join(", ")}`,
     ].filter(Boolean).join(" · ");
   }
 
@@ -152,9 +152,9 @@ export function createRemotesView(section) {
     const other = pairedByRole(remote.role === "smart-control" ? "screen" : "smart-control");
     const byActivity = new Map(keyComparison(hub.state.config).map((p) => [p.activityId, p]));
     const notes = [
-      other && `<p class="list-note">Keys work the same on the ${escapeHtml(remote.short)} and the ${escapeHtml(other.short)}: a key you change goes on both unless you set it for one remote only.</p>`,
-      remote.role === "screen" && remote.short !== "Touch"
-        && `<p class="list-note">The editor was built and tested with the Harmony Touch. Other remotes with a screen answer from the same maps.</p>`,
+      other && `<p class="list-note">Keys work the same on both remotes: a key you change goes on both unless you set it for one remote only.</p>`,
+      remote.role === "screen" && !remote.tested
+        && `<p class="list-note">Remotes with a screen share these maps, but this editor hasn't been tested on this model yet.</p>`,
     ].filter(Boolean).join("");
     return `<div class="m-card">
         <div class="m-card-head"><span>Buttons for each activity</span></div>

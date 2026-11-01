@@ -111,7 +111,7 @@ describe("the Smart Control's keys in the activity editor", () => {
     assert.equal(hasRemoteMaps(cfg, "16414"), false);
     const read = readHardKeys(cfg, SHIELD, SMART);
     const rows = [{ buttonKey: "Menu", buttonId: null, action: { kind: "command", deviceId: "1", command: "Menu", functionId: 0 }, pressMode: "standard", longPress: null }];
-    assert.throws(() => buildTouchControlsMapList(cfg, { hard: { activityId: SHIELD, rows, base: read.base } }, SMART), /no Smart Control keys/);
+    assert.throws(() => buildTouchControlsMapList(cfg, { hard: { activityId: SHIELD, rows, base: read.base } }, SMART), /no keys for this remote/);
   });
 });
 

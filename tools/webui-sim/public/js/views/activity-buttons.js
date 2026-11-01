@@ -65,8 +65,7 @@ export function createActivityButtonsView(section) {
     }
     const missing = rows.some((r) => r.missing.length);
     root.innerHTML = `<div class="m-card">
-        <div class="m-card-head"><span>Harmony Smart Control remote</span></div>
-        <p class="list-note">Each button starts one activity on a press and another on a long press. Off turns everything off by itself.</p>
+        <p class="list-note">Each of the remote's three activity buttons starts one activity on a press and another on a long press. Off turns everything off by itself.</p>
         ${missing ? `<div class="notice notice-warn" role="status">A button still names an activity that was deleted. Saving sets it to Nothing, or pick another activity first.</div>` : ""}
         <div class="remotes-buttons" role="group" aria-label="Activity buttons">
           <span class="remotes-buttons-head">Button</span><span class="remotes-buttons-head">Press</span><span class="remotes-buttons-head">Long press</span>
@@ -97,7 +96,7 @@ export function createActivityButtonsView(section) {
     saving = true;
     render();
     const result = await saveMapList(built.mapList, {
-      done: "Saved. The Smart Control uses the new buttons at once.",
+      done: "Saved. The remote uses the new buttons at once.",
       check: (config) => activityButtonsSaveOutcome(config, draft.baseRows, draft.rows),
     });
     saving = false;

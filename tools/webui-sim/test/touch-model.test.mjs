@@ -95,8 +95,8 @@ describe("readTouchScreen", () => {
     const draft = readTouchScreen(gapConfig(), SCREEN);
     assert.deepEqual(draft.rows.map((r) => [r.slot, r.locked]), [[0, false], [2, true], [4, false]]);
     assert.equal(draft.rows[1].action.kind, "touch");
-    assert.throws(() => setLabel(draft, draft.rows[1].key, "Pad"), /runs on the Touch/);
-    assert.throws(() => removeButton(draft, draft.rows[1].key), /runs on the Touch/);
+    assert.throws(() => setLabel(draft, draft.rows[1].key, "Pad"), /handled by the remote itself/);
+    assert.throws(() => removeButton(draft, draft.rows[1].key), /handled by the remote itself/);
   });
 
   it("reads an activity without a screen as empty, and creatable from a sibling", () => {
@@ -237,7 +237,7 @@ describe("buildTouchMapList", () => {
     cfg.mapList.ButtonMaps = cfg.mapList.ButtonMaps.filter((m) => !m.ButtonMapIdentifier.startsWith("16417"));
     const draft = readTouchScreen(cfg, NO_SCREEN);
     assert.equal(draft.canCreate, false);
-    assert.throws(() => buildTouchMapList(cfg, addButton(draft, { label: "X", ...pick() })), /no Harmony Touch screen/);
+    assert.throws(() => buildTouchMapList(cfg, addButton(draft, { label: "X", ...pick() })), /no remote with a screen/);
   });
 
   it("refuses when the screen changed on the hub after the draft was read", () => {

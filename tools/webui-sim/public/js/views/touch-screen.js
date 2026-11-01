@@ -66,10 +66,9 @@ import {
 
 /* A save publishes a new revision, and the Touch syncs by itself when it
    sees it. Its own Sync menu asks the cloud and fails offline. */
-const SYNC_NOTE = "The Touch picks up the change by itself. Until it does, a button you moved or changed can run its new action under its old label.";
-/* The Smart Control keeps nothing: the hub answers its keys from the saved map. */
-const SMART_CONTROL_NOTE = "The Smart Control uses the change at once.";
-const REMOTE_NAMES = { [SMART_CONTROL_REMOTE]: "Smart Control", [TOUCH_REMOTE]: "Touch" };
+const SYNC_NOTE = "A remote with a screen picks up the change by itself. Until it does, a button you moved or changed can run its new action under its old label.";
+/* A remote without a screen keeps nothing: the hub answers its keys from the saved map. */
+const NO_SCREEN_NOTE = "A remote without a screen uses the change at once.";
 
 export function createTouchScreenView(section) {
   let activityId = "";
@@ -98,9 +97,7 @@ export function createTouchScreenView(section) {
   const isSmart = () => remote === SMART_CONTROL_REMOTE;
   const twinChanged = () => Boolean(twin) && keyRowsChanged(twin.readRows, twin.rows);
   const touchChanged = () => !isSmart() || (twinChanged() && twin.remote === TOUCH_REMOTE);
-  const syncNote = () => ((saved && !dirty ? savedTouch : touchChanged()) ? SYNC_NOTE : SMART_CONTROL_NOTE);
-  const thisName = () => REMOTE_NAMES[remote];
-  const twinName = () => twinPaired?.short ?? REMOTE_NAMES[twin.remote];
+  const syncNote = () => ((saved && !dirty ? savedTouch : touchChanged()) ? SYNC_NOTE : NO_SCREEN_NOTE);
   // The other remote's side shows when it's paired (or the radio couldn't say);
   // its keys follow edits either way, so they stay alike if it's paired later.
   const twinShown = () => Boolean(twin) && twinPaired !== null;
@@ -179,7 +176,7 @@ export function createTouchScreenView(section) {
     }
     if (action.kind === "sequence") return action.name ? `Runs the sequence “${action.name}”` : "Runs a sequence";
     if (action.kind === "activity") return `Starts ${hub.activityName(hub.activityById(action.activityId))}`;
-    return "Works on the Touch only";
+    return "Handled by the remote itself";
   }
 
   function pickerDevices() {
@@ -198,7 +195,7 @@ export function createTouchScreenView(section) {
   function updateBar() {
     if (section.hidden) return;
     setAppBar({
-      title: isSmart() ? "Smart Control & HA controls" : "Touch & HA controls",
+      title: "Remote & HA controls",
       back: fromRemotes ? "remotes" : "activities",
       close: dirty,
       onBack: requestClose,
@@ -220,8 +217,8 @@ export function createTouchScreenView(section) {
     if (!softDraft.canCreate) {
       return `${intro}<div class="m-empty">
           ${iconTile("info_outlined", { size: 64 })}
-          <h2 class="m-empty-title">No Harmony Touch screen on this hub</h2>
-          <p class="m-empty-body">On-screen buttons need a Harmony Touch that has synced with this hub at least once.</p>
+          <h2 class="m-empty-title">No remote with a screen on this hub</h2>
+          <p class="m-empty-body">On-screen buttons need a remote with a screen that has synced with this hub at least once.</p>
         </div>`;
     }
     const list = softDraft.rows.length
@@ -293,12 +290,12 @@ export function createTouchScreenView(section) {
   function hardBody() {
     const intro = `<div class="wiz-intro"><h2 tabindex="-1">${escapeHtml(activityName())}</h2>
         <p>${twinShown()
-          ? `Keys work the same on the ${escapeHtml(thisName())} and the ${escapeHtml(twinName())} unless you set one for this remote only`
-          : isSmart() ? "The Smart Control's keys in this activity" : "Physical hard keys on the Touch"}. Any device works — <strong>Extra</strong> keys are not powered by the activity. Toggles default to One-shot.</p></div>`;
+          ? "Keys work the same on both remotes unless you set one for this remote only"
+          : "This remote's keys in this activity"}. Any device works — <strong>Extra</strong> keys are not powered by the activity. Toggles default to One-shot.</p></div>`;
     const savedNote = saved
       ? `<div class="notice notice-warn touch-sync" role="status"><strong>Saved to the hub.</strong> ${escapeHtml(syncNote())}</div>`
       : "";
-    if (!canEdit()) return `${intro}<p class="list-note">${isSmart() ? "No Smart Control keys on this hub." : "No Touch screen on this hub."}</p>`;
+    if (!canEdit()) return `${intro}<p class="list-note">${isSmart() ? "This hub has no keys for this remote yet." : "No remote with a screen on this hub."}</p>`;
     const ids = roleIds();
     const list = hardRows.length
       ? `<div class="m-list">${hardRows.map((r) => {
@@ -308,7 +305,7 @@ export function createTouchScreenView(section) {
         const own = twinShown() && keyOn(twin.remote, r.buttonKey) && !mirrors(r.buttonKey);
         const theirs = own ? twinRow(r.buttonKey) : null;
         const twinNote = own
-          ? ` · ${theirs ? `On the ${twinName()}: ${theirs.action?.kind === "command" ? actionSummary(theirs.action) + pressModeSummary(theirs) : "something else"}` : `Not on the ${twinName()}`}`
+          ? ` · ${theirs ? `On the other remote: ${theirs.action?.kind === "command" ? actionSummary(theirs.action) + pressModeSummary(theirs) : "something else"}` : "Not on the other remote"}`
           : "";
         return `<div class="m-row touch-row">
             <button type="button" class="touch-main" data-hedit="${escapeHtml(r.buttonKey)}" aria-haspopup="dialog">
@@ -320,23 +317,23 @@ export function createTouchScreenView(section) {
             <button type="button" class="icon-btn" data-hremove="${escapeHtml(r.buttonKey)}" aria-label="Remove ${escapeHtml(r.buttonKey)}" ${saving ? " disabled" : ""}>${icon("delete_outlined")}</button>
           </div>`;
       }).join("")}</div>`
-      : `<p class="list-note">No keys mapped on the ${escapeHtml(thisName())} yet. Add the ones this activity uses.</p>`;
+      : `<p class="list-note">No keys mapped on this remote yet. Add the ones this activity uses.</p>`;
     const missing = hardKeysFor(remote).filter((k) => !hardRows.some((r) => r.buttonKey === k));
     const addHint = missing.length
       ? `<p class="wiz-hint">Unmapped: ${missing.slice(0, 8).join(", ")}${missing.length > 8 ? ` +${missing.length - 8} more` : ""}.${twinShown() ? ` Keys you add go on both remotes unless you choose this remote only.` : ""}</p>`
       : "";
     const numbersNote = twinShown() && hardRows.some((r) => !keyOn(twin.remote, r.buttonKey))
-      ? `<p class="wiz-hint">The ${escapeHtml(twinName())} has no number keys, so those are the ${escapeHtml(thisName())}'s alone.</p>`
+      ? `<p class="wiz-hint">The other remote has no number keys, so those are this remote's alone.</p>`
       : "";
     const theirsOnly = twinOnlyRows();
     const theirsList = theirsOnly.length
-      ? `${sectionLabel(`Only on the ${twinName()}`)}
+      ? `${sectionLabel("Only on the other remote")}
         <div class="m-list">${theirsOnly.map(({ row, key }) => row.action?.kind === "command"
           ? `<div class="m-row touch-row"><button type="button" class="touch-main" data-htwin="${escapeHtml(key)}" aria-haspopup="dialog">
               <span class="m-row-text"><span class="m-row-title">${escapeHtml(key)}</span>
-              <span class="m-row-sub">${escapeHtml(`${actionSummary(row.action)}${pressModeSummary(row)} · not on the ${thisName()}`)}</span></span></button></div>`
+              <span class="m-row-sub">${escapeHtml(`${actionSummary(row.action)}${pressModeSummary(row)} · not on this remote`)}</span></span></button></div>`
           : `<div class="m-row touch-row is-locked"><span class="m-row-text"><span class="m-row-title">${escapeHtml(key)}</span>
-              <span class="m-row-sub">${escapeHtml(`${actionSummary(row.action)} · set it on the ${twinName()}`)}</span></span></div>`).join("")}</div>
+              <span class="m-row-sub">${escapeHtml(`${actionSummary(row.action)} · set it on the other remote`)}</span></span></div>`).join("")}</div>
         ${theirsOnly.some(({ row }) => row.action?.kind === "command")
           ? `<button type="button" class="btn btn-outlined" data-act="htake"${saving ? " disabled" : ""}>Add these here too</button>`
           : ""}`
@@ -349,11 +346,11 @@ export function createTouchScreenView(section) {
 
   function gestureBody() {
     const intro = `<div class="wiz-intro"><h2 tabindex="-1">${escapeHtml(activityName())}</h2>
-        <p>Swipes and taps resolve on the Touch against the target device's own screen. Plain swipes release in ~200ms (single execution); hold-swipes ramp. Toggles on gestures can double-fire — prefer On/Off or Up/Down.</p></div>`;
+        <p>Swipes and taps resolve on the remote against the target device's own screen. Plain swipes release in ~200ms (single execution); hold-swipes ramp. Toggles on gestures can double-fire — prefer On/Off or Up/Down.</p></div>`;
     const syncNote = saved
       ? `<div class="notice notice-warn touch-sync" role="status"><strong>Saved to the hub.</strong> ${escapeHtml(SYNC_NOTE)}</div>`
       : "";
-    if (!softDraft.canCreate) return `${intro}<p class="list-note">No Touch screen on this hub.</p>`;
+    if (!softDraft.canCreate) return `${intro}<p class="list-note">No remote with a screen on this hub.</p>`;
     const warnings = gestureWarningsForActivity(hub.state.config.mapList, activityId);
     const warnByKey = new Map();
     for (const w of warnings) {
@@ -510,7 +507,7 @@ export function createTouchScreenView(section) {
               <button type="button" class="btn btn-filled btn-sm" data-sheet="done">Done</button>
             </div>
             <div class="wiz-field">
-              <label for="touchLabel">Label on the Touch</label>
+              <label for="touchLabel">Label on the remote</label>
               <input id="touchLabel" maxlength="${LABEL_MAX}" autocomplete="off" value="${escapeHtml(label)}">
             </div>
             <p class="pick-now" data-pick-now></p>
@@ -750,13 +747,13 @@ export function createTouchScreenView(section) {
         }
         function twinMarkup() {
           if (!twinShown()) return "";
-          if (!twinHas()) return `<p class="wiz-hint">The ${escapeHtml(twinName())} has no ${escapeHtml(key)} key, so this one is the ${escapeHtml(thisName())}'s alone.</p>`;
+          if (!twinHas()) return `<p class="wiz-hint">The other remote has no ${escapeHtml(key)} key, so this one is this remote's alone.</p>`;
           const theirs = twinRow(key);
           const alike = sameKey(pick ? { action: pick, pressMode, longPress: longPick, doublePress: start?.doublePress ?? null } : null, theirs);
           const now = theirs
-            ? `On the ${twinName()}: ${theirs.action?.kind === "command" ? actionSummary(theirs.action) + pressModeSummary(theirs) : "something else"}`
-            : `Not set on the ${twinName()}`;
-          const scope = [["both", "Both remotes"], ["this", `Only the ${thisName()}`]]
+            ? `On the other remote: ${theirs.action?.kind === "command" ? actionSummary(theirs.action) + pressModeSummary(theirs) : "something else"}`
+            : "Not set on the other remote";
+          const scope = [["both", "Both remotes"], ["this", "Only this remote"]]
             .map(([v, t]) => `<button type="button" class="chip" data-h-scope="${v}" aria-pressed="${(v === "both") === both}">${escapeHtml(t)}</button>`).join("");
           return `<div class="m-chips" role="group" aria-label="Which remotes">${scope}</div>
             <p class="wiz-hint">${escapeHtml(now)}.${!alike && theirs?.action?.kind === "command" ? ` <button type="button" class="btn btn-text btn-sm" data-h="theirs">Use it here</button>` : ""}</p>`;

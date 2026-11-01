@@ -429,31 +429,31 @@ export function createDevicesView(section) {
      ones named like them, every other command on screen. The Touch pulls
      the change by itself. */
   async function saveTouchScreen(d, remove) {
-    snackbar(remove ? `Removing ${d.name}'s Touch screen…` : `Building ${d.name}'s Touch screen…`);
+    snackbar(remove ? `Removing ${d.name}'s remote screen…` : `Building ${d.name}'s remote screen…`);
     try {
       const result = await saveDeviceScreen({ deviceId: d.id, remove });
       await hub.refreshConfig().catch(() => {});
       if (!result.changed) {
-        snackbar(remove ? `${d.name} has no Touch screen` : `${d.name}'s Touch screen is already up to date`);
+        snackbar(remove ? `${d.name} has no remote screen` : `${d.name}'s remote screen is already up to date`);
       } else if (remove) {
-        snackbar(`Removed ${d.name}'s Touch screen. The Touch picks this up by itself.`);
+        snackbar(`Removed ${d.name}'s remote screen. Remotes with a screen pick this up by themselves.`);
       } else {
         const keys = result.hardKeys?.length ?? 0;
         const onScreen = result.onScreen ?? 0;
-        snackbar(`${d.name}'s Touch screen: ${keys} hard key${keys === 1 ? "" : "s"}, ${onScreen} on-screen button${onScreen === 1 ? "" : "s"}. The Touch picks it up by itself.`);
+        snackbar(`${d.name}'s remote screen: ${keys} hard key${keys === 1 ? "" : "s"}, ${onScreen} on-screen button${onScreen === 1 ? "" : "s"}. Remotes with a screen pick it up by themselves.`);
       }
     } catch (error) {
-      snackbar(error.message || "The Touch screen was not saved.", { error: true });
+      snackbar(error.message || "The remote screen was not saved.", { error: true });
     }
   }
 
   function touchScreenItems(d) {
     const screen = touchScreenState(hub.state.config, d.id);
-    if (screen === "none") return [{ id: "screen-make", label: "Make Touch screen", icon: "settings_remote_outlined" }];
+    if (screen === "none") return [{ id: "screen-make", label: "Make remote screen", icon: "settings_remote_outlined" }];
     if (screen === "made") {
       return [
-        { id: "screen-make", label: "Rebuild Touch screen", icon: "refresh" },
-        { id: "screen-remove", label: "Remove Touch screen", icon: "remove" },
+        { id: "screen-make", label: "Rebuild remote screen", icon: "refresh" },
+        { id: "screen-remove", label: "Remove remote screen", icon: "remove" },
       ];
     }
     return [];

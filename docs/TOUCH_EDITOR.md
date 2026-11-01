@@ -134,7 +134,7 @@ keys and gestures of `16417Activity<id>` directly. Opened for the Smart
 Control (`#touch/<id>/16414`, from Settings → Remotes), the same page edits
 only the hard keys of `16414Activity<id>`. Either way the two remotes' hard
 keys stay alike: a key edit is written to both maps in one save, unless the
-owner picks "Only the <remote>" for it (an override). A key already set
+owner picks "Only this remote" for it (an override). A key already set
 differently on the two remotes stays that way unless they pick "Both
 remotes", and the page shows the other remote's setting next to it. Keys
 only the other remote has set are listed with "Add these here too". The

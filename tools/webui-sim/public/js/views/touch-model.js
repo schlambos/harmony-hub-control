@@ -276,7 +276,7 @@ function copy(draft) {
 function editable(draft, key) {
   const row = draft.rows.find((r) => r.key === key);
   if (!row) throw new Error("That button is no longer on this screen.");
-  if (row.locked) throw new Error("That button runs on the Touch and can't be changed here.");
+  if (row.locked) throw new Error("That button is handled by the remote itself and can't be changed here.");
   return row;
 }
 
@@ -640,8 +640,8 @@ function newMap(config, activityId, alloc, remote = TOUCH_REMOTE) {
   const sibling = siblingMap(config, remote);
   if (!sibling) {
     throw new Error(remote === SMART_CONTROL_REMOTE
-      ? "This hub has no Smart Control keys to model new ones on."
-      : "This hub has no Harmony Touch screen to add buttons to.");
+      ? "This hub has no keys for this remote to model new ones on."
+      : "This hub has no remote with a screen to add buttons to.");
   }
   return {
     "ButtonMapId-": alloc.mapId(),
@@ -749,7 +749,7 @@ export function buildTouchControlsMapList(config, edits, { now = Date.now(), rem
   const gestureEdits = edits?.gestures ?? null;
   const twinEdits = edits?.twin?.rows ? edits.twin : null;
   const activityId = softDraft.activityId ?? hardEdits?.activityId ?? gestureEdits?.activityId;
-  if (!activityId) throw new Error("No activity for this Touch screen.");
+  if (!activityId) throw new Error("No activity for this screen.");
   if (!(config?.activityList?.Activities ?? []).some((a) => String(a?.["Id-"]) === activityId)) {
     throw new Error("This activity isn't on the hub any more.");
   }
@@ -875,7 +875,7 @@ export function buildTouchControlsMapList(config, edits, { now = Date.now(), rem
   if (errors.length) {
     throw new Error(remote === SMART_CONTROL_REMOTE
       ? `The new keys would not load on the hub: ${errors[0]}`
-      : `The new screen would not load on the Touch: ${errors[0]}`);
+      : `The new screen would not load on the remote: ${errors[0]}`);
   }
   return mapList;
 }
