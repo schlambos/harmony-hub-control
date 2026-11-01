@@ -76,6 +76,7 @@ export function createActivitiesHomeView(section) {
             <h3 class="run-card-name">${escapeHtml(name)}</h3>
             <p class="run-card-meta">${escapeHtml(deviceNamesFor(a, devices).join(" · "))}</p>
           </div>
+          <a class="icon-btn" href="#touch/${encodeURIComponent(id)}" aria-label="On-screen buttons for ${escapeHtml(name)}" title="On-screen buttons">${icon("tune_outlined")}</a>
           <a class="icon-btn" href="#wizard/${encodeURIComponent(id)}" aria-label="Edit ${escapeHtml(name)}" title="Edit">${icon("edit_outlined")}</a>
         </div>
         <div class="run-card-actions">
