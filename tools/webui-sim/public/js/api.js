@@ -96,6 +96,18 @@ export function saveDeviceScreen({ deviceId, remove = false }) {
   });
 }
 
+// The hub's RF remotes: { pairing } while a pairing window is open, else
+// { reply } with hal's raw rf.info answer (remotes-model.js parses it).
+export function getRemotes() {
+  return request("/api/remotes");
+}
+
+// Open the hub's pairing window and wait for it to close (up to `seconds`
+// plus a little). Answers with the slot table from before and after.
+export function pairRemote({ seconds }) {
+  return request("/api/remote-pair", { method: "POST", body: { seconds } });
+}
+
 export function importCatalog({ deviceId, commands }) {
   return request("/api/catalog-import", {
     method: "POST",

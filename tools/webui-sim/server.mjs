@@ -454,6 +454,61 @@ const MAX_CANCELED_RUNS = 64;
 const canceledRuns = new Set();
 let captureArmed = false;
 
+/* RF remotes (GET /api/remotes, POST /api/remote-pair). The sim starts with
+   a Smart Control in slot 1 and a Touch in slot 2, with made-up radio IDs.
+   A pairing window lasts a few seconds here; then a new Smart Control joins
+   the first free slot and, as hal does, the older one of its kind goes. */
+const SIM_PAIR_MS = 3000;
+let simRemotes = [];
+let simPairing = false;
+let simNextRfid = 3000000001;
+
+function resetSimRemotes() {
+  simRemotes = [
+    { EquadID: "16414", SkinId: "", DeviceIndex: "1", RFID: "1000000001" },
+    { EquadID: "16417", SkinId: "99", DeviceIndex: "2", RFID: "2000000001" }
+  ];
+  simPairing = false;
+}
+
+function simRfInfo() {
+  return JSON.stringify({
+    id: 1,
+    data: { EquadID: "34827", RFID: "9000000001", Devices: simRemotes, DeviceCount: simRemotes.length },
+    code: 200
+  });
+}
+
+async function handleRemotePair(res, params) {
+  if (simPairing) {
+    sendJson(res, 409, { ok: false, pairing: true, error: "A pairing window is already open on the hub." });
+    return;
+  }
+  const seconds = Math.min(120, Math.max(10, Number(params.seconds) || 60));
+  const before = simRfInfo();
+  simPairing = true;
+  const started = Date.now();
+  await new Promise((resolve) => setTimeout(resolve, SIM_PAIR_MS));
+  const used = new Set(simRemotes.map((r) => r.DeviceIndex));
+  let slot = 1;
+  while (used.has(String(slot))) slot += 1;
+  const joined = { EquadID: "16414", SkinId: "", DeviceIndex: String(slot), RFID: String(simNextRfid++) };
+  simRemotes = simRemotes.filter((r) => r.EquadID !== joined.EquadID);
+  simRemotes.push(joined);
+  simRemotes.sort((a, b) => Number(a.DeviceIndex) - Number(b.DeviceIndex));
+  simPairing = false;
+  logEvent({ kind: "remote-pair", message: `Smart Control paired in slot ${slot}` });
+  sendJson(res, 200, {
+    ok: true,
+    seconds,
+    elapsedMs: Date.now() - started,
+    pairCode: 200,
+    pair: JSON.stringify({ id: 1, data: { ...joined }, code: 200 }),
+    before,
+    after: simRfInfo()
+  });
+}
+
 // safe_label(): non-empty, no control characters, no '"' or backslash. It
 // has no length limit of its own: form_value() already cut the field to its
 // buffer (formFields below).
@@ -1199,6 +1254,7 @@ async function handleApi(req, res, pathname, url) {
     case "POST /api/sim/reset": {
       try {
         loadFixture();
+        resetSimRemotes();
         state.events.length = 0;
         captureArmed = false;
         canceledRuns.clear();
@@ -1208,6 +1264,12 @@ async function handleApi(req, res, pathname, url) {
       }
       return;
     }
+    case "GET /api/remotes":
+      sendJson(res, 200, simPairing ? { ok: true, pairing: true } : { ok: true, pairing: false, reply: simRfInfo() });
+      return;
+    case "POST /api/remote-pair":
+      await handleRemotePair(res, params);
+      return;
     case "GET /api/bt-call":
     case "POST /api/bt-call":
       sendJson(res, 200, { ok: true, action: String(params.action || ""), reply: "sim stub: no bluetooth hardware" });
@@ -1263,7 +1325,8 @@ async function handleApi(req, res, pathname, url) {
         update: { protocol: 0 },
         features: [
           "activity-save", "activity-sync", "catalog-import", "device-commands",
-          "device-screen", "device-settings", "ha-devices", "irdb-import"
+          "device-screen", "device-settings", "ha-devices", "irdb-import",
+          "remote-pair"
         ]
       });
       return;
@@ -1400,6 +1463,7 @@ const server = http.createServer((req, res) => {
 
 try {
   loadFixture();
+  resetSimRemotes();
 } catch (error) {
   console.error(`Failed to load fixture ${FIXTURE_PATH}: ${error.message}`);
   process.exit(1);

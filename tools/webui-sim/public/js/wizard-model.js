@@ -733,7 +733,7 @@ function actionShape(action) {
   return [action.__type, String(action["DeviceId-"] ?? ""), action.CommandName ?? null, action["ActivityId-"] ?? null];
 }
 
-function sameButton(left, right) {
+export function sameButton(left, right) {
   if (!left || !right) return !left && !right;
   return ["ButtonAction", "ButtonLongPressAction", "ButtonDoublePressAction"].every(
     (field) => JSON.stringify(actionShape(left[field])) === JSON.stringify(actionShape(right[field])),
@@ -880,16 +880,46 @@ export async function saveDraft({ config, revision, draft, editId }) {
   return { result, activityId: graph.activityId, name: graph.name };
 }
 
-export async function deleteActivityGraph({ config, revision, id }) {
+const ACTION_FIELDS = ["ButtonAction", "ButtonLongPressAction", "ButtonDoublePressAction"];
+
+/* The three resources without one activity. The hub refuses a MapList that
+   still starts the deleted activity anywhere (a Smart Control activity
+   button, say), so those actions become null. A button left with no action
+   goes, except in a root map: an action-less button in an activity map
+   stops the paired remote, while Logitech's root maps keep empty ones. */
+export function deleteActivityResources(config, id) {
   const activityList = cloneJsonResource(config.activityList ?? { Activities: [] });
   activityList.Activities = (activityList.Activities ?? []).filter(
     (a) => String(a["Id-"]) !== String(id));
   const mapList = cloneJsonResource(config.mapList ?? { ButtonMaps: [] });
   mapList.ButtonMaps = (mapList.ButtonMaps ?? []).filter(
     (m) => String(m?.["ActivityId-"]) !== String(id));
+  for (const map of mapList.ButtonMaps) {
+    if (!Array.isArray(map?.Buttons)) continue;
+    const isRoot = String(map.__type ?? "").includes("RootButtonMap");
+    let changed = false;
+    map.Buttons = map.Buttons.filter((button) => {
+      let cleared = false;
+      for (const field of ACTION_FIELDS) {
+        if (button?.[field] && String(button[field]["ActivityId-"] ?? "") === String(id)) {
+          button[field] = null;
+          cleared = true;
+        }
+      }
+      if (!cleared) return true;
+      changed = true;
+      return isRoot || ACTION_FIELDS.some((field) => button[field]);
+    });
+    if (changed && Object.prototype.hasOwnProperty.call(map, "DateModified")) map.DateModified = harmonyDate();
+  }
   const functionList = cloneJsonResource(config.functionList ?? { FunctionMaps: [] });
   functionList.FunctionMaps = (functionList.FunctionMaps ?? []).filter((m) =>
     !(String(m?.__type ?? "").includes("ActivityFunctionMap") && String(m?.["ActivityId-"]) === String(id)));
+  return { activityList, mapList, functionList };
+}
+
+export async function deleteActivityGraph({ config, revision, id }) {
+  const { activityList, mapList, functionList } = deleteActivityResources(config, id);
   const result = await api.saveActivity({
     baseRevision: revision,
     activityList,

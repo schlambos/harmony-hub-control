@@ -155,13 +155,16 @@ an account.
 ### Remotes
 
 Melodious does its work on the hub, so it's designed for any Harmony remote
-that pairs with the hub. **So far it has been validated on hardware only with
-the Harmony Touch.**
+that pairs with the hub. **It has been validated on hardware with the Harmony
+Touch and the Harmony Smart Control remote, and a user reports that the
+Harmony Elite works.**
 
 | Remote | Status |
 | --- | --- |
 | Harmony Touch | Validated, with stock remote firmware: offline sync, hard keys, on-screen buttons, the number pad, gestures, device screens and press modes. |
-| Other remotes that pair with the hub, such as the Harmony Companion, Ultimate, Elite or 950 | Expected to work, but not yet tested. Features that need a screen apply only to remotes that have one. |
+| Harmony Smart Control remote | Validated, paired next to a Touch: pairing on the hub with no cloud (Settings → Remotes), its keys driving the same devices as the Touch's, and its activity buttons. It keeps no setup of its own; its buttons live on the hub. If it stops responding, take its coin cell out for 10 seconds, then pair it again. |
+| Harmony Elite | Works, per a user report; not yet tested here. |
+| Other remotes that pair with the hub, such as the Harmony Companion, Ultimate or 950 | Expected to work, but not yet tested. Features that need a screen apply only to remotes that have one. |
 | Phones, tablets and computers | The web, Android and macOS apps. |
 
 No remote needs modified firmware. If you run Melodious with another remote,
@@ -432,6 +435,10 @@ so you can bookmark it.
 
 **Settings**
 - **Hub**: whether the hub is connected, and its activity and device counts.
+- **Remotes**: the remotes paired with the hub and a pairing window for one
+  more, with no cloud. The hub keeps one remote of each kind, so a Smart
+  Control joins a Touch but replaces an older Smart Control. Also the Smart
+  Control's activity buttons, and its keys compared with the Touch's.
 - **Bluetooth keyboard**: pairing and saved devices.
 - **MQTT**: the broker, Home Assistant discovery and the topics.
 - **Wi-Fi**: the network the hub joins. Changes take effect after a reboot.

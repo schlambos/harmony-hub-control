@@ -47,7 +47,7 @@ content centred.
 | Remote | `#remote` | "Everything's off" picker, running-activity remote | `#control`, `#home` |
 | Activities | `#activities` | list, setup wizard (`#wizard`), advanced editor (`#editor`) | (unchanged) |
 | Devices | `#devices` | device list, then a device page (remote, commands, settings, learn, import) and the IR tools | `#ir` |
-| Settings | `#settings` | hub status, Bluetooth, MQTT, Wi-Fi, Backup, System | `#bluetooth` `#mqtt` `#wifi` `#backup` `#system`, kept as sub-pages |
+| Settings | `#settings` | hub status, Remotes, Bluetooth, MQTT, Wi-Fi, Backup, System | `#bluetooth` `#mqtt` `#wifi` `#backup` `#system`, kept as sub-pages; `#remotes` is new |
 
 - Sub-pages get the app's top bar (back arrow and title). Back returns to
   the tab they belong to.

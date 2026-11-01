@@ -7792,6 +7792,123 @@ static void render_led_json(int fd, const struct request *req) {
     fclose(f);
 }
 
+/* Harmony RF remotes (Smart Control, Touch, Companion, Smart Keyboard). hal
+ * pairs them on the hub with no cloud: rf.info lists the radio's pairing
+ * slots and rf.pairing opens its pairing window. After a pair hal unpairs any
+ * older remote of the same kind (it keeps one per EquadID), so the pair reply
+ * carries the slot table from before and after the window for the page to
+ * compare. While a window is open nothing here reads rf.info: hal reads the
+ * same slot registers to decide what to unpair, and two readers can take
+ * each other's answers. The lock is inherited by codex_hal_ltcp, so it holds
+ * until the window closes even if this child dies first. */
+#define RF_PAIR_LOCK "/var/run/codex-rf-pair.lock"
+#define RF_PAIR_DEFAULT_SECONDS 60
+#define RF_PAIR_MIN_SECONDS 10
+#define RF_PAIR_MAX_SECONDS 120
+
+/* fd holding the lock, -1 while a window is open, -2 when the lock can't be made. */
+static int rf_pair_lock(void) {
+    int fd = open(RF_PAIR_LOCK, O_RDWR | O_CREAT, 0600);
+    if (fd < 0) return -2;
+    if (flock(fd, LOCK_EX | LOCK_NB) != 0) {
+        close(fd);
+        return -1;
+    }
+    return fd;
+}
+
+static void send_rf_pair_lock_error(int fd, int lock) {
+    FILE *f = send_json_start(fd, lock == -1 ? "409 Conflict" : "500 Internal Server Error");
+    if (!f) return;
+    fputs(lock == -1
+        ? "{\"ok\":false,\"pairing\":true,\"error\":\"A pairing window is already open on the hub.\"}\n"
+        : "{\"ok\":false,\"error\":\"The hub couldn't create its pairing lock.\"}\n", f);
+    fclose(f);
+}
+
+static int read_rf_info(char *out, size_t outlen) {
+    int rc = run_hal_json("rf.info", "{}", 8, out, outlen);
+    return rc == 0 && json_int(out, "code", -1) == 200 ? 0 : -1;
+}
+
+static void render_remotes_json(int fd) {
+    char reply[4096];
+    int lock, ok;
+    FILE *f;
+    lock = rf_pair_lock();
+    if (lock == -1) {
+        f = send_json_start(fd, "200 OK");
+        if (!f) return;
+        fputs("{\"ok\":true,\"pairing\":true}\n", f);
+        fclose(f);
+        return;
+    }
+    if (lock < 0) {
+        send_rf_pair_lock_error(fd, lock);
+        return;
+    }
+    ok = read_rf_info(reply, sizeof(reply)) == 0;
+    close(lock);
+    f = send_json_start(fd, ok ? "200 OK" : "502 Bad Gateway");
+    if (!f) return;
+    fprintf(f, "{\"ok\":%s,\"pairing\":false", ok ? "true" : "false");
+    if (!ok) fputs(",\"error\":\"The hub's radio didn't list its paired remotes.\"", f);
+    fputs(",\"reply\":", f);
+    json_write_string(f, reply[0] ? reply : "no response");
+    fputs("}\n", f);
+    fclose(f);
+}
+
+static void render_remote_pair_json(int fd, const struct request *req) {
+    char before[4096], after[4096], pair[4096], cmd[160];
+    int lock, seconds;
+    long long started, elapsed;
+    FILE *f;
+    seconds = req->body ? json_int(req->body, "seconds", RF_PAIR_DEFAULT_SECONDS) : RF_PAIR_DEFAULT_SECONDS;
+    if (seconds < RF_PAIR_MIN_SECONDS) seconds = RF_PAIR_MIN_SECONDS;
+    if (seconds > RF_PAIR_MAX_SECONDS) seconds = RF_PAIR_MAX_SECONDS;
+    lock = rf_pair_lock();
+    if (lock < 0) {
+        send_rf_pair_lock_error(fd, lock);
+        return;
+    }
+    if (read_rf_info(before, sizeof(before)) != 0) {
+        close(lock);
+        f = send_json_start(fd, "502 Bad Gateway");
+        if (!f) return;
+        fputs("{\"ok\":false,\"error\":\"The hub's radio didn't list its paired remotes, so the pairing window didn't open.\",\"before\":", f);
+        json_write_string(f, before[0] ? before : "no response");
+        fputs("}\n", f);
+        fclose(f);
+        return;
+    }
+    /* codex_hal_ltcp waits as long as it is told for rf.pairing only; give it
+       the window plus room for hal's post-pair clean-up. */
+    snprintf(cmd, sizeof(cmd),
+        "/data/codex/bin/codex_hal_ltcp 'rf.pairing' '{\"timeout\":%d}' %d 2>&1",
+        seconds, seconds + 15);
+    started = hold_now_ms();
+    run_cmd(cmd, pair, sizeof(pair));
+    elapsed = hold_now_ms() - started;
+    sleep(1);
+    if (read_rf_info(after, sizeof(after)) != 0) {
+        sleep(2);
+        read_rf_info(after, sizeof(after));
+    }
+    close(lock);
+    f = send_json_start(fd, "200 OK");
+    if (!f) return;
+    fprintf(f, "{\"ok\":true,\"seconds\":%d,\"elapsedMs\":%lld,\"pairCode\":%d,\"pair\":",
+        seconds, elapsed, json_int(pair, "code", -1));
+    json_write_string(f, pair[0] ? pair : "no response");
+    fputs(",\"before\":", f);
+    json_write_string(f, before);
+    fputs(",\"after\":", f);
+    json_write_string(f, after[0] ? after : "no response");
+    fputs("}\n", f);
+    fclose(f);
+}
+
 /* Cheap state poll.  connect.statedigest?get returns 304 unless the hub's
  * stateVersion has moved past the client's current_version, so the UI can poll
  * this often without a full engine round-trip and re-pull detail only when the
@@ -8939,7 +9056,8 @@ static void render_version_json(int fd) {
         "device-screen",
         "device-settings",
         "ha-devices",
-        "irdb-import"
+        "irdb-import",
+        "remote-pair"
     };
     FILE *f = send_json_start(fd, "200 OK");
     size_t i;
@@ -9788,6 +9906,10 @@ static void handle_client(int client) {
         render_ir_send_json(client, &req);
     } else if (strcmp(req.method, "POST") == 0 && strcmp(req.path, "/api/led") == 0) {
         render_led_json(client, &req);
+    } else if (strcmp(req.method, "GET") == 0 && strcmp(req.path, "/api/remotes") == 0) {
+        render_remotes_json(client);
+    } else if (strcmp(req.method, "POST") == 0 && strcmp(req.path, "/api/remote-pair") == 0) {
+        render_remote_pair_json(client, &req);
     } else if (strcmp(req.method, "POST") == 0 && strcmp(req.path, "/api/ir-test-learned") == 0) {
         render_ir_test_learned_json(client, &req);
     } else if (strcmp(req.method, "POST") == 0 && strcmp(req.path, "/api/ir-batch-send") == 0) {
