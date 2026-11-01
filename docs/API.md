@@ -745,13 +745,25 @@ reports. This is a one-shot edit and the daemon does not repeat it. Run it
 after "Pairing & link" has registered the profile and before the host
 pairs. HAL's next profile registration restores the full record.
 
-The same Android 14 box also stops its whole Bluetooth stack about 10 ms
-after it runs GATT discovery over BR/EDR against the Hub. A Google
-service on the box connects GATT to the newly paired keyboard, the box
-reads the Hub's ATT records from SDP, and its Bluetooth main thread then
-spins without sending a single ATT request. Every Bluetooth device on the
-box stays dead until it reboots. To check whether those records are the
-trigger:
+The same Android 14 box also stopped its whole Bluetooth stack about 10 ms
+after running GATT discovery over BR/EDR against the Hub. A Google
+service on the box (Axel) connects GATT to every newly paired keyboard,
+and the box reads the Hub's ATT records from SDP. Its Bluetooth main
+thread then spun without sending a single ATT request, and every
+Bluetooth device on the box stayed dead until it rebooted. Removing those
+records from SDP prevents it. For the `btkeyboard` profile the same watch
+therefore also removes every record with an ATT protocol element (GATT
+`0x1801` and bluetoothd's 128-bit service), never the HID record. LE GATT
+and bluetoothd's ATT listener are untouched.
+
+bluetoothd registers those records again whenever it starts. The watch
+keeps an idle connection to its SDP socket; when that closes, it checks
+every second for a minute. It does the same for the first minute after
+it starts, and checks at once on every incoming or completed connection.
+The log shows `sdp-hid state=hid=… att=…` lines and
+`sdp-hid bluetoothd-sdp-closed` on a restart.
+
+To inspect or apply this by hand:
 
 ```sh
 /data/codex/bin/codex_bt_pair_agent btkeyboard 10 --sdp-att-check
@@ -759,11 +771,7 @@ trigger:
 ```
 
 `--sdp-att-check` lists every record that an ATT (UUID `0x0007`) search
-returns, with its service class and ATT handle range. `--sdp-att-hide`
-removes the ones with an ATT element (not the HID record) from SDP. LE
-GATT and bluetoothd's ATT listener are untouched. This is a one-shot
-experiment and is undone when bluetoothd restarts, for example at a Hub
-reboot.
+returns, with its service class and ATT handle range.
 
 The WebGUI remote-control endpoint also recognizes DeviceList entries
 whose transport is Bluetooth HID (`Transport: 32`). When one of those

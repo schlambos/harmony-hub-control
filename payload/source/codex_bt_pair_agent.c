@@ -110,6 +110,7 @@ static const char *const hcitool_clients[] = {
 #define SDP_IO_TIMEOUT_MS 700
 #define SDP_CHECK_INTERVAL_SECONDS 30
 #define SDP_BACKOFF_SECONDS 300
+#define SDP_BURST_SECONDS 60
 #define HID_USAGE_PAGE_GENERIC_DEVICE 0x06
 #define HID_USAGE_BATTERY_STRENGTH 0x20
 #define HID_MAX_BLOCKS 32
@@ -1430,7 +1431,8 @@ static int sdp_remove_record(int fd, uint32_t handle, char *err,
  * client sees it.  With apply, removes those that carry an ATT protocol
  * element, except HID records.  Returns the number of such records, or -1.
  */
-static int sdp_att_records(int apply, char *err, size_t errlen) {
+static int sdp_att_records(int apply, int verbose, char *err,
+                           size_t errlen) {
     static unsigned char lists[SDP_MAX_RESPONSE];
     size_t lists_len = 0, header, body, pos, end;
     unsigned int type;
@@ -1474,6 +1476,7 @@ static int sdp_att_records(int apply, char *err, size_t errlen) {
                 return -1;
             }
         }
+        if (!verbose && strcmp(action, "removed") != 0) continue;
         if (info.has_att) {
             printf("pair-agent sdp-att record handle=0x%08lx service=%s att=0x%04x-0x%04x %s\n",
                 (unsigned long)info.handle,
@@ -1486,8 +1489,10 @@ static int sdp_att_records(int apply, char *err, size_t errlen) {
         }
     }
     close(fd);
-    printf("pair-agent sdp-att records=%d gatt-records=%d\n", records,
-        matched);
+    if (verbose) {
+        printf("pair-agent sdp-att records=%d gatt-records=%d\n", records,
+            matched);
+    }
     return matched;
 }
 
@@ -1509,22 +1514,59 @@ static void read_saved_profile(char *out, size_t outlen) {
 }
 
 /*
- * Periodic check from the daemon and the pairing helper.  HAL registers
- * the record again whenever it (re)starts the HID profile, so this keeps
- * looking.  Only the plain btkeyboard profile is touched.  Logs changes of
- * state, not every check, because the log lives in RAM.
+ * Periodic check from the daemon and the pairing helper, for the plain
+ * btkeyboard profile only:
+ *  - HAL registers the HID record again whenever it (re)starts the HID
+ *    profile, so the battery collection can come back;
+ *  - bluetoothd registers its GATT-over-BR/EDR records again whenever it
+ *    starts, and they must be gone before a host connects (see
+ *    sdp_att_records).
+ * It runs every 30 s, at once on every incoming or completed connection,
+ * and every second for a minute after the daemon starts or bluetoothd
+ * restarts.  An idle connection to the SDP socket shows the restart: it
+ * closes when bluetoothd exits.  Logs changes of state, not every check,
+ * because the log lives in RAM.
  */
 struct sdp_watch {
     time_t next_check;
+    time_t burst_until;
+    int monitor_fd;
     int consecutive_patches;
-    char last_state[160];
+    char last_state[200];
 };
+
+static void sdp_watch_init(struct sdp_watch *watch, time_t now) {
+    memset(watch, 0, sizeof(*watch));
+    watch->monitor_fd = -1;
+    watch->burst_until = now + SDP_BURST_SECONDS;
+}
+
+/* Called when the monitor connection is readable: EOF means a restart. */
+static void sdp_watch_monitor_event(struct sdp_watch *watch, time_t now) {
+    unsigned char scratch[64];
+    ssize_t got = read(watch->monitor_fd, scratch, sizeof(scratch));
+
+    if (got > 0 || (got < 0 && (errno == EINTR || errno == EAGAIN))) return;
+    close(watch->monitor_fd);
+    watch->monitor_fd = -1;
+    watch->next_check = 0;
+    watch->burst_until = now + SDP_BURST_SECONDS;
+    printf("pair-agent sdp-hid bluetoothd-sdp-closed\n");
+}
 
 static void sdp_watch_check(struct sdp_watch *watch, const char *profile,
                             time_t now) {
-    char state[160], err[128];
-    int rc, interval = SDP_CHECK_INTERVAL_SECONDS;
+    char state[200], hid[80], att[80], err[128];
+    int rc, patched = 0;
+    int interval = now < watch->burst_until ? 1 : SDP_CHECK_INTERVAL_SECONDS;
 
+    if (watch->monitor_fd < 0) {
+        watch->monitor_fd = sdp_local_open(err, sizeof(err));
+        if (watch->monitor_fd >= 0) {
+            fcntl(watch->monitor_fd, F_SETFL,
+                fcntl(watch->monitor_fd, F_GETFL) | O_NONBLOCK);
+        }
+    }
     if (strcmp(profile, "btkeyboard") != 0) {
         snprintf(state, sizeof(state), "skip profile=%s", profile);
         watch->consecutive_patches = 0;
@@ -1532,25 +1574,37 @@ static void sdp_watch_check(struct sdp_watch *watch, const char *profile,
         rc = sdp_strip_hid(HID_STRIP_BATTERY, SDP_STRIP_APPLY, err,
             sizeof(err));
         if (rc < 0) {
-            snprintf(state, sizeof(state), "error %s", err);
+            snprintf(hid, sizeof(hid), "error(%.60s)", err);
         } else if (rc == 0) {
-            snprintf(state, sizeof(state), "%s",
+            snprintf(hid, sizeof(hid), "%s",
                 err[0] ? "no-hid-record" : "clean");
-            watch->consecutive_patches = 0;
         } else {
-            snprintf(state, sizeof(state), "patched");
-            /*
-             * If the record keeps coming back, the update is not taking
-             * effect; stop rewriting it so often.
-             */
-            if (++watch->consecutive_patches >= 3) {
-                interval = SDP_BACKOFF_SECONDS;
-                snprintf(state, sizeof(state), "patched-repeatedly");
-            }
+            snprintf(hid, sizeof(hid), "patched");
+            patched = 1;
         }
+        rc = sdp_att_records(1, 0, err, sizeof(err));
+        if (rc < 0) {
+            snprintf(att, sizeof(att), "error(%.60s)", err);
+        } else if (rc == 0) {
+            snprintf(att, sizeof(att), "clean");
+        } else {
+            snprintf(att, sizeof(att), "hidden");
+            patched = 1;
+        }
+        if (!patched) {
+            watch->consecutive_patches = 0;
+        } else if (++watch->consecutive_patches >= 3 &&
+                   now >= watch->burst_until) {
+            /*
+             * If records keep coming back outside a restart, the edit
+             * is not taking effect; stop rewriting them so often.
+             */
+            interval = SDP_BACKOFF_SECONDS;
+        }
+        snprintf(state, sizeof(state), "hid=%s att=%s%s", hid, att,
+            interval == SDP_BACKOFF_SECONDS ? " backoff" : "");
     }
-    if (strcmp(state, watch->last_state) != 0 &&
-        strcmp(state, "patched") != 0) {
+    if (strcmp(state, watch->last_state) != 0) {
         printf("pair-agent sdp-hid state=%s\n", state);
     }
     snprintf(watch->last_state, sizeof(watch->last_state), "%s", state);
@@ -1737,7 +1791,7 @@ int main(int argc, char **argv) {
     int fd;
     struct sockaddr_hci address;
     struct hci_filter filter;
-    struct pollfd poll_fd;
+    struct pollfd poll_fds[2];
     time_t deadline;
     time_t paired_at = 0;
     time_t connected_at = 0;
@@ -1766,7 +1820,7 @@ int main(int argc, char **argv) {
 
     setvbuf(stdout, NULL, _IOLBF, 0);
     setvbuf(stderr, NULL, _IOLBF, 0);
-    memset(&sdp_watch, 0, sizeof(sdp_watch));
+    sdp_watch_init(&sdp_watch, time(NULL));
 
     if (sdp_mode) {
         char err[128];
@@ -1777,6 +1831,35 @@ int main(int argc, char **argv) {
                 strcmp(argv[4], "keyboard-only") == 0 ?
                 HID_STRIP_KEYBOARD_ONLY : HID_STRIP_BATTERY);
         }
+        if (strcmp(sdp_mode, "--sdp-watch-test") == 0) {
+            /*
+             * The daemon's SDP watch without HCI, for tests and for
+             * watching a bluetoothd restart by hand.  timeout_seconds is
+             * the run time.
+             */
+            time_t end_at = time(NULL) + timeout_seconds;
+            signal(SIGTERM, on_signal);
+            signal(SIGINT, on_signal);
+            signal(SIGPIPE, SIG_IGN);
+            while (!stop_requested && time(NULL) < end_at) {
+                struct pollfd pfd;
+                time_t now = time(NULL);
+                if (now >= sdp_watch.next_check) {
+                    sdp_watch_check(&sdp_watch, profile, now);
+                }
+                if (sdp_watch.monitor_fd < 0) {
+                    usleep(200000);
+                    continue;
+                }
+                pfd.fd = sdp_watch.monitor_fd;
+                pfd.events = POLLIN;
+                pfd.revents = 0;
+                if (poll(&pfd, 1, 200) > 0 && pfd.revents) {
+                    sdp_watch_monitor_event(&sdp_watch, time(NULL));
+                }
+            }
+            return 0;
+        }
         if (strcmp(sdp_mode, "--sdp-att-check") == 0 ||
             strcmp(sdp_mode, "--sdp-att-hide") == 0) {
             int apply = strcmp(sdp_mode, "--sdp-att-hide") == 0;
@@ -1785,7 +1868,7 @@ int main(int argc, char **argv) {
                     "pair-agent sdp-att only used with the btkeyboard profile\n");
                 return 2;
             }
-            if (sdp_att_records(apply, err, sizeof(err)) < 0) {
+            if (sdp_att_records(apply, 1, err, sizeof(err)) < 0) {
                 fprintf(stderr, "pair-agent sdp-att failed: %s\n", err);
                 return 1;
             }
@@ -1899,9 +1982,9 @@ int main(int argc, char **argv) {
         printf("pair-agent link-key-load-complete count=%d\n", loaded);
     }
 
-    memset(&poll_fd, 0, sizeof(poll_fd));
-    poll_fd.fd = fd;
-    poll_fd.events = POLLIN;
+    memset(poll_fds, 0, sizeof(poll_fds));
+    poll_fds[0].fd = fd;
+    poll_fds[0].events = POLLIN;
     deadline = hid_control_daemon ? 0 : time(NULL) + timeout_seconds;
     printf("pair-agent start profile=%s timeout=%d mode=%s\n",
         profile, timeout_seconds,
@@ -1952,7 +2035,10 @@ int main(int argc, char **argv) {
             }
             next_reconnect_at = now + 4;
         }
-        poll_rc = poll(&poll_fd, 1, 1000);
+        poll_fds[1].fd = sdp_watch.monitor_fd;
+        poll_fds[1].events = POLLIN;
+        poll_fds[1].revents = 0;
+        poll_rc = poll(poll_fds, sdp_watch.monitor_fd >= 0 ? 2 : 1, 1000);
         if (poll_rc < 0) {
             if (errno == EINTR) continue;
             fprintf(stderr, "pair-agent HCI poll failed: %s\n", strerror(errno));
@@ -1960,8 +2046,12 @@ int main(int argc, char **argv) {
             return 1;
         }
         if (poll_rc == 0) continue;
-        if (!(poll_fd.revents & POLLIN)) {
-            fprintf(stderr, "pair-agent HCI poll revents=0x%x\n", poll_fd.revents);
+        if (sdp_watch.monitor_fd >= 0 && poll_fds[1].revents) {
+            sdp_watch_monitor_event(&sdp_watch, time(NULL));
+        }
+        if (!poll_fds[0].revents) continue;
+        if (!(poll_fds[0].revents & POLLIN)) {
+            fprintf(stderr, "pair-agent HCI poll revents=0x%x\n", poll_fds[0].revents);
             close(fd);
             return 1;
         }

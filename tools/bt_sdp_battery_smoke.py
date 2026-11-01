@@ -29,6 +29,7 @@ import subprocess
 import sys
 import tempfile
 import threading
+import time
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 SOURCE = os.path.join(ROOT, "payload", "source", "codex_bt_pair_agent.c")
@@ -243,6 +244,7 @@ class FakeSdpd:
         # uuid16 -> handles a search returns; by default every record is HID
         self.search = search or {0x1124: sorted(self.records)}
         self.removed = []
+        self.conns = []
         self.chunk = chunk
         self.updates = []
         self.errors = []
@@ -262,8 +264,17 @@ class FakeSdpd:
                 conn, _ = self.server.accept()
             except OSError:
                 return
-            with conn:
-                self.session(conn)
+            self.conns.append(conn)
+            threading.Thread(target=self.session_thread, args=(conn,),
+                             daemon=True).start()
+
+    def session_thread(self, conn):
+        try:
+            self.session(conn)
+        except OSError:
+            pass
+        finally:
+            conn.close()
 
     def session(self, conn):
         while True:
@@ -320,7 +331,15 @@ class FakeSdpd:
         return struct.pack(">H", 0)
 
     def close(self):
+        """Like bluetoothd exiting: the listener and every session close."""
         self.server.close()
+        for conn in self.conns:
+            try:
+                conn.shutdown(socket.SHUT_RDWR)
+            except OSError:
+                pass
+        if os.path.exists(self.path):
+            os.unlink(self.path)
 
 
 def check(condition, message):
@@ -454,7 +473,6 @@ def main():
         finally:
             sdpd.close()
 
-        os.unlink(sock_path)
         sdpd = FakeSdpd(sock_path, {0x10000: hub_prefix})
         try:
             out = subprocess.run(exe + ["btkeyboard", "10", "--sdp-hid-check"],
@@ -482,7 +500,6 @@ def main():
 
         # GATT over BR/EDR, as the hub answers an ATT (0x0007) search: its
         # HID record (no ATT element) plus two GATT service records.
-        os.unlink(sock_path)
         gatt = gatt_record(0x10001, 0x1801, 0x0010, 0x0010,
                            "Generic Attribute Profile")
         vendor = gatt_record(0x10002, "830a55485c6623bd0949c0040000227e",
@@ -522,8 +539,62 @@ def main():
         finally:
             sdpd.close()
 
+        # The daemon's watch: it strips the battery collection and hides the
+        # GATT records at start, and again right after bluetoothd restarts
+        # and registers them again.
+        def hub_sdpd():
+            return FakeSdpd(sock_path,
+                            {0x10000: hub_prefix, 0x10001: gatt,
+                             0x10002: vendor},
+                            search={0x1124: [0x10000],
+                                    0x0007: [0x10000, 0x10001, 0x10002]})
+
+        def wait_for(condition, seconds):
+            deadline = time.time() + seconds
+            while time.time() < deadline:
+                if condition():
+                    return True
+                time.sleep(0.05)
+            return False
+
+        sdpd = hub_sdpd()
+        watch = subprocess.Popen(exe + ["btkeyboard", "12", "--sdp-watch-test"],
+                                 stdout=subprocess.PIPE, stderr=subprocess.STDOUT)
+        try:
+            check(wait_for(lambda: set(sdpd.records) == {0x10000} and
+                           sdpd.updates == [0x10000], 3),
+                  "watch did not clean up at start: %r %r" %
+                  (sorted(sdpd.records), sdpd.updates))
+            check(sdpd.records[0x10000] == HUB_RECORD,
+                  "watch left an unexpected HID record")
+            sdpd.close()
+            time.sleep(0.3)
+            sdpd = hub_sdpd()
+            check(wait_for(lambda: set(sdpd.records) == {0x10000} and
+                           sdpd.updates == [0x10000], 3),
+                  "watch did not clean up after a restart: %r %r" %
+                  (sorted(sdpd.records), sdpd.updates))
+            check(not sdpd.errors, "sdpd errors: %r" % sdpd.errors)
+        finally:
+            watch.terminate()
+            out = watch.communicate(timeout=10)[0].decode()
+            sdpd.close()
+        check("bluetoothd-sdp-closed" in out and
+              "state=hid=patched att=hidden" in out and
+              out.count("sdp-att record") == 4, "watch log: " + out)
+
+        sdpd = FakeSdpd(sock_path, {0x10000: hub_prefix, 0x10001: gatt},
+                        search={0x1124: [0x10000],
+                                0x0007: [0x10000, 0x10001]})
+        try:
+            out = subprocess.run(exe + ["fire", "3", "--sdp-watch-test"],
+                                 capture_output=True, check=True).stdout.decode()
+            check("state=skip profile=fire" in out and not sdpd.updates and
+                  not sdpd.removed, "watch must skip other profiles: " + out)
+        finally:
+            sdpd.close()
+
         # No SDP server at all: a clear error, not a hang.
-        os.unlink(sock_path)
         p = subprocess.run(exe + ["btkeyboard", "10", "--sdp-hid-check"],
                            capture_output=True, timeout=10)
         check(p.returncode == 1 and b"connect" in p.stderr,
