@@ -102,7 +102,8 @@ static const char *const hcitool_clients[] = {
 #define SDP_UUID_HID 0x1124
 #define SDP_MAX_RESPONSE 8192
 #define SDP_IO_TIMEOUT_MS 700
-#define SDP_CHECK_INTERVAL_SECONDS 3
+#define SDP_CHECK_INTERVAL_SECONDS 30
+#define SDP_BACKOFF_SECONDS 300
 #define HID_USAGE_PAGE_GENERIC_DEVICE 0x06
 #define HID_USAGE_BATTERY_STRENGTH 0x20
 #define HID_MAX_BLOCKS 32
@@ -534,7 +535,7 @@ static int send_hid_input_report_reply(int fd, unsigned int handle,
 }
 
 /*
- * HID battery report removal.
+ * HID descriptor edits in the published SDP record.
  *
  * The btkeyboard descriptor that Logitech's HAL publishes in the SDP
  * HIDDescriptorList (attribute 0x0206) has a top-level collection whose
@@ -549,14 +550,26 @@ static int send_hid_input_report_reply(int fd, unsigned int handle,
  * creates the battery and never asks.  Hosts cache the descriptor when they
  * bond, so a host that bonded earlier must forget the keyboard and pair
  * again.  The GET_REPORT reply stays as a fallback.
+ *
+ * HID_STRIP_KEYBOARD_ONLY is a manual diagnostic: it keeps only the
+ * keyboard, consumer control and system control collections, to find out
+ * whether a host problem follows one of the others (mouse, vendor).
  */
+#define HID_STRIP_BATTERY 1
+#define HID_STRIP_KEYBOARD_ONLY 2
+
+#define HID_APP(page, usage) (((uint32_t)(page) << 16) | (uint32_t)(usage))
+
 struct hid_block {
     size_t start;
     size_t end;
     int closed;
     int seen_collection;
     int application;
+    uint32_t app_usage;         /* usage of the top-level collection */
     int battery;
+    int keyboard_usages;        /* page 0x07 usages inside the collection */
+    int consumer_usages;        /* page 0x0C usages inside the collection */
     int report_id;              /* -1 until the block sets one */
     int mixed_report_ids;
     int output_or_feature;
@@ -567,6 +580,12 @@ struct hid_block {
     unsigned int globals_pre_io;    /* set before the first Input/Output/Feature */
     int seen_local_or_main;
     int seen_io;
+};
+
+struct hid_scan {
+    struct hid_block blocks[HID_MAX_BLOCKS];
+    unsigned int report_id_items[256];
+    size_t count;
 };
 
 static int hid_short_item(const unsigned char *d, size_t len, size_t pos,
@@ -591,23 +610,19 @@ static int hid_short_item(const unsigned char *d, size_t len, size_t pos,
 }
 
 /*
- * Finds a top-level collection that exists only to report battery strength
- * and can be cut out without changing how the rest of the descriptor parses.
- * Returns 1 and the byte range [start, end) if found, 0 if not, and -1 if
- * the descriptor uses something this parser does not model (long items,
+ * Splits a report descriptor into top-level collections ("blocks"), each
+ * with the global and local items in front of it.  Returns 0, or -1 if the
+ * descriptor uses something this parser does not model (long items,
  * Push/Pop, unbalanced collections).
  */
-static int hid_find_battery_block(const unsigned char *d, size_t len,
-                                  size_t *out_start, size_t *out_end,
-                                  unsigned int *out_report_id) {
-    struct hid_block blocks[HID_MAX_BLOCKS];
-    unsigned int report_id_items[256];
+static int hid_scan_blocks(const unsigned char *d, size_t len,
+                           struct hid_scan *scan) {
     struct hid_block *b = NULL;
-    size_t count = 0, pos = 0, i;
-    uint32_t usage_page = 0;
+    uint32_t usage_page = 0, last_usage = 0;
+    size_t pos = 0;
     int depth = 0;
 
-    memset(report_id_items, 0, sizeof(report_id_items));
+    memset(scan, 0, sizeof(*scan));
     while (pos < len) {
         unsigned int type, tag;
         uint32_t value;
@@ -617,9 +632,8 @@ static int hid_find_battery_block(const unsigned char *d, size_t len,
             return -1;
         }
         if (!b) {
-            if (count >= HID_MAX_BLOCKS) return -1;
-            b = &blocks[count++];
-            memset(b, 0, sizeof(*b));
+            if (scan->count >= HID_MAX_BLOCKS) return -1;
+            b = &scan->blocks[scan->count++];
             b->start = pos;
             b->report_id = -1;
         }
@@ -631,7 +645,7 @@ static int hid_find_battery_block(const unsigned char *d, size_t len,
             if (tag == 0x00) usage_page = value;
             if (tag == 0x08) {
                 if (value == 0 || value > 0xff) return -1;
-                report_id_items[value]++;
+                scan->report_id_items[value]++;
                 b->report_id_items++;
                 if (b->report_id < 0) b->report_id = (int)value;
                 else if (b->report_id != (int)value) b->mixed_report_ids = 1;
@@ -640,6 +654,13 @@ static int hid_find_battery_block(const unsigned char *d, size_t len,
             uint32_t page = item_len == 5 ? value >> 16 : usage_page;
             uint32_t usage = item_len == 5 ? value & 0xffff : value;
             b->seen_local_or_main = 1;
+            if (tag <= 0x02) { /* Usage, Usage Minimum, Usage Maximum */
+                if (tag == 0x00) last_usage = HID_APP(page, usage);
+                if (b->seen_collection) {
+                    if (page == 0x07) b->keyboard_usages = 1;
+                    if (page == 0x0c) b->consumer_usages = 1;
+                }
+            }
             if (tag == 0x00 && page == HID_USAGE_PAGE_GENERIC_DEVICE &&
                 usage == HID_USAGE_BATTERY_STRENGTH) {
                 b->battery = 1;
@@ -650,6 +671,7 @@ static int hid_find_battery_block(const unsigned char *d, size_t len,
                 if (depth == 0 && !b->seen_collection) {
                     b->seen_collection = 1;
                     b->application = value == 0x01;
+                    b->app_usage = last_usage;
                 }
                 depth++;
             } else if (tag == 0x0c) { /* End Collection */
@@ -672,30 +694,73 @@ static int hid_find_battery_block(const unsigned char *d, size_t len,
         } else {
             return -1;
         }
+        /* Local items apply to the next main item only. */
+        if (type == 0) last_usage = 0;
         pos += item_len;
     }
     if (depth != 0) return -1;
     if (b) b->end = len;
-    if (count < 2) return 0;
+    return 0;
+}
 
-    for (i = 0; i < count; i++) {
-        const struct hid_block *c = &blocks[i];
-        if (!c->closed || !c->application || !c->battery ||
-            c->report_id < 0 || c->mixed_report_ids ||
-            c->output_or_feature || c->inputs == 0 ||
-            report_id_items[c->report_id] != c->report_id_items) {
+static int hid_block_is_keyboard_side(const struct hid_block *b) {
+    return b->application &&
+        (((b->app_usage == HID_APP(0x01, 0x06) ||
+           b->app_usage == HID_APP(0x01, 0x07)) && b->keyboard_usages) ||
+         (b->app_usage == HID_APP(0x0c, 0x01) && b->consumer_usages) ||
+         b->app_usage == HID_APP(0x01, 0x80));
+}
+
+static int hid_block_policy_removes(const struct hid_block *b, int policy) {
+    if (policy == HID_STRIP_KEYBOARD_ONLY) return !hid_block_is_keyboard_side(b);
+    /* A collection that exists only to report battery strength. */
+    return b->application && b->battery && !b->output_or_feature &&
+        b->inputs > 0;
+}
+
+/*
+ * Can block i be cut without changing how the rest parses?  It needs one
+ * report ID of its own, and global items persist into the next collection,
+ * so the next one must set again every global the block changed: the
+ * usage page before its first usage, the rest before its first field.
+ */
+static int hid_block_cut_safe(const struct hid_scan *scan, size_t i) {
+    const struct hid_block *c = &scan->blocks[i];
+
+    if (!c->closed || c->report_id < 0 || c->mixed_report_ids ||
+        scan->report_id_items[c->report_id] != c->report_id_items) {
+        return 0;
+    }
+    if (i + 1 < scan->count) {
+        const struct hid_block *n = &scan->blocks[i + 1];
+        if ((c->globals_set & 1U) && !(n->globals_pre_local & 1U)) return 0;
+        if ((c->globals_set & ~1U) & ~n->globals_pre_io) return 0;
+    }
+    return 1;
+}
+
+/*
+ * Finds the first collection the policy removes and that can be cut
+ * safely.  Returns 1 and the byte range [start, end), 0 if there is none,
+ * -1 if the descriptor cannot be parsed.  At least one keyboard-side
+ * collection always stays.
+ */
+static int hid_find_strip_block(const unsigned char *d, size_t len,
+                                int policy, size_t *out_start,
+                                size_t *out_end, unsigned int *out_report_id) {
+    static struct hid_scan scan;
+    size_t i, kept = 0;
+
+    if (hid_scan_blocks(d, len, &scan) != 0) return -1;
+    for (i = 0; i < scan.count; i++) {
+        if (hid_block_is_keyboard_side(&scan.blocks[i])) kept++;
+    }
+    if (kept == 0) return 0;
+    for (i = 0; i < scan.count; i++) {
+        const struct hid_block *c = &scan.blocks[i];
+        if (!hid_block_policy_removes(c, policy) ||
+            !hid_block_cut_safe(&scan, i)) {
             continue;
-        }
-        /*
-         * Global items persist into the next collection.  Only cut the
-         * block if the next one sets again every global the block changed
-         * (the usage page before its first usage, the rest before its
-         * first report field), so its meaning cannot change.
-         */
-        if (i + 1 < count) {
-            const struct hid_block *n = &blocks[i + 1];
-            if ((c->globals_set & 1U) && !(n->globals_pre_local & 1U)) continue;
-            if ((c->globals_set & ~1U) & ~n->globals_pre_io) continue;
         }
         *out_start = c->start;
         *out_end = c->end;
@@ -703,6 +768,33 @@ static int hid_find_battery_block(const unsigned char *d, size_t len,
         return 1;
     }
     return 0;
+}
+
+/* Prints the descriptor's collections and what each policy would do. */
+static void hid_print_blocks(const unsigned char *d, size_t len) {
+    static struct hid_scan scan;
+    size_t i;
+
+    if (hid_scan_blocks(d, len, &scan) != 0) {
+        printf("pair-agent sdp-hid descriptor-unparsed len=%u\n",
+            (unsigned int)len);
+        return;
+    }
+    for (i = 0; i < scan.count; i++) {
+        const struct hid_block *b = &scan.blocks[i];
+        int safe = hid_block_cut_safe(&scan, i);
+        printf("pair-agent sdp-hid collection=%u offset=%u bytes=%u usage=%04lx:%04lx report=0x%02x%s battery-policy=%s keyboard-only=%s\n",
+            (unsigned int)i, (unsigned int)b->start,
+            (unsigned int)(b->end - b->start),
+            (unsigned long)(b->app_usage >> 16),
+            (unsigned long)(b->app_usage & 0xffff),
+            b->report_id < 0 ? 0 : (unsigned int)b->report_id,
+            b->mixed_report_ids ? "+mixed" : "",
+            hid_block_policy_removes(b, HID_STRIP_BATTERY) ?
+                (safe ? "remove" : "unsafe") : "keep",
+            hid_block_policy_removes(b, HID_STRIP_KEYBOARD_ONLY) ?
+                (safe ? "remove" : "unsafe") : "keep");
+    }
 }
 
 /* SDP data element header: type, size index, header length, data length. */
@@ -777,20 +869,23 @@ static void sdp_element_shrink(unsigned char *p, size_t removed) {
 struct sdp_strip_result {
     uint32_t handle;
     int have_handle;
-    unsigned int report_id;
-    size_t removed;
+    unsigned int collections;   /* collections removed */
+    char report_ids[64];        /* their report IDs, "0xac,0x02" */
+    size_t removed;             /* bytes removed */
     int descriptors;
 };
 
 /*
  * rec is one service record: a sequence of (uint16 attribute id, value)
  * pairs, as a ServiceSearchAttributeResponse returns it and as
- * SDP_SVC_UPDATE_REQ takes it.  Removes the first battery-only collection
- * from the HIDDescriptorList.  Returns 1 if removed, 0 if there is none,
- * -1 if the record is malformed, -2 if a descriptor cannot be parsed.
+ * SDP_SVC_UPDATE_REQ takes it.  Removes the collections the policy picks
+ * from the HIDDescriptorList.  Returns 1 if any were removed, 0 if there
+ * are none, -1 if the record is malformed, -2 if a descriptor cannot be
+ * parsed.  verbose prints each descriptor's collections first.
  */
-static int sdp_record_strip_hid_battery(unsigned char *rec, size_t *rec_len,
-                                        struct sdp_strip_result *result) {
+static int sdp_record_strip_hid(unsigned char *rec, size_t *rec_len,
+                                int policy, int verbose,
+                                struct sdp_strip_result *result) {
     unsigned int type;
     size_t header, body, pos, end;
     int unparsed = 0;
@@ -851,23 +946,32 @@ static int sdp_record_strip_hid_battery(unsigned char *rec, size_t *rec_len,
                         int found;
 
                         result->descriptors++;
-                        found = hid_find_battery_block(desc, item_len,
-                            &cut_start, &cut_end, &report_id);
-                        if (found < 0) unparsed = 1;
-                        if (found > 0) {
+                        if (verbose) hid_print_blocks(desc, item_len);
+                        while ((found = hid_find_strip_block(desc, item_len,
+                                policy, &cut_start, &cut_end,
+                                &report_id)) > 0) {
+                            size_t used = strlen(result->report_ids);
                             if (!result->have_handle) return -1;
                             removed = cut_end - cut_start;
                             memmove(desc + cut_start, desc + cut_end,
                                 *rec_len - (size_t)(desc + cut_end - rec));
                             *rec_len -= removed;
+                            item_len -= removed;
+                            item_end -= removed;
+                            list_end -= removed;
+                            end -= removed;
                             sdp_element_shrink(rec + item_pos, removed);
                             sdp_element_shrink(rec + list_pos, removed);
                             sdp_element_shrink(rec + value_pos, removed);
                             sdp_element_shrink(rec, removed);
-                            result->report_id = report_id;
-                            result->removed = removed;
-                            return 1;
+                            value_len -= removed;
+                            result->collections++;
+                            result->removed += removed;
+                            snprintf(result->report_ids + used,
+                                sizeof(result->report_ids) - used,
+                                "%s0x%02x", used ? "," : "", report_id);
                         }
+                        if (found < 0) unparsed = 1;
                     }
                     item_pos += item_header + item_len;
                 }
@@ -876,6 +980,7 @@ static int sdp_record_strip_hid_battery(unsigned char *rec, size_t *rec_len,
         }
         pos = value_pos + value_header + value_len;
     }
+    if (result->collections) return 1;
     return unparsed ? -2 : 0;
 }
 
@@ -1081,11 +1186,11 @@ static int sdp_update_record(int fd, uint32_t handle,
 
 /*
  * Checks every HID record in the local SDP database and, with
- * SDP_STRIP_APPLY, rewrites the ones that carry a battery-only collection.
- * Returns the number of records stripped (or, without APPLY, that would
- * be), or -1 with a reason in err.
+ * SDP_STRIP_APPLY, rewrites the ones that carry collections the policy
+ * removes.  Returns the number of records stripped (or, without APPLY,
+ * that would be), or -1 with a reason in err.
  */
-static int sdp_strip_hid_battery(int flags, char *err, size_t errlen) {
+static int sdp_strip_hid(int policy, int flags, char *err, size_t errlen) {
     static unsigned char lists[SDP_MAX_RESPONSE];
     static unsigned char rec[SDP_MAX_RESPONSE];
     size_t lists_len = 0, header, body, pos, end;
@@ -1123,15 +1228,18 @@ static int sdp_strip_hid_battery(int flags, char *err, size_t errlen) {
         memcpy(rec, lists + pos, rec_len);
         pos += rec_len;
         records++;
-        stripped = sdp_record_strip_hid_battery(rec, &rec_len, &result);
+        if (flags & SDP_STRIP_VERBOSE) {
+            print_hex("pair-agent sdp-hid record-hex ", rec, rec_len);
+        }
+        stripped = sdp_record_strip_hid(rec, &rec_len, policy,
+            flags & SDP_STRIP_VERBOSE, &result);
         if (flags & SDP_STRIP_VERBOSE) {
             printf("pair-agent sdp-hid record=%d handle=0x%08lx descriptors=%d result=%s\n",
                 records, (unsigned long)result.handle, result.descriptors,
-                stripped > 0 ? "battery-collection" :
+                stripped > 0 ? (policy == HID_STRIP_BATTERY ?
+                    "battery-collection" : "removable-collections") :
                 (stripped == 0 ? "clean" :
                 (stripped == -2 ? "descriptor-unparsed" : "malformed")));
-            print_hex("pair-agent sdp-hid record-hex ",
-                lists + pos - (rec_header + rec_body), rec_header + rec_body);
         }
         if (stripped == -1) {
             snprintf(err, errlen, "malformed HID record %d", records);
@@ -1140,8 +1248,9 @@ static int sdp_strip_hid_battery(int flags, char *err, size_t errlen) {
         }
         if (stripped <= 0) continue;
         if (flags & SDP_STRIP_VERBOSE) {
-            printf("pair-agent sdp-hid would-remove report=0x%02x bytes=%u\n",
-                result.report_id, (unsigned int)result.removed);
+            printf("pair-agent sdp-hid would-remove report=%s collections=%u bytes=%u\n",
+                result.report_ids, result.collections,
+                (unsigned int)result.removed);
             print_hex("pair-agent sdp-hid patched-hex ", rec, rec_len);
         }
         if (flags & SDP_STRIP_APPLY) {
@@ -1150,8 +1259,10 @@ static int sdp_strip_hid_battery(int flags, char *err, size_t errlen) {
                 close(fd);
                 return -1;
             }
-            printf("pair-agent sdp-hid battery-report-removed handle=0x%08lx report=0x%02x bytes=%u\n",
-                (unsigned long)result.handle, result.report_id,
+            printf("pair-agent sdp-hid %s handle=0x%08lx report=%s bytes=%u\n",
+                policy == HID_STRIP_BATTERY ? "battery-report-removed" :
+                "collections-removed",
+                (unsigned long)result.handle, result.report_ids,
                 (unsigned int)result.removed);
         }
         changed++;
@@ -1201,7 +1312,8 @@ static void sdp_watch_check(struct sdp_watch *watch, const char *profile,
         snprintf(state, sizeof(state), "skip profile=%s", profile);
         watch->consecutive_patches = 0;
     } else {
-        rc = sdp_strip_hid_battery(SDP_STRIP_APPLY, err, sizeof(err));
+        rc = sdp_strip_hid(HID_STRIP_BATTERY, SDP_STRIP_APPLY, err,
+            sizeof(err));
         if (rc < 0) {
             snprintf(state, sizeof(state), "error %s", err);
         } else if (rc == 0) {
@@ -1212,10 +1324,10 @@ static void sdp_watch_check(struct sdp_watch *watch, const char *profile,
             snprintf(state, sizeof(state), "patched");
             /*
              * If the record keeps coming back, the update is not taking
-             * effect; stop rewriting it every few seconds.
+             * effect; stop rewriting it so often.
              */
             if (++watch->consecutive_patches >= 3) {
-                interval = 60;
+                interval = SDP_BACKOFF_SECONDS;
                 snprintf(state, sizeof(state), "patched-repeatedly");
             }
         }
@@ -1240,7 +1352,7 @@ static int hex_value(int c) {
  * result.  Lets a captured record be checked on a PC, and drives the
  * host-side test.
  */
-static int sdp_filter_stdin(void) {
+static int sdp_filter_stdin(int policy) {
     static unsigned char rec[SDP_MAX_RESPONSE];
     struct sdp_strip_result result;
     size_t len = 0;
@@ -1264,7 +1376,7 @@ static int sdp_filter_stdin(void) {
         fprintf(stderr, "odd number of hex digits\n");
         return 1;
     }
-    rc = sdp_record_strip_hid_battery(rec, &len, &result);
+    rc = sdp_record_strip_hid(rec, &len, policy, 0, &result);
     if (rc == -1) {
         printf("malformed\n");
         return 1;
@@ -1277,8 +1389,8 @@ static int sdp_filter_stdin(void) {
         printf("clean\n");
         return 0;
     }
-    printf("removed handle=0x%08lx report=0x%02x bytes=%u\n",
-        (unsigned long)result.handle, result.report_id,
+    printf("removed handle=0x%08lx report=%s bytes=%u\n",
+        (unsigned long)result.handle, result.report_ids,
         (unsigned int)result.removed);
     print_hex("", rec, len);
     return 0;
@@ -1444,18 +1556,24 @@ int main(int argc, char **argv) {
         int rc;
 
         if (strcmp(sdp_mode, "--sdp-hid-filter") == 0) {
-            return sdp_filter_stdin();
+            return sdp_filter_stdin(argc > 4 &&
+                strcmp(argv[4], "keyboard-only") == 0 ?
+                HID_STRIP_KEYBOARD_ONLY : HID_STRIP_BATTERY);
         }
         if (strcmp(sdp_mode, "--sdp-hid-check") == 0) {
-            rc = sdp_strip_hid_battery(SDP_STRIP_VERBOSE, err, sizeof(err));
-        } else if (strcmp(sdp_mode, "--sdp-hid-strip-battery") == 0) {
+            rc = sdp_strip_hid(HID_STRIP_BATTERY, SDP_STRIP_VERBOSE,
+                err, sizeof(err));
+        } else if (strcmp(sdp_mode, "--sdp-hid-strip-battery") == 0 ||
+                   strcmp(sdp_mode, "--sdp-hid-keyboard-only") == 0) {
             if (strcmp(profile, "btkeyboard") != 0) {
                 fprintf(stderr,
                     "pair-agent sdp-hid only the btkeyboard profile is patched\n");
                 return 2;
             }
-            rc = sdp_strip_hid_battery(SDP_STRIP_APPLY | SDP_STRIP_VERBOSE,
-                err, sizeof(err));
+            rc = sdp_strip_hid(
+                strcmp(sdp_mode, "--sdp-hid-keyboard-only") == 0 ?
+                HID_STRIP_KEYBOARD_ONLY : HID_STRIP_BATTERY,
+                SDP_STRIP_APPLY | SDP_STRIP_VERBOSE, err, sizeof(err));
         } else {
             fprintf(stderr, "unknown mode: %s\n", sdp_mode);
             return 2;
@@ -1464,7 +1582,9 @@ int main(int argc, char **argv) {
             fprintf(stderr, "pair-agent sdp-hid failed: %s\n", err);
             return 1;
         }
-        printf("pair-agent sdp-hid records-with-battery-collection=%d%s\n",
+        printf("pair-agent sdp-hid records-%s=%d%s\n",
+            strcmp(sdp_mode, "--sdp-hid-keyboard-only") == 0 ?
+            "trimmed-to-keyboard" : "with-battery-collection",
             rc, err[0] ? " (no HID record registered)" : "");
         return 0;
     }
@@ -1766,6 +1886,8 @@ int main(int argc, char **argv) {
             char peer[24];
             format_addr(payload + 3, peer, sizeof(peer));
             printf("pair-agent connection-complete peer=%s status=%u\n", peer, payload[0]);
+            /* Hub-initiated links never raise a connection request. */
+            sdp_watch.next_check = 0;
             if (payload[0] == 0) {
                 current_connected = 1;
                 connected_at = now;

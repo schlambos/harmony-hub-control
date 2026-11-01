@@ -715,12 +715,13 @@ sole input is Battery Strength. So for the `btkeyboard` profile the daemon,
 and the pairing helper while pairing mode is on, also remove that
 collection from the HID record in the Hub's local SDP database
 (`/var/run/sdp`, BlueZ `SDP_SVC_UPDATE_REQ`). The host then never sees a
-battery and never asks for the report. The check repeats every few
-seconds and on each incoming connection, because HAL registers the record
-again whenever it starts the profile. It only cuts a collection when the
-rest of the descriptor parses the same without it; other profiles are left
-alone. Hosts cache the descriptor when they bond, so a host that bonded
-before this change must forget "Harmony Keyboard" and pair again.
+battery and never asks for the report. The check runs every 30 seconds
+and at once on each incoming or completed connection, because HAL
+registers the record again whenever it starts the profile. It only cuts a
+collection when the rest of the descriptor parses the same without it;
+other profiles are left alone. Hosts cache the descriptor when they bond,
+so a host that bonded before this change must forget "Harmony Keyboard"
+and pair again.
 
 To inspect or apply this by hand on the Hub:
 
@@ -729,10 +730,20 @@ To inspect or apply this by hand on the Hub:
 /data/codex/bin/codex_bt_pair_agent btkeyboard 10 --sdp-hid-strip-battery
 ```
 
-`--sdp-hid-check` prints each HID record, as hex, and what would be
-removed. It changes nothing. The daemon logs to
+`--sdp-hid-check` prints each HID record, as hex, and one line per
+top-level collection: its usage, its report ID, and whether each policy
+would remove it. It changes nothing. The daemon logs to
 `/var/volatile/codex-bt-hid-control.log`, as `sdp-hid state=…` and
 `sdp-hid battery-report-removed …` lines.
+
+For diagnosing a host that misbehaves with the full keyboard,
+`--sdp-hid-keyboard-only` goes further. It keeps only the keyboard
+(report `0x01`), consumer control (`0x03`) and system control (`0x04`)
+collections, and removes the mouse (`0x02`) and the vendor collections
+(`0xAD`, `0xFF`, `0x10`). The host then cannot receive pointer or vendor
+reports. This is a one-shot edit and the daemon does not repeat it. Run it
+after "Pairing & link" has registered the profile and before the host
+pairs. HAL's next profile registration restores the full record.
 
 The WebGUI remote-control endpoint also recognizes DeviceList entries
 whose transport is Bluetooth HID (`Transport: 32`). When one of those

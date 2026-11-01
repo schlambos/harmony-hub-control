@@ -88,7 +88,9 @@ grep -q 'codex-bt-hid-control.pid' \
   "$ROOT/payload/scripts/init.sh"
 grep -q 'codex_bt_pair_agent.c' \
   "$ROOT/build/build_harmony_tools_kali.sh"
-grep -q 'sdp_strip_hid_battery' \
+grep -q 'sdp_strip_hid(' \
+  "$ROOT/payload/source/codex_bt_pair_agent.c"
+grep -q -- '--sdp-hid-keyboard-only' \
   "$ROOT/payload/source/codex_bt_pair_agent.c"
 grep -q 'sdp_watch_check' \
   "$ROOT/payload/source/codex_bt_pair_agent.c"
