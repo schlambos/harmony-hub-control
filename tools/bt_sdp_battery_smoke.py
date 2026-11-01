@@ -53,6 +53,42 @@ VENDOR = bytes.fromhex(
     "0600FF0901A1018510150026FF00750895060901810209019106C0")
 
 
+# The HID record a Homatics Box R 4K Plus read from a Harmony Hub after the
+# battery strip, from its btsnoop log: Logitech's btkeyboard record, handle
+# 0x00010000.  Its descriptor, split by hand into top-level collections:
+HUB_RECORD = bytes.fromhex(
+    "3602100900000a000100000900013503191124090004350d350619010009001135031900"
+    "110900053503191002090006350909656e09006a09010009000935083506191124090100"
+    "09000d350f350d3506190100090013350319001109010025244c6f67697465636820426c"
+    "7565746f6f746820436f72646c657373204b6579626f61726409010125084b6579626f61"
+    "726409010225084c6f676974656368090200090100090201090111090202084009020308"
+    "210902042801090205280109020636012236011f082226011a05010902a10185020901a1"
+    "00050919012908150025017501950881020501093009311601f826ff07750c9502810609"
+    "381581257f750895018106050c0a3802810605091909291015002501950875018102c0c0"
+    "05010906a101850175019508050719e029e7150025018102950175088103950175089103"
+    "95067508150026ff000507190029ff8100c0050c0901a101850375109502150126ff0219"
+    "012aff028160c005010980a1018504150025017501950109828102950175078103c0050c"
+    "0901a10185ad05010906a1020600ff2501750195020a03fe0a04fe810295068103c0c005"
+    "0c0901a10185ff0506150025029501750219242926814075068101c00600ff0901a10185"
+    "1075089506150026ff000901810009019100c00902073508350609040909010009020828"
+    "00090209280009020a280109020b09010009020d280009020e2801")
+HUB_MOUSE = bytes.fromhex(
+    "05010902a10185020901a100050919012908150025017501950881020501093009311601"
+    "f826ff07750c9502810609381581257f750895018106050c0a3802810605091909291015"
+    "002501950875018102c0c0")
+HUB_KEYBOARD = bytes.fromhex(
+    "05010906a101850175019508050719e029e715002501810295017508810395017508910395"
+    "067508150026ff000507190029ff8100c0")
+HUB_CONSUMER = CONSUMER
+HUB_SYSTEM = SYSTEM
+HUB_AD = bytes.fromhex(
+    "050c0901a10185ad05010906a1020600ff2501750195020a03fe0a04fe810295068103c0c0")
+HUB_FF = bytes.fromhex(
+    "050c0901a10185ff0506150025029501750219242926814075068101c0")
+HUB_VENDOR = bytes.fromhex(
+    "0600ff0901a101851075089506150026ff000901810009019100c0")
+
+
 def de(type_, payload, size_index=None):
     """Encode one SDP data element."""
     if type_ in (1, 2, 3, 5):
@@ -147,6 +183,26 @@ def decode(buf, pos=0, end=None):
 RUNNER = shlex.split(os.environ.get("AGENT_RUNNER", ""))
 
 
+def encode(tree):
+    """Re-encode decode() output with minimal length fields, as BlueZ does."""
+    out = b""
+    for t, v in tree:
+        out += de(t, encode(v) if t in (6, 7) else v) if t else b"\x00"
+    return out
+
+
+def replace_descriptor(tree, descriptor):
+    """Copy of a decoded record with its HID descriptor string replaced."""
+    out = []
+    for t, v in tree:
+        if t in (6, 7):
+            v = tuple(replace_descriptor(v, descriptor))
+        elif t == 4 and v[:2] in (b"\x05\x01", b"\x05\x0c"):
+            v = descriptor
+        out.append((t, v))
+    return out
+
+
 def build_agent(cc, workdir, sock_path):
     exe = os.path.join(workdir, "codex_bt_pair_agent")
     subprocess.run(shlex.split(cc) + ["-std=gnu99", "-Wall", "-Wextra", "-O2",
@@ -155,8 +211,9 @@ def build_agent(cc, workdir, sock_path):
     return RUNNER + [exe]
 
 
-def run_filter(exe, record):
-    p = subprocess.run(exe + ["btkeyboard", "10", "--sdp-hid-filter"],
+def run_filter(exe, record, policy=None):
+    p = subprocess.run(exe + ["btkeyboard", "10", "--sdp-hid-filter"] +
+                       ([policy] if policy else []),
                        input=record.hex(":").encode(), capture_output=True,
                        check=True)
     lines = p.stdout.decode().strip().splitlines()
@@ -294,6 +351,44 @@ def main():
             capture_output=True).stdout.decode().strip()
         check(status == "malformed", "truncated record status: " + status)
 
+        # The real hub record.  Restoring the battery collection where HAL
+        # puts it (before system control) and stripping it again must give
+        # back exactly the bytes the box read.
+        hub_desc = (HUB_MOUSE + HUB_KEYBOARD + HUB_CONSUMER + HUB_SYSTEM +
+                    HUB_AD + HUB_FF + HUB_VENDOR)
+        hub_tree = decode(HUB_RECORD)
+        check(encode(hub_tree) == HUB_RECORD, "fixture re-encoding differs")
+        check(replace_descriptor(hub_tree, hub_desc) == hub_tree,
+              "hand split of the hub descriptor is wrong")
+        status, _ = run_filter(exe, HUB_RECORD)
+        check(status == "clean", "hub record after strip: " + status)
+        hub_prefix = encode(replace_descriptor(hub_tree, hub_desc.replace(
+            HUB_SYSTEM, BATTERY + HUB_SYSTEM)))
+        status, patched = run_filter(exe, hub_prefix)
+        check(status == "removed handle=0x00010000 report=0xac bytes=30",
+              "hub record strip status: " + status)
+        check(patched == HUB_RECORD, "hub record strip is not byte-exact")
+
+        # Keyboard-only diagnostic: keyboard, consumer and system control stay.
+        hub_kbd = encode(replace_descriptor(
+            hub_tree, HUB_KEYBOARD + HUB_CONSUMER + HUB_SYSTEM))
+        status, patched = run_filter(exe, HUB_RECORD, "keyboard-only")
+        check(status == "removed handle=0x00010000 report=0x02,0xad,0xff,0x10"
+              " bytes=176", "keyboard-only status: " + status)
+        check(decode(patched) == decode(hub_kbd), "keyboard-only record differs")
+        status, patched = run_filter(exe, hub_prefix, "keyboard-only")
+        check(status.startswith("removed handle=0x00010000 "
+                                "report=0x02,0xac,0xad,0xff,0x10 "),
+              "keyboard-only from pre-fix: " + status)
+        check(decode(patched) == decode(hub_kbd),
+              "keyboard-only from pre-fix differs")
+        status, _ = run_filter(exe, patched, "keyboard-only")
+        check(status == "clean", "keyboard-only second pass: " + status)
+        # A keyboard collection is never removed, even with nothing else left.
+        status, _ = run_filter(exe, hid_record(0x10008, HUB_FF + HUB_AD),
+                               "keyboard-only")
+        check(status == "clean", "no keyboard collection: " + status)
+
         # Against the fake sdpd, with small chunks to force continuations.
         battery_rec = hid_record(0x10001, full)
         other_rec = hid_record(0x10007, clean)
@@ -331,6 +426,32 @@ def main():
         finally:
             sdpd.close()
 
+        os.unlink(sock_path)
+        sdpd = FakeSdpd(sock_path, {0x10000: hub_prefix})
+        try:
+            out = subprocess.run(exe + ["btkeyboard", "10", "--sdp-hid-check"],
+                                 capture_output=True, check=True).stdout.decode()
+            check("report=0x02 battery-policy=keep keyboard-only=remove" in out
+                  and "report=0xac battery-policy=remove" in out
+                  and "report=0x01 battery-policy=keep keyboard-only=keep" in out,
+                  "check mode collection table: " + out)
+            p = subprocess.run(exe + ["fire", "10", "--sdp-hid-keyboard-only"],
+                               capture_output=True)
+            check(p.returncode == 2 and not sdpd.updates,
+                  "keyboard-only must refuse other profiles")
+            out = subprocess.run(
+                exe + ["btkeyboard", "10", "--sdp-hid-keyboard-only"],
+                capture_output=True, check=True).stdout.decode()
+            check("collections-removed handle=0x00010000 "
+                  "report=0x02,0xac,0xad,0xff,0x10" in out and
+                  "records-trimmed-to-keyboard=1" in out,
+                  "keyboard-only mode output: " + out)
+            check(decode(sdpd.records[0x10000]) == decode(hub_kbd),
+                  "sdpd holds an unexpected keyboard-only record")
+            check(not sdpd.errors, "sdpd errors: %r" % sdpd.errors)
+        finally:
+            sdpd.close()
+
         # No SDP server at all: a clear error, not a hang.
         os.unlink(sock_path)
         p = subprocess.run(exe + ["btkeyboard", "10", "--sdp-hid-check"],
@@ -338,7 +459,7 @@ def main():
         check(p.returncode == 1 and b"connect" in p.stderr,
               "missing socket: %r" % p.stderr)
 
-    print("PASS SDP HID battery-collection removal")
+    print("PASS SDP HID battery-collection removal and keyboard-only trim")
 
 
 if __name__ == "__main__":
