@@ -155,6 +155,19 @@ def hid_record(handle, descriptor, desc_size_index=None):
     return seq(*(u16(a) + v for a, v in attrs))
 
 
+def gatt_record(handle, service, start, end, name):
+    """An SDP record for a GATT service over BR/EDR, as bluetoothd makes it."""
+    service_uuid = uuid16(service) if isinstance(service, int) else \
+        de(3, bytes.fromhex(service))
+    return seq(
+        u16(0x0000) + u32(handle),
+        u16(0x0001) + seq(service_uuid),
+        u16(0x0004) + seq(seq(uuid16(0x0100), u16(0x001F)),
+                          seq(uuid16(0x0007), u16(start), u16(end))),
+        u16(0x0005) + seq(uuid16(0x1002)),
+        u16(0x0100) + text(name))
+
+
 def decode(buf, pos=0, end=None):
     """Decode a run of data elements into comparable tuples, strictly."""
     end = len(buf) if end is None else end
@@ -224,9 +237,12 @@ def run_filter(exe, record, policy=None):
 class FakeSdpd:
     """Enough of BlueZ 4 sdpd: search-attr with continuation, update."""
 
-    def __init__(self, path, records, chunk=48):
+    def __init__(self, path, records, chunk=48, search=None):
         self.path = path
         self.records = dict(records)  # handle -> record bytes
+        # uuid16 -> handles a search returns; by default every record is HID
+        self.search = search or {0x1124: sorted(self.records)}
+        self.removed = []
         self.chunk = chunk
         self.updates = []
         self.errors = []
@@ -236,8 +252,9 @@ class FakeSdpd:
         self.thread = threading.Thread(target=self.serve, daemon=True)
         self.thread.start()
 
-    def lists(self):
-        return seq(*(self.records[h] for h in sorted(self.records)))
+    def lists(self, uuid):
+        return seq(*(self.records[h] for h in self.search.get(uuid, [])
+                     if h in self.records))
 
     def serve(self):
         while True:
@@ -265,17 +282,20 @@ class FakeSdpd:
                 rsp_pdu, body = 0x07, self.search_attr(params)
             elif pdu == 0x77:
                 rsp_pdu, body = 0x78, self.update(params)
+            elif pdu == 0x79:
+                rsp_pdu, body = 0x80, self.remove(params)
             else:
                 self.errors.append("unexpected pdu 0x%02x" % pdu)
                 rsp_pdu, body = 0x01, struct.pack(">H", 0x0003)
             conn.sendall(struct.pack(">BHH", rsp_pdu, tid, len(body)) + body)
 
     def search_attr(self, params):
-        assert params[:5] == bytes.fromhex("3503191124"), params.hex()
+        assert params[:3] == bytes.fromhex("350319"), params.hex()
         assert params[7:14] == bytes.fromhex("35050a0000ffff"), params.hex()
+        uuid = struct.unpack(">H", params[3:5])[0]
         cont = params[14:]
         offset = 0 if cont[0] == 0 else struct.unpack(">H", cont[1:3])[0]
-        full = self.lists()
+        full = self.lists(uuid)
         part = full[offset:offset + self.chunk]
         nxt = offset + len(part)
         cstate = b"\x00" if nxt >= len(full) else b"\x02" + struct.pack(">H", nxt)
@@ -289,6 +309,14 @@ class FakeSdpd:
         decode(record)
         self.records[handle] = record
         self.updates.append(handle)
+        return struct.pack(">H", 0)
+
+    def remove(self, params):
+        handle = struct.unpack(">I", params[:4])[0]
+        if handle not in self.records:
+            return struct.pack(">H", 0x0002)
+        del self.records[handle]
+        self.removed.append(handle)
         return struct.pack(">H", 0)
 
     def close(self):
@@ -452,6 +480,48 @@ def main():
         finally:
             sdpd.close()
 
+        # GATT over BR/EDR, as the hub answers an ATT (0x0007) search: its
+        # HID record (no ATT element) plus two GATT service records.
+        os.unlink(sock_path)
+        gatt = gatt_record(0x10001, 0x1801, 0x0010, 0x0010,
+                           "Generic Attribute Profile")
+        vendor = gatt_record(0x10002, "830a55485c6623bd0949c0040000227e",
+                             0xFFF4, 0xFFFE, "Harmony")
+        sdpd = FakeSdpd(sock_path,
+                        {0x10000: HUB_RECORD, 0x10001: gatt, 0x10002: vendor},
+                        search={0x1124: [0x10000],
+                                0x0007: [0x10000, 0x10001, 0x10002]})
+        try:
+            out = subprocess.run(exe + ["btkeyboard", "10", "--sdp-att-check"],
+                                 capture_output=True, check=True).stdout.decode()
+            check("handle=0x00010000 service=1124 att=none keep" in out and
+                  "handle=0x00010001 service=1801 att=0x0010-0x0010 "
+                  "would-remove" in out and
+                  "handle=0x00010002 service=830a55485c6623bd0949c0040000227e "
+                  "att=0xfff4-0xfffe would-remove" in out and
+                  "records=3 gatt-records=2" in out,
+                  "att check output: " + out)
+            check(not sdpd.removed, "att check must not remove")
+            p = subprocess.run(exe + ["fire", "10", "--sdp-att-hide"],
+                               capture_output=True)
+            check(p.returncode == 2 and not sdpd.removed,
+                  "att hide must refuse other profiles")
+            out = subprocess.run(exe + ["btkeyboard", "10", "--sdp-att-hide"],
+                                 capture_output=True, check=True).stdout.decode()
+            check(sdpd.removed == [0x10001, 0x10002] and
+                  "att=0x0010-0x0010 removed" in out,
+                  "att hide: %r %s" % (sdpd.removed, out))
+            check(set(sdpd.records) == {0x10000},
+                  "HID record must survive att hide")
+            out = subprocess.run(exe + ["btkeyboard", "10", "--sdp-att-hide"],
+                                 capture_output=True, check=True).stdout.decode()
+            check("records=1 gatt-records=0" in out and
+                  sdpd.removed == [0x10001, 0x10002],
+                  "second att hide must be a no-op: " + out)
+            check(not sdpd.errors, "sdpd errors: %r" % sdpd.errors)
+        finally:
+            sdpd.close()
+
         # No SDP server at all: a clear error, not a hang.
         os.unlink(sock_path)
         p = subprocess.run(exe + ["btkeyboard", "10", "--sdp-hid-check"],
@@ -459,7 +529,7 @@ def main():
         check(p.returncode == 1 and b"connect" in p.stderr,
               "missing socket: %r" % p.stderr)
 
-    print("PASS SDP HID battery-collection removal and keyboard-only trim")
+    print("PASS SDP HID battery strip, keyboard-only trim and ATT record hide")
 
 
 if __name__ == "__main__":
