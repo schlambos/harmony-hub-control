@@ -644,7 +644,8 @@ Each run:
 | `--no-prompt` | `-NoPrompt` | Fails instead of asking for a missing value. |
 | `--mqtt-broker`, `--mqtt-port`, `--mqtt-user`, `--mqtt-password`, `--mqtt-base-topic`, `--mqtt-discovery-prefix`, `--mqtt-client-id`, `--mqtt-disabled` | `-MqttBroker` … `-MqttDisabled` | Set up the MQTT bridge. Without them, an upgrade keeps the hub's MQTT settings. |
 | `--no-apply-cloud-restart` | `-NoApplyCloudRestart` | Skips the reboot after the cloud-blocker files change. |
-| `--skip-cloud-suppression` | `-SkipCloudSuppression` | Leaves the hub's `netservicestarter.lua` as it is. With a clean install, it also writes the cloud blocker as off. |
+| `--skip-cloud-suppression` | `-SkipCloudSuppression` | Leaves the hub's `netservicestarter.lua` as it is. With a clean install, it also writes the cloud blocker as off. It doesn't undo an install; use `--turn-off` for that. |
+| `--turn-off` | `-TurnOff` | Turns Melodious off and gives the hub back to the Harmony app. See [Turn Melodious off](#turn-melodious-off). |
 | `--remove-root-tool-leftovers` | `-RemoveRootToolLeftovers` | Deletes what harmony-hub-root left behind before installing (see below). |
 | `--skip-flash-check` | `-SkipFlashCheck` | Installs even when the measured free flash looks too small. If flash really runs out, the install still stops with nothing in use changed. |
 
@@ -690,8 +691,10 @@ fit, the run stops with `BLOCKED_CAPACITY` before writing anything.
     that already has Melodious.
   - **Doesn't change:** the hub's settings (the Hub ID, cloud blocker, MQTT)
     and its web routes.
-- **Rolling back.** In PowerShell, `restore_backup.ps1` restores these from
-  the newest handoff backup, then tells you to reboot the hub:
+- **Rolling back an update.** In PowerShell, `restore_backup.ps1` restores
+  these from the newest handoff backup, which holds what the last installer
+  run replaced, then tells you to reboot the hub. It goes back one update. To
+  stop using Melodious, see [Turn Melodious off](#turn-melodious-off).
   - the boot script;
   - `netservicestarter.lua`;
   - the SSH wrappers;
@@ -704,6 +707,47 @@ fit, the run stops with `BLOCKED_CAPACITY` before writing anything.
 - **Docker and Unraid.** The image runs the same installer with settings from
   environment variables, then stays up as a small proxy to the hub's web app.
   See [UNRAID.md](UNRAID.md) and `compose.yaml`.
+
+### Turn Melodious off
+
+To go back to the Harmony app and Logitech's cloud, run the installer with
+`--turn-off`:
+
+```sh
+python3 install_webui.py --hub-host <hub-ip> --turn-off
+```
+
+```powershell
+.\install_webui.ps1 -HubHost <hub-ip> -TurnOff
+```
+
+Before you do, download a backup (Backup → **Download full backup**): the
+Harmony app's copy of your setup replaces the hub's at the next sync.
+
+The installer:
+
+1. Checks that SSH will come back after a restart.
+2. Backs up what it changes to `/data/codex-backups/melodious-off-*`.
+3. Turns the cloud blocker off, so Logitech's cloud tasks start again.
+4. Removes the Touch sync probe from `/etc/hosts` and moves Melodious's two
+   engine plugins out of `/pkg`.
+5. Stops Melodious from starting at boot: `init.sh` is no longer executable,
+   so the boot script skips it.
+6. Restarts the hub and checks that none of Melodious is running.
+
+Then open the Harmony app and sync the hub. Devices and activities you made
+only in Melodious go away.
+
+- **What stays:** Melodious's files, including the SSH wrappers and your key.
+  SSH still works: the hub's own boot script starts it. Nothing of Melodious
+  runs, and the hub's firmware isn't touched.
+- **Preview:** add `--preflight-only` to see what would change; nothing is
+  written.
+- **Turning it back on:** run the installer again without `--turn-off`. It
+  makes `init.sh` executable again, puts the plugins back, turns the cloud
+  blocker on and restarts the hub. If the Harmony app changed the setup,
+  restore your backup on the Backup page. The macOS app won't update a hub
+  that's turned off.
 
 ## How it works
 

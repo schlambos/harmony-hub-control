@@ -12,7 +12,8 @@
 #   when boot scripts or plugins changed.
 #
 #   sh hub_update.sh status <dest>...  one "file <md5|absent> <dest>" line each,
-#                                      then "memfree_kb N" and "hub_id yes|no"
+#                                      then "memfree_kb N", "hub_id yes|no", and
+#                                      "melodious off" if --turn-off turned it off
 #   sh hub_update.sh apply <stage>     <stage>/plan lines:
 #                                      "<md5> <mode> <reboot 0|1> <name> <dest>",
 #                                      files in <stage>/files/<name>; progress and
@@ -45,6 +46,7 @@ status() {
   done
   echo "memfree_kb $(usable_kb)"
   if [ -f /data/codex/hub_id ]; then echo "hub_id yes"; else echo "hub_id no"; fi
+  if [ -f /data/codex/melodious-off ]; then echo "melodious off"; fi
 }
 
 apply() {
@@ -106,6 +108,12 @@ apply() {
   say "STEP checking"
   if [ ! -f /data/codex/hub_id ]; then
     result refused "This hub has no Melodious setup yet (/data/codex/hub_id). Install it once with the installer."
+    return 1
+  fi
+  # An update would bring back Melodious's boot files with the cloud blocker
+  # still off. Turning it back on is the installer's job.
+  if [ -f /data/codex/melodious-off ]; then
+    result refused "Melodious is turned off on this hub. To turn it back on, run the installer."
     return 1
   fi
   while read md5 mode reboot name dest; do

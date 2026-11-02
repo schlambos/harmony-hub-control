@@ -193,6 +193,9 @@ class FakeHub:
             entry = self.fs.get("/data/codex/hub_id")
             return 0, entry["data"].decode("utf-8") if entry else "", ""
 
+        if c == f"[ -f {INST.MELODIOUS_OFF_MARKER} ] && echo off || true":
+            return 0, "off\n" if INST.MELODIOUS_OFF_MARKER in self.fs else "", ""
+
         if c == "cat /proc/meminfo":
             self.events.append(("meminfo",))
             return 0, (
@@ -498,6 +501,7 @@ def prime_current_hub(hub: FakeHub) -> None:
     installer = INST.Installer.__new__(INST.Installer)
     installer.args = INST.parse_args(["--hub-host", FAKE_HUB_HOST])
     installer.hub_id = FAKE_HUB_ID
+    installer.turning_back_on = False
     installer.build_inventory()
     for cand in installer.candidates:
         hub.fs[cand.dest] = {"data": cand.data(), "mode": cand.mode}
@@ -1520,6 +1524,326 @@ class PythonInstallerFileStatus(unittest.TestCase):
             INST.perm_to_mode("drwxr-xr-x")
 
 
+FAKE_MELODIOUS_RCS = b"#!/bin/sh\n# fake melodious rcS.local\n[ -x /data/codex/init.sh ] && /data/codex/init.sh &\n"
+FAKE_MELODIOUS_NSS = b"-- fake melodious netservicestarter\nlocal f = '/data/codex/cloud_blocker.conf'\n"
+FAKE_INIT = b"#!/bin/sh\n# fake melodious init.sh\n"
+FAKE_HOSTS = b"127.0.0.1\tlocalhost\n"
+FAKE_PROBE_LINE = b"127.0.0.1\tping.myharmony.com\t# codex: Harmony Touch sync probe\n"
+NSS_PATH = "/opt/luaworks/tasks/connectserver/netservicestarter.lua"
+RCS_PATH = "/etc/init.d/rcS.local"
+INIT_PATH = "/data/codex/init.sh"
+
+
+class TurnOffTree:
+    """A fake hub root on disk for TURN_OFF_SCRIPT.
+
+    The script runs under the local /bin/sh with CODEX_OFF_ROOT pointing here.
+    """
+
+    def __init__(self) -> None:
+        self.dir = Path(tempfile.mkdtemp(prefix="turn-off-"))
+        self.root = self.dir / "root"
+        self.script = self.dir / "turn_off.sh"
+        self.script.write_text(INST.TURN_OFF_SCRIPT, encoding="utf-8")
+        self.prime()
+
+    def close(self) -> None:
+        for dirpath, _dirs, _files in os.walk(self.dir):
+            os.chmod(dirpath, 0o755)
+        shutil.rmtree(self.dir, ignore_errors=True)
+
+    def put(self, path: str, data: bytes, mode: int = 0o644) -> None:
+        target = self.root / path.lstrip("/")
+        target.parent.mkdir(parents=True, exist_ok=True)
+        target.write_bytes(data)
+        target.chmod(mode)
+
+    def prime(self) -> None:
+        """An installed, running Melodious, as the installer leaves it."""
+        self.put("/data/codex/hub_id", b"1234\n")
+        self.put("/data/codex/cloud_blocker.conf", b"1\n")
+        self.put(INIT_PATH, FAKE_INIT, 0o755)
+        self.put("/data/codex/bin/dropbear", b"fake dropbear\n", 0o755)
+        self.put("/etc/init.d/rcS", (
+            b"if [ -r /etc/tdeenable -a -x /usr/sbin/dropbear ]; then\n"
+            b"    /usr/sbin/dropbear\nfi\n"), 0o755)
+        self.put(RCS_PATH, FAKE_MELODIOUS_RCS, 0o755)
+        self.put("/etc/tdeenable", b"1\n")
+        self.put("/etc/hosts", FAKE_HOSTS + FAKE_PROBE_LINE)
+        self.put("/usr/sbin/dropbear", b'#!/bin/sh\nexec /data/codex/bin/dropbear -K 300 "$@"\n', 0o755)
+        self.put(NSS_PATH, FAKE_MELODIOUS_NSS)
+        for plugin in ("codexactivity", "codexmqtt", "heos"):
+            self.put(f"/pkg/{plugin}/manifest.json", f'{{"plugin":"{plugin}"}}\n'.encode())
+            self.put(f"/pkg/{plugin}/{plugin}.lua", f"-- fake {plugin}\n".encode())
+
+    def read(self, path: str) -> bytes:
+        return (self.root / path.lstrip("/")).read_bytes()
+
+    def mode(self, path: str) -> int:
+        return (self.root / path.lstrip("/")).stat().st_mode & 0o777
+
+    def exists(self, path: str) -> bool:
+        return os.path.lexists(self.root / path.lstrip("/"))
+
+    def snapshot(self, skip: str = "/data/codex-backups") -> dict[str, object]:
+        """Every file under the root with its bytes and mode."""
+        out: dict[str, object] = {}
+        for dirpath, _dirs, files in os.walk(self.root):
+            for name in files:
+                full = os.path.join(dirpath, name)
+                rel = "/" + os.path.relpath(full, self.root)
+                if not rel.startswith(skip + "/"):
+                    out[rel] = (Path(full).read_bytes(), os.stat(full).st_mode & 0o777)
+        return out
+
+    def run(self, mode: str, script: Path | None = None) -> tuple[int, str, str]:
+        env = dict(os.environ, CODEX_OFF_ROOT=str(self.root))
+        proc = subprocess.run(
+            ["/bin/sh", str(script or self.script), mode],
+            capture_output=True, text=True, env=env, timeout=60, check=False,
+        )
+        return proc.returncode, proc.stdout, proc.stderr
+
+
+def script_values(stdout: str) -> dict[str, list[str]]:
+    values: dict[str, list[str]] = {}
+    for line in stdout.splitlines():
+        key, sep, value = line.partition("=")
+        if sep:
+            values.setdefault(key, []).append(value)
+    return values
+
+
+class TurnOffScriptBehavior(unittest.TestCase):
+    """[SHELL BEHAVIORAL] TURN_OFF_SCRIPT itself, run against a fake hub root."""
+
+    def setUp(self):
+        self.tree = TurnOffTree()
+        self.addCleanup(self.tree.close)
+
+    def test_check_reports_everything_and_changes_nothing(self):
+        before = self.tree.snapshot(skip="/nothing")
+        code, out, err = self.tree.run("check")
+        self.assertEqual(code, 0, err or out)
+        v = script_values(out)
+        self.assertEqual(v["cloud_blocker"], ["1"])
+        self.assertEqual(v["starts_at_boot"], ["yes"])
+        self.assertEqual(v["touch_probe"], ["present"])
+        self.assertEqual(v["plugin"], ["codexactivity present", "codexmqtt present"])
+        self.assertEqual(v["marker"], ["absent"])
+        self.assertEqual(v["changes"], ["5"])
+        self.assertEqual(self.tree.snapshot(skip="/nothing"), before)
+
+    def test_apply_disables_melodious_and_keeps_its_files(self):
+        code, out, err = self.tree.run("apply")
+        self.assertEqual(code, 0, err or out)
+        v = script_values(out)
+        self.assertEqual(v["result"], ["off"])
+        backup = v["backup"][0]
+        self.assertRegex(backup, r"^/data/codex-backups/melodious-off-\d{8}-\d{6}$")
+
+        self.assertEqual(self.tree.read("/data/codex/cloud_blocker.conf"), b"0\n")
+        self.assertEqual(self.tree.read(INIT_PATH), FAKE_INIT)
+        self.assertEqual(self.tree.mode(INIT_PATH), 0o644, "init.sh must no longer run at boot")
+        self.assertEqual(self.tree.read("/etc/hosts"), FAKE_HOSTS)
+        self.assertFalse(self.tree.exists("/pkg/codexactivity"))
+        self.assertFalse(self.tree.exists("/pkg/codexmqtt"))
+        self.assertTrue(self.tree.exists("/pkg/heos/heos.lua"), "stock plugins stay")
+        self.assertTrue(self.tree.exists(INST.MELODIOUS_OFF_MARKER))
+        # Nothing of the firmware's or of Melodious's boot files is replaced.
+        self.assertEqual(self.tree.read(RCS_PATH), FAKE_MELODIOUS_RCS)
+        self.assertEqual(self.tree.read(NSS_PATH), FAKE_MELODIOUS_NSS)
+        # SSH comes back through the stock boot path and the kept wrapper.
+        self.assertEqual(self.tree.read("/usr/sbin/dropbear"),
+                         b'#!/bin/sh\nexec /data/codex/bin/dropbear -K 300 "$@"\n')
+        self.assertTrue(self.tree.exists("/data/codex/bin/dropbear"))
+        self.assertTrue(self.tree.exists("/etc/tdeenable"))
+
+        self.assertEqual(self.tree.read(f"{backup}/_data_codex_cloud_blocker.conf"), b"1\n")
+        self.assertEqual(self.tree.read(f"{backup}/_etc_hosts"), FAKE_HOSTS + FAKE_PROBE_LINE)
+        self.assertTrue(self.tree.exists(f"{backup}/pkg/codexactivity/codexactivity.lua"))
+        self.assertEqual([p for p in self.tree.snapshot() if p.endswith(".codex-new")], [])
+
+        code, out, err = self.tree.run("check")
+        self.assertEqual(code, 0, err or out)
+        v = script_values(out)
+        self.assertEqual(v["changes"], ["0"])
+        self.assertEqual(v["starts_at_boot"], ["no"])
+        self.assertEqual(v["marker"], ["present"])
+
+    def assert_refused(self, needle: str):
+        before = self.tree.snapshot(skip="/nothing")
+        for mode in ("check", "apply"):
+            code, out, _err = self.tree.run(mode)
+            self.assertEqual(code, 1, out)
+            self.assertIn(needle, script_values(out)["error"][0])
+        self.assertEqual(self.tree.snapshot(skip="/nothing"), before)
+
+    def test_refuses_when_ssh_would_not_come_back(self):
+        os.remove(self.tree.root / "etc/tdeenable")
+        self.assert_refused("tdeenable")
+
+    def test_refuses_when_the_dropbear_wrapper_points_nowhere(self):
+        os.remove(self.tree.root / "data/codex/bin/dropbear")
+        self.assert_refused("/data/codex/bin/dropbear")
+
+    def test_refuses_a_hub_without_melodious(self):
+        shutil.rmtree(self.tree.root / "data/codex")
+        self.assert_refused("isn't installed")
+
+    def test_blocker_write_failure_changes_nothing(self):
+        """If the blocker can't be written (flash full), nothing else is
+        touched: Melodious still starts at boot with the blocker on."""
+        before = self.tree.snapshot()
+        os.chmod(self.tree.root / "data/codex", 0o555)
+        code, out, _err = self.tree.run("apply")
+        os.chmod(self.tree.root / "data/codex", 0o755)
+        self.assertEqual(code, 1, out)
+        self.assertIn("nothing changed", script_values(out)["error"][0])
+        self.assertEqual(self.tree.snapshot(), before)
+
+
+class TurnOffInstallerFlow(unittest.TestCase):
+    """[PYTHON BEHAVIORAL] install_webui.py --turn-off, with the real script
+    run against a fake hub root in place of SSH."""
+
+    def setUp(self):
+        self.tree = TurnOffTree()
+        self.addCleanup(self.tree.close)
+        self.harness = InstallerHarness(FakeHub())
+        self.addCleanup(self.harness.close)
+        self.commands: list[str] = []
+
+    def run_installer(self, *extra: str) -> tuple[int, str, str]:
+        hub_script = self.tree.dir / "uploaded.sh"
+        commands = self.commands
+        tree = self.tree
+
+        def fake_run_remote_rc(self_installer, command, input_bytes=None, timeout=90):
+            c = command.strip()
+            commands.append(c)
+            if c == "id; uname -a":
+                return 0, "uid=0(root) gid=0(root)\n", ""
+            if c == f"cat > {INST.TURN_OFF_SCRIPT_PATH}":
+                hub_script.write_bytes(input_bytes or b"")
+                return 0, "", ""
+            if c.startswith(f"sh {INST.TURN_OFF_SCRIPT_PATH} "):
+                return tree.run(c.split()[-1], script=hub_script)
+            if c == f"rm -f {INST.TURN_OFF_SCRIPT_PATH}":
+                hub_script.unlink(missing_ok=True)
+                return 0, "", ""
+            if c.startswith("(/bin/sleep 2;"):
+                return 0, "rebooting\n", ""
+            raise AssertionError(f"unexpected command during --turn-off: {c!r}")
+
+        old_rrc = INST.Installer.run_remote_rc
+        old_wait = INST.wait_for_port
+        old_sleep = INST.time.sleep
+        INST.Installer.run_remote_rc = fake_run_remote_rc
+        INST.wait_for_port = lambda host, port, seconds, label: commands.append(f"wait {port}")
+        INST.time.sleep = lambda _seconds: None
+        stdout_buf, stderr_buf = io.StringIO(), io.StringIO()
+        try:
+            with contextlib.redirect_stdout(stdout_buf), contextlib.redirect_stderr(stderr_buf):
+                try:
+                    code = INST.main(["--hub-host", FAKE_HUB_HOST, "--key-path", self.harness.key_path,
+                                      "--turn-off", *extra])
+                except SystemExit as exc:
+                    code = int(exc.code or 0)
+        finally:
+            INST.Installer.run_remote_rc = old_rrc
+            INST.wait_for_port = old_wait
+            INST.time.sleep = old_sleep
+        self.assertFalse(hub_script.exists(), "the script must not stay in the hub's RAM")
+        return code, stdout_buf.getvalue(), stderr_buf.getvalue()
+
+    def modes_run(self) -> list[str]:
+        return [c.split()[-1] for c in self.commands if c.startswith(f"sh {INST.TURN_OFF_SCRIPT_PATH} ")]
+
+    def test_preflight_only_checks_and_changes_nothing(self):
+        before = self.tree.snapshot(skip="/nothing")
+        code, out, err = self.run_installer("--preflight-only", "--no-prompt")
+        self.assertEqual(code, 0, err or out)
+        self.assertEqual(self.modes_run(), ["check"])
+        self.assertFalse(any(c.startswith("(/bin/sleep 2;") for c in self.commands))
+        self.assertIn("changes=5", out)
+        self.assertEqual(self.tree.snapshot(skip="/nothing"), before)
+
+    def test_turn_off_applies_restarts_and_checks_again(self):
+        code, out, err = self.run_installer("--no-prompt")
+        self.assertEqual(code, 0, err or out)
+        self.assertEqual(self.modes_run(), ["check", "apply", "check"])
+        apply_at = self.commands.index(f"sh {INST.TURN_OFF_SCRIPT_PATH} apply")
+        reboot_at = next(i for i, c in enumerate(self.commands) if c.startswith("(/bin/sleep 2;"))
+        self.assertLess(apply_at, reboot_at)
+        self.assertIn("wait 22", self.commands[reboot_at:])
+        self.assertIn("Melodious is off:", out)
+        self.assertEqual(self.tree.read("/data/codex/cloud_blocker.conf"), b"0\n")
+        self.assertEqual(self.tree.mode(INIT_PATH), 0o644)
+
+    def test_declining_the_prompt_changes_nothing(self):
+        before = self.tree.snapshot(skip="/nothing")
+        import builtins
+        old_input = builtins.input
+        builtins.input = lambda _prompt="": "n"
+        self.addCleanup(setattr, builtins, "input", old_input)
+        code, out, _err = self.run_installer()
+        self.assertEqual(code, 1, out)
+        self.assertEqual(self.modes_run(), ["check"])
+        self.assertEqual(self.tree.snapshot(skip="/nothing"), before)
+
+    def test_already_off_does_nothing(self):
+        self.assertEqual(self.tree.run("apply")[0], 0)
+        code, out, err = self.run_installer("--no-prompt")
+        self.assertEqual(code, 0, err or out)
+        self.assertEqual(self.modes_run(), ["check"])
+        self.assertIn("already off", out)
+
+    def test_turn_off_refuses_clean_install(self):
+        code, _out, err = self.run_installer("--no-prompt", "--clean-install")
+        self.assertEqual(code, 1)
+        self.assertIn("--clean-install", err)
+        self.assertEqual(self.commands, [])
+
+
+class PythonInstallerTurningBackOn(unittest.TestCase):
+    """[PYTHON BEHAVIORAL] a normal run on a hub turned off with --turn-off
+    turns Melodious back on: blocker on, marker gone."""
+
+    BLOCKER = "/data/codex/cloud_blocker.conf"
+
+    def setUp(self):
+        self.hub = FakeHub()
+        prime_upgrade_hub(self.hub)
+        self.hub.fs[self.BLOCKER] = {"data": b"0\n", "mode": "644"}
+        self.hub.fs[INST.MELODIOUS_OFF_MARKER] = {"data": b"20260101-000000 x\n", "mode": "644"}
+        self.hub.fs["/data/codex/init.sh"]["mode"] = "644"
+        self.harness = InstallerHarness(self.hub)
+        self.addCleanup(self.harness.close)
+
+    def test_install_turns_blocker_back_on_and_clears_marker(self):
+        code, stdout, stderr = self.harness.run(self.harness.base_argv())
+        self.assertEqual(code, 0, stderr or stdout)
+        self.assertIn("turns it back on", stdout)
+        self.assertEqual(self.hub.fs[self.BLOCKER]["data"], b"1\n")
+        self.assertNotIn(INST.MELODIOUS_OFF_MARKER, self.hub.fs)
+        self.assertEqual(self.hub.fs["/data/codex/init.sh"]["mode"], "755", "init.sh must start at boot again")
+        self.assertIn("Melodious is back on.", stdout)
+
+    def test_preflight_keeps_marker(self):
+        code, stdout, stderr = self.harness.run(self.harness.base_argv("--preflight-only"))
+        self.assertEqual(code, 0, stderr or stdout)
+        line = [l for l in stdout.splitlines() if l.startswith("destination ") and f"dest={self.BLOCKER} " in l]
+        self.assertEqual(len(line), 1)
+        self.assertIn("action=replace", line[0])
+        self.assertIn(INST.MELODIOUS_OFF_MARKER, self.hub.fs)
+
+    def test_skip_cloud_suppression_leaves_blocker_off(self):
+        code, stdout, stderr = self.harness.run(self.harness.base_argv("--skip-cloud-suppression"))
+        self.assertEqual(code, 0, stderr or stdout)
+        self.assertEqual(self.hub.fs[self.BLOCKER]["data"], b"0\n")
+
+
 class PowerShellStaticContract(unittest.TestCase):
     """[PS1 STATIC] structured assertions on install_webui.ps1 (no pwsh run).
 
@@ -1575,6 +1899,24 @@ class PowerShellStaticContract(unittest.TestCase):
             'Add-Candidate (New-Candidate "/data/codex/cloud_blocker.conf" "644" "config" -Text "1`n" -Condition "if-missing")',
             self.inventory,
         )
+
+    def test_turn_off_parity(self):
+        """[PS1 STATIC] -TurnOff runs the same hub script as --turn-off, and a
+        normal run on a turned-off hub turns the blocker back on and clears
+        the marker."""
+        self.assertIn("[switch]$TurnOff", self.text)
+        self.assertEqual(self.ps_scalar("TurnOffScriptPath"), INST.TURN_OFF_SCRIPT_PATH)
+        self.assertEqual(self.ps_scalar("MelodiousOffMarker"), INST.MELODIOUS_OFF_MARKER)
+        body = self.text.replace("\r\n", "\n").split("$TurnOffScript = @'\n", 1)[1].split("\n'@\n", 1)[0]
+        self.assertEqual(body + "\n", INST.TURN_OFF_SCRIPT)
+        self.assertIn(
+            'Add-Candidate (New-Candidate "/data/codex/cloud_blocker.conf" "644" "config" -Text "1`n")',
+            self.inventory,
+        )
+        main = self.main.replace("\r\n", "\n")
+        self.assertLess(main.index("if ($TurnOff) { exit (Invoke-TurnOff) }"), main.index("Resolve-HubIdentity"))
+        self.assertLess(main.index("$TurningBackOn = Test-MelodiousOff"), main.index("Build-Inventory"))
+        self.assertLess(main.index("rm -f $MelodiousOffMarker"), main.index("$cloudChanged = Test-CloudBlockerChanged"))
 
     def test_constants_match_python(self):
         """[PS1 STATIC] stage prefix, suffixes, margins, verdicts match Python."""

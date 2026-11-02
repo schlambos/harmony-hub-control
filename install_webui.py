@@ -133,6 +133,141 @@ VERDICT_VALIDATION = "BLOCKED_VALIDATION_FAILURE"
 
 MD5_LINE_RE = re.compile(r"^([0-9a-f]{32})  (.+)$")
 
+# --turn-off copies TURN_OFF_SCRIPT here (RAM) and runs it; the installer
+# turns Melodious back on, cloud blocker included, while the marker exists.
+TURN_OFF_SCRIPT_PATH = "/var/volatile/codex-turn-off.sh"
+MELODIOUS_OFF_MARKER = "/data/codex/melodious-off"
+
+# Runs on the hub. install_webui.ps1 carries an identical copy
+# (tools/installer_contract_smoke.py checks they match).
+TURN_OFF_SCRIPT = r"""#!/bin/sh
+# Turns Melodious off, run ON THE HUB by install_webui.py --turn-off or
+# install_webui.ps1 -TurnOff.
+#
+# Melodious's files stay; it just stops running. The cloud blocker goes off,
+# so Melodious's cloud starter starts Logitech's cloud tasks again and the
+# Harmony app can manage the hub. init.sh stops being executable, so the boot
+# script skips it and SSH comes up the stock way. Running the installer again
+# turns Melodious back on.
+#
+#   sh turn_off.sh check   what would change, as key=value lines
+#   sh turn_off.sh apply   backs up what it changes to
+#                          /data/codex-backups/melodious-off-<stamp>, then
+#                          changes it; the caller reboots the hub
+#
+# "error=..." means it stopped there. BusyBox 1.13 on the hub: no stat,
+# mktemp, rmdir, head or grep -E.
+
+set -u
+# Tests run this against a fake root.
+R=${CODEX_OFF_ROOT:-}
+INIT=/data/codex/init.sh
+BLOCKER=/data/codex/cloud_blocker.conf
+HOSTS=/etc/hosts
+PROBE_MARK="# codex: Harmony Touch sync probe"
+MARKER=/data/codex/melodious-off
+PLUGINS="codexactivity codexmqtt"
+
+die() { echo "error=$*"; exit 1; }
+backup_name() { echo "$1" | sed 's#/#_#g'; }
+
+inspect() {
+  [ -d "$R/data/codex" ] || die "Melodious isn't installed on this hub: /data/codex is missing."
+
+  # With init.sh skipped, SSH has to come up the stock way: rcS starts
+  # /usr/sbin/dropbear when /etc/tdeenable exists, and that wrapper runs the
+  # dropbear in /data/codex/bin, which stays.
+  grep -F tdeenable "$R/etc/init.d/rcS" >/dev/null && grep -F /usr/sbin/dropbear "$R/etc/init.d/rcS" >/dev/null ||
+    die "The hub's boot script doesn't start SSH, so SSH might not come back."
+  [ -r "$R/etc/tdeenable" ] || die "/etc/tdeenable is missing, so SSH wouldn't start after the reboot."
+  [ -x "$R/usr/sbin/dropbear" ] || die "/usr/sbin/dropbear is missing, so SSH wouldn't start after the reboot."
+  if [ "$(sed -n 1p "$R/usr/sbin/dropbear")" = "#!/bin/sh" ]; then
+    target=$(sed -n 's/^exec \([^ ]*\).*/\1/p' "$R/usr/sbin/dropbear")
+    if [ -n "$target" ] && [ ! -x "$R$target" ]; then
+      die "/usr/sbin/dropbear runs $target, which is missing, so SSH wouldn't start after the reboot."
+    fi
+  fi
+}
+
+report() {
+  n=0
+  value=$(sed -n 1p "$R$BLOCKER" 2>/dev/null)
+  echo "cloud_blocker=$value"
+  [ "$value" = 0 ] || n=$((n + 1))
+  if [ -x "$R$INIT" ]; then echo "starts_at_boot=yes"; n=$((n + 1)); else echo "starts_at_boot=no"; fi
+  if grep -F "$PROBE_MARK" "$R$HOSTS" >/dev/null 2>&1; then
+    echo "touch_probe=present"; n=$((n + 1))
+  else
+    echo "touch_probe=absent"
+  fi
+  for p in $PLUGINS; do
+    if [ -d "$R/pkg/$p" ]; then echo "plugin=$p present"; n=$((n + 1)); else echo "plugin=$p absent"; fi
+  done
+  if [ -f "$R$MARKER" ]; then echo "marker=present"; else echo "marker=absent"; fi
+  if ps | grep '[c]odex_webui' >/dev/null; then echo "webui=running"; else echo "webui=stopped"; fi
+  if route -n 2>/dev/null | awk '$1 == "0.0.0.0" && $4 ~ /G/ {f = 1} END {exit !f}'; then
+    echo "internet_route=yes"
+  else
+    echo "internet_route=no"
+  fi
+  echo "changes=$n"
+}
+
+apply() {
+  # Finish even if SSH drops: a hangup or a write to the closed pipe would
+  # otherwise stop this halfway.
+  trap '' HUP PIPE
+  stamp=$(date -u +%Y%m%d-%H%M%S)
+  B=/data/codex-backups/melodious-off-$stamp
+  mkdir -p "$R/data/codex-backups" && mkdir "$R$B" || die "Couldn't create the backup folder $B."
+  for p in $BLOCKER $HOSTS; do
+    if [ -f "$R$p" ]; then
+      cp -p "$R$p" "$R$B/$(backup_name $p)" || die "Couldn't back up $p; nothing changed."
+    fi
+  done
+
+  # Blocker off: Melodious's cloud starter then starts Logitech's cloud tasks.
+  if ! { echo 0 > "$R$BLOCKER.codex-new" && chmod 644 "$R$BLOCKER.codex-new" &&
+      mv -f "$R$BLOCKER.codex-new" "$R$BLOCKER"; }; then
+    rm -f "$R$BLOCKER.codex-new"
+    die "Couldn't turn the cloud blocker off; nothing changed."
+  fi
+
+  # The Touch sync probe points ping.myharmony.com at the hub, where nothing
+  # answers once Melodious is off. Some mounts refuse a rename over
+  # /etc/hosts, so rewrite it in place.
+  if grep -F "$PROBE_MARK" "$R$HOSTS" >/dev/null 2>&1; then
+    grep -v -F "$PROBE_MARK" "$R$HOSTS" > "$R$HOSTS.codex-new" &&
+      cat "$R$HOSTS.codex-new" > "$R$HOSTS" ||
+      die "Couldn't remove the Touch sync probe from $HOSTS; the cloud blocker is already off."
+    rm -f "$R$HOSTS.codex-new"
+  fi
+
+  # Out of /pkg, so the engine doesn't load Melodious's plugins.
+  for p in $PLUGINS; do
+    if [ -d "$R/pkg/$p" ]; then
+      mkdir -p "$R$B/pkg" && mv "$R/pkg/$p" "$R$B/pkg/$p" ||
+        die "Couldn't move /pkg/$p out of /pkg; the cloud blocker is already off."
+    fi
+  done
+
+  # rcS.local runs init.sh only when it's executable.
+  if [ -f "$R$INIT" ]; then
+    chmod 644 "$R$INIT" || die "Couldn't stop $INIT from running at boot; the cloud blocker is already off."
+  fi
+
+  echo "$stamp $B" > "$R$MARKER"
+  echo "backup=$B"
+  echo "result=off"
+}
+
+case "${1:-}" in
+  check) inspect; report ;;
+  apply) inspect; apply ;;
+  *) echo "usage: $0 check|apply" >&2; exit 2 ;;
+esac
+"""
+
 
 def step(text: str) -> None:
     print(f"\n== {text} ==")
@@ -452,6 +587,7 @@ class Installer:
         self.root_tool_stages: list[dict[str, object]] = []
         # Inode of each Dropbear copy, by path.
         self.dropbear_copies: dict[str, str] = {}
+        self.turning_back_on = False
 
     # ------------------------------------------------------------------ ssh
 
@@ -713,6 +849,9 @@ class Installer:
                     text="0\n" if self.args.skip_cloud_suppression else "1\n",
                 )
             )
+        elif self.turning_back_on and not self.args.skip_cloud_suppression:
+            # --turn-off left the blocker off; Melodious comes back with it on.
+            candidates.append(Candidate("/data/codex/cloud_blocker.conf", "644", "config", text="1\n"))
         elif not self.args.skip_cloud_suppression:
             # Without the file, codex_webui and netservicestarter.lua treat the
             # cloud as blocked but the egress guard and the activity writer
@@ -1508,6 +1647,79 @@ class Installer:
         cloud = {"/opt/luaworks/tasks/connectserver/netservicestarter.lua", "/data/codex/cloud_blocker.conf"}
         return any(c.dest in cloud for c in self.active_candidates())
 
+    # ------------------------------------------------------------ turn off
+
+    def melodious_is_off(self) -> bool:
+        out = self.run_remote(f"[ -f {MELODIOUS_OFF_MARKER} ] && echo off || true", timeout=30, quiet=True)
+        return out.strip() == "off"
+
+    def run_turn_off_script(self, mode: str) -> dict[str, list[str]]:
+        """Run TURN_OFF_SCRIPT on the hub; returns its key=value lines by key."""
+        self.run_remote(f"cat > {TURN_OFF_SCRIPT_PATH}", TURN_OFF_SCRIPT.encode("utf-8"), timeout=30, quiet=True)
+        try:
+            code, out, err = self.run_remote_rc(f"sh {TURN_OFF_SCRIPT_PATH} {mode}", timeout=120)
+        finally:
+            self.run_remote_rc(f"rm -f {TURN_OFF_SCRIPT_PATH}", timeout=30)
+        values: dict[str, list[str]] = {}
+        for line in out.splitlines():
+            key, sep, value = line.strip().partition("=")
+            if sep:
+                values.setdefault(key, []).append(value)
+                kv(line.strip())
+        if "error" in values:
+            raise RuntimeError(values["error"][0])
+        if code != 0:
+            raise RuntimeError(f"the turn-off script exited with {code}: {err.strip()}")
+        return values
+
+    def turn_off(self) -> int:
+        step("Checking SSH")
+        identity = self.run_remote("id; uname -a", timeout=30)
+        print(identity.strip())
+
+        step("Checking what turning Melodious off changes")
+        before = self.run_turn_off_script("check")
+        if before.get("changes") == ["0"]:
+            step("Done")
+            info("Melodious is already off on this hub.")
+            return 0
+        if self.args.preflight_only:
+            step("Done")
+            info("Preflight only: nothing was changed.")
+            return 0
+        if not self.args.no_prompt:
+            info("The hub goes back to Logitech's cloud and the Harmony app. Melodious's web app stops.")
+            answer = input("Turn Melodious off and restart the hub? [y/N]: ").strip().lower()
+            if answer not in ("y", "yes"):
+                info("Nothing was changed.")
+                return 1
+
+        step("Turning Melodious off")
+        result = self.run_turn_off_script("apply")
+        if result.get("result") != ["off"]:
+            raise RuntimeError("the turn-off script didn't report a result")
+        info(f"What changed is backed up in {result.get('backup', ['?'])[0]}")
+
+        step("Restarting the hub")
+        self.run_remote("(/bin/sleep 2; /sbin/reboot || reboot) >/dev/null 2>&1 & echo rebooting", timeout=30, quiet=True)
+        time.sleep(8)
+        wait_for_port(self.args.hub_host, self.args.port, 180, "SSH")
+
+        step("Checking the hub after the restart")
+        after = self.run_turn_off_script("check")
+        if after.get("changes") != ["0"]:
+            raise RuntimeError("after the restart the hub still has some of Melodious running; see the lines above")
+
+        step("Done")
+        info("Melodious is off: the cloud blocker is off and Melodious no longer starts at boot.")
+        info("Next, open the Harmony app and sync the hub. The app's copy of your setup")
+        info("replaces the hub's, so devices and activities you made only in Melodious go away.")
+        if after.get("internet_route") == ["no"]:
+            info("The hub has no internet route yet. It gets one when it renews its address;")
+            info("if the Harmony app can't reach it in a few minutes, unplug the hub and plug it back in.")
+        info("To turn Melodious back on, run this installer again without --turn-off.")
+        return 0
+
     def run(self) -> int:
         step("Checking SSH")
         identity = self.run_remote("id; uname -a", timeout=30)
@@ -1515,6 +1727,9 @@ class Installer:
 
         step("Resolving hub id")
         self.resolve_hub_id()
+        self.turning_back_on = self.melodious_is_off()
+        if self.turning_back_on:
+            info("Melodious was turned off on this hub (--turn-off). This run turns it back on, cloud blocker included.")
 
         step("Building candidate inventory")
         self.build_inventory()
@@ -1633,6 +1848,8 @@ class Installer:
 
         self.report_flash_after_install()
         self.cleanup_stage()
+        if self.turning_back_on:
+            self.run_remote(f"rm -f {MELODIOUS_OFF_MARKER}", timeout=30, quiet=True)
 
         if self.cloud_blocker_changed() and not self.args.no_apply_cloud_restart:
             step("Applying cloud blocker")
@@ -1643,6 +1860,8 @@ class Installer:
             wait_for_port(self.args.hub_host, 8080, 180, "Web UI")
 
         step("Done")
+        if self.turning_back_on:
+            info("Melodious is back on.")
         if self.first_install:
             info("Install finished as a first install (configuration written).")
         elif self.args.clean_install:
@@ -1691,7 +1910,24 @@ def parse_args(argv: list[str]) -> argparse.Namespace:
     parser.add_argument("--mqtt-discovery-prefix", default=None, help="Home Assistant MQTT discovery prefix")
     parser.add_argument("--mqtt-client-id", default=None, help="MQTT client ID")
     parser.add_argument("--mqtt-disabled", action="store_true", default=None, help="Install with MQTT disabled")
-    parser.add_argument("--skip-cloud-suppression", action="store_true", help="Do not replace netservicestarter.lua")
+    parser.add_argument(
+        "--skip-cloud-suppression",
+        action="store_true",
+        help=(
+            "Do not replace netservicestarter.lua (with --clean-install, also write the cloud blocker as off). "
+            "This does not undo an existing install; use --turn-off for that"
+        ),
+    )
+    parser.add_argument(
+        "--turn-off",
+        action="store_true",
+        help=(
+            "Turn Melodious off and give the hub back to Logitech's cloud and the Harmony app: turn the cloud "
+            "blocker off, stop Melodious from starting at boot, and restart the hub. Melodious's files stay "
+            "and SSH keeps working; run the installer again without it to turn Melodious back on. With "
+            "--preflight-only, only reports what would change"
+        ),
+    )
     parser.add_argument("--no-apply-cloud-restart", action="store_true", help="Do not reboot after the Logitech cloud blocker files change")
     parser.add_argument("--no-prompt", action="store_true", help="Fail instead of asking for missing required values")
     parser.add_argument(
@@ -1751,6 +1987,11 @@ def main(argv: list[str]) -> int:
         if not key_path.is_file():
             raise RuntimeError(f"SSH key not found: {key_path}")
         args.key_path = str(key_path)
+        if args.turn_off:
+            if args.clean_install:
+                raise RuntimeError("--turn-off can't be combined with --clean-install")
+            installer = Installer(args)
+            return installer.turn_off()
         mqtt_cli_supplied = any(
             value is not None
             for value in (
