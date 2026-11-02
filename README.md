@@ -164,7 +164,8 @@ Harmony Elite works.**
 | Harmony Touch | Validated, with stock remote firmware: offline sync, hard keys, on-screen buttons, the number pad, gestures, device screens and press modes. |
 | Harmony Smart Control remote | Validated, paired next to a Touch: pairing on the hub with no cloud (Settings → Remotes), its keys driving the same devices as the Touch's, and its activity buttons. It keeps no setup of its own; its buttons live on the hub. If it stops responding, take its coin cell out for 10 seconds, then pair it again. |
 | Harmony Elite | Works, per a user report; not yet tested here. |
-| Other remotes that pair with the hub, such as the Harmony Companion, Ultimate or 950 | Expected to work, but not yet tested. Features that need a screen apply only to remotes that have one. |
+| Harmony Companion remote | Expected to work, but not yet tested here: its activity buttons and keys live in its own maps on the hub, edited the same way as the Smart Control's. |
+| Other remotes that pair with the hub, such as the Harmony Ultimate or 950 | Expected to work, but not yet tested. Features that need a screen apply only to remotes that have one. |
 | Phones, tablets and computers | The web, Android and macOS apps. |
 
 No remote needs modified firmware. If you run Melodious with another remote,
@@ -439,10 +440,11 @@ so you can bookmark it.
   more, with no cloud. The hub keeps one remote of each kind, so a Smart
   Control joins a Touch but replaces an older Smart Control. Each paired
   remote gets the same section: its buttons for each activity, opening the
-  same editor for either remote (the Smart Control also has its activity
-  buttons). Both remotes' keys stay the same: a key you change goes on both
-  unless you set it for one remote only, and each activity row says where
-  they differ.
+  same editor for every remote (a remote without a screen, such as the
+  Smart Control or Companion, also has its activity buttons). Every
+  remote's keys stay the same: a key you change goes on all of them unless
+  you set it for one remote only, and each activity row says where they
+  differ.
 - **Bluetooth keyboard**: pairing and saved devices.
 - **MQTT**: the broker, Home Assistant discovery and the topics.
 - **Wi-Fi**: the network the hub joins. Changes take effect after a reboot.

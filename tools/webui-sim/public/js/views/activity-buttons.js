@@ -1,18 +1,22 @@
-/* Activity buttons (#activitybuttons, from Settings → Remotes): the Harmony
-   Smart Control's three activity buttons, each starting one activity on a
-   press and another on a long press (16414Root). Saved through
-   /api/activity-save; models in remotes-model.js. */
+/* Activity buttons (#activitybuttons/<EquadID>, from Settings → Remotes):
+   the three activity buttons of a remote without a screen, each starting
+   one activity on a press and another on a long press, in that remote's
+   own root map (<EquadID>Root; plain #activitybuttons is 16414). Saved
+   through /api/activity-save; models in remotes-model.js. */
 
 import * as hub from "../state.js";
 import { confirmDialog, escapeHtml, setAppBar, snackbar, spinner } from "../ui/shell.js";
 import {
+  SMART_CONTROL_EQUAD,
   activityButtonsSaveOutcome,
   buildActivityButtonsMapList,
+  hasActivityButtons,
   readActivityButtons,
 } from "./remotes-model.js";
 import { saveMapList } from "./map-save.js";
 
 export function createActivityButtonsView(section) {
+  let remote = SMART_CONTROL_EQUAD; // whose root map
   let rows = null; // draft
   let baseRows = null;
   let dirty = false;
@@ -60,7 +64,7 @@ export function createActivityButtonsView(section) {
       return;
     }
     if (!rows) {
-      baseRows = readActivityButtons(hub.state.config).rows;
+      baseRows = readActivityButtons(hub.state.config, remote).rows;
       rows = structuredClone(baseRows);
     }
     const missing = rows.some((r) => r.missing.length);
@@ -82,7 +86,7 @@ export function createActivityButtonsView(section) {
     if (saving || !needsSave()) return;
     let built;
     try {
-      built = buildActivityButtonsMapList(hub.state.config, rows);
+      built = buildActivityButtonsMapList(hub.state.config, rows, remote);
     } catch (error) {
       snackbar(`Not saved — ${error.message}`, { error: true });
       return;
@@ -92,12 +96,12 @@ export function createActivityButtonsView(section) {
       render();
       return;
     }
-    const draft = { rows, baseRows, dirty };
+    const draft = { rows, baseRows, dirty, remote };
     saving = true;
     render();
     const result = await saveMapList(built.mapList, {
       done: "Saved. The remote uses the new buttons at once.",
-      check: (config) => activityButtonsSaveOutcome(config, draft.baseRows, draft.rows),
+      check: (config) => activityButtonsSaveOutcome(config, draft.baseRows, draft.rows, draft.remote),
     });
     saving = false;
     if (result === "kept") ({ rows, baseRows, dirty } = draft);
@@ -135,7 +139,12 @@ export function createActivityButtonsView(section) {
   });
 
   return {
-    onShow() {
+    onShow({ args = [] } = {}) {
+      const asked = hasActivityButtons(args[0]) ? String(args[0]) : SMART_CONTROL_EQUAD;
+      if (asked !== remote) {
+        remote = asked;
+        dirty = false;
+      }
       if (!dirty) rows = null;
       hub.ensureConfig();
       render();

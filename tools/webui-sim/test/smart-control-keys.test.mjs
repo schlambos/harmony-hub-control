@@ -10,7 +10,7 @@ import {
   hasRemoteMaps,
   keyOn,
   keyRowsChanged,
-  otherRemote,
+  otherRemotes,
   readHardKeys,
   sameKey,
 } from "../public/js/views/touch-model.js";
@@ -120,9 +120,11 @@ describe("both remotes' keys in one save", () => {
   const row = (key, action, extra = {}) => ({ key, buttonKey: key, buttonId: null, action, pressMode: "standard", longPress: null, doublePress: null, ...extra });
 
   it("names keys each remote's way, and only keys it has", () => {
-    assert.equal(otherRemote("16414"), "16417");
-    assert.equal(otherRemote(), "16414");
+    assert.deepEqual(otherRemotes(config(), "16414"), ["16417"]);
+    assert.deepEqual(otherRemotes(config()), ["16414"]);
     assert.equal(keyOn("16414", "DVR"), "Dvr");
+    assert.equal(keyOn("16422", "DVR"), "Dvr", "a Companion spells it like the Smart Control");
+    assert.equal(keyOn("16423", "Number4"), "Number4");
     assert.equal(keyOn("16417", "Dvr"), "DVR");
     assert.equal(keyOn("16417", "Number1"), "", "the Touch has no number keys");
     assert.equal(keyOn("16414", "Home"), "");
@@ -148,7 +150,7 @@ describe("both remotes' keys in one save", () => {
     const twinRows = [...theirs.rows.filter((r) => r.buttonKey !== "DVR"), { ...edit, key: "DVR", buttonKey: "DVR" }];
     const mapList = buildTouchControlsMapList(cfg, {
       hard: { activityId: SHIELD, rows: [...mine.rows.filter((r) => r.buttonKey !== "Dvr"), edit], base: mine.base },
-      twin: { remote: "16417", rows: twinRows, base: theirs.base },
+      twins: [{ remote: "16417", rows: twinRows, base: theirs.base }],
     }, SMART);
     const smart = mapOf({ mapList }, `16414Activity${SHIELD}`).Buttons.find((b) => b.ButtonKey === "Dvr");
     const touch = mapOf({ mapList }, `16417Activity${SHIELD}`).Buttons.find((b) => b.ButtonKey === "DVR");
@@ -158,20 +160,20 @@ describe("both remotes' keys in one save", () => {
     if (before) assert.equal(touch.ButtonId, before.ButtonId, "the Touch's key keeps its ButtonId");
     assert.ok(mapOf({ mapList }, `16417Activity${SHIELD}`).Buttons.some((b) => b.__type === "SoftRemoteButton"), "on-screen buttons stay");
     assert.deepEqual(validateMapList(mapList), []);
-    const twin = { remote: "16417", base: theirs.base };
-    assert.equal(controlsSaveOutcome({ ...cfg, mapList }, SHIELD, mine.base, mapList, { ...SMART, twin }), "saved");
-    assert.equal(controlsSaveOutcome(cfg, SHIELD, mine.base, mapList, { ...SMART, twin }), "unchanged");
+    const twins = [{ remote: "16417", base: theirs.base }];
+    assert.equal(controlsSaveOutcome({ ...cfg, mapList }, SHIELD, mine.base, mapList, { ...SMART, twins }), "saved");
+    assert.equal(controlsSaveOutcome(cfg, SHIELD, mine.base, mapList, { ...SMART, twins }), "unchanged");
     // Only the Smart Control's half landed: not what was sent.
     const half = structuredClone(cfg.mapList);
     half.ButtonMaps = half.ButtonMaps.map((m) => (m.ButtonMapIdentifier === `16414Activity${SHIELD}` ? mapOf({ mapList }, m.ButtonMapIdentifier) : m));
-    assert.equal(controlsSaveOutcome({ ...cfg, mapList: half }, SHIELD, mine.base, mapList, { ...SMART, twin }), "changed");
+    assert.equal(controlsSaveOutcome({ ...cfg, mapList: half }, SHIELD, mine.base, mapList, { ...SMART, twins }), "changed");
   });
 
   it("leaves the other remote alone when only this one's keys changed", () => {
     const cfg = config();
     const mine = readHardKeys(cfg, SHIELD, SMART);
     const rows = mine.rows.filter((r) => r.buttonKey !== "Menu");
-    const mapList = buildTouchControlsMapList(cfg, { hard: { activityId: SHIELD, rows, base: mine.base }, twin: null }, SMART);
+    const mapList = buildTouchControlsMapList(cfg, { hard: { activityId: SHIELD, rows, base: mine.base }, twins: [] }, SMART);
     assert.deepEqual(mapOf({ mapList }, `16417Activity${SHIELD}`), mapOf(fixture, `16417Activity${SHIELD}`));
   });
 
@@ -185,7 +187,7 @@ describe("both remotes' keys in one save", () => {
     const mapList = buildTouchControlsMapList(cfg, {
       hard: { rows: [...mine.rows.filter((r) => r.buttonKey !== "VolumeUp"), edit] },
       soft: { activityId: WITHOUT_SMART, base: mine.base },
-      twin: { remote: "16414", rows: [edit], base: theirs.base },
+      twins: [{ remote: "16414", rows: [edit], base: theirs.base }],
     });
     const made = mapOf({ mapList }, `16414Activity${WITHOUT_SMART}`);
     assert.deepEqual(made.Buttons.map((b) => [b.ButtonKey, b.ButtonAction.CommandName]), [["VolumeUp", "VolumeUp"]]);
@@ -200,7 +202,51 @@ describe("both remotes' keys in one save", () => {
     mapOf(cfg, `16417Activity${SHIELD}`).Buttons.pop();
     assert.throws(() => buildTouchControlsMapList(cfg, {
       hard: { activityId: SHIELD, rows: mine.rows, base: mine.base },
-      twin: { remote: "16417", rows: theirs.rows, base: theirs.base },
+      twins: [{ remote: "16417", rows: theirs.rows, base: theirs.base }],
     }, SMART), /changed on the hub/);
   });
 });
+
+describe("a Companion's keys alongside the other remotes", () => {
+  /* The fixture with a Companion (16422) map for each Smart Control map. */
+  const withCompanion = () => {
+    const cfg = config();
+    for (const m of cfg.mapList.ButtonMaps.filter((x) => /^16414Activity/.test(x.ButtonMapIdentifier))) {
+      cfg.mapList.ButtonMaps.push({ ...structuredClone(m), ButtonMapIdentifier: m.ButtonMapIdentifier.replace(/^16414/, "16422"), "RemoteId-": 4242 });
+    }
+    return cfg;
+  };
+  const command = (deviceId, name) => ({ kind: "command", deviceId, command: name, functionId: 0 });
+
+  it("lists every other remote with maps on the hub", () => {
+    const cfg = withCompanion();
+    assert.deepEqual(otherRemotes(cfg, "16422"), ["16417", "16414"]);
+    assert.deepEqual(otherRemotes(cfg, "16417"), ["16414", "16422"]);
+    assert.deepEqual(hardKeysFor("16422"), SMART_CONTROL_HARD_KEYS);
+  });
+
+  it("writes one key to the Companion, the Smart Control and the Touch in one save", () => {
+    const cfg = withCompanion();
+    const read = (remote) => readHardKeys(cfg, SHIELD, { remote });
+    const mine = read("16422");
+    const deviceId = mine.rows.find((r) => r.action?.kind === "command").action.deviceId;
+    const edit = (key) => ({ key, buttonKey: key, buttonId: null, action: command(deviceId, "Guide"), pressMode: "standard", longPress: null, doublePress: null });
+    const withKey = (rows, key) => [...rows.filter((r) => r.buttonKey !== key), edit(key)];
+    const mapList = buildTouchControlsMapList(cfg, {
+      hard: { activityId: SHIELD, rows: withKey(mine.rows, "Number5"), base: mine.base },
+      twins: [
+        { remote: "16414", rows: withKey(read("16414").rows, "Number5"), base: read("16414").base },
+      ],
+    }, { remote: "16422" });
+    const key = (prefix, name) => mapOf({ mapList }, `${prefix}Activity${SHIELD}`).Buttons.find((b) => b.ButtonKey === name);
+    assert.equal(key("16422", "Number5").ButtonAction.CommandName, "Guide");
+    assert.equal(key("16422", "Number5").FunctionGroupType, 2, "a Companion's number keys are in the number-pad group");
+    assert.equal(key("16414", "Number5").ButtonAction.CommandName, "Guide");
+    assert.equal(key("16417", "Number5"), undefined, "the Touch has no number keys and wasn't asked");
+    assert.deepEqual(mapOf({ mapList }, `16417Activity${SHIELD}`), mapOf(cfg, `16417Activity${SHIELD}`));
+    assert.deepEqual(validateMapList(mapList), []);
+    const twins = [{ remote: "16414", base: read("16414").base }];
+    assert.equal(controlsSaveOutcome({ ...cfg, mapList }, SHIELD, mine.base, mapList, { remote: "16422", twins }), "saved");
+  });
+});
+

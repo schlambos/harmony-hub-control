@@ -814,6 +814,94 @@ describe("Harmony Touch hard buttons", () => {
   });
 });
 
+describe("Companion hard buttons", () => {
+  /* The fixture as a hub with a Companion (16422): Logitech gives it its own
+     map per activity, on its own surface, alike with the Smart Control's. */
+  const withCompanion = () => {
+    const config = structuredClone(FIXTURE);
+    const companion = config.mapList.ButtonMaps
+      .filter((m) => /^16414Activity/.test(m.ButtonMapIdentifier))
+      .map((m, i) => ({
+        ...structuredClone(m),
+        "ButtonMapId-": 70000000 + i,
+        ButtonMapIdentifier: m.ButtonMapIdentifier.replace(/^16414/, "16422"),
+        "RemoteId-": 4242,
+        "SurfaceId-": 4243,
+        "ButtonMapSurfaceId-": 4244,
+        Buttons: m.Buttons.map((b, j) => ({ ...structuredClone(b), ButtonId: 71000000 + i * 100 + j })),
+      }));
+    config.mapList.ButtonMaps.push(...companion);
+    return config;
+  };
+  const companionMap = (maps, id) => maps.find((m) => m.ButtonMapIdentifier === `16422Activity${id}`);
+  const hard = (map) => map.Buttons.filter((b) => b.__type === "HardRemoteButton");
+  const command = (deviceId, name) => ({ deviceId, command: { name, functionId: 0 }, hold: null });
+
+  it("a new activity's Companion map gets every hard button, number keys included", () => {
+    const config = withCompanion();
+    const draft = {
+      name: "Companion keys",
+      type: 1,
+      roles: [{ deviceId: "74521691", roleType: "VolumeActivityRole", input: "", powerDelay: "" }],
+      buttons: { VolumeUp: command("74521691", "VolumeUp"), Dvr: command("74521691", "Guide"), Number1: command("74521691", "1") },
+    };
+    const graph = buildActivityGraph({ config, draft, editId: null });
+    const map = companionMap(graph.mapList.ButtonMaps, graph.activityId);
+    assert.ok(map, "the Companion surface is created");
+    assert.equal(map["RemoteId-"], 4242, "on the Companion's own surface");
+    const wizard = graph.mapList.ButtonMaps.find((m) => isWizardOwnedActivityMap(m, graph.activityId));
+    assert.deepEqual(hard(map).map((b) => b.ButtonKey).sort(), ["Dvr", "Number1", "VolumeUp"]);
+    for (const button of hard(map)) {
+      const twin = wizard.Buttons.find((b) => b.ButtonKey === button.ButtonKey);
+      assert.deepEqual(button.ButtonAction, twin.ButtonAction);
+      assert.equal(button.FunctionGroupType, twin.FunctionGroupType, "number keys stay in the number-pad group");
+      assert.notEqual(button.ButtonId, twin.ButtonId);
+    }
+    assertUniqueIdentities(graph.mapList.ButtonMaps);
+  });
+
+  it("an unchanged save leaves a Logitech Companion map exactly as it was", () => {
+    const config = withCompanion();
+    for (const activity of config.activityList.Activities) {
+      const id = String(activity["Id-"]);
+      const before = companionMap(config.mapList.ButtonMaps, id);
+      if (!before) continue;
+      const graph = buildActivityGraph({ config, draft: draftFromActivity(config, id), editId: id });
+      assert.deepEqual(companionMap(graph.mapList.ButtonMaps, id), before, activity.Name);
+    }
+  });
+
+  it("a changed key reaches the Companion and keeps its identity", () => {
+    const config = withCompanion();
+    const id = "48113644";
+    const before = companionMap(config.mapList.ButtonMaps, id);
+    const draft = draftFromActivity(config, id);
+    draft.buttons.VolumeUp = command("78760839", "ChannelUp");
+    const graph = buildActivityGraph({ config, draft, editId: id });
+    const after = companionMap(graph.mapList.ButtonMaps, id);
+    const volume = (map) => map.Buttons.find((b) => b.ButtonKey === "VolumeUp");
+    assert.equal(volume(after).ButtonAction.CommandName, "ChannelUp");
+    assert.equal(volume(after).ButtonId, volume(before).ButtonId);
+    assert.deepEqual(after.Buttons.filter((b) => b.ButtonKey !== "VolumeUp"), before.Buttons.filter((b) => b.ButtonKey !== "VolumeUp"));
+  });
+
+  it("an empty Companion map (made before this fix) gets every key on the next save", () => {
+    const config = withCompanion();
+    const id = "48113644";
+    companionMap(config.mapList.ButtonMaps, id).Buttons = [];
+    const graph = buildActivityGraph({ config, draft: draftFromActivity(config, id), editId: id });
+    const wizard = graph.mapList.ButtonMaps.find((m) => isWizardOwnedActivityMap(m, id));
+    assert.deepEqual(hard(companionMap(graph.mapList.ButtonMaps, id)).map((b) => b.ButtonKey).sort(),
+      hard(wizard).map((b) => b.ButtonKey).sort());
+  });
+
+  it("a hub without a Companion gets no Companion map", () => {
+    const draft = { name: "No Companion", type: 1, roles: [], buttons: {} };
+    const graph = buildActivityGraph({ config: FIXTURE, draft, editId: null });
+    assert.ok(!graph.mapList.ButtonMaps.some((m) => /^1642[23]/.test(m.ButtonMapIdentifier)));
+  });
+});
+
 describe("inputOptions", () => {
   const entry = (id) => FIXTURE.deviceList.DevicesWithFeatures.find((e) => String(e.Device["Id-"]) === id);
 
