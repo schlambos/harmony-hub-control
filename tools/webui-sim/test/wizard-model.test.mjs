@@ -817,7 +817,7 @@ describe("Harmony Touch hard buttons", () => {
 describe("Companion hard buttons", () => {
   /* The fixture as a hub with a Companion (16422): Logitech gives it its own
      map per activity, on its own surface, alike with the Smart Control's. */
-  const withCompanion = () => {
+  const withCompanion = ({ sharedSurface = false } = {}) => {
     const config = structuredClone(FIXTURE);
     const companion = config.mapList.ButtonMaps
       .filter((m) => /^16414Activity/.test(m.ButtonMapIdentifier))
@@ -825,9 +825,8 @@ describe("Companion hard buttons", () => {
         ...structuredClone(m),
         "ButtonMapId-": 70000000 + i,
         ButtonMapIdentifier: m.ButtonMapIdentifier.replace(/^16414/, "16422"),
-        "RemoteId-": 4242,
-        "SurfaceId-": 4243,
-        "ButtonMapSurfaceId-": 4244,
+        // #79's hub: the Companion's maps may carry the Smart Control's surface ids.
+        ...(sharedSurface ? {} : { "RemoteId-": 4242, "SurfaceId-": 4243, "ButtonMapSurfaceId-": 4244 }),
         Buttons: m.Buttons.map((b, j) => ({ ...structuredClone(b), ButtonId: 71000000 + i * 100 + j })),
       }));
     config.mapList.ButtonMaps.push(...companion);
@@ -849,6 +848,7 @@ describe("Companion hard buttons", () => {
     const map = companionMap(graph.mapList.ButtonMaps, graph.activityId);
     assert.ok(map, "the Companion surface is created");
     assert.equal(map["RemoteId-"], 4242, "on the Companion's own surface");
+    assert.equal(graph.mapList.ButtonMaps.filter((m) => m.ButtonMapIdentifier === `16422Activity${graph.activityId}`).length, 1, "exactly one");
     const wizard = graph.mapList.ButtonMaps.find((m) => isWizardOwnedActivityMap(m, graph.activityId));
     assert.deepEqual(hard(map).map((b) => b.ButtonKey).sort(), ["Dvr", "Number1", "VolumeUp"]);
     for (const button of hard(map)) {
@@ -893,6 +893,28 @@ describe("Companion hard buttons", () => {
     const wizard = graph.mapList.ButtonMaps.find((m) => isWizardOwnedActivityMap(m, id));
     assert.deepEqual(hard(companionMap(graph.mapList.ButtonMaps, id)).map((b) => b.ButtonKey).sort(),
       hard(wizard).map((b) => b.ButtonKey).sort());
+  });
+
+  it("a Companion sharing the Smart Control's surface ids still gets its own map (#79)", () => {
+    const config = withCompanion({ sharedSurface: true });
+    const draft = { name: "Shared surface", type: 1, roles: [], buttons: { VolumeUp: command("74521691", "VolumeUp") } };
+    const graph = buildActivityGraph({ config, draft, editId: null });
+    const made = graph.mapList.ButtonMaps.filter((m) => m.ButtonMapIdentifier === `16422Activity${graph.activityId}`);
+    assert.equal(made.length, 1);
+    assert.deepEqual(hard(made[0]).map((b) => b.ButtonKey), ["VolumeUp"]);
+    assertUniqueIdentities(graph.mapList.ButtonMaps);
+  });
+
+  it("an activity with no Companion map gets one on its next save", () => {
+    const config = withCompanion({ sharedSurface: true });
+    const id = "48113644";
+    config.mapList.ButtonMaps = config.mapList.ButtonMaps.filter((m) => m.ButtonMapIdentifier !== `16422Activity${id}`);
+    const graph = buildActivityGraph({ config, draft: draftFromActivity(config, id), editId: id });
+    const wizard = graph.mapList.ButtonMaps.find((m) => isWizardOwnedActivityMap(m, id));
+    const made = companionMap(graph.mapList.ButtonMaps, id);
+    assert.ok(made);
+    assert.deepEqual(hard(made).map((b) => b.ButtonKey).sort(), hard(wizard).map((b) => b.ButtonKey).sort());
+    assertUniqueIdentities(graph.mapList.ButtonMaps);
   });
 
   it("a hub without a Companion gets no Companion map", () => {

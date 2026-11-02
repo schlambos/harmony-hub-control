@@ -350,7 +350,10 @@ export function createTouchScreenView(section) {
             <button type="button" class="icon-btn" data-hremove="${escapeHtml(r.buttonKey)}" aria-label="Remove ${escapeHtml(r.buttonKey)}" ${saving ? " disabled" : ""}>${icon("delete_outlined")}</button>
           </div>`;
       }).join("")}</div>`
-      : `<p class="list-note">No keys mapped on this remote yet. Add the ones this activity uses.</p>`;
+      : isSmart()
+        // Saving the activity copies its keys to every remote without a screen that has none.
+        ? `<p class="list-note">No keys mapped on this remote yet. To give it this activity's keys, open the activity from Activities with ⋮ → Edit and save it. Or add keys here.</p>`
+        : `<p class="list-note">No keys mapped on this remote yet. Add the ones this activity uses.</p>`;
     const missing = hardKeysFor(remote).filter((k) => !hardRows.some((r) => r.buttonKey === k));
     const addHint = missing.length
       ? `<p class="wiz-hint">Unmapped: ${missing.slice(0, 8).join(", ")}${missing.length > 8 ? ` +${missing.length - 8} more` : ""}.${shownTwins().length ? ` Keys you add go on ${everyRemote()} unless you choose this remote only.` : ""}</p>`

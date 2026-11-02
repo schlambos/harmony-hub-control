@@ -20,7 +20,7 @@ exact SHA-256 digests and sizes are:
 
 | Binary | Size | SHA-256 |
 | --- | --- | --- |
-| `codex_webui` | 1191140 | `5495fe676448da49a8c96baccbf5beb85b84ed2fcb6c37abf217186bbed567f9` |
+| `codex_webui` | 1191540 | `9a6ed1f9068fc6867f9a7c5f8b174e7ba01d70770a09ceb5b0273e83d76dd22b` |
 | `codex_hbus` | 74660 | `4be9e6ac2e09e7eb052f9c47e81480d1e32aee7190bedb6ef7f932cf07aab8f9` |
 
 The remaining six binaries (`codex_bt_pair_agent`, `codex_bthid_keyboard`,
@@ -70,7 +70,7 @@ Both regenerators reproduce the committed headers byte-for-byte.
 Pinned source blobs:
 
 - `payload/source/codex_webui.c` — `9183f4386520ec7c8394bdead5f754daf4fb8396`
-- `payload/source/harmony_shell_assets.h` — `b1c473789d2bb2367ed8de4651ae6d1fe3fbad46`
+- `payload/source/harmony_shell_assets.h` — `3abf9e5e1664bd03cbc70f5dd0072bda21fbd975`
 - `payload/source/activity_ui_assets.h` — `f68a2bce58e71242b2480b2d483f405484c036da`
 - `payload/source/remote_skin_jpg.h` — `419611c5ff0713f1f5de2dd684d699f6d77238d5`
 
@@ -82,8 +82,8 @@ Pinned source blobs:
 ```
 
 Result must be `ELF 32-bit MSB executable, MIPS, MIPS32 rel2, statically
-linked, stripped`, size 1191140, SHA-256
-`5495fe676448da49a8c96baccbf5beb85b84ed2fcb6c37abf217186bbed567f9`.
+linked, stripped`, size 1191540, SHA-256
+`9a6ed1f9068fc6867f9a7c5f8b174e7ba01d70770a09ceb5b0273e83d76dd22b`.
 
 To compare against a Homebrew-built box binary, strip the compiler stamp from
 both first:

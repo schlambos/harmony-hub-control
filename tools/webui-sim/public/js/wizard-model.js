@@ -868,6 +868,17 @@ export function buildActivityGraph({ config, draft, editId }) {
     alloc,
   });
   mapList.ButtonMaps = mergedMaps;
+  /* The engine drops every press from a remote that has no map for the
+     running activity, and the surface copy above misses a Companion's map
+     when it shares the Smart Control's surface ids (seen on a hub in #79).
+     So each Companion the hub has maps for gets one, modelled on another
+     of its activity maps, and the mirror below fills it. */
+  for (const prefix of COMPANION_REMOTES) {
+    const id = `${prefix}Activity${activityId}`;
+    if (mergedMaps.some((m) => String(m?.ButtonMapIdentifier ?? "") === id)) continue;
+    const sibling = mergedMaps.find((m) => String(m?.ButtonMapIdentifier ?? "").startsWith(`${prefix}Activity`));
+    if (sibling) mergedMaps.push(cloneEmptySurfaceMap(sibling, activityId, alloc));
+  }
   for (const prefix of ["16417", ...COMPANION_REMOTES]) {
     mirrorHardButtons({ buttonMaps: mergedMaps, activityId, wizardMap, previousWizardMap, alloc, prefix });
   }
