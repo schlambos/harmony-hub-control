@@ -123,7 +123,7 @@ export function simulateGestureLookup(mapList, activityId, gestureKey) {
   const id = String(activityId);
   const maps = mapList?.ButtonMaps ?? [];
   const activityMap = maps.find((m) => String(m?.ButtonMapIdentifier) === `16417Activity${id}`);
-  if (!activityMap) return { ok: false, reason: "no-activity-map", warnings: ["No Touch screen for this activity yet."] };
+  if (!activityMap) return { ok: false, reason: "no-activity-map", warnings: ["No remote screen for this activity yet."] };
   const gesture = (activityMap.Buttons ?? []).find(
     (b) => String(b?.__type ?? "").includes("GestureRemoteButton") && String(b?.ButtonKey) === String(gestureKey),
   );
@@ -139,7 +139,7 @@ export function simulateGestureLookup(mapList, activityId, gestureKey) {
   if (!deviceMap) {
     return {
       ok: false, reason: "no-device-screen", deviceId, command, functionId,
-      warnings: [`Device ${deviceId} has no Touch screen, so ${gestureKey} → ${command} does nothing.`],
+      warnings: [`Device ${deviceId} has no remote screen, so ${gestureKey} → ${command} does nothing.`],
     };
   }
   const buttons = deviceMap.Buttons ?? [];
@@ -161,7 +161,7 @@ export function simulateGestureLookup(mapList, activityId, gestureKey) {
   if (!target) {
     return {
       ok: false, reason: "no-command-on-screen", deviceId, command, functionId,
-      warnings: [`Device ${deviceId} has no ${command} on its Touch screen.`],
+      warnings: [`Device ${deviceId} has no ${command} on its remote screen.`],
     };
   }
   const isHard = String(target?.__type ?? "").includes("HardRemoteButton");
@@ -180,7 +180,7 @@ export function simulateGestureLookup(mapList, activityId, gestureKey) {
       return {
         ok: false, reason: "hard-gate-blocked", deviceId, command, functionId,
         resolved: "hard", hardKey: key, hardGateOk: false,
-        warnings: [`${gestureKey} → ${command} resolves to hard key ${key}, which is not mapped in this activity (Touch key gate drops it).`],
+        warnings: [`${gestureKey} → ${command} resolves to hard key ${key}, which is not mapped in this activity (the remote drops keys the activity doesn't map).`],
       };
     }
     return { ok: true, reason: "hard", deviceId, command, functionId, resolved: "hard", hardKey: key, hardGateOk: true, warnings };
@@ -197,7 +197,7 @@ export function gestureWarningsForActivity(mapList, activityId) {
     if (!String(b?.__type ?? "").includes("GestureRemoteButton")) continue;
     const key = String(b?.ButtonKey ?? "");
     if (!GESTURE_KEYS.includes(key)) {
-      out.push({ key, level: "warn", message: `Unknown gesture key ${key}; the Touch only resolves SwipeUp/Down/Left/Right and Tap.` });
+      out.push({ key, level: "warn", message: `Unknown gesture key ${key}; remotes only resolve SwipeUp/Down/Left/Right and Tap.` });
       continue;
     }
     const sim = simulateGestureLookup(mapList, activityId, key);

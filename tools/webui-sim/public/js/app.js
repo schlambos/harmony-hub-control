@@ -10,6 +10,7 @@ import { createDevicesView } from "./views/devices.js";
 import { createSettingsView } from "./views/settings.js";
 import { createBluetoothView } from "./views/bluetooth.js";
 import { createRemotesView } from "./views/remotes.js";
+import { createActivityButtonsView } from "./views/activity-buttons.js";
 import { createMqttView } from "./views/mqtt.js";
 import { createWifiView } from "./views/wifi.js";
 import { createBackupView } from "./views/backup.js";
@@ -33,6 +34,7 @@ const ROUTES = {
   devices: { section: "view-devices", factory: createDevicesView, title: "Devices" },
   settings: { section: "view-settings", factory: createSettingsView, title: "Settings" },
   remotes: { parent: "settings", section: "view-remotes", factory: createRemotesView, title: "Remotes" },
+  activitybuttons: { parent: "remotes", section: "view-activity-buttons", factory: createActivityButtonsView, title: "Activity buttons" },
   bluetooth: { parent: "settings", section: "view-bluetooth", factory: createBluetoothView, title: "Bluetooth" },
   mqtt: { parent: "settings", section: "view-mqtt", factory: createMqttView, title: "MQTT" },
   wifi: { parent: "settings", section: "view-wifi", factory: createWifiView, title: "Wi-Fi" },
@@ -100,6 +102,13 @@ function renderNav() {
       </a>`).join("")}`;
 }
 
+/* The tab a page sits under; sub-pages can nest (Remotes → Activity buttons). */
+function tabOf(name) {
+  let at = name;
+  while (ROUTES[at]?.parent) at = ROUTES[at].parent;
+  return at;
+}
+
 function markTab(tab) {
   document.querySelectorAll(".nav-item").forEach((link) => {
     if (link.dataset.tab === tab) link.setAttribute("aria-current", "page");
@@ -121,7 +130,7 @@ function show({ name, args }) {
   next.section.classList.add("active");
   // Every navigation starts at the top, also within one view (list → device).
   window.scrollTo(0, 0);
-  markTab(route.parent ?? name);
+  markTab(tabOf(name));
   setAppBar(route.parent ? { title: route.title, back: route.parent } : null);
   document.body.dataset.route = name;
   next.view.onShow?.({ args });
