@@ -115,6 +115,22 @@ Result must be size 74660, SHA-256
   -o build/output/codex_hal_ltcp payload/source/codex_hal_ltcp.c
 ```
 
+### codex_flash_free (installer helper, Official Zig, `-mcpu=mips32`)
+
+The installers copy this probe into their RAM staging folder, run it to read
+the free flash (`statfs` on `/data`; the hub's BusyBox has no `df`), and
+delete it with the folder. It lives in `payload/helpers/`, not `payload/bin/`,
+because it is never installed on the hub.
+
+```sh
+"$OFFICIAL_ZIG" cc -target mips-linux-musleabi -mcpu=mips32 -Os -static -s \
+  -o payload/helpers/codex_flash_free payload/source/codex_flash_free.c
+```
+
+Result must be `ELF 32-bit MSB executable, MIPS, MIPS32`, statically linked,
+stripped, size 54424, SHA-256
+`82f398eff425562494dc9153b9aff2b903ad7af29d791b7f1efde70fa8e06379`.
+
 ### dhcpd / portal (Bootlin mips32-uclibc)
 
 `codex_dhcpd` and `codex_portal` reproduce with the pinned Bootlin

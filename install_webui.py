@@ -12,13 +12,22 @@ MD5 sums using strict BusyBox md5sum output, and compared with the hub's
 current files. Candidates that already match are left alone.
 
 The hub's BusyBox has no mktemp, stat, df, or sync applets, so everything
-here uses only cat, cp, mv, rm, chmod, mkdir, ls -l, and md5sum. Flash free
-space cannot be measured, so changed files install as a two-phase commit:
+here uses only cat, cp, ln, mv, rm, chmod, mkdir, ls -l, awk, and md5sum.
+Free flash is measured by payload/helpers/codex_flash_free, which runs from
+the RAM staging tree and is never installed. The preflight compares it with
+an estimate of what the changed files take on the hub's compressing jffs2 and
+blocks (BLOCKED_CAPACITY) before writing anything when they don't fit.
+
+Changed files install as a two-phase commit:
 
   1. copy each changed file next to its destination as <dest>.codex-new and
-     verify it; if flash fills up, every .codex-new is removed and no live
-     file has changed (BLOCKED_CAPACITY);
+     verify it; if flash fills up anyway, every .codex-new is removed and no
+     live file has changed (BLOCKED_CAPACITY);
   2. rename each .codex-new over its destination, codex_webui last.
+
+When harmony-hub-root already left an identical dropbearmulti on the hub,
+phase 1 hard-links it instead of writing a second copy. Its leftover staging
+folders are reported, and removed with --remove-root-tool-leftovers.
 
 Originals are copied into RAM before phase 1, so any later failure restores
 them (copy to <dest>.codex-rb, then rename) with their observed modes.
@@ -42,6 +51,7 @@ import socket
 import subprocess
 import sys
 import time
+import zlib
 from pathlib import Path
 
 
@@ -57,6 +67,40 @@ NEW_SUFFIX = ".codex-new"
 RESTORE_SUFFIX = ".codex-rb"
 # RAM that must stay free after staging and rollback copies (tmpfs is RAM).
 RAM_MARGIN_BYTES = 4 * 1048576
+
+# Free-space probe, run from the RAM staging tree only.
+FLASH_HELPER = PAYLOAD / "helpers" / "codex_flash_free"
+FLASH_HELPER_NAME = "codex_flash_free"
+FLASH_PATH = "/data"
+# jffs2 stores a file as zlib-compressed nodes of at most one 4 KiB page, each
+# with a 68-byte header; its directory entry adds 40 bytes plus the name.
+JFFS2_PAGE = 4096
+JFFS2_NODE_HEADER = 68
+JFFS2_DIRENT_HEADER = 40
+# Flash kept spare on top of the estimate: one 64 KiB erase block plus 5%.
+FLASH_MARGIN_BYTES = 64 * 1024
+FLASH_MARGIN_PERCENT = 5
+
+# What harmony-hub-root leaves behind. Its dropbearmulti is the same build as
+# ours, and its staging folders hold about 0.5 MB of base64 chunks each.
+DROPBEAR_DEST = "/data/codex/bin/dropbearmulti"
+ROOT_TOOL_DROPBEAR = "/data/rootssh/bin/dropbearmulti"
+ROOT_TOOL_FILES = ["/data/rootssh/bin/dropbearmulti", "/data/rootssh/bin/dropbear", "/data/rootssh/bin/dropbearkey"]
+ROOT_TOOL_STAGE_RE = re.compile(r"^/data/codexssh_[A-Za-z0-9_]+_stage$")
+# The hub's ls has no -R; a root-tool stage holds files and a chunks/ folder.
+ROOT_TOOL_SCAN = (
+    'for d in /data/codexssh_*_stage; do [ -d "$d" ] || continue; '
+    "set -- $(ls -l \"$d\" \"$d/chunks\" 2>/dev/null | awk '/^-/ {s += $5; n++} END {print s + 0, n + 0}'); "
+    'echo "root_tool_stage bytes=$1 files=$2 path=$d"; done; '
+    "for f in /data/rootssh/bin/dropbearmulti /data/codex/bin/dropbearmulti; do "
+    '[ -f "$f" ] && [ ! -L "$f" ] || continue; set -- $(ls -il "$f"); '
+    'echo "dropbear_copy inode=$1 path=$f"; done'
+)
+# Removes the root tool's Dropbear only while SSH runs ours.
+ROOT_TOOL_DROPBEAR_REMOVE = (
+    "if [ -x /data/codex/bin/dropbear ] && grep /data/codex/bin/dropbear /usr/sbin/dropbear >/dev/null; then "
+    "rm -f " + " ".join(ROOT_TOOL_FILES) + " && echo removed; fi"
+)
 
 HANDOFF_REQUIRED_PATHS = [
     "/etc/init.d/rcS.local",
@@ -210,6 +254,26 @@ def bin_manifest_names() -> list[str]:
     return names
 
 
+def flash_estimate(data: bytes, name: str) -> int:
+    """Bytes a new file takes on the hub's jffs2: one zlib node (level 3, as
+    jffs2 uses) per 4 KiB page, stored raw when that is smaller, plus the
+    directory entry. Nodes are 4-byte aligned."""
+    total = (JFFS2_DIRENT_HEADER + len(name.encode("utf-8")) + 3) & ~3
+    for start in range(0, len(data), JFFS2_PAGE):
+        page = data[start : start + JFFS2_PAGE]
+        stored = min(len(zlib.compress(page, 3)), len(page))
+        total += (JFFS2_NODE_HEADER + stored + 3) & ~3
+    return total
+
+
+def flash_margin(estimate: int) -> int:
+    return FLASH_MARGIN_BYTES + estimate * FLASH_MARGIN_PERCENT // 100
+
+
+def kib(value: int) -> str:
+    return f"{(value + 1023) // 1024} KB"
+
+
 def stage_suffix() -> str:
     """Random staging-dir suffix (the hub has no mktemp)."""
     return secrets.token_hex(6)
@@ -255,8 +319,11 @@ class Candidate:
         self.condition = condition  # always | if-missing
         self.bytes = 0
         self.md5 = ""
+        self.flash_bytes = 0
         self.action = "replace"  # replace | create | preserve | unchanged
         self.staged_name = ""
+        # An identical file already on the hub that phase 1 hard-links.
+        self.link_source = ""
 
     def data(self) -> bytes:
         if self.local is not None:
@@ -267,6 +334,7 @@ class Candidate:
         data = self.data()
         self.bytes = len(data)
         self.md5 = hashlib.md5(data).hexdigest()
+        self.flash_bytes = flash_estimate(data, self.dest.rsplit("/", 1)[-1] + NEW_SUFFIX)
 
 
 MD5_HEX_RE = re.compile(r"^[0-9a-f]{32}$")
@@ -371,6 +439,19 @@ class Installer:
         self.changed: list[dict[str, object]] = []
         self.new_copies: list[str] = []
         self.hub_id = ""
+        # Flash, from codex_flash_free; None when it couldn't be measured.
+        self.flash_helper = ""
+        self.flash_avail: int | None = None
+        self.flash_total = 0
+        self.flash_written = 0
+        self.flash_required = 0
+        self.flash_released = 0
+        self.flash_note = ""
+        # "preflight" when the measured check blocked, "phase1" when a copy failed.
+        self.capacity_stage = ""
+        self.root_tool_stages: list[dict[str, object]] = []
+        # Inode of each Dropbear copy, by path.
+        self.dropbear_copies: dict[str, str] = {}
 
     # ------------------------------------------------------------------ ssh
 
@@ -466,6 +547,42 @@ class Installer:
             self.run_remote(command, cand.data(), timeout=timeout, quiet=True)
             shown = "<hidden>" if cand.sensitive else cand.md5
             kv(f"staged index={index} dest={cand.dest} bytes={cand.bytes} md5={shown}")
+
+    def upload_flash_helper(self) -> None:
+        if not FLASH_HELPER.is_file():
+            self.flash_note = f"{FLASH_HELPER.relative_to(ROOT)} is missing"
+            return
+        remote = f"{self.stage}/{FLASH_HELPER_NAME}"
+        self.run_remote(
+            f"cat > {remote_quote(remote)} && chmod 700 {remote_quote(remote)}",
+            FLASH_HELPER.read_bytes(),
+            timeout=90,
+            quiet=True,
+        )
+        self.flash_helper = remote
+        info(f"staged flash probe {remote} (RAM only, never installed)")
+
+    def measure_flash(self) -> None:
+        """Free flash from codex_flash_free; leaves flash_avail None on any doubt."""
+        self.flash_avail = None
+        if not self.flash_helper:
+            return
+        code, out, err = self.run_remote_rc(f"{remote_quote(self.flash_helper)} {FLASH_PATH}", timeout=30)
+        match = re.search(
+            r"^flash type=(0x[0-9a-f]+) total_bytes=(\d+) free_bytes=(\d+) avail_bytes=(\d+) path=(\S+)$",
+            out.strip(),
+            re.M,
+        )
+        if code != 0 or not match or match.group(5) != FLASH_PATH:
+            self.flash_note = f"the flash probe didn't answer ({(err or out).strip()[:120] or f'exit {code}'})"
+            return
+        total, avail = int(match.group(2)), int(match.group(4))
+        if not (1048576 <= total <= 64 * 1048576) or avail > total:
+            self.flash_note = f"the flash probe reported an unlikely size (total {total}, available {avail})"
+            return
+        self.flash_total = total
+        self.flash_avail = avail
+        self.flash_note = ""
 
     def verify_stage_md5(self) -> None:
         step("Verifying staged candidate MD5 (strict BusyBox format)")
@@ -642,7 +759,7 @@ class Installer:
     def probe_destinations(self) -> None:
         step("Probing destination state (BusyBox ls -l / md5sum)")
         dests = [c.dest for c in self.candidates]
-        dests += [p for p in HANDOFF_REQUIRED_PATHS if p not in dests]
+        dests += [p for p in HANDOFF_REQUIRED_PATHS + [ROOT_TOOL_DROPBEAR] if p not in dests]
         self.probe = self.file_status(dests)
         for cand in self.candidates:
             if self.probe[cand.dest]["kind"] in ("symlink", "other"):
@@ -706,6 +823,59 @@ class Installer:
                 "upgrade mode: /data/codex/hub_id missing and no explicit --hub-id supplied"
             )
 
+    def plan_dropbear_link(self) -> None:
+        """Reuse harmony-hub-root's dropbearmulti when it is byte-identical."""
+        source = self.probe.get(ROOT_TOOL_DROPBEAR, {})
+        for cand in self.candidates:
+            if (
+                cand.dest == DROPBEAR_DEST
+                and cand.action in ("replace", "create")
+                and source.get("kind") == "regular"
+                and source.get("md5") == cand.md5
+            ):
+                cand.link_source = ROOT_TOOL_DROPBEAR
+
+    def scan_root_tool_leftovers(self) -> None:
+        out = self.run_remote(ROOT_TOOL_SCAN, timeout=60, quiet=True)
+        self.root_tool_stages = []
+        self.dropbear_copies = {}
+        for line in out.splitlines():
+            line = line.strip()
+            stage = re.match(r"^root_tool_stage bytes=(\d+) files=(\d+) path=(\S+)$", line)
+            if stage and ROOT_TOOL_STAGE_RE.match(stage.group(3)):
+                self.root_tool_stages.append(
+                    {"path": stage.group(3), "bytes": int(stage.group(1)), "files": int(stage.group(2))}
+                )
+                continue
+            copy = re.match(r"^dropbear_copy inode=(\d+) path=(\S+)$", line)
+            if copy and copy.group(2) in (ROOT_TOOL_DROPBEAR, DROPBEAR_DEST):
+                self.dropbear_copies[copy.group(2)] = copy.group(1)
+
+    def root_tool_dropbear_removable(self) -> bool:
+        """True when the root tool's Dropbear is a separate copy that SSH no
+        longer uses and phase 1 won't link."""
+        ours = self.dropbear_copies.get(DROPBEAR_DEST)
+        theirs = self.dropbear_copies.get(ROOT_TOOL_DROPBEAR)
+        wrapper = next((c for c in self.candidates if c.dest == "/usr/sbin/dropbear"), None)
+        return bool(
+            ours
+            and theirs
+            and ours != theirs
+            and wrapper is not None
+            and self.probe.get("/usr/sbin/dropbear", {}).get("md5") == wrapper.md5
+            and not any(c.link_source == ROOT_TOOL_DROPBEAR for c in self.candidates)
+        )
+
+    def leftover_credit(self) -> int:
+        """Flash the removable root-tool leftovers are estimated to free."""
+        # Base64 chunks compress to about two thirds; count three fifths.
+        credit = sum(int(s["bytes"]) * 3 // 5 for s in self.root_tool_stages)
+        if self.root_tool_dropbear_removable():
+            dropbear = next((c for c in self.candidates if c.dest == DROPBEAR_DEST), None)
+            if dropbear is not None:
+                credit += dropbear.flash_bytes
+        return credit
+
     def active_candidates(self) -> list[Candidate]:
         return [c for c in self.candidates if c.action in ("replace", "create")]
 
@@ -728,18 +898,48 @@ class Installer:
         self.forward_total = 0
         self.rollback_total = 0
         self.staged_total = sum(c.bytes for c in self.candidates)
+        copies = 0
+        self.flash_released = 0
         for cand in self.candidates:
             state = self.probe.get(cand.dest, {})
             if cand.action in ("replace", "create"):
                 self.forward_total += cand.bytes
+                if not cand.link_source:
+                    copies += cand.flash_bytes
             if cand.action == "replace":
-                self.rollback_total += int(state.get("size", "0"))
+                old = int(state.get("size", "0"))
+                self.rollback_total += old
+                # The replaced original's flash comes back after the rename;
+                # assume it compressed like its replacement.
+                self.flash_released += cand.flash_bytes * old // max(cand.bytes, 1)
             kv(
                 f"destination dest={cand.dest} exists={1 if state.get('kind') == 'regular' else 0} "
                 f"action={cand.action} bytes={cand.bytes} mode={cand.mode}"
+                + (f" link={cand.link_source}" if cand.link_source else "")
             )
         # Staged candidates already occupy RAM; rollback copies are added next.
         self.ram_required_bytes = self.rollback_total + RAM_MARGIN_BYTES
+        # Phase 1 writes every new copy before any original goes, after the
+        # handoff backup: text the installer hasn't read, assumed to halve.
+        handoff = self.handoff_estimate // 2 + 1024 if self.active_candidates() else 0
+        self.flash_written = copies + handoff
+        self.flash_required = self.flash_written + (flash_margin(copies) if copies else 0)
+
+    def flash_after(self) -> int:
+        """Estimated free flash once the install (and any opted-in cleanup) is done."""
+        credit = self.leftover_credit() if self.args.remove_root_tool_leftovers else 0
+        return max(0, (self.flash_avail or 0) + credit - self.flash_written + self.flash_released)
+
+    def flash_shortfall(self, credit: int = 0) -> int:
+        """Bytes of flash missing for phase 1; 0 when enough or not measured."""
+        if self.flash_avail is None:
+            return 0
+        return max(0, self.flash_required - self.flash_avail - credit)
+
+    def update_flash_need(self) -> int:
+        """Flash a later codex_webui update needs while both copies exist."""
+        webui = next(c for c in self.candidates if c.dest == WEBUI_DEST)
+        return webui.flash_bytes + flash_margin(webui.flash_bytes)
 
     def count_backup_generations(self) -> None:
         cmd = (
@@ -772,10 +972,18 @@ class Installer:
     def decide_verdict(self) -> None:
         if self.verdict == VERDICT_CONFIG_UNCERTAIN:
             return
+        credit = self.leftover_credit() if self.args.remove_root_tool_leftovers else 0
         if self.ram_free_bytes < self.ram_required_bytes:
             self.verdict = VERDICT_ROLLBACK_CAPACITY
             self.verdict_reasons.append(
                 f"free RAM {self.ram_free_bytes} < rollback copies + margin {self.ram_required_bytes}"
+            )
+        elif self.flash_shortfall(credit) and not self.args.skip_flash_check:
+            self.verdict = VERDICT_CAPACITY
+            self.capacity_stage = "preflight"
+            self.verdict_reasons.append(
+                f"free flash {self.flash_avail} < estimated need {self.flash_required}"
+                + (f" (after about {credit} freed from root-tool leftovers)" if credit else "")
             )
         else:
             self.verdict = VERDICT_ALLOWED
@@ -826,7 +1034,7 @@ class Installer:
             shown = "<hidden>" if cand.sensitive else cand.md5
             kv(
                 f"candidate index={index} dest={cand.dest} bytes={cand.bytes} md5={shown} "
-                f"mode={cand.mode} kind={cand.kind} action={cand.action}"
+                f"mode={cand.mode} kind={cand.kind} action={cand.action} flash={cand.flash_bytes}"
             )
             info(
                 f"candidate[{index}] path={cand.dest} expected_md5={shown} "
@@ -844,17 +1052,18 @@ class Installer:
             f"update={self.generations['update']}"
         )
         kv(f"handoff_estimate_bytes={self.handoff_estimate}")
-        kv("flash_capacity_check=two-phase-commit")
+        kv(f"flash_capacity_check={'two-phase-commit' if self.flash_avail is None else 'measured'}")
         kv(f"forward_total_bytes={self.forward_total}")
         kv(f"rollback_total_bytes={self.rollback_total}")
         kv(f"staged_total_bytes={self.staged_total}")
         kv(f"ram_free_bytes={self.ram_free_bytes}")
         kv(f"ram_required_bytes={self.ram_required_bytes}")
-        info(
-            "Flash free space cannot be measured on this firmware (no df/statvfs): "
-            f"changed files ({self.forward_total} bytes) are written as {NEW_SUFFIX} copies "
-            "first, and the install aborts with no live changes if flash fills up."
-        )
+        kv(f"flash_required_bytes={self.flash_required}")
+        if self.flash_avail is not None:
+            kv(f"flash_total_bytes={self.flash_total}")
+            kv(f"flash_free_bytes={self.flash_avail}")
+            kv(f"flash_after_bytes={self.flash_after()}")
+        self.render_flash_report()
         info(
             f"RAM: free={self.ram_free_bytes} required={self.ram_required_bytes} "
             f"(rollback copies {self.rollback_total} + margin {RAM_MARGIN_BYTES})"
@@ -863,6 +1072,50 @@ class Installer:
             kv(f"verdict_reason={reason}")
             info(f"verdict_reason: {reason}")
         self.render_verdict()
+
+    def render_flash_report(self) -> None:
+        # NOTE(InstallerCliUX): human-facing prose; the key=value lines are
+        # the stable contract.
+        if self.flash_avail is None:
+            info(
+                f"Free flash couldn't be measured ({self.flash_note}): changed files "
+                f"(about {kib(self.flash_written)} on flash) are written as {NEW_SUFFIX} copies "
+                "first, and the install stops with no live changes if flash fills up."
+            )
+        else:
+            info(
+                f"Flash: {kib(self.flash_avail)} free of {kib(self.flash_total)}. The changed files "
+                f"need about {kib(self.flash_required)} while old and new copies both exist "
+                "(an estimate with a safety margin)."
+            )
+            if self.flash_shortfall() and self.args.skip_flash_check:
+                info("--skip-flash-check: installing anyway; the install stops with no live changes if flash fills up.")
+            after = self.flash_after()
+            info(f"About {kib(after)} will be free afterwards.")
+            if after < self.update_flash_need():
+                info(
+                    f"That is less than the {kib(self.update_flash_need())} a later web UI update "
+                    "needs. Free some space before updating (see the README)."
+                )
+        for cand in self.active_candidates():
+            if cand.link_source:
+                kv(f"flash_link dest={cand.dest} source={cand.link_source}")
+                info(
+                    f"{cand.dest}: harmony-hub-root's identical copy at {cand.link_source} is reused "
+                    "as a hard link, so it takes no extra flash."
+                )
+        leftovers = [(str(s["path"]), int(s["bytes"]), int(s["files"])) for s in self.root_tool_stages]
+        if self.root_tool_dropbear_removable():
+            leftovers.append((ROOT_TOOL_DROPBEAR, int(self.probe[ROOT_TOOL_DROPBEAR]["size"]), 1))
+        for path, size, files in leftovers:
+            kv(f"root_tool_leftover bytes={size} files={files} path={path}")
+            what = "a second copy of Dropbear that SSH no longer uses" if path == ROOT_TOOL_DROPBEAR else "staging files"
+            info(f"harmony-hub-root left {path} behind: {what}, {kib(size)} in {files} file(s).")
+        if leftovers:
+            if self.args.remove_root_tool_leftovers and not self.args.preflight_only:
+                info("They are removed before the install (--remove-root-tool-leftovers).")
+            else:
+                info("Run the installer with --remove-root-tool-leftovers to remove them and free that flash.")
 
     def render_verdict(self) -> None:
         # NOTE(InstallerCliUX): human-facing verdict prose is owned by
@@ -881,6 +1134,20 @@ class Installer:
                     "Persistent install may proceed after this report "
                     f"({NEW_SUFFIX} copies, then same-directory renames)."
                 )
+        elif self.verdict == VERDICT_CAPACITY and self.capacity_stage == "preflight":
+            info(
+                f"BLOCKED_CAPACITY — not enough free flash: about {kib(self.flash_required)} needed, "
+                f"{kib(self.flash_avail or 0)} free. Nothing was installed."
+            )
+            if (self.root_tool_stages or self.root_tool_dropbear_removable()) and not self.args.remove_root_tool_leftovers:
+                info(
+                    f"Removing harmony-hub-root's leftovers (--remove-root-tool-leftovers) frees about "
+                    f"{kib(self.leftover_credit())}."
+                )
+            info(
+                "Otherwise free space on the hub, or pass --skip-flash-check to try anyway: "
+                "the install still stops with no live changes if flash fills up."
+            )
         elif self.verdict == VERDICT_CAPACITY:
             info(
                 "BLOCKED_CAPACITY — flash filled up while writing the new copies; "
@@ -1002,6 +1269,44 @@ class Installer:
             raise RuntimeError("handoff directory rename did not complete")
         self.handoff_dirs.append(created[-1])
 
+    def remove_root_tool_leftovers(self) -> None:
+        """Delete harmony-hub-root's staging folders and, while SSH runs ours,
+        its spare Dropbear. Opted in with --remove-root-tool-leftovers; not
+        rolled back, since nothing reads them."""
+        step("Removing harmony-hub-root leftovers")
+        for stage in self.root_tool_stages:
+            path = str(stage["path"])
+            if not ROOT_TOOL_STAGE_RE.match(path):
+                raise RuntimeError(f"refusing to remove unexpected path {path!r}")
+            code, _out, err = self.run_remote_rc(f"rm -rf {remote_quote(path)}", timeout=120)
+            if code != 0:
+                info(f"warning: could not remove {path}: {err.strip()}")
+            else:
+                kv(f"removed_leftover={path}")
+        if self.root_tool_dropbear_removable():
+            code, out, _err = self.run_remote_rc(ROOT_TOOL_DROPBEAR_REMOVE, timeout=30)
+            if code == 0 and out.strip() == "removed":
+                kv(f"removed_leftover={ROOT_TOOL_DROPBEAR}")
+            else:
+                info(f"kept {ROOT_TOOL_DROPBEAR}: SSH doesn't run the installed Dropbear yet")
+        self.scan_root_tool_leftovers()
+        self.measure_flash()
+        if self.flash_avail is not None:
+            kv(f"flash_free_after_cleanup_bytes={self.flash_avail}")
+            info(f"Flash free after removing them: {kib(self.flash_avail)}.")
+
+    def report_flash_after_install(self) -> None:
+        self.measure_flash()
+        if self.flash_avail is None:
+            return
+        kv(f"flash_free_after_bytes={self.flash_avail}")
+        info(f"Flash free after the install: {kib(self.flash_avail)}.")
+        if self.flash_avail < self.update_flash_need():
+            info(
+                f"A later web UI update needs about {kib(self.update_flash_need())}. "
+                "Free some space before updating (see the README)."
+            )
+
     def remove_new_copies(self) -> list[str]:
         """Remove every <dest>.codex-new this run wrote; return those that failed."""
         failed = []
@@ -1012,12 +1317,31 @@ class Installer:
         self.new_copies = []
         return failed
 
+    def link_new_copy(self, cand: Candidate, new: str) -> bool:
+        """Hard-link an identical file already on the hub as <dest>.codex-new."""
+        code, out, err = self.run_remote_rc(
+            f"ln {remote_quote(cand.link_source)} {remote_quote(new)} && "
+            f"chmod {remote_quote(cand.mode)} {remote_quote(new)} && "
+            f"md5sum {remote_quote(new)}",
+            timeout=60,
+        )
+        lines = out.strip().splitlines()
+        match = MD5_LINE_RE.match(lines[-1]) if code == 0 and lines else None
+        if match and match.group(1) == cand.md5:
+            info(f"linked dest={new} to {cand.link_source} (no extra flash)")
+            return True
+        self.run_remote_rc(f"rm -f {remote_quote(new)}", timeout=30)
+        info(f"could not link {cand.link_source} ({err.strip() or 'verification failed'}); copying instead")
+        return False
+
     def write_new_copies(self) -> None:
         """Phase 1: write and verify <dest>.codex-new next to every changed dest."""
         step(f"Phase 1: writing verified {NEW_SUFFIX} copies (no live file changes)")
         for cand in self.active_candidates():
             new = cand.dest + NEW_SUFFIX
             self.new_copies.append(new)
+            if cand.link_source and self.link_new_copy(cand, new):
+                continue
             cmd = (
                 f"cp {remote_quote(f'{self.stage}/{cand.staged_name}')} {remote_quote(new)} && "
                 f"chmod {remote_quote(cand.mode)} {remote_quote(new)} && "
@@ -1198,11 +1522,15 @@ class Installer:
 
         self.create_stage()
         self.upload_candidates()
+        self.upload_flash_helper()
         self.verify_stage_md5()
 
         self.probe_destinations()
         self.apply_upgrade_gates()
+        self.plan_dropbear_link()
         self.ram_status()
+        self.measure_flash()
+        self.scan_root_tool_leftovers()
 
         self.count_backup_generations()
         self.compute_handoff_estimate()
@@ -1224,10 +1552,25 @@ class Installer:
             info("normal mode aborted before any persistent mutation")
             return 2
 
+        if self.args.remove_root_tool_leftovers and (self.root_tool_stages or self.root_tool_dropbear_removable()):
+            self.remove_root_tool_leftovers()
+            if self.active_candidates() and self.flash_shortfall() and not self.args.skip_flash_check:
+                self.verdict = VERDICT_CAPACITY
+                self.capacity_stage = "preflight"
+                reason = (
+                    f"free flash {self.flash_avail} < estimated need {self.flash_required} "
+                    "after removing the leftovers"
+                )
+                self.verdict_reasons.append(reason)
+                kv(f"verdict_reason={reason}")
+                self.render_verdict()
+                self.cleanup_stage()
+                return 2
+
         if not self.active_candidates():
             self.cleanup_stage()
             step("Done")
-            info("The hub already matches this payload; nothing was written or restarted.")
+            info("The hub already matches this payload; nothing was installed or restarted.")
             return 0
 
         try:
@@ -1240,6 +1583,7 @@ class Installer:
             self.verify_installed()
         except CapacityAbort as exc:
             self.verdict = VERDICT_CAPACITY
+            self.capacity_stage = "phase1"
             self.verdict_reasons.append(str(exc))
             kv(f"verdict_reason={exc}")
             self.render_verdict()
@@ -1287,6 +1631,7 @@ class Installer:
                 fail(str(rb_exc))
             fail(f"smoke test failed and changes were rolled back: {exc}")
 
+        self.report_flash_after_install()
         self.cleanup_stage()
 
         if self.cloud_blocker_changed() and not self.args.no_apply_cloud_restart:
@@ -1350,14 +1695,30 @@ def parse_args(argv: list[str]) -> argparse.Namespace:
     parser.add_argument("--no-apply-cloud-restart", action="store_true", help="Do not reboot after the Logitech cloud blocker files change")
     parser.add_argument("--no-prompt", action="store_true", help="Fail instead of asking for missing required values")
     parser.add_argument(
+        "--remove-root-tool-leftovers",
+        action="store_true",
+        help=(
+            "Delete harmony-hub-root's leftover /data/codexssh_*_stage folders, and its spare "
+            "/data/rootssh/bin/dropbearmulti once SSH runs the installed Dropbear, before installing"
+        ),
+    )
+    parser.add_argument(
+        "--skip-flash-check",
+        action="store_true",
+        help=(
+            "Install even when the measured free flash looks too small; the install still stops "
+            "with no live changes if flash fills up"
+        ),
+    )
+    parser.add_argument(
         "--preflight-only",
         action="store_true",
         help=(
             "Volatile preflight only: upload candidates into a private "
             "/var/volatile/codex-install-* tree, verify nonsensitive MD5 "
             "hashes, compare them with the hub's current files, check RAM "
-            "for rollback copies, and print inventory plus a terminal "
-            "verdict (ALLOWED or BLOCKED_*). "
+            "for rollback copies and free flash for the changed files, and "
+            "print inventory plus a terminal verdict (ALLOWED or BLOCKED_*). "
             "Performs no persistent writes, pruning, handoff, installs, "
             "restarts, or other service actions."
         ),

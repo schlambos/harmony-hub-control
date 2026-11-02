@@ -54,6 +54,9 @@ HUB_FILES = {
     "payload/scripts/netservicestarter.lua": ("/opt/luaworks/tasks/connectserver/netservicestarter.lua", "644", 3),
 }
 HUB_INVENTORY_FILES = {"payload/bin/MANIFEST.txt", "payload/bin/FILES"}
+# Run by the installers from the hub's RAM staging folder; never installed,
+# so no app update ships them.
+HUB_INSTALLER_HELPERS = {"payload/helpers/codex_flash_free"}
 VERSION_RE = re.compile(r"^\d+\.\d+\.\d+$")
 
 
@@ -112,7 +115,7 @@ def hub_zip_files(zip_path: Path, version: str) -> tuple[list[dict], str]:
                 continue
             data = z.read(info)
             contents[rel] = data
-            if rel in HUB_INVENTORY_FILES:
+            if rel in HUB_INVENTORY_FILES or rel in HUB_INSTALLER_HELPERS:
                 continue
             if rel not in HUB_FILES:
                 raise ReleaseError(
@@ -124,7 +127,7 @@ def hub_zip_files(zip_path: Path, version: str) -> tuple[list[dict], str]:
                 "path": rel, "dest": dest, "mode": mode, "tier": tier,
                 "size": len(data), "sha256": sha256_bytes(data),
             })
-    missing = sorted(set(HUB_FILES) - seen)
+    missing = sorted(set(HUB_FILES) - seen) + sorted(HUB_INSTALLER_HELPERS - set(contents))
     if missing:
         raise ReleaseError(f"{zip_path.name}: missing payload files {', '.join(missing)}")
     check_bin_manifest(contents, zip_path.name)

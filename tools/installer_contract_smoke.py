@@ -27,7 +27,12 @@ Contract proven (Python behavioral):
   and preserves staging; upgrade preserves existing configuration;
   codex_webui is installed last; no service action before post-install
   verification; only installer handoffs are pruned; reboot only when the
-  cloud-blocker files change.
+  cloud-blocker files change; free flash is measured from RAM and a short
+  hub is blocked before any write, with a fallback when it can't be
+  measured; harmony-hub-root's identical Dropbear is hard-linked (copied if
+  the link fails) and survives rollback; its leftovers are reported and
+  removed only with --remove-root-tool-leftovers, the spare Dropbear only
+  while SSH runs ours.
 
 Determinism: no randomness, no clock reads, fixed fake staging suffix,
 fixed fake timestamps. All hosts/IDs/credentials are obviously fake
@@ -100,13 +105,21 @@ class FakeHub:
     prefix). Like the real hub it has no mktemp, stat, readlink, or df.
     """
 
-    def __init__(self, available_bytes: int = 100_000_000) -> None:
+    def __init__(self, available_bytes: int = 4_000_000) -> None:
         self.fs: dict[str, dict[str, object]] = {}
         self.symlinks: set[str] = set()
         self.events: list[tuple] = []
         self.stage = FAKE_STAGE
-        # Flash bytes left for phase-1 copies; there is no way to query it.
+        # Free flash, charged with the installer's own jffs2 estimate per new
+        # file. codex_flash_free reports it unless flash_probe is False.
         self.available_bytes = available_bytes
+        self.flash_total = 5_242_880
+        self.flash_probe = True
+        # A unionfs that refuses hard links.
+        self.fail_link = False
+        # harmony-hub-root staging folders: path -> (bytes, files).
+        self.root_stages: dict[str, tuple[int, int]] = {}
+        self.next_inode = 100
         self.ram_free_kb = 26_000
         self.ram_inactive_file_kb = 0
         self.ram_slab_reclaimable_kb = 0
@@ -137,7 +150,24 @@ class FakeHub:
             self.events.append(("persistent_write", path))
 
     def remove_file(self, path: str) -> None:
+        self.release(path)
         self.fs.pop(path, None)
+
+    def links(self, entry: dict[str, object]) -> int:
+        return sum(1 for value in self.fs.values() if value is entry)
+
+    def release(self, path: str) -> None:
+        """Give back the flash of a persistent file whose last name goes away."""
+        entry = self.fs.get(path)
+        if entry is None or path.startswith(self.stage + "/") or self.links(entry) > 1:
+            return
+        self.available_bytes += INST.flash_estimate(entry["data"], path.rsplit("/", 1)[-1])
+
+    def inode(self, entry: dict[str, object]) -> int:
+        if "inode" not in entry:
+            self.next_inode += 1
+            entry["inode"] = self.next_inode
+        return int(entry["inode"])
 
     def paths_under_stage(self) -> list[str]:
         return sorted(p for p in self.fs if p.startswith(self.stage + "/") or p == self.stage)
@@ -186,6 +216,41 @@ class FakeHub:
             self.events.append(("staged_upload", path, mode))
             return 0, "", ""
 
+        if c == f"{self.stage}/{INST.FLASH_HELPER_NAME} {INST.FLASH_PATH}":
+            self.events.append(("flash_probe",))
+            if f"{self.stage}/{INST.FLASH_HELPER_NAME}" not in self.fs:
+                return 127, "", "sh: codex_flash_free: not found"
+            if not self.flash_probe:
+                return 1, "", "/data: Function not implemented"
+            free = min(self.available_bytes, self.flash_total)
+            return 0, (
+                f"flash type=0xf15f083d total_bytes={self.flash_total} free_bytes={free} "
+                f"avail_bytes={free} path={INST.FLASH_PATH}\n"
+            ), ""
+
+        if c == INST.ROOT_TOOL_SCAN:
+            lines = [
+                f"root_tool_stage bytes={size} files={files} path={path}"
+                for path, (size, files) in sorted(self.root_stages.items())
+            ]
+            for path in (INST.ROOT_TOOL_DROPBEAR, INST.DROPBEAR_DEST):
+                entry = self.fs.get(path)
+                if entry is not None and path not in self.symlinks:
+                    lines.append(f"dropbear_copy inode={self.inode(entry)} path={path}")
+            return 0, "".join(line + "\n" for line in lines), ""
+
+        if c == INST.ROOT_TOOL_DROPBEAR_REMOVE:
+            wrapper = self.fs.get("/usr/sbin/dropbear")
+            if INST.DROPBEAR_DEST in self.fs and wrapper and b"/data/codex/bin/dropbear" in wrapper["data"]:
+                for path in INST.ROOT_TOOL_FILES:
+                    self.remove_file(path)
+                    self.events.append(("rm", path))
+                return 0, "removed\n", ""
+            return 0, "", ""
+
+        if c.startswith("ln "):
+            return self.do_link(c)
+
         if c.startswith("for p in "):
             return self.do_probe(shlex.split(c[len("for p in "):c.index("; do ")]))
 
@@ -210,6 +275,9 @@ class FakeHub:
                     self.fs.pop(path, None)
             if target in self.backup_listing:
                 self.backup_listing.remove(target)
+            if target in self.root_stages:
+                # Base64 chunks take about two thirds of their size on jffs2.
+                self.available_bytes += self.root_stages.pop(target)[0] * 2 // 3
             return 0, "", ""
 
         if c.startswith("rm -f "):
@@ -316,12 +384,13 @@ class FakeHub:
         mode = shlex.split(segments[1])[1]
         data = self.fs[src]["data"]
         if dst.endswith(INST.NEW_SUFFIX):
-            if len(data) > self.available_bytes:
+            cost = INST.flash_estimate(data, dst.rsplit("/", 1)[-1])
+            if cost > self.available_bytes:
                 # Real cp leaves a truncated file behind on ENOSPC.
                 self.set_file(dst, data[: self.available_bytes], "644")
                 self.available_bytes = 0
                 return 1, "", "cp: write error: No space left on device"
-            self.available_bytes -= len(data)
+            self.available_bytes -= cost
             self.set_file(dst, data, mode)
             self.events.append(("new_copy", dst[: -len(INST.NEW_SUFFIX)]))
             return 0, f"{md5_bytes(data)}  {dst}\n", ""
@@ -335,13 +404,29 @@ class FakeHub:
             return 0, "", ""
         raise AssertionError(f"unexpected copy destination {dst!r}")
 
+    def do_link(self, command: str) -> tuple[int, str, str]:
+        """`ln SRC DST && chmod MODE DST && md5sum DST`: a second name, same file."""
+        segments = command.split(" && ")
+        src, dst = shlex.split(segments[0])[1:3]
+        mode = shlex.split(segments[1])[1]
+        if self.fail_link or src not in self.fs:
+            return 1, "", f"ln: {dst}: Operation not permitted"
+        entry = self.fs[src]
+        self.fs[dst] = entry
+        entry["mode"] = mode
+        self.events.append(("persistent_write", dst))
+        self.events.append(("link", src, dst[: -len(INST.NEW_SUFFIX)]))
+        return 0, f"{md5_bytes(entry['data'])}  {dst}\n", ""
+
     def do_rename(self, src: str, dst: str) -> tuple[int, str, str]:
         if self.timeout_rename_dest == dst:
             raise subprocess.TimeoutExpired(cmd=f"ssh mv {dst}", timeout=60, output=None, stderr=None)
         if self.fail_rename_dest == dst:
             return 1, "", f"mv: can't rename '{src}': simulated failure"
-        entry = self.fs.pop(src)
-        self.set_file(dst, entry["data"], entry["mode"])
+        self.release(dst)
+        # Same file under a new name: hard links stay links.
+        self.fs[dst] = self.fs.pop(src)
+        self.events.append(("persistent_write", dst))
         self.installs_done += 1
         self.events.append(("install_file", dst, False))
         return 0, "", ""
@@ -541,15 +626,19 @@ class PythonInstallerPreflight(unittest.TestCase):
         self.assertEqual(kv_value(stdout, "verdict"), INST.VERDICT_ALLOWED)
         self.assertEqual(kv_value(stdout, "staging_dir"), self.hub.stage)
         self.assertIn(("staging_create", self.hub.stage, "700"), self.hub.events)
-        # Staged candidates uploaded at 0600 under the private tree.
+        # Staged candidates uploaded at 0600 under the private tree; only the
+        # flash probe is executable.
         uploads = [e for e in self.hub.events if e[0] == "staged_upload"]
         self.assertTrue(uploads)
+        helper = f"{self.hub.stage}/{INST.FLASH_HELPER_NAME}"
         for _kind, path, mode in uploads:
             self.assertTrue(path.startswith(self.hub.stage + "/"))
-            self.assertEqual(mode, "600", f"staged {path} must be 0600")
+            self.assertEqual(mode, "700" if path == helper else "600", f"staged {path} mode")
+        self.assertIn(("staged_upload", helper, "700"), self.hub.events)
         self.assertEqual(len([e for e in self.hub.events if e[0] == "probe"]), 1)
         self.assertIn(("meminfo",), self.hub.events)
-        self.assertEqual(kv_value(stdout, "flash_capacity_check"), "two-phase-commit")
+        self.assertIn(("flash_probe",), self.hub.events)
+        self.assertEqual(kv_value(stdout, "flash_capacity_check"), "measured")
         # Sensitive MQTT config redaction in staged + report lines.
         sensitive_lines = [
             line for line in stdout.splitlines()
@@ -763,12 +852,16 @@ class PythonInstallerMutating(unittest.TestCase):
     def test_flash_full_in_phase_one_changes_nothing(self):
         """[PYTHON BEHAVIORAL] running out of flash while writing new copies
         removes every copy (including the truncated one), leaves all live
-        files untouched, starts no services, and reports BLOCKED_CAPACITY."""
-        webui_size = (INST.PAYLOAD / "bin" / "codex_webui").stat().st_size
-        self.hub.available_bytes = webui_size  # earlier copies use some of it
+        files untouched, starts no services, and reports BLOCKED_CAPACITY.
+        The flash probe is off, so only the two-phase commit protects."""
+        self.hub.flash_probe = False
+        webui = INST.flash_estimate((INST.PAYLOAD / "bin" / "codex_webui").read_bytes(), "codex_webui.codex-new")
+        self.hub.available_bytes = webui  # earlier copies use some of it
         code, stdout, stderr = self.harness.run(self.harness.base_argv())
         self.assertEqual(code, 2, stderr or stdout)
         self.assertEqual(kv_multi(stdout, "verdict")[-1], INST.VERDICT_CAPACITY)
+        self.assertEqual(kv_value(stdout, "flash_capacity_check"), "two-phase-commit")
+        self.assertIn("flash filled up while writing the new copies", stdout)
         self.assertEqual(install_file_dests(self.hub), [])
         self.assert_originals_restored({"/data/codex/init.sh": "600"})
         for path in self.created_paths:
@@ -1023,6 +1116,342 @@ class PythonInstallerFirstInstall(unittest.TestCase):
         self.assertNotIn(self.BLOCKER, self.hub.fs)
 
 
+ROOT_TOOL_WRAPPER = b'#!/bin/sh\nexec /data/rootssh/bin/dropbear -s -g -K 300 "$@"\n'
+
+
+def candidate_flash(stdout: str) -> list[tuple[str, str, int]]:
+    """(dest, action, estimated flash bytes) for every candidate line."""
+    rows = []
+    for line in stdout.splitlines():
+        if line.startswith("candidate "):
+            rows.append((
+                re.search(r" dest=(\S+)", line).group(1),
+                re.search(r" action=(\S+)", line).group(1),
+                int(re.search(r" flash=(\d+)", line).group(1)),
+            ))
+    return rows
+
+
+class PythonInstallerFlash(unittest.TestCase):
+    """[PYTHON BEHAVIORAL] measured free flash, harmony-hub-root's Dropbear
+    reused as a hard link, and its leftovers removed only on request."""
+
+    DROPBEAR = (INST.PAYLOAD / "bin" / "dropbearmulti").read_bytes()
+
+    def setUp(self):
+        self.hub = FakeHub()
+        self.harness = InstallerHarness(self.hub)
+        self.addCleanup(self.harness.close)
+
+    def root_tool_hub(self, stages: dict[str, tuple[int, int]] | None = None) -> None:
+        """A hub harmony-hub-root just rooted: its Dropbear and wrapper, no Melodious."""
+        self.hub.fs[INST.ROOT_TOOL_DROPBEAR] = {"data": self.DROPBEAR, "mode": "755"}
+        self.hub.fs["/usr/sbin/dropbear"] = {"data": ROOT_TOOL_WRAPPER, "mode": "755"}
+        self.hub.fs["/etc/tdeenable"] = {"data": b"1\n", "mode": "644"}
+        self.hub.root_stages.update(stages or {})
+
+    def expected_required(self, stdout: str, linked: tuple[str, ...] = ()) -> int:
+        copies = sum(
+            flash for dest, action, flash in candidate_flash(stdout)
+            if action in ("replace", "create") and dest not in linked
+        )
+        handoff = int(kv_value(stdout, "handoff_estimate_bytes")) // 2 + 1024
+        return copies + handoff + INST.flash_margin(copies)
+
+    def required(self, *extra: str) -> int:
+        """flash_required_bytes from a preflight against a copy of this hub."""
+        hub = FakeHub(self.hub.available_bytes)
+        hub.fs = {path: dict(entry) for path, entry in self.hub.fs.items()}
+        hub.root_stages = dict(self.hub.root_stages)
+        harness = InstallerHarness(hub)
+        self.addCleanup(harness.close)
+        _code, stdout, _ = harness.run(harness.base_argv("--preflight-only", *extra))
+        return int(kv_value(stdout, "flash_required_bytes"))
+
+    def persistent_writes(self) -> list[str]:
+        return [e[1] for e in self.hub.events if e[0] == "persistent_write"]
+
+    def test_flash_estimate_models_compression(self):
+        """[PYTHON BEHAVIORAL] the jffs2 estimate charges compressed 4 KiB
+        nodes: binaries about half, zeros almost nothing, random bytes raw."""
+        webui = (INST.PAYLOAD / "bin" / "codex_webui").read_bytes()
+        ratio = INST.flash_estimate(webui, "codex_webui") / len(webui)
+        self.assertTrue(0.35 < ratio < 0.6, ratio)
+        self.assertLess(INST.flash_estimate(bytes(65536), "z"), 2048)
+        # One page of incompressible bytes is stored raw.
+        random_page = b"".join(hashlib.sha256(bytes([i])).digest() for i in range(128))
+        self.assertEqual(INST.flash_estimate(random_page, "r"),
+                         ((INST.JFFS2_DIRENT_HEADER + 1 + 3) & ~3) + INST.JFFS2_NODE_HEADER + 4096)
+
+    def test_preflight_reports_measured_flash(self):
+        """[PYTHON BEHAVIORAL] the preflight runs codex_flash_free from RAM and
+        reports free flash, the estimate for the changed files, and the free
+        space left afterwards."""
+        prime_upgrade_hub(self.hub)
+        code, stdout, _ = self.harness.run(self.harness.base_argv("--preflight-only"))
+        self.assertEqual(code, 0, stdout)
+        self.assertEqual(kv_value(stdout, "flash_capacity_check"), "measured")
+        self.assertEqual(int(kv_value(stdout, "flash_free_bytes")), self.hub.available_bytes)
+        self.assertEqual(int(kv_value(stdout, "flash_total_bytes")), self.hub.flash_total)
+        self.assertEqual(int(kv_value(stdout, "flash_required_bytes")), self.expected_required(stdout))
+        self.assertIsNotNone(kv_value(stdout, "flash_after_bytes"))
+        self.assertEqual(self.persistent_writes(), [])
+
+    def test_preflight_blocks_when_flash_is_short(self):
+        """[PYTHON BEHAVIORAL] measured free flash below the estimate stops a
+        normal run at the preflight with BLOCKED_CAPACITY: no handoff, no
+        copies, no writes."""
+        prime_upgrade_hub(self.hub)
+        self.hub.available_bytes = self.required() - 1
+        code, stdout, _ = self.harness.run(self.harness.base_argv())
+        self.assertEqual(code, 2, stdout)
+        self.assertEqual(kv_value(stdout, "verdict"), INST.VERDICT_CAPACITY)
+        self.assertIn("not enough free flash", stdout)
+        self.assertIn("--skip-flash-check", stdout)
+        self.assertEqual(self.persistent_writes(), [])
+        self.assertFalse(any(e[0] in ("handoff", "new_copy", "service") for e in self.hub.events))
+        self.assertEqual(self.hub.paths_under_stage(), [])
+
+    def test_skip_flash_check_tries_anyway(self):
+        """[PYTHON BEHAVIORAL] --skip-flash-check installs past a pessimistic
+        estimate; here the copies themselves fit."""
+        prime_upgrade_hub(self.hub)
+        _code, stdout, _ = self.harness.run(self.harness.base_argv("--preflight-only"))
+        copies = sum(f for _d, action, f in candidate_flash(stdout) if action in ("replace", "create"))
+        self.hub.available_bytes = copies + 1000
+        self.hub.events.clear()
+        code, stdout, _ = self.harness.run(self.harness.base_argv())
+        self.assertEqual(code, 2, stdout)
+        self.assertEqual(kv_value(stdout, "verdict"), INST.VERDICT_CAPACITY)
+        code, stdout, stderr = self.harness.run(self.harness.base_argv("--skip-flash-check"))
+        self.assertEqual(code, 0, stderr or stdout)
+        self.assertEqual(kv_value(stdout, "verdict"), INST.VERDICT_ALLOWED)
+        self.assertEqual(install_file_dests(self.hub, rollback=False)[-1], INST.WEBUI_DEST)
+
+    def test_unmeasurable_flash_falls_back_to_two_phase_commit(self):
+        """[PYTHON BEHAVIORAL] when the probe fails the run is not blocked;
+        the two-phase commit still protects the hub."""
+        prime_upgrade_hub(self.hub)
+        self.hub.flash_probe = False
+        code, stdout, _ = self.harness.run(self.harness.base_argv("--preflight-only"))
+        self.assertEqual(code, 0, stdout)
+        self.assertEqual(kv_value(stdout, "flash_capacity_check"), "two-phase-commit")
+        self.assertIsNone(kv_value(stdout, "flash_free_bytes"))
+        self.assertIn("couldn't be measured", stdout)
+        self.assertEqual(kv_value(stdout, "verdict"), INST.VERDICT_ALLOWED)
+
+    def test_missing_helper_falls_back(self):
+        """[PYTHON BEHAVIORAL] a payload without the probe binary uploads no
+        probe and falls back to the two-phase commit."""
+        prime_upgrade_hub(self.hub)
+        old = INST.FLASH_HELPER
+        INST.FLASH_HELPER = INST.PAYLOAD / "helpers" / "missing-flash-probe"
+        self.addCleanup(setattr, INST, "FLASH_HELPER", old)
+        code, stdout, _ = self.harness.run(self.harness.base_argv("--preflight-only"))
+        self.assertEqual(code, 0, stdout)
+        self.assertEqual(kv_value(stdout, "flash_capacity_check"), "two-phase-commit")
+        self.assertIn("is missing", stdout)
+        self.assertNotIn(("flash_probe",), self.hub.events)
+
+    def test_root_tool_dropbear_hard_linked_on_first_install(self):
+        """[PYTHON BEHAVIORAL] harmony-hub-root's byte-identical dropbearmulti
+        becomes ours by hard link: no second copy, and the estimate leaves it out."""
+        self.root_tool_hub()
+        code, stdout, stderr = self.harness.run(self.harness.base_argv("--hub-id", FAKE_HUB_ID))
+        self.assertEqual(code, 0, stderr or stdout)
+        self.assertIs(self.hub.fs[INST.DROPBEAR_DEST], self.hub.fs[INST.ROOT_TOOL_DROPBEAR])
+        self.assertIn(("link", INST.ROOT_TOOL_DROPBEAR, INST.DROPBEAR_DEST), self.hub.events)
+        self.assertNotIn(("new_copy", INST.DROPBEAR_DEST), self.hub.events)
+        self.assertEqual(kv_value(stdout, "flash_link dest"),
+                         f"{INST.DROPBEAR_DEST} source={INST.ROOT_TOOL_DROPBEAR}")
+        self.assertEqual(int(kv_value(stdout, "flash_required_bytes")),
+                         self.expected_required(stdout, linked=(INST.DROPBEAR_DEST,)))
+        wrapper = (INST.PAYLOAD / "scripts" / "dropbear").read_bytes()
+        self.assertEqual(self.hub.fs["/usr/sbin/dropbear"]["data"], wrapper)
+        self.assertEqual(self.hub.leftovers(), [])
+
+    def test_hard_link_lets_a_tight_hub_install(self):
+        """[PYTHON BEHAVIORAL] flash that fits everything but a second Dropbear
+        is enough once the root tool's copy is linked, and too little without it."""
+        self.root_tool_hub()
+        need = self.required("--hub-id", FAKE_HUB_ID)
+        self.hub.available_bytes = need
+        code, stdout, stderr = self.harness.run(self.harness.base_argv("--hub-id", FAKE_HUB_ID))
+        self.assertEqual(code, 0, stderr or stdout)
+        self.assertIsNotNone(kv_value(stdout, "flash_free_after_bytes"))
+
+        hub = FakeHub(need)  # same hub without the root tool's copy
+        hub.fs["/etc/tdeenable"] = {"data": b"1\n", "mode": "644"}
+        harness = InstallerHarness(hub)
+        self.addCleanup(harness.close)
+        code, stdout, _ = harness.run(harness.base_argv("--hub-id", FAKE_HUB_ID))
+        self.assertEqual(code, 2, stdout)
+        self.assertEqual(kv_value(stdout, "verdict"), INST.VERDICT_CAPACITY)
+
+    def test_link_failure_copies_instead(self):
+        """[PYTHON BEHAVIORAL] a filesystem that refuses the hard link gets an
+        ordinary verified copy."""
+        self.root_tool_hub()
+        self.hub.fail_link = True
+        code, stdout, stderr = self.harness.run(self.harness.base_argv("--hub-id", FAKE_HUB_ID))
+        self.assertEqual(code, 0, stderr or stdout)
+        self.assertIn("copying instead", stdout)
+        self.assertIn(("new_copy", INST.DROPBEAR_DEST), self.hub.events)
+        self.assertIsNot(self.hub.fs[INST.DROPBEAR_DEST], self.hub.fs[INST.ROOT_TOOL_DROPBEAR])
+        self.assertEqual(self.hub.fs[INST.DROPBEAR_DEST]["data"], self.DROPBEAR)
+        self.assertEqual(self.hub.leftovers(), [])
+
+    def test_rollback_after_link_keeps_root_tool_dropbear(self):
+        """[PYTHON BEHAVIORAL] rolling back removes only our name for the
+        linked Dropbear; the root tool's copy and wrapper keep SSH working."""
+        self.root_tool_hub()
+        self.hub.fail_rename_dest = INST.WEBUI_DEST
+        code, _stdout, stderr = self.harness.run(self.harness.base_argv("--hub-id", FAKE_HUB_ID))
+        self.assertEqual(code, 1, stderr)
+        self.assertIn("install failed and was rolled back", stderr)
+        self.assertNotIn(INST.DROPBEAR_DEST, self.hub.fs)
+        self.assertEqual(self.hub.fs[INST.ROOT_TOOL_DROPBEAR]["data"], self.DROPBEAR)
+        self.assertEqual(self.hub.fs[INST.ROOT_TOOL_DROPBEAR]["mode"], "755")
+        self.assertEqual(self.hub.fs["/usr/sbin/dropbear"]["data"], ROOT_TOOL_WRAPPER)
+        self.assertEqual(self.hub.leftovers(), [])
+
+    def test_leftovers_reported_but_kept_without_flag(self):
+        """[PYTHON BEHAVIORAL] root-tool staging folders are listed with their
+        size and a hint, and left alone."""
+        stages = {"/data/codexssh_19f9ec4dbc1_094b_stage": (771_000, 556),
+                  "/data/codexssh_19f9ed7731a_7bc7_stage": (771_000, 556)}
+        self.root_tool_hub(stages)
+        code, stdout, stderr = self.harness.run(self.harness.base_argv("--hub-id", FAKE_HUB_ID))
+        self.assertEqual(code, 0, stderr or stdout)
+        self.assertEqual(kv_multi(stdout, "root_tool_leftover bytes"),
+                         [f"771000 files=556 path={p}" for p in sorted(stages)])
+        self.assertIn("--remove-root-tool-leftovers", stdout)
+        rm_rf_targets = [e[1] for e in self.hub.events if e[0] == "rm_rf"]
+        self.assertEqual(rm_rf_targets, [self.hub.stage])
+        self.assertEqual(sorted(self.hub.root_stages), sorted(stages))
+
+    def test_leftovers_removed_before_install_with_flag(self):
+        """[PYTHON BEHAVIORAL] --remove-root-tool-leftovers deletes exactly the
+        staging folders before the handoff and phase 1; the root tool's
+        Dropbear stays while SSH still runs it."""
+        stages = {"/data/codexssh_19f9ec4dbc1_094b_stage": (771_000, 556)}
+        self.root_tool_hub(stages)
+        code, stdout, stderr = self.harness.run(
+            self.harness.base_argv("--hub-id", FAKE_HUB_ID, "--remove-root-tool-leftovers"))
+        self.assertEqual(code, 0, stderr or stdout)
+        self.assertEqual(kv_multi(stdout, "removed_leftover"), list(stages))
+        removed = self.hub.first_index(lambda e: e == ("rm_rf", next(iter(stages))))
+        self.assertLess(removed, self.hub.first_index(lambda e: e[0] == "handoff"))
+        self.assertLess(removed, self.hub.first_index(lambda e: e[0] in ("new_copy", "link")))
+        self.assertEqual(self.hub.root_stages, {})
+        self.assertIn(INST.ROOT_TOOL_DROPBEAR, self.hub.fs)
+        self.assertIsNotNone(kv_value(stdout, "flash_free_after_cleanup_bytes"))
+
+    def test_leftover_removal_unblocks_a_short_hub(self):
+        """[PYTHON BEHAVIORAL] a hub too full for the install fits once the
+        root tool's staging folder goes, and the block says so."""
+        stages = {"/data/codexssh_19f9ec4dbc1_094b_stage": (900_000, 640)}
+        self.root_tool_hub(stages)
+        self.hub.available_bytes = self.required("--hub-id", FAKE_HUB_ID) - 300_000
+        code, stdout, _ = self.harness.run(self.harness.base_argv("--hub-id", FAKE_HUB_ID))
+        self.assertEqual(code, 2, stdout)
+        self.assertEqual(kv_value(stdout, "verdict"), INST.VERDICT_CAPACITY)
+        self.assertIn("Removing harmony-hub-root's leftovers", stdout)
+        self.assertEqual(self.persistent_writes(), [])
+        code, stdout, stderr = self.harness.run(
+            self.harness.base_argv("--hub-id", FAKE_HUB_ID, "--remove-root-tool-leftovers"))
+        self.assertEqual(code, 0, stderr or stdout)
+        self.assertEqual(kv_value(stdout, "verdict"), INST.VERDICT_ALLOWED)
+
+    def test_too_little_even_after_cleanup_removes_nothing(self):
+        """[PYTHON BEHAVIORAL] when removing the leftovers wouldn't be enough
+        either, the preflight blocks before deleting anything."""
+        stages = {"/data/codexssh_19f9ec4dbc1_094b_stage": (900_000, 640)}
+        self.root_tool_hub(stages)
+        self.hub.available_bytes = self.required("--hub-id", FAKE_HUB_ID) - 700_000
+        code, stdout, _ = self.harness.run(
+            self.harness.base_argv("--hub-id", FAKE_HUB_ID, "--remove-root-tool-leftovers"))
+        self.assertEqual(code, 2, stdout)
+        self.assertEqual(kv_value(stdout, "verdict"), INST.VERDICT_CAPACITY)
+        self.assertEqual(sorted(self.hub.root_stages), sorted(stages))
+        self.assertEqual(self.persistent_writes(), [])
+
+    def test_preflight_only_never_removes_leftovers(self):
+        """[PYTHON BEHAVIORAL] --preflight-only with the cleanup flag still
+        writes and removes nothing."""
+        stages = {"/data/codexssh_19f9ec4dbc1_094b_stage": (771_000, 556)}
+        self.root_tool_hub(stages)
+        code, stdout, _ = self.harness.run(self.harness.base_argv(
+            "--hub-id", FAKE_HUB_ID, "--preflight-only", "--remove-root-tool-leftovers"))
+        self.assertEqual(code, 0, stdout)
+        self.assertEqual([e[1] for e in self.hub.events if e[0] == "rm_rf"], [self.hub.stage])
+        self.assertEqual(self.persistent_writes(), [])
+        self.assertEqual(sorted(self.hub.root_stages), sorted(stages))
+
+    def test_spare_root_tool_dropbear_removed_once_ssh_runs_ours(self):
+        """[PYTHON BEHAVIORAL] on a hub already running Melodious, the root
+        tool's separate Dropbear copy is a leftover; the cleanup flag removes
+        it even when nothing else needs installing."""
+        prime_current_hub(self.hub)
+        self.hub.fs[INST.ROOT_TOOL_DROPBEAR] = {"data": self.DROPBEAR, "mode": "755"}
+        before = self.hub.available_bytes
+        code, stdout, _ = self.harness.run(self.harness.base_argv("--preflight-only"))
+        self.assertIn(f"root_tool_leftover bytes={len(self.DROPBEAR)} files=1 path={INST.ROOT_TOOL_DROPBEAR}", stdout)
+        code, stdout, stderr = self.harness.run(self.harness.base_argv("--remove-root-tool-leftovers"))
+        self.assertEqual(code, 0, stderr or stdout)
+        self.assertEqual(kv_multi(stdout, "removed_leftover"), [INST.ROOT_TOOL_DROPBEAR])
+        for path in INST.ROOT_TOOL_FILES:
+            self.assertNotIn(path, self.hub.fs)
+        self.assertIn(INST.DROPBEAR_DEST, self.hub.fs)
+        self.assertGreater(self.hub.available_bytes, before)
+        self.assertFalse(any(e[0] in ("handoff", "service", "new_copy") for e in self.hub.events))
+
+    def test_spare_root_tool_dropbear_kept_while_ssh_uses_it(self):
+        """[PYTHON BEHAVIORAL] with the root tool's wrapper still in
+        /usr/sbin/dropbear its Dropbear is never offered for removal."""
+        prime_current_hub(self.hub)
+        self.hub.fs[INST.ROOT_TOOL_DROPBEAR] = {"data": self.DROPBEAR, "mode": "755"}
+        self.hub.fs["/usr/sbin/dropbear"] = {"data": ROOT_TOOL_WRAPPER, "mode": "755"}
+        code, stdout, stderr = self.harness.run(self.harness.base_argv("--remove-root-tool-leftovers"))
+        self.assertEqual(code, 0, stderr or stdout)
+        self.assertNotIn(f"path={INST.ROOT_TOOL_DROPBEAR}", stdout.replace("source=", ""))
+        self.assertIn(INST.ROOT_TOOL_DROPBEAR, self.hub.fs)
+        self.assertEqual(kv_multi(stdout, "removed_leftover"), [])
+
+    def test_root_tool_dropbear_kept_when_it_is_the_link_source(self):
+        """[PYTHON BEHAVIORAL] when our Dropbear is out of date and the root
+        tool's copy matches the payload, the cleanup flag keeps that copy and
+        phase 1 links it."""
+        prime_current_hub(self.hub)
+        self.hub.fs[INST.DROPBEAR_DEST] = {"data": b"fake-older-dropbear\n" * 64, "mode": "755"}
+        self.hub.fs[INST.ROOT_TOOL_DROPBEAR] = {"data": self.DROPBEAR, "mode": "755"}
+        code, stdout, stderr = self.harness.run(self.harness.base_argv("--remove-root-tool-leftovers"))
+        self.assertEqual(code, 0, stderr or stdout)
+        self.assertEqual(kv_multi(stdout, "removed_leftover"), [])
+        self.assertIn(("link", INST.ROOT_TOOL_DROPBEAR, INST.DROPBEAR_DEST), self.hub.events)
+        self.assertIs(self.hub.fs[INST.DROPBEAR_DEST], self.hub.fs[INST.ROOT_TOOL_DROPBEAR])
+
+    def test_linked_dropbear_is_not_a_leftover(self):
+        """[PYTHON BEHAVIORAL] a root-tool name that is a hard link to our
+        Dropbear frees nothing, so it is not reported."""
+        prime_current_hub(self.hub)
+        self.hub.fs[INST.ROOT_TOOL_DROPBEAR] = self.hub.fs[INST.DROPBEAR_DEST]
+        code, stdout, _ = self.harness.run(self.harness.base_argv("--preflight-only"))
+        self.assertEqual(code, 0, stdout)
+        self.assertEqual(kv_multi(stdout, "root_tool_leftover bytes"), [])
+
+    def test_free_flash_reported_after_install(self):
+        """[PYTHON BEHAVIORAL] a finished install measures flash once more,
+        after the originals were replaced, before removing the staging tree."""
+        prime_upgrade_hub(self.hub)
+        code, stdout, stderr = self.harness.run(self.harness.base_argv())
+        self.assertEqual(code, 0, stderr or stdout)
+        self.assertEqual(int(kv_value(stdout, "flash_free_after_bytes")), self.hub.available_bytes)
+        probes = self.hub.indices(lambda e: e == ("flash_probe",))
+        self.assertEqual(len(probes), 2)
+        self.assertLess(probes[-1], self.hub.first_index(lambda e: e == ("rm_rf", self.hub.stage)))
+
+
 class PythonInstallerFileStatus(unittest.TestCase):
     """[PYTHON BEHAVIORAL] the BusyBox ls/md5sum probe powers discovery and
     post-install verification; the fake fails any stat/readlink/mktemp/df."""
@@ -1264,6 +1693,64 @@ class PowerShellStaticContract(unittest.TestCase):
         self.assertNotIn("stat -c", handoff)
         self.assertNotIn("$(stat", handoff)
         self.assertNotIn("readlink", handoff)
+
+    def ps_here_string(self, variable: str) -> str:
+        match = re.search(rf"\${re.escape(variable)} = @'\r?\n(.*?)\r?\n'@", self.text, re.S)
+        assert match, f"missing ${variable} here-string"
+        return match.group(1)
+
+    def test_flash_constants_match_python(self):
+        """[PS1 STATIC] flash probe, jffs2 model, margins, and root-tool paths
+        match Python."""
+        for variable, value in (
+            ("Jffs2Page", INST.JFFS2_PAGE),
+            ("Jffs2NodeHeader", INST.JFFS2_NODE_HEADER),
+            ("Jffs2DirentHeader", INST.JFFS2_DIRENT_HEADER),
+            ("FlashMarginPercent", INST.FLASH_MARGIN_PERCENT),
+        ):
+            self.assertIn(f"${variable} = {value}\n", self.text)
+        self.assertIn(f"$FlashMarginBytes = {INST.FLASH_MARGIN_BYTES // 1024} * 1024", self.text)
+        self.assertEqual(self.ps_scalar("FlashHelperName"), INST.FLASH_HELPER_NAME)
+        self.assertEqual(INST.FLASH_HELPER.name, INST.FLASH_HELPER_NAME)
+        self.assertEqual(self.ps_scalar("FlashPath"), INST.FLASH_PATH)
+        self.assertEqual(self.ps_scalar("DropbearDest"), INST.DROPBEAR_DEST)
+        self.assertEqual(self.ps_scalar("RootToolDropbear"), INST.ROOT_TOOL_DROPBEAR)
+        pattern = re.search(r"\$RootToolStagePattern = '([^']*)'", self.text).group(1)
+        self.assertEqual(pattern, INST.ROOT_TOOL_STAGE_RE.pattern)
+
+    def test_root_tool_commands_match_python(self):
+        """[PS1 STATIC] the leftover scan and the Dropbear removal run the
+        same hub commands as Python, byte for byte."""
+        self.assertEqual(self.ps_here_string("RootToolScan"), INST.ROOT_TOOL_SCAN)
+        self.assertEqual(self.ps_here_string("RootToolDropbearRemove"), INST.ROOT_TOOL_DROPBEAR_REMOVE)
+
+    def test_flash_switches_parity(self):
+        """[PS1 STATIC] Python's flash and cleanup flags have PS1 switches."""
+        source = INSTALLER_PY.read_text(encoding="utf-8")
+        self.assertIn('"--remove-root-tool-leftovers"', source)
+        self.assertIn('"--skip-flash-check"', source)
+        self.assertIn("[switch]$RemoveRootToolLeftovers", self.text)
+        self.assertIn("[switch]$SkipFlashCheck", self.text)
+
+    def test_flash_steps_in_main_flow(self):
+        """[PS1 STATIC] main order matches Python: probe staged with the
+        candidates, flash measured before the plans, link planned after the
+        gates, leftovers removed after the verdict gate and before any
+        rollback copy, flash measured again before the final cleanup."""
+        main = self.main
+        self.assertLess(main.index("Send-CandidatesToStage"), main.index("Send-FlashHelper"))
+        self.assertLess(main.index("Send-FlashHelper"), main.index("Test-StagedMd5"))
+        self.assertLess(main.index("Set-UpgradeGates"), main.index("Set-DropbearLink"))
+        self.assertLess(main.index("Measure-Flash"), main.index("Build-Plans"))
+        self.assertLess(main.index("Get-RootToolLeftovers"), main.index("Build-Plans"))
+        self.assertLess(main.index("if ($Verdict -ne $VerdictAllowed)"), main.index("Remove-RootToolLeftovers"))
+        self.assertLess(main.index("Remove-RootToolLeftovers"), main.index("Add-RollbackCopies"))
+        self.assertLess(main.index("Show-FlashAfterInstall"), main.rindex("Remove-StagingTree"))
+        self.assertIn('$script:CapacityStage = "phase1"', main)
+        write = self.text.split("function Write-NewCopies()", 1)[1].split("function Install-Sequence()", 1)[0]
+        self.assertLess(write.index("Add-NewCopyLink"), write.index("cp $(Remote-Quote"))
+        probe = self.text.split("function Invoke-DestinationProbe()", 1)[1].split("function Stop-WithValidation(", 1)[0]
+        self.assertIn("$RootToolDropbear", probe)
 
     def test_trap_guarantees_staging_cleanup(self):
         """[PS1 STATIC] unhandled terminating errors remove the owned stage."""
