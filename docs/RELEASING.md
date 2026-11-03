@@ -38,7 +38,11 @@ key, so losing that key means users uninstall and reinstall.
    It also checks:
    - the APK is signed with the release key;
    - the hub zip's `MANIFEST.txt` matches its binaries;
-   - every payload file has a known destination.
+   - every payload file has a known destination;
+   - the hub zip carries the installers' flash probe,
+     `payload/helpers/codex_flash_free`. Add `payload/helpers` to the
+     `git archive` path list. The probe runs only from the hub's RAM, so
+     `melodious-update.json` doesn't list it.
 3. **Verify** (the agent runs this):
 
    ```sh

@@ -26,8 +26,10 @@ def fake_apk(_path: Path) -> dict:
             "certs": [release.ANDROID_RELEASE_CERT]}
 
 
-def write_hub_zip(path: Path, extra: dict | None = None, bad_md5: bool = False) -> None:
+def write_hub_zip(path: Path, extra: dict | None = None, bad_md5: bool = False, helpers: bool = True) -> None:
     files = {rel: f"content of {rel}\n".encode() for rel in release.HUB_FILES}
+    if helpers:
+        files.update({rel: f"helper {rel}\n".encode() for rel in release.HUB_INSTALLER_HELPERS})
     files.update(extra or {})
     manifest = "".join(
         f"{hashlib.md5(data).hexdigest() if not bad_md5 else '0' * 32}  {rel.split('/')[-1]}\n"
@@ -102,6 +104,16 @@ class ReleaseToolTest(unittest.TestCase):
     def test_unknown_payload_file_is_rejected(self):
         with self.assertRaisesRegex(release.ReleaseError, "no install destination"):
             self.make_release(extra={"payload/bin/codex_new_daemon": b"new"})
+
+    def test_installer_helpers_ship_but_are_not_installed(self):
+        manifest = self.make_release()
+        paths = {f["path"] for f in manifest["hub"]["files"]}
+        self.assertTrue(release.HUB_INSTALLER_HELPERS)
+        self.assertFalse(paths & release.HUB_INSTALLER_HELPERS)
+
+    def test_missing_installer_helper_is_rejected(self):
+        with self.assertRaisesRegex(release.ReleaseError, "missing payload files payload/helpers/"):
+            self.make_release(helpers=False)
 
     def test_payload_manifest_mismatch_is_rejected(self):
         with self.assertRaisesRegex(release.ReleaseError, "md5 for"):
