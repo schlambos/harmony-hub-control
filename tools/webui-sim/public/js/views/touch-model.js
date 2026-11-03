@@ -39,9 +39,9 @@ export const TOUCH_HARD_KEYS = Object.freeze([
   "Select", "Stop", "VolumeDown", "VolumeMute", "VolumeUp", "Yellow",
 ]);
 
-/** Hard keys the Smart Control answers in an activity (16414 spelling), as
-    Logitech's 16414 maps name them; its three activity buttons live in
-    16414Root, not here. */
+/** Hard keys a remote without a screen answers in an activity, as Logitech's
+    16414 maps name them; its three activity buttons live in its root map,
+    not here. hal names every such remote's keys from one table. */
 export const SMART_CONTROL_HARD_KEYS = Object.freeze([
   "Blue", "ChannelDown", "ChannelUp", "DirectionDown", "DirectionLeft",
   "DirectionRight", "DirectionUp", "Dvr", "Exit", "FastForward", "Green",
@@ -51,30 +51,47 @@ export const SMART_CONTROL_HARD_KEYS = Object.freeze([
   "VolumeDown", "VolumeMute", "VolumeUp", "Yellow",
 ]);
 
-/* The hard keys can be edited for either remote with keys per activity: the
-   Touch (16417, also every other remote with a screen) or the Smart Control
-   (16414). The on-screen buttons and gestures are the Touch's alone.
-   The hub keeps a key map per remote, but Logitech fills both with the same
-   keys, so the editor keeps them alike: a key edit goes to both unless the
-   owner sets it for one remote only (an override). */
+/* Each remote answers an activity's keys from its own map, named by its
+   EquadID: the engine looks up `<EquadID>Activity<id>` for the remote that
+   sent the press, and `<EquadID>Root` when nothing runs or the activity map
+   lacks the key (activity.lua buttonPress). The remotes with keys per
+   activity are every remote with a screen (16417: Touch, Elite…) and the
+   ones without (hal's "Sprite" remotes: 16414 the Smart Control, 16422 and
+   16423 the Companion). The on-screen buttons and gestures are the screen
+   remote's alone.
+   Logitech fills every remote's map with the same keys, so the editor keeps
+   them alike: a key edit goes to every remote unless the owner sets it for
+   one remote only (an override). */
 export const TOUCH_REMOTE = "16417";
 export const SMART_CONTROL_REMOTE = "16414";
+/** Remotes with keys and no screen; they share one key list and spelling. */
+export const NO_SCREEN_REMOTES = Object.freeze(["16414", "16422", "16423"]);
+/** Every remote with keys per activity. */
+export const KEY_REMOTES = Object.freeze([TOUCH_REMOTE, ...NO_SCREEN_REMOTES]);
+
+export function isScreenRemote(remote = TOUCH_REMOTE) {
+  return String(remote) === TOUCH_REMOTE;
+}
+
+export function isKeyRemote(remote) {
+  return KEY_REMOTES.includes(String(remote));
+}
 
 export function hardKeysFor(remote = TOUCH_REMOTE) {
-  return remote === SMART_CONTROL_REMOTE ? SMART_CONTROL_HARD_KEYS : TOUCH_HARD_KEYS;
+  return isScreenRemote(remote) ? TOUCH_HARD_KEYS : SMART_CONTROL_HARD_KEYS;
 }
 
-/** The other remote with keys per activity. */
-export function otherRemote(remote = TOUCH_REMOTE) {
-  return remote === SMART_CONTROL_REMOTE ? TOUCH_REMOTE : SMART_CONTROL_REMOTE;
+/** The other remotes with keys that the hub has maps for. */
+export function otherRemotes(config, remote = TOUCH_REMOTE) {
+  return KEY_REMOTES.filter((r) => r !== String(remote) && hasRemoteMaps(config, r));
 }
 
-/** A key's name on `remote` (the Smart Control spells DVR "Dvr"), or "" when that remote has no such key. */
+/** A key's name on `remote` (remotes without a screen spell DVR "Dvr"), or "" when that remote has no such key. */
 export function keyOn(remote, key) {
   const name = String(key ?? "");
-  const spelled = remote === SMART_CONTROL_REMOTE
-    ? (name === "DVR" ? "Dvr" : name)
-    : (name === "Dvr" ? "DVR" : name);
+  const spelled = isScreenRemote(remote)
+    ? (name === "Dvr" ? "DVR" : name)
+    : (name === "DVR" ? "Dvr" : name);
   return hardKeysFor(remote).includes(spelled) ? spelled : "";
 }
 
@@ -503,9 +520,9 @@ function controlsShape(map) {
  * saveOutcome for a save of on-screen buttons, hard keys and gestures
  * together: `base` is the map text the editor read, `mapList` what it sent.
  */
-export function controlsSaveOutcome(config, activityId, base, mapList, { remote = TOUCH_REMOTE, twin = null } = {}) {
-  // `twin` ({ remote, base }) is the other remote's map when the save wrote its keys too.
-  const checks = [{ remote, base }, ...(twin ? [twin] : [])];
+export function controlsSaveOutcome(config, activityId, base, mapList, { remote = TOUCH_REMOTE, twins = [] } = {}) {
+  // `twins` ([{ remote, base }]) are the other remotes' maps the save wrote keys to as well.
+  const checks = [{ remote, base }, ...twins];
   const now = checks.map((c) => touchMap(config, String(activityId), c.remote));
   if (checks.every((c, i) => JSON.stringify(now[i]) === c.base)) return "unchanged";
   const sent = (r) => (mapList?.ButtonMaps ?? []).find((m) => m?.ButtonMapIdentifier === touchMapIdentifier(activityId, r));
@@ -639,9 +656,9 @@ function newButton(row, activityId, buttonId) {
 function newMap(config, activityId, alloc, remote = TOUCH_REMOTE) {
   const sibling = siblingMap(config, remote);
   if (!sibling) {
-    throw new Error(remote === SMART_CONTROL_REMOTE
-      ? "This hub has no keys for this remote to model new ones on."
-      : "This hub has no remote with a screen to add buttons to.");
+    throw new Error(isScreenRemote(remote)
+      ? "This hub has no remote with a screen to add buttons to."
+      : "This hub has no keys for this remote to model new ones on.");
   }
   return {
     "ButtonMapId-": alloc.mapId(),
@@ -718,8 +735,8 @@ function writeHardKeys(map, rows, alloc, remote) {
       __type: "HardRemoteButton",
       ButtonAction: commandAction(row.action, 1),
       ButtonDoublePressAction: row.doublePress ?? null,
-      // Logitech's Smart Control maps keep their number keys in the number-pad group.
-      FunctionGroupType: remote === SMART_CONTROL_REMOTE && /^Number\d$/.test(key) ? NUMPAD_GROUP : 0,
+      // Logitech's maps for remotes without a screen keep number keys in the number-pad group.
+      FunctionGroupType: !isScreenRemote(remote) && /^Number\d$/.test(key) ? NUMPAD_GROUP : 0,
       ButtonState: 1,
       ButtonKey: key,
       ButtonLongPressAction: row.pressMode === "oneShot"
@@ -738,7 +755,7 @@ function writeHardKeys(map, rows, alloc, remote) {
  * - soft: draft from readTouchScreen (rows with pressMode/longPress).
  * - hard: { rows: [{ buttonKey, action, pressMode, longPress }] } or array; null buttonId adds.
  * - gestures: { rows: [{ gestureKey, action, longPress, doublePress }] }.
- * - twin: { remote, rows, base }: the other remote's hard keys, when the
+ * - twins: [{ remote, rows, base }]: other remotes' hard keys, when the
  *   editor changed them too (keys mirror unless set for one remote only).
  * `remote` picks the map: the Touch's (16417, default) or the Smart
  * Control's (16414, hard keys only). Never writes ButtonHomeControlAction.
@@ -747,7 +764,7 @@ export function buildTouchControlsMapList(config, edits, { now = Date.now(), rem
   const softDraft = edits?.soft ?? edits;
   const hardEdits = edits?.hard ?? null;
   const gestureEdits = edits?.gestures ?? null;
-  const twinEdits = edits?.twin?.rows ? edits.twin : null;
+  const twinEdits = (edits?.twins ?? []).filter((t) => t?.rows);
   const activityId = softDraft.activityId ?? hardEdits?.activityId ?? gestureEdits?.activityId;
   if (!activityId) throw new Error("No activity for this screen.");
   if (!(config?.activityList?.Activities ?? []).some((a) => String(a?.["Id-"]) === activityId)) {
@@ -858,22 +875,22 @@ export function buildTouchControlsMapList(config, edits, { now = Date.now(), rem
   }
   map.DateModified = harmonyDate(now);
   // --- the other remote's hard keys ---
-  if (twinEdits) {
-    if (JSON.stringify(touchMap(config, activityId, twinEdits.remote)) !== twinEdits.base) {
+  for (const edit of twinEdits) {
+    if (JSON.stringify(touchMap(config, activityId, edit.remote)) !== edit.base) {
       throw new Error("These keys changed on the hub since you opened them. Reopen to see the latest.");
     }
-    const twinId = touchMapIdentifier(activityId, twinEdits.remote);
+    const twinId = touchMapIdentifier(activityId, edit.remote);
     let twin = mapList.ButtonMaps.find((m) => m?.ButtonMapIdentifier === twinId);
     if (!twin) {
-      twin = newMap(config, activityId, alloc, twinEdits.remote);
+      twin = newMap(config, activityId, alloc, edit.remote);
       mapList.ButtonMaps.push(twin);
     }
-    twin.Buttons = writeHardKeys(twin, twinEdits.rows, alloc, twinEdits.remote);
+    twin.Buttons = writeHardKeys(twin, edit.rows, alloc, edit.remote);
     twin.DateModified = harmonyDate(now);
   }
   const errors = validateMapList(mapList);
   if (errors.length) {
-    throw new Error(remote === SMART_CONTROL_REMOTE
+    throw new Error(!isScreenRemote(remote)
       ? `The new keys would not load on the hub: ${errors[0]}`
       : `The new screen would not load on the remote: ${errors[0]}`);
   }

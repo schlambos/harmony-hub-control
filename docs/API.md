@@ -788,18 +788,23 @@ Invoke-RestMethod "http://<hub-ip>:8080/api/remote-pair" -Method Post `
   (`RemoteManager/SavePairings`); behind the cloud blocker that fails at
   once and changes nothing.
 
-The Smart Control keeps no setup and never syncs: it sends key codes and
-the hub answers them from MapList. `16414Activity<id>` answers keys while
-that activity runs; without it the remote does nothing in that activity.
-`16414Root` holds the three activity buttons (`WatchTVActivity`,
-`MovieActivity`, `MusicActivity`), each with a `ButtonActivityAction` on
-press (`EventType` 1) and long press (`EventType` 2), and answers keys
-while everything is off. The engine adds `PowerOffActivity` to the root
-map itself. The web app's Remotes page edits the activity buttons and each
-remote's keys per activity (`#touch/<id>/16414` for the Smart Control,
-`#touch/<id>/16417` for the Touch), all through `/api/activity-save`. A key
-edit writes both remotes' maps in one save unless the owner sets that key
-for one remote only.
+A remote without a screen (the Smart Control, 16414, or the Companion,
+16422 or 16423) keeps no setup and never syncs. hal names its keys from one
+shared table and sends each press tagged with the remote's own EquadID
+(`control.button?press&buttonKey=<Name>&equadId=<id>`), and the engine
+answers from that remote's maps (`buttonPress` in the engine's
+`activity.lua`). `<EquadID>Activity<id>` answers keys while that activity
+runs; without it the remote does nothing in that activity, and a key it
+lacks falls back to the root map. `<EquadID>Root` holds the three activity
+buttons (`WatchTVActivity`, `MovieActivity`, `MusicActivity`), each with a
+`ButtonActivityAction` on press (`EventType` 1) and long press
+(`EventType` 2), and answers keys while everything is off. So a Companion
+never reads `16414Root`. The engine adds `PowerOffActivity` to the root
+map itself. The web app's Remotes page edits each paired remote's activity
+buttons (`#activitybuttons/<EquadID>`) and keys per activity
+(`#touch/<id>/<EquadID>`), all through `/api/activity-save`. A key edit
+writes every remote's map in one save unless the owner sets that key for
+one remote only.
 
 ## State changes (cheap liveness)
 

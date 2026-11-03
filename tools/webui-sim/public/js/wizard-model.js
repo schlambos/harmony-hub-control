@@ -6,7 +6,8 @@
 
    Ownership rule: the wizard may only create/replace the 16414Activity<ID>
    map for the activity being saved, plus the hard buttons of its Harmony
-   Touch map (16417Activity<ID>; see mirrorTouchHardButtons). The Touch's
+   Touch map (16417Activity<ID>) and of a Companion's (1642xActivity<ID>; see
+   mirrorHardButtons). The Touch's
    on-screen buttons, number pad, gestures and sequences belong to the Touch
    editor. Every other ButtonMap (second surfaces, conditional 16420 keyboard
    HID maps, root/device maps, other activities) is preserved byte-for-byte.
@@ -740,28 +741,41 @@ export function sameButton(left, right) {
   );
 }
 
-function hardButtonsByTouchKey(map) {
+/* Remotes without a screen besides the Smart Control: the Companion's two
+   EquadIDs. hal names their keys from the same table as the Smart Control's,
+   so they take the wizard's 16414 keys as they are, number keys included. */
+export const COMPANION_REMOTES = Object.freeze(["16422", "16423"]);
+
+/* A wizard key's name on remote `prefix`, or "" when that remote has no such key. */
+function keyNameOn(prefix, buttonKey) {
+  return prefix === "16417" ? touchHardKey(buttonKey) : String(buttonKey ?? "");
+}
+
+function hardButtonsByKey(map, prefix) {
   const out = new Map();
   for (const button of map?.Buttons ?? []) {
     if (button?.__type !== "HardRemoteButton") continue;
-    const key = touchHardKey(button.ButtonKey);
+    const key = keyNameOn(prefix, button.ButtonKey);
     if (key && !out.has(key)) out.set(key, button);
   }
   return out;
 }
 
-/* The Touch answers its hard buttons from its own 16417Activity map, never
-   the 16414 one; Logitech's maps carry the same hard buttons on both. A
-   Touch map with no hard buttons (made by Melodious) gets every one the
-   wizard map has. A Touch map that already has some keeps them, and only
-   the keys this edit changed are copied over, so a Touch-only mapping set
-   up in MyHarmony survives. Buttons that aren't hard buttons are untouched. */
-export function mirrorTouchHardButtons({ buttonMaps, activityId, wizardMap, previousWizardMap, alloc }) {
-  const touch = buttonMaps.find((m) => isTouchActivityMap(m, activityId));
-  if (!touch) return;
-  const next = hardButtonsByTouchKey(wizardMap);
-  const before = hardButtonsByTouchKey(previousWizardMap);
-  const current = hardButtonsByTouchKey(touch);
+/* Each remote answers its hard buttons from its own <EquadID>Activity map,
+   never the 16414 one; Logitech's maps carry the same hard buttons on all
+   of them. A remote's map with no hard buttons (an empty one the wizard
+   made for a new activity, or one made by Melodious) gets every one the
+   wizard map has. A map that already has some keeps them, and only the keys
+   this edit changed are copied over, so a mapping set for one remote in
+   MyHarmony survives. Buttons that aren't hard buttons are untouched.
+   `prefix` is the remote's EquadID: 16417 (screen remotes; no number keys,
+   DVR spelled "DVR") or a Companion's. */
+export function mirrorHardButtons({ buttonMaps, activityId, wizardMap, previousWizardMap, alloc, prefix }) {
+  const target = buttonMaps.find((m) => String(m?.ButtonMapIdentifier ?? "") === `${prefix}Activity${activityId}`);
+  if (!target) return;
+  const next = hardButtonsByKey(wizardMap, prefix);
+  const before = hardButtonsByKey(previousWizardMap, prefix);
+  const current = hardButtonsByKey(target, prefix);
   const mirrorAll = current.size === 0;
   const result = new Map(); // key -> button, or null to drop it
   for (const key of new Set([...next.keys(), ...current.keys()])) {
@@ -774,15 +788,16 @@ export function mirrorTouchHardButtons({ buttonMaps, activityId, wizardMap, prev
     if (current.has(key) && sameButton(wanted, current.get(key))) continue;
     const copy = cloneJsonResource(wanted);
     copy.ButtonId = current.get(key)?.ButtonId ?? alloc.id();
-    copy.FunctionGroupType = 0;
+    // Screen remotes have no number pad among their hard keys; the others keep the wizard's group.
+    if (prefix === "16417") copy.FunctionGroupType = 0;
     copy.ButtonKey = key;
     result.set(key, copy);
   }
   if (result.size === 0) return;
   // Changed buttons keep their place; new ones go after the rest.
   const buttons = [];
-  for (const button of touch.Buttons ?? []) {
-    const key = button?.__type === "HardRemoteButton" ? touchHardKey(button.ButtonKey) : "";
+  for (const button of target.Buttons ?? []) {
+    const key = button?.__type === "HardRemoteButton" ? keyNameOn(prefix, button.ButtonKey) : "";
     if (!key || !result.has(key)) {
       buttons.push(button);
       continue;
@@ -793,8 +808,13 @@ export function mirrorTouchHardButtons({ buttonMaps, activityId, wizardMap, prev
   for (const button of result.values()) {
     if (button) buttons.push(button);
   }
-  touch.Buttons = buttons;
-  touch.DateModified = harmonyDate();
+  target.Buttons = buttons;
+  target.DateModified = harmonyDate();
+}
+
+/** The screen remote's copy of the wizard's hard keys (16417Activity). */
+export function mirrorTouchHardButtons(args) {
+  mirrorHardButtons({ ...args, prefix: "16417" });
 }
 
 /* Pure graph builder used by saveDraft and unit tests. Does not touch the network. */
@@ -848,7 +868,20 @@ export function buildActivityGraph({ config, draft, editId }) {
     alloc,
   });
   mapList.ButtonMaps = mergedMaps;
-  mirrorTouchHardButtons({ buttonMaps: mergedMaps, activityId, wizardMap, previousWizardMap, alloc });
+  /* The engine drops every press from a remote that has no map for the
+     running activity, and the surface copy above misses a Companion's map
+     when it shares the Smart Control's surface ids (seen on a hub in #79).
+     So each Companion the hub has maps for gets one, modelled on another
+     of its activity maps, and the mirror below fills it. */
+  for (const prefix of COMPANION_REMOTES) {
+    const id = `${prefix}Activity${activityId}`;
+    if (mergedMaps.some((m) => String(m?.ButtonMapIdentifier ?? "") === id)) continue;
+    const sibling = mergedMaps.find((m) => String(m?.ButtonMapIdentifier ?? "").startsWith(`${prefix}Activity`));
+    if (sibling) mergedMaps.push(cloneEmptySurfaceMap(sibling, activityId, alloc));
+  }
+  for (const prefix of ["16417", ...COMPANION_REMOTES]) {
+    mirrorHardButtons({ buttonMaps: mergedMaps, activityId, wizardMap, previousWizardMap, alloc, prefix });
+  }
 
   const existingFunction = functionMaps.find((m) => isActivityFunctionMap(m, activityId));
   if (!existingFunction) {

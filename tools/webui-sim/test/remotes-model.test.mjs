@@ -3,13 +3,14 @@ import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import {
   PAIRING_STEPS,
-  ROOT_MAP_ID,
   activityButtonsSaveOutcome,
   buildActivityButtonsMapList,
   keyComparison,
   pairOutcome,
   parseRfInfo,
+  hasActivityButtons,
   readActivityButtons,
+  rootMapId,
   remoteKindName,
 } from "../public/js/views/remotes-model.js";
 import { validateMapList } from "../public/js/views/remote-model.js";
@@ -50,7 +51,7 @@ describe("parseRfInfo", () => {
   it("lists remotes by slot with their kind", () => {
     const parsed = parseRfInfo(rfInfo([TOUCH, SMART]));
     assert.deepEqual(parsed.remotes.map((r) => [r.slot, r.equadId, r.name, r.short, r.role]), [
-      [1, "16414", "Harmony Smart Control remote", "Smart Control", "smart-control"],
+      [1, "16414", "Harmony Smart Control remote", "Smart Control", "no-screen"],
       [2, "16417", "Harmony Touch", "Touch", "screen"],
     ]);
     assert.equal(parsed.hub.equadId, "34827");
@@ -60,7 +61,7 @@ describe("parseRfInfo", () => {
     const parsed = parseRfInfo(rfInfo([[1, "16417", "5", "104"], [2, "16422", "6"], [3, "16420", "7"], [4, "16999", "8"]]));
     assert.deepEqual(parsed.remotes.map((r) => [r.name, r.short, r.role]), [
       ["Harmony remote with a screen", "screen remote", "screen"],
-      ["Harmony Companion remote", "Companion", "other"],
+      ["Harmony Companion remote", "Companion", "no-screen"],
       ["Harmony keyboard", "keyboard", "other"],
       ["Unknown remote (EquadID 16999)", "remote", "other"],
     ]);
@@ -149,17 +150,17 @@ describe("activity buttons", () => {
     const { mapList, changed } = buildActivityButtonsMapList(cfg, rows);
     assert.equal(changed, true);
     assert.deepEqual(cfg.mapList, before, "input untouched");
-    const root = mapOf({ mapList }, ROOT_MAP_ID);
+    const root = mapOf({ mapList }, rootMapId("16414"));
     const music = root.Buttons.find((b) => b.ButtonKey === "MusicActivity");
-    const oldMusic = mapOf(fixture, ROOT_MAP_ID).Buttons.find((b) => b.ButtonKey === "MusicActivity");
+    const oldMusic = mapOf(fixture, rootMapId("16414")).Buttons.find((b) => b.ButtonKey === "MusicActivity");
     assert.equal(music.ButtonId, oldMusic.ButtonId);
     assert.deepEqual(music.ButtonAction, { __type: "ButtonActivityAction", "ActivityId-": Number(ids[0]), Order: 0, EventType: 1, Id: 0 });
     assert.equal(music.ButtonLongPressAction, null);
     for (const key of ["WatchTVActivity", "MovieActivity"]) {
-      assert.deepEqual(root.Buttons.find((b) => b.ButtonKey === key), mapOf(fixture, ROOT_MAP_ID).Buttons.find((b) => b.ButtonKey === key));
+      assert.deepEqual(root.Buttons.find((b) => b.ButtonKey === key), mapOf(fixture, rootMapId("16414")).Buttons.find((b) => b.ButtonKey === key));
     }
     for (const map of mapList.ButtonMaps) {
-      if (map.ButtonMapIdentifier !== ROOT_MAP_ID) assert.deepEqual(map, mapOf(fixture, map.ButtonMapIdentifier));
+      if (map.ButtonMapIdentifier !== rootMapId("16414")) assert.deepEqual(map, mapOf(fixture, map.ButtonMapIdentifier));
     }
     assert.deepEqual(validateMapList(mapList), []);
   });
@@ -175,7 +176,7 @@ describe("activity buttons", () => {
     const rows = readActivityButtons(config()).rows;
     const { mapList, changed } = buildActivityButtonsMapList(config(), rows);
     assert.equal(changed, true);
-    const root = mapOf({ mapList }, ROOT_MAP_ID);
+    const root = mapOf({ mapList }, rootMapId("16414"));
     assert.equal(root.Buttons.find((b) => b.ButtonKey === "MusicActivity").ButtonAction, null);
     assert.deepEqual(readActivityButtons({ ...config(), mapList }).rows.flatMap((r) => r.missing), []);
     assert.equal(activityButtonsSaveOutcome({ ...config(), mapList }, rows, rows), "saved");
@@ -187,10 +188,10 @@ describe("activity buttons", () => {
 
   it("makes 16414Root with the Smart Control surface when the hub has none", () => {
     const cfg = config();
-    cfg.mapList.ButtonMaps = cfg.mapList.ButtonMaps.filter((m) => m.ButtonMapIdentifier !== ROOT_MAP_ID);
+    cfg.mapList.ButtonMaps = cfg.mapList.ButtonMaps.filter((m) => m.ButtonMapIdentifier !== rootMapId("16414"));
     const { mapList, changed } = buildActivityButtonsMapList(cfg, [{ key: "WatchTVActivity", press: ids[1], longPress: "" }]);
     assert.equal(changed, true);
-    const root = mapOf({ mapList }, ROOT_MAP_ID);
+    const root = mapOf({ mapList }, rootMapId("16414"));
     const surface = mapOf(fixture, `16414Activity${ids[0]}`);
     assert.equal(root.__type, "RootButtonMap");
     assert.equal(root["SurfaceId-"], surface["SurfaceId-"]);
@@ -200,7 +201,57 @@ describe("activity buttons", () => {
     assert.deepEqual(validateMapList(mapList), []);
     const nothing = buildActivityButtonsMapList(cfg, [{ key: "WatchTVActivity", press: "", longPress: "" }]);
     assert.equal(nothing.changed, false);
-    assert.equal(mapOf(nothing, ROOT_MAP_ID), undefined);
+    assert.equal(mapOf(nothing, rootMapId("16414")), undefined);
+  });
+
+  /* A hub with a Companion (16422): its own root map, from Logitech's app,
+     on its own surface (issue #79). */
+  const withCompanionRoot = () => {
+    const cfg = withoutDeleted();
+    const root = structuredClone(mapOf(cfg, "16414Root"));
+    root.ButtonMapIdentifier = "16422Root";
+    root["ButtonMapId-"] = 72000000;
+    root["RemoteId-"] = 4242;
+    root.Buttons = root.Buttons.map((b, i) => ({ ...b, ButtonId: 72000100 + i }));
+    const tv = root.Buttons.find((b) => b.ButtonKey === "WatchTVActivity");
+    tv.ButtonAction = { __type: "ButtonActivityAction", "ActivityId-": Number(ids[2]), Order: 0, EventType: 1, Id: 0 };
+    cfg.mapList.ButtonMaps.push(root);
+    return cfg;
+  };
+
+  it("reads and writes a Companion's own root map, never the Smart Control's", () => {
+    const cfg = withCompanionRoot();
+    assert.equal(readActivityButtons(cfg, "16422").rows.find((r) => r.key === "WatchTVActivity").press, ids[2]);
+    assert.notEqual(readActivityButtons(cfg, "16414").rows.find((r) => r.key === "WatchTVActivity").press, ids[2]);
+    const rows = [{ key: "WatchTVActivity", press: ids[3], longPress: ids[1] }];
+    const { mapList, changed } = buildActivityButtonsMapList(cfg, rows, "16422");
+    assert.equal(changed, true);
+    const tv = mapOf({ mapList }, "16422Root").Buttons.find((b) => b.ButtonKey === "WatchTVActivity");
+    assert.equal(tv.ButtonAction["ActivityId-"], Number(ids[3]));
+    assert.equal(tv.ButtonLongPressAction["ActivityId-"], Number(ids[1]));
+    assert.equal(tv.ButtonId, 72000100 + mapOf(cfg, "16422Root").Buttons.indexOf(mapOf(cfg, "16422Root").Buttons.find((b) => b.ButtonKey === "WatchTVActivity")));
+    for (const map of mapList.ButtonMaps) {
+      if (map.ButtonMapIdentifier !== "16422Root") assert.deepEqual(map, mapOf(cfg, map.ButtonMapIdentifier), map.ButtonMapIdentifier);
+    }
+    assert.deepEqual(validateMapList(mapList), []);
+    assert.equal(activityButtonsSaveOutcome({ ...cfg, mapList }, readActivityButtons(cfg, "16422").rows, rows, "16422"), "saved");
+    assert.equal(activityButtonsSaveOutcome(cfg, readActivityButtons(cfg, "16422").rows, rows, "16422"), "unchanged");
+  });
+
+  it("makes a Companion's root map on its own surface when it has none", () => {
+    const cfg = withCompanionRoot();
+    cfg.mapList.ButtonMaps = cfg.mapList.ButtonMaps.filter((m) => m.ButtonMapIdentifier !== "16422Root");
+    cfg.mapList.ButtonMaps.push({ ...structuredClone(mapOf(cfg, `16414Activity${ids[0]}`)), ButtonMapIdentifier: `16423Activity${ids[0]}`, "RemoteId-": 4343, "ButtonMapId-": 73000000, Buttons: [] });
+    const { mapList } = buildActivityButtonsMapList(cfg, [{ key: "MovieActivity", press: ids[0], longPress: "" }], "16423");
+    const root = mapOf({ mapList }, "16423Root");
+    assert.equal(root.__type, "RootButtonMap");
+    assert.equal(root["RemoteId-"], 4343);
+    assert.deepEqual(mapOf({ mapList }, "16414Root"), mapOf(cfg, "16414Root"));
+  });
+
+  it("knows which remotes have activity buttons", () => {
+    assert.deepEqual(["16414", "16417", "16420", "16422", "16423"].map(hasActivityButtons), [true, false, false, true, true]);
+    assert.equal(rootMapId("16423"), "16423Root");
   });
 
   it("deleting an activity clears the buttons that start it", () => {
@@ -208,11 +259,11 @@ describe("activity buttons", () => {
     const tv = ids[0];
     const { activityList, mapList } = deleteActivityResources(cfg, tv);
     assert.ok(!activityList.Activities.some((a) => String(a["Id-"]) === tv));
-    const root = mapOf({ mapList }, ROOT_MAP_ID);
+    const root = mapOf({ mapList }, rootMapId("16414"));
     const button = root.Buttons.find((b) => b.ButtonKey === "WatchTVActivity");
     assert.equal(button.ButtonAction, null, "the press that started it is gone");
     assert.equal(String(button.ButtonLongPressAction["ActivityId-"]), ids[1], "the long press to another activity stays");
-    assert.equal(root.Buttons.length, mapOf(cfg, ROOT_MAP_ID).Buttons.length, "root buttons stay");
+    assert.equal(root.Buttons.length, mapOf(cfg, rootMapId("16414")).Buttons.length, "root buttons stay");
     const left = JSON.stringify(mapList);
     assert.ok(!left.includes(`"ActivityId-":${tv}`), "nothing names the deleted activity");
   });
@@ -285,17 +336,31 @@ describe("keys on both remotes", () => {
     },
   });
 
-  it("lists, per activity, the keys where the two remotes differ", () => {
-    const [radio, lounge] = keyComparison(graph());
-    assert.deepEqual([radio.name, radio.smartMap, radio.touchMap], ["Radio", false, true]);
-    assert.deepEqual(lounge.differ, ["Play"]);
-    assert.deepEqual(lounge.onlySmart.sort(), ["Exit", "Info"], "Number1 isn't compared: the Touch has no number keys");
-    assert.deepEqual(lounge.onlyTouch.sort(), ["DVR", "Guide", "Select"]);
+  it("lists, per activity, the keys where one remote differs from each other", () => {
+    const [radio, lounge] = keyComparison(graph(), "16414", ["16417"]);
+    assert.deepEqual([radio.name, radio.hasMap, radio.others[0].hasMap], ["Radio", false, true]);
+    const [touch] = lounge.others;
+    assert.deepEqual(touch.differ, ["Play"]);
+    assert.deepEqual(touch.mineOnly, ["Exit", "Info"], "Number1 isn't compared: the Touch has no number keys");
+    assert.deepEqual(touch.theirsOnly, ["Dvr", "Guide", "Select"], "in the Smart Control's spelling");
+    const [, fromTouch] = keyComparison(graph(), "16417", ["16414"]);
+    assert.deepEqual([fromTouch.others[0].mineOnly, fromTouch.others[0].theirsOnly], [["DVR", "Guide", "Select"], ["Exit", "Info"]]);
+  });
+
+  it("compares a Companion with the other remotes the same way", () => {
+    const cfg = graph();
+    const smart = cfg.mapList.ButtonMaps.find((m) => m.ButtonMapIdentifier === "16414Activity7");
+    cfg.mapList.ButtonMaps.push({ ...structuredClone(smart), ButtonMapIdentifier: "16422Activity7", Buttons: smart.Buttons.filter((b) => b.ButtonKey !== "Info") });
+    const lounge = keyComparison(cfg, "16422", ["16414", "16417"]).find((p) => p.name === "Lounge");
+    const [fromSmart, fromTouch] = lounge.others;
+    assert.deepEqual([fromSmart.remote, fromSmart.differ, fromSmart.mineOnly, fromSmart.theirsOnly], ["16414", [], [], ["Info"]]);
+    assert.deepEqual(fromTouch.differ, ["Play"]);
+    assert.deepEqual(fromTouch.mineOnly, ["Exit"]);
   });
 
   it("finds the live fixture's maps", () => {
-    const rows = keyComparison(config());
+    const rows = keyComparison(config(), "16414", ["16417"]);
     assert.equal(rows.length, fixture.activityList.Activities.length);
-    assert.ok(rows.filter((p) => p.smartMap && p.touchMap).length >= 4);
+    assert.ok(rows.filter((p) => p.hasMap && p.others[0].hasMap).length >= 4);
   });
 });

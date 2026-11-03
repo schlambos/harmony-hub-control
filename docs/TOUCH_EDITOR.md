@@ -123,23 +123,29 @@ only. Editors work to these rules:
 | `16417Activity<id>` | On-screen buttons, their sequences, hard keys, gestures (Touch & HA Control Studio, `#touch/<id>`) | Number pad, Touch-only actions |
 | `16417Device<id>` made on the hub | The whole map, built from the device's commands (`POST /api/device-screen` or `POST /api/ha-devices`), with self-long on one-shot commands | Map and button IDs |
 | `16417Device<id>` made by Logitech | Nothing | The whole map |
-| `16414Activity<id>` | Hard keys (the same editor from Settings → Remotes, `#touch/<id>/16414`) | Everything else |
-| `16414Root` | The three activity buttons (Settings → Remotes → Activity buttons) | Other buttons |
+| `16414Activity<id>`, `16422Activity<id>`, `16423Activity<id>` | Hard keys (the same editor from Settings → Remotes, `#touch/<id>/<EquadID>`) | Everything else |
+| `16414Root`, `16422Root`, `16423Root` | The three activity buttons of that remote (Settings → Remotes → Activity buttons, `#activitybuttons/<EquadID>`) | Other buttons |
 | Any other root map | Nothing | The whole map |
 
 The activity wizard (web and Android) owns each activity's
-`16414Activity<id>` map and the hard buttons of its `16417Activity<id>` map.
+`16414Activity<id>` map and the hard buttons of its `16417Activity<id>` map;
+the web wizard also copies them to a Companion's `1642xActivity<id>` map
+(only the keys an edit changed, or every key when that map has none), and
+makes that map when the activity has none: without one the engine drops
+every press from the Companion in that activity.
 The Touch & HA Control Studio (`#touch/<id>`) owns the on-screen rows, hard
-keys and gestures of `16417Activity<id>` directly. Opened for the Smart
-Control (`#touch/<id>/16414`, from Settings → Remotes), the same page edits
-only the hard keys of `16414Activity<id>`. Either way the two remotes' hard
-keys stay alike: a key edit is written to both maps in one save, unless the
-owner picks "Only this remote" for it (an override). A key already set
-differently on the two remotes stays that way unless they pick "Both
-remotes", and the page shows the other remote's setting next to it. Keys
-only the other remote has set are listed with "Add these here too". The
-number keys are the Smart Control's alone. Settings → Remotes notes, per
-activity, where the two differ. The Touch answers its
+keys and gestures of `16417Activity<id>` directly. Opened for a remote
+without a screen (`#touch/<id>/<EquadID>`, from Settings → Remotes), the
+same page edits only that remote's hard keys. Either way every remote's
+hard keys stay alike: a key edit is written to each remote's map in one
+save, unless the owner picks "Only this remote" for it (an override). A
+key already set differently stays that way unless they pick "Both remotes"
+("All remotes" with three), and the page shows each other remote's setting
+next to it. The page shows the remotes the radio lists as paired; one that
+isn't paired still follows an edit to a key it had alike. Keys only
+another remote has set are listed with "Add these here too". Remotes with
+a screen have no number keys. Settings → Remotes notes, per activity, where
+they differ. The Touch answers its
 hard keys from its own `16417` map only; Logitech's configs carry the same
 hard buttons on both maps, minus the number keys (which are on screen on
 the Touch) and with `Dvr` spelled `DVR`.

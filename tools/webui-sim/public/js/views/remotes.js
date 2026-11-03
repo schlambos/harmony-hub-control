@@ -2,10 +2,11 @@
    pairing window for one more, then a section for each paired remote, all
    built the same way: rows that open a page. Every remote with keys gets
    "Buttons for each activity", one row per activity opening the same editor
-   (#touch/<id>/<remote>); the Smart Control also gets its activity buttons
-   (#activitybuttons). The two remotes' keys stay alike (the editor changes
-   both unless a key is set for one remote only), so each activity row only
-   says where they differ. Models in remotes-model.js.
+   (#touch/<id>/<EquadID>); a remote without a screen also gets its activity
+   buttons (#activitybuttons/<EquadID>). Each remote has its own maps, named
+   by its EquadID. Their keys stay alike (the editor changes every remote
+   unless a key is set for one remote only), so each activity row only says
+   where they differ. Models in remotes-model.js.
 
    Pairing never touches a remote of another kind: hal keeps one remote per
    kind and replaces only an older one of the same kind. The page reads the
@@ -18,12 +19,12 @@ import {
   ACTIVITY_BUTTONS,
   PAIRING_STEPS,
   SMART_CONTROL_EQUAD,
-  TOUCH_EQUAD,
   keyComparison,
   pairOutcome,
   parseRfInfo,
   readActivityButtons,
 } from "./remotes-model.js";
+import { hasRemoteMaps } from "./touch-model.js";
 
 const SMART_CONTROL_STEPS = `On a Harmony Smart Control, ${PAIRING_STEPS[SMART_CONTROL_EQUAD]}.`;
 
@@ -31,9 +32,6 @@ const SMART_CONTROL_STEPS = `On a Harmony Smart Control, ${PAIRING_STEPS[SMART_C
    hal's clean-up, and the macOS app gives up on a request after 120 s. */
 const WINDOWS = [30, 60];
 const DEFAULT_WINDOW = 60;
-
-/* Remotes whose keys this page can open per activity, and the map each uses. */
-const KEY_REMOTES = { "smart-control": SMART_CONTROL_EQUAD, screen: TOUCH_EQUAD };
 
 export function createRemotesView(section) {
   let remotes = undefined; // parsed rf.info; null when it couldn't be read
@@ -48,7 +46,8 @@ export function createRemotesView(section) {
 
   const busy = () => Boolean(pairing);
   const paired = () => remotes?.remotes ?? [];
-  const pairedByRole = (role) => paired().find((r) => r.role === role) ?? null;
+  // Paired remotes with keys per activity: with a screen, or without one.
+  const keyRemotes = () => paired().filter((r) => r.role === "screen" || r.role === "no-screen");
 
   function remoteRow(r) {
     // A screen remote other than the Touch shows its skin, which tells which model it is.
@@ -128,31 +127,30 @@ export function createRemotesView(section) {
       </div>`;
   }
 
-  /* Where this remote's keys differ from the other paired remote's in an
+  /* Where this remote's keys differ from the other paired remotes' in an
      activity, in this remote's words; "" when they're alike. */
-  function keyDifference(remote, other, p) {
+  function keyDifference(p, others) {
     if (!p) return "";
-    const mine = remote.role === "smart-control";
-    if (!(mine ? p.smartMap : p.touchMap)) return "No keys here yet";
-    if (!other || !(mine ? p.touchMap : p.smartMap)) return "";
-    const mineOnly = mine ? p.onlySmart : p.onlyTouch;
-    const theirsOnly = mine ? p.onlyTouch : p.onlySmart;
-    return [
-      p.differ.length && `different on the other remote: ${p.differ.map((k) => (mine ? k : k === "Dvr" ? "DVR" : k)).join(", ")}`,
-      mineOnly.length && `not on the other remote: ${mineOnly.join(", ")}`,
-      theirsOnly.length && `only on the other remote: ${theirsOnly.join(", ")}`,
-    ].filter(Boolean).join(" · ");
+    if (!p.hasMap) return "No keys here yet";
+    const name = (o) => (others.length > 1 ? `the ${others.find((r) => r.equadId === o.remote)?.short ?? "other remote"}` : "the other remote");
+    return p.others.filter((o) => o.hasMap).flatMap((o) => [
+      o.differ.length && `different on ${name(o)}: ${o.differ.join(", ")}`,
+      o.mineOnly.length && `not on ${name(o)}: ${o.mineOnly.join(", ")}`,
+      o.theirsOnly.length && `only on ${name(o)}: ${o.theirsOnly.join(", ")}`,
+    ]).filter(Boolean).join(" · ");
   }
 
   /* The same card for every remote with keys: a row per activity opening
-     that remote's keys (and, for the Touch, its screen and gestures). */
+     that remote's keys (and, for a remote with a screen, its screen and
+     gestures). */
   function activitiesCard(remote) {
     const acts = hub.activities();
     const what = remote.role === "screen" ? "On-screen buttons, hard keys and gestures" : "Its keys";
-    const other = pairedByRole(remote.role === "smart-control" ? "screen" : "smart-control");
-    const byActivity = new Map(keyComparison(hub.state.config).map((p) => [p.activityId, p]));
+    const others = keyRemotes().filter((r) => r.equadId !== remote.equadId && hasRemoteMaps(hub.state.config, r.equadId));
+    const byActivity = new Map(keyComparison(hub.state.config, remote.equadId, others.map((r) => r.equadId)).map((p) => [p.activityId, p]));
+    const every = others.length > 1 ? "all your remotes" : "both remotes";
     const notes = [
-      other && `<p class="list-note">Keys work the same on both remotes: a key you change goes on both unless you set it for one remote only.</p>`,
+      others.length && `<p class="list-note">Keys work the same on ${every}: a key you change goes on ${others.length > 1 ? "all of them" : "both"} unless you set it for one remote only.</p>`,
       remote.role === "screen" && !remote.tested
         && `<p class="list-note">Remotes with a screen share these maps, but this editor hasn't been tested on this model yet.</p>`,
     ].filter(Boolean).join("");
@@ -165,8 +163,8 @@ export function createRemotesView(section) {
               const id = String(a["Id-"]);
               return listRow({
                 title: hub.activityName(a),
-                subtitle: keyDifference(remote, other, byActivity.get(id)) || undefined,
-                href: `#touch/${encodeURIComponent(id)}/${KEY_REMOTES[remote.role]}`,
+                subtitle: keyDifference(byActivity.get(id), others) || undefined,
+                href: `#touch/${encodeURIComponent(id)}/${encodeURIComponent(remote.equadId)}`,
                 chevron: true,
               });
             }).join("")}</div>`
@@ -174,8 +172,9 @@ export function createRemotesView(section) {
       </div>`;
   }
 
-  function activityButtonsCard() {
-    const rows = readActivityButtons(hub.state.config).rows;
+  /* A remote without a screen has three activity buttons, in its own root map. */
+  function activityButtonsCard(remote) {
+    const rows = readActivityButtons(hub.state.config, remote.equadId).rows;
     const name = (id) => {
       if (id === null) return "set elsewhere";
       if (!id) return "nothing";
@@ -188,7 +187,7 @@ export function createRemotesView(section) {
         <div class="m-list">${listRow({
           title: ACTIVITY_BUTTONS.map((b) => b.label).join(", "),
           subtitle: summary,
-          href: "#activitybuttons",
+          href: `#activitybuttons/${encodeURIComponent(remote.equadId)}`,
           chevron: true,
         })}</div>
       </div>`;
@@ -196,7 +195,7 @@ export function createRemotesView(section) {
 
   function remoteSection(remote) {
     let body;
-    if (remote.role === "smart-control") body = `${activityButtonsCard()}${activitiesCard(remote)}`;
+    if (remote.role === "no-screen") body = `${activityButtonsCard(remote)}${activitiesCard(remote)}`;
     else if (remote.role === "screen") body = activitiesCard(remote);
     else body = `<div class="m-card"><p class="list-note">Nothing to set for this remote here yet.</p></div>`;
     return `${sectionLabel(remote.name)}<div class="remotes-section">${body}</div>`;
