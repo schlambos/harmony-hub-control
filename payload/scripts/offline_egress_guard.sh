@@ -23,6 +23,49 @@ ensure_multicast_route() {
   fi
 }
 
+hub_ip() {
+  ifconfig ath0 2>/dev/null | sed -n 's/.*inet addr:\([0-9.]*\).*/\1/p'
+}
+
+# Prints the RFC 1918 range that contains the hub's own address (nothing if the
+# address is missing or not private).
+detect_private_routes() {
+  case "$(hub_ip)" in
+    10.*) echo "10.0.0.0/255.0.0.0" ;;
+    172.1[6-9].*|172.2[0-9].*|172.3[01].*) echo "172.16.0.0/255.240.0.0" ;;
+    192.168.*) echo "192.168.0.0/255.255.0.0" ;;
+  esac
+}
+
+# Keep replies to hosts on other private subnets (for example another VLAN
+# behind the same router) possible, even though the default route is removed.
+# Only private (RFC 1918) ranges are routed via the saved gateway, so the
+# internet stays unreachable.
+ensure_private_routes() {
+  [ -s "$GATEWAY_STATE" ] || return
+  PRIVATE_GW=$(sed -n '1p' "$GATEWAY_STATE")
+  case "$PRIVATE_GW" in
+    *[!0-9.]*|"") return ;;
+  esac
+  WANTED=$(detect_private_routes)
+  [ -n "$WANTED" ] || return
+  MISSING=$(route -n 2>/dev/null | awk -v g="$PRIVATE_GW" -v list="$WANTED" '
+    BEGIN {
+      cnt = split(list, ent, " ")
+      for (i = 1; i <= cnt; i++) { split(ent[i], p, "/"); n[i] = p[1]; m[i] = p[2]; need[i] = 1 }
+    }
+    { for (i = 1; i <= cnt; i++)
+        if ($1 == n[i] && $3 == m[i] && ($2 == g || $2 == "0.0.0.0")) need[i] = 0 }
+    END { for (i = 1; i <= cnt; i++) if (need[i]) print n[i], m[i] }')
+  [ -n "$MISSING" ] || return
+  echo "$MISSING" | while read NET MASK; do
+    route del -net "$NET" netmask "$MASK" >/dev/null 2>&1
+    if route add -net "$NET" netmask "$MASK" gw "$PRIVATE_GW" dev ath0 >/dev/null 2>&1; then
+      echo "$(date) codex offline egress guard routed $NET/$MASK via $PRIVATE_GW" >> "$LOG"
+    fi
+  done
+}
+
 enforce_once() {
   ensure_multicast_route
   CURRENT_GATEWAY=$(default_gateway)
@@ -33,6 +76,7 @@ enforce_once() {
         echo "$(date) codex offline egress guard removed default route via $CURRENT_GATEWAY" >> "$LOG"
       fi
     fi
+    ensure_private_routes
     return
   fi
 
