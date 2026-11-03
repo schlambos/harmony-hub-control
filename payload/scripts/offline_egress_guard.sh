@@ -6,6 +6,12 @@ GATEWAY_STATE=/var/volatile/codex-default-gateway
 PID_FILE=/var/run/codex-offline-egress.pid
 LOG=/cache/codex-init.log
 
+# While the default route is removed, the private (RFC 1918) ranges stay
+# routed through the saved gateway, so hosts on other private subnets (for
+# example another VLAN behind the same router) can still reach the hub and get
+# replies. The internet stays unreachable.
+PRIVATE_ROUTES="10.0.0.0/255.0.0.0 172.16.0.0/255.240.0.0 192.168.0.0/255.255.0.0"
+
 blocker_enabled() {
   [ -f "$BLOCKER" ] && [ "$(sed -n '1p' "$BLOCKER")" = "1" ]
 }
@@ -23,45 +29,53 @@ ensure_multicast_route() {
   fi
 }
 
-hub_ip() {
-  ifconfig ath0 2>/dev/null | sed -n 's/.*inet addr:\([0-9.]*\).*/\1/p'
-}
-
-# Prints the RFC 1918 range that contains the hub's own address (nothing if the
-# address is missing or not private).
-detect_private_routes() {
-  case "$(hub_ip)" in
-    10.*) echo "10.0.0.0/255.0.0.0" ;;
-    172.1[6-9].*|172.2[0-9].*|172.3[01].*) echo "172.16.0.0/255.240.0.0" ;;
-    192.168.*) echo "192.168.0.0/255.255.0.0" ;;
+# Sets SAVED_GATEWAY to the gateway saved before the default route was
+# removed. Fails if there is none.
+load_saved_gateway() {
+  [ -s "$GATEWAY_STATE" ] || return 1
+  SAVED_GATEWAY=$(sed -n '1p' "$GATEWAY_STATE")
+  case "$SAVED_GATEWAY" in
+    *[!0-9.]*|"") return 1 ;;
   esac
 }
 
-# Keep replies to hosts on other private subnets (for example another VLAN
-# behind the same router) possible, even though the default route is removed.
-# Only private (RFC 1918) ranges are routed via the saved gateway, so the
-# internet stays unreachable.
-ensure_private_routes() {
-  [ -s "$GATEWAY_STATE" ] || return
-  PRIVATE_GW=$(sed -n '1p' "$GATEWAY_STATE")
-  case "$PRIVATE_GW" in
-    *[!0-9.]*|"") return ;;
-  esac
-  WANTED=$(detect_private_routes)
-  [ -n "$WANTED" ] || return
-  MISSING=$(route -n 2>/dev/null | awk -v g="$PRIVATE_GW" -v list="$WANTED" '
+# Prints "net mask" for each PRIVATE_ROUTES range that is routed through
+# gateway $2 ($1 = via), or that is routed neither through it nor on the hub's
+# own link ($1 = missing).
+private_routes() {
+  route -n 2>/dev/null | awk -v want="$1" -v g="$2" -v list="$PRIVATE_ROUTES" '
     BEGIN {
       cnt = split(list, ent, " ")
-      for (i = 1; i <= cnt; i++) { split(ent[i], p, "/"); n[i] = p[1]; m[i] = p[2]; need[i] = 1 }
+      for (i = 1; i <= cnt; i++) { split(ent[i], p, "/"); n[i] = p[1]; m[i] = p[2] }
     }
     { for (i = 1; i <= cnt; i++)
-        if ($1 == n[i] && $3 == m[i] && ($2 == g || $2 == "0.0.0.0")) need[i] = 0 }
-    END { for (i = 1; i <= cnt; i++) if (need[i]) print n[i], m[i] }')
-  [ -n "$MISSING" ] || return
-  echo "$MISSING" | while read NET MASK; do
+        if ($1 == n[i] && $3 == m[i]) {
+          if ($2 == g) via[i] = 1
+          if ($2 == "0.0.0.0") onlink[i] = 1
+        } }
+    END {
+      for (i = 1; i <= cnt; i++)
+        if ((want == "via" && via[i]) || (want == "missing" && !via[i] && !onlink[i]))
+          print n[i], m[i]
+    }'
+}
+
+ensure_private_routes() {
+  private_routes missing "$1" | while read NET MASK; do
+    # drop a route left behind through an earlier gateway
     route del -net "$NET" netmask "$MASK" >/dev/null 2>&1
-    if route add -net "$NET" netmask "$MASK" gw "$PRIVATE_GW" dev ath0 >/dev/null 2>&1; then
-      echo "$(date) codex offline egress guard routed $NET/$MASK via $PRIVATE_GW" >> "$LOG"
+    if route add -net "$NET" netmask "$MASK" gw "$1" dev ath0 >/dev/null 2>&1; then
+      echo "$(date) codex offline egress guard routed $NET/$MASK via $1" >> "$LOG"
+    fi
+  done
+}
+
+# Once the default route is back it covers the private ranges. Left in place,
+# they would keep pointing at the old gateway if it changes.
+clear_private_routes() {
+  private_routes via "$1" | while read NET MASK; do
+    if route del -net "$NET" netmask "$MASK" gw "$1" >/dev/null 2>&1; then
+      echo "$(date) codex offline egress guard removed route to $NET/$MASK via $1" >> "$LOG"
     fi
   done
 }
@@ -76,18 +90,21 @@ enforce_once() {
         echo "$(date) codex offline egress guard removed default route via $CURRENT_GATEWAY" >> "$LOG"
       fi
     fi
-    ensure_private_routes
+    if load_saved_gateway; then
+      ensure_private_routes "$SAVED_GATEWAY"
+    fi
     return
   fi
 
-  if [ -z "$CURRENT_GATEWAY" ] && [ -s "$GATEWAY_STATE" ]; then
-    SAVED_GATEWAY=$(sed -n '1p' "$GATEWAY_STATE")
-    case "$SAVED_GATEWAY" in
-      *[!0-9.]*|"") return ;;
-    esac
+  load_saved_gateway || return
+  if [ -z "$CURRENT_GATEWAY" ]; then
     if route add default gw "$SAVED_GATEWAY" dev ath0 >/dev/null 2>&1; then
       echo "$(date) codex offline egress guard restored default route via $SAVED_GATEWAY" >> "$LOG"
+      CURRENT_GATEWAY=$SAVED_GATEWAY
     fi
+  fi
+  if [ -n "$CURRENT_GATEWAY" ]; then
+    clear_private_routes "$SAVED_GATEWAY"
   fi
 }
 

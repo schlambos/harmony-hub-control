@@ -70,7 +70,10 @@ for required in \
   'cloud_blocker.conf' \
   'route del default' \
   '224.0.0.0' \
-  '240.0.0.0'
+  '240.0.0.0' \
+  '10.0.0.0/255.0.0.0 172.16.0.0/255.240.0.0 192.168.0.0/255.255.0.0' \
+  'ensure_private_routes "$SAVED_GATEWAY"' \
+  'clear_private_routes "$SAVED_GATEWAY"'
 do
   rg -F "$required" "$EGRESS" >/dev/null
 done
