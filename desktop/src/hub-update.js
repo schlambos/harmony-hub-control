@@ -189,6 +189,10 @@ async function updateHub({
       await ssh(`rm -rf ${stage}`).catch(() => {});
       throw new HubUpdateError("This hub has no Melodious setup yet. Install it once with the installer.");
     }
+    if (/^melodious off$/m.test(status)) {
+      await ssh(`rm -rf ${stage}`).catch(() => {});
+      throw new HubUpdateError("Melodious is turned off on this hub. To turn it back on, run the installer.");
+    }
     const current = new Map();
     for (const m of status.matchAll(/^file (\S+) (\S+)$/gm)) current.set(m[2], m[1]);
     const changed = files.filter((f) => current.get(f.dest) !== f.md5);

@@ -41,6 +41,16 @@
   still stops with no live changes if flash fills up.
 .PARAMETER MqttPassword
   MQTT password (never printed in preflight or logs).
+.PARAMETER TurnOff
+  Turn Melodious off and give the hub back to Logitech's cloud and the
+  Harmony app: turn the cloud blocker off, stop Melodious from starting at
+  boot, and restart the hub. Melodious's files stay and SSH keeps working;
+  run the installer again without it to turn Melodious back on. With
+  -PreflightOnly, only reports what would change.
+.PARAMETER SkipCloudSuppression
+  Do not replace netservicestarter.lua (with -CleanInstall, also write the
+  cloud blocker as off). This does not undo an existing install; use
+  -TurnOff for that.
 #>
 param(
     [Alias("Host")]
@@ -67,7 +77,9 @@ param(
     # -RemoveRootToolLeftovers: delete harmony-hub-root's leftover staging folders (and its spare Dropbear once SSH runs ours) before installing
     [switch]$RemoveRootToolLeftovers,
     # -SkipFlashCheck: install even when the measured free flash looks too small; phase 1 still stops safely if flash fills up
-    [switch]$SkipFlashCheck
+    [switch]$SkipFlashCheck,
+    # -TurnOff: turn Melodious off and give the hub back to Logitech's cloud; run again without it to turn Melodious back on
+    [switch]$TurnOff
 )
 
 $ErrorActionPreference = "Stop"
@@ -142,6 +154,142 @@ $VerdictCapacity = "BLOCKED_CAPACITY"
 $VerdictRollbackCapacity = "BLOCKED_ROLLBACK_CAPACITY"
 $VerdictConfigUncertain = "BLOCKED_CONFIGURATION_UNCERTAINTY"
 $VerdictValidation = "BLOCKED_VALIDATION_FAILURE"
+
+# -TurnOff copies $TurnOffScript here (RAM) and runs it; the installer
+# turns Melodious back on, cloud blocker included, while the marker exists.
+$TurnOffScriptPath = "/var/volatile/codex-turn-off.sh"
+$MelodiousOffMarker = "/data/codex/melodious-off"
+
+# Runs on the hub. Identical to TURN_OFF_SCRIPT in install_webui.py
+# (tools/installer_contract_smoke.py checks they match).
+$TurnOffScript = @'
+#!/bin/sh
+# Turns Melodious off, run ON THE HUB by install_webui.py --turn-off or
+# install_webui.ps1 -TurnOff.
+#
+# Melodious's files stay; it just stops running. The cloud blocker goes off,
+# so Melodious's cloud starter starts Logitech's cloud tasks again and the
+# Harmony app can manage the hub. init.sh stops being executable, so the boot
+# script skips it and SSH comes up the stock way. Running the installer again
+# turns Melodious back on.
+#
+#   sh turn_off.sh check   what would change, as key=value lines
+#   sh turn_off.sh apply   backs up what it changes to
+#                          /data/codex-backups/melodious-off-<stamp>, then
+#                          changes it; the caller reboots the hub
+#
+# "error=..." means it stopped there. BusyBox 1.13 on the hub: no stat,
+# mktemp, rmdir, head or grep -E.
+
+set -u
+# Tests run this against a fake root.
+R=${CODEX_OFF_ROOT:-}
+INIT=/data/codex/init.sh
+BLOCKER=/data/codex/cloud_blocker.conf
+HOSTS=/etc/hosts
+PROBE_MARK="# codex: Harmony Touch sync probe"
+MARKER=/data/codex/melodious-off
+PLUGINS="codexactivity codexmqtt"
+
+die() { echo "error=$*"; exit 1; }
+backup_name() { echo "$1" | sed 's#/#_#g'; }
+
+inspect() {
+  [ -d "$R/data/codex" ] || die "Melodious isn't installed on this hub: /data/codex is missing."
+
+  # With init.sh skipped, SSH has to come up the stock way: rcS starts
+  # /usr/sbin/dropbear when /etc/tdeenable exists, and that wrapper runs the
+  # dropbear in /data/codex/bin, which stays.
+  grep -F tdeenable "$R/etc/init.d/rcS" >/dev/null && grep -F /usr/sbin/dropbear "$R/etc/init.d/rcS" >/dev/null ||
+    die "The hub's boot script doesn't start SSH, so SSH might not come back."
+  [ -r "$R/etc/tdeenable" ] || die "/etc/tdeenable is missing, so SSH wouldn't start after the reboot."
+  [ -x "$R/usr/sbin/dropbear" ] || die "/usr/sbin/dropbear is missing, so SSH wouldn't start after the reboot."
+  if [ "$(sed -n 1p "$R/usr/sbin/dropbear")" = "#!/bin/sh" ]; then
+    target=$(sed -n 's/^exec \([^ ]*\).*/\1/p' "$R/usr/sbin/dropbear")
+    if [ -n "$target" ] && [ ! -x "$R$target" ]; then
+      die "/usr/sbin/dropbear runs $target, which is missing, so SSH wouldn't start after the reboot."
+    fi
+  fi
+}
+
+report() {
+  n=0
+  value=$(sed -n 1p "$R$BLOCKER" 2>/dev/null)
+  echo "cloud_blocker=$value"
+  [ "$value" = 0 ] || n=$((n + 1))
+  if [ -x "$R$INIT" ]; then echo "starts_at_boot=yes"; n=$((n + 1)); else echo "starts_at_boot=no"; fi
+  if grep -F "$PROBE_MARK" "$R$HOSTS" >/dev/null 2>&1; then
+    echo "touch_probe=present"; n=$((n + 1))
+  else
+    echo "touch_probe=absent"
+  fi
+  for p in $PLUGINS; do
+    if [ -d "$R/pkg/$p" ]; then echo "plugin=$p present"; n=$((n + 1)); else echo "plugin=$p absent"; fi
+  done
+  if [ -f "$R$MARKER" ]; then echo "marker=present"; else echo "marker=absent"; fi
+  if ps | grep '[c]odex_webui' >/dev/null; then echo "webui=running"; else echo "webui=stopped"; fi
+  if route -n 2>/dev/null | awk '$1 == "0.0.0.0" && $4 ~ /G/ {f = 1} END {exit !f}'; then
+    echo "internet_route=yes"
+  else
+    echo "internet_route=no"
+  fi
+  echo "changes=$n"
+}
+
+apply() {
+  # Finish even if SSH drops: a hangup or a write to the closed pipe would
+  # otherwise stop this halfway.
+  trap '' HUP PIPE
+  stamp=$(date -u +%Y%m%d-%H%M%S)
+  B=/data/codex-backups/melodious-off-$stamp
+  mkdir -p "$R/data/codex-backups" && mkdir "$R$B" || die "Couldn't create the backup folder $B."
+  for p in $BLOCKER $HOSTS; do
+    if [ -f "$R$p" ]; then
+      cp -p "$R$p" "$R$B/$(backup_name $p)" || die "Couldn't back up $p; nothing changed."
+    fi
+  done
+
+  # Blocker off: Melodious's cloud starter then starts Logitech's cloud tasks.
+  if ! { echo 0 > "$R$BLOCKER.codex-new" && chmod 644 "$R$BLOCKER.codex-new" &&
+      mv -f "$R$BLOCKER.codex-new" "$R$BLOCKER"; }; then
+    rm -f "$R$BLOCKER.codex-new"
+    die "Couldn't turn the cloud blocker off; nothing changed."
+  fi
+
+  # The Touch sync probe points ping.myharmony.com at the hub, where nothing
+  # answers once Melodious is off. Some mounts refuse a rename over
+  # /etc/hosts, so rewrite it in place.
+  if grep -F "$PROBE_MARK" "$R$HOSTS" >/dev/null 2>&1; then
+    grep -v -F "$PROBE_MARK" "$R$HOSTS" > "$R$HOSTS.codex-new" &&
+      cat "$R$HOSTS.codex-new" > "$R$HOSTS" ||
+      die "Couldn't remove the Touch sync probe from $HOSTS; the cloud blocker is already off."
+    rm -f "$R$HOSTS.codex-new"
+  fi
+
+  # Out of /pkg, so the engine doesn't load Melodious's plugins.
+  for p in $PLUGINS; do
+    if [ -d "$R/pkg/$p" ]; then
+      mkdir -p "$R$B/pkg" && mv "$R/pkg/$p" "$R$B/pkg/$p" ||
+        die "Couldn't move /pkg/$p out of /pkg; the cloud blocker is already off."
+    fi
+  done
+
+  # rcS.local runs init.sh only when it's executable.
+  if [ -f "$R$INIT" ]; then
+    chmod 644 "$R$INIT" || die "Couldn't stop $INIT from running at boot; the cloud blocker is already off."
+  fi
+
+  echo "$stamp $B" > "$R$MARKER"
+  echo "backup=$B"
+  echo "result=off"
+}
+
+case "${1:-}" in
+  check) inspect; report ;;
+  apply) inspect; apply ;;
+  *) echo "usage: $0 check|apply" >&2; exit 2 ;;
+esac
+'@
 
 function Step($Text) {
     Write-Host ""
@@ -381,6 +529,7 @@ $Changed = [System.Collections.ArrayList]::new()
 $NewCopies = [System.Collections.ArrayList]::new()
 $ResolvedHubId = ""
 $FirstInstall = $false
+$TurningBackOn = $false
 $PreserveStage = $false
 # Flash, from codex_flash_free; $FlashAvail stays $null when it couldn't be measured.
 $FlashHelperRemote = ""
@@ -500,6 +649,9 @@ function Build-Inventory() {
         $blocker = "1`n"
         if ($SkipCloudSuppression) { $blocker = "0`n" }
         Add-Candidate (New-Candidate "/data/codex/cloud_blocker.conf" "644" "config" -Text $blocker)
+    } elseif ($TurningBackOn -and -not $SkipCloudSuppression) {
+        # -TurnOff left the blocker off; Melodious comes back with it on.
+        Add-Candidate (New-Candidate "/data/codex/cloud_blocker.conf" "644" "config" -Text "1`n")
     } elseif (-not $SkipCloudSuppression) {
         # Without the file, codex_webui and netservicestarter.lua treat the
         # cloud as blocked but the egress guard and the activity writer
@@ -1426,6 +1578,93 @@ function Test-CloudBlockerChanged() {
     return [bool](Get-ActiveCandidates | Where-Object { $cloud -contains $_.Dest })
 }
 
+# --------------------------------------------------------------- turn off
+
+function Test-MelodiousOff() {
+    $out = Invoke-Remote "[ -f $MelodiousOffMarker ] && echo off || true" $null 30000
+    return $out.Trim() -eq "off"
+}
+
+# Runs $TurnOffScript on the hub; returns its key=value lines by key.
+function Invoke-TurnOffScript([string]$Mode) {
+    $body = [System.Text.Encoding]::UTF8.GetBytes(($TurnOffScript -replace "`r", "") + "`n")
+    Invoke-Remote "cat > $TurnOffScriptPath" $body 30000 | Out-Null
+    try {
+        $r = Invoke-RemoteRc "sh $TurnOffScriptPath $Mode" $null 120000
+    } finally {
+        Invoke-RemoteRc "rm -f $TurnOffScriptPath" $null 30000 | Out-Null
+    }
+    $values = @{}
+    foreach ($line in ($r.Out -split "`n")) {
+        $line = $line.Trim()
+        $eq = $line.IndexOf("=")
+        if ($eq -lt 1) { continue }
+        $key = $line.Substring(0, $eq)
+        if (-not $values.ContainsKey($key)) { $values[$key] = [System.Collections.ArrayList]::new() }
+        $values[$key].Add($line.Substring($eq + 1)) | Out-Null
+        KV $line
+    }
+    if ($values.ContainsKey("error")) { throw $values["error"][0] }
+    if ($r.Code -ne 0) { throw "the turn-off script exited with $($r.Code): $($r.Err.Trim())" }
+    return $values
+}
+
+function Test-NoChanges($Values) {
+    return $Values.ContainsKey("changes") -and $Values["changes"][0] -eq "0"
+}
+
+function Invoke-TurnOff() {
+    Step "Checking what turning Melodious off changes"
+    $before = Invoke-TurnOffScript "check"
+    if (Test-NoChanges $before) {
+        Step "Done"
+        Info "Melodious is already off on this hub."
+        return 0
+    }
+    if ($PreflightOnly) {
+        Step "Done"
+        Info "Preflight only: nothing was changed."
+        return 0
+    }
+    if (-not $NoPrompt) {
+        Info "The hub goes back to Logitech's cloud and the Harmony app. Melodious's web app stops."
+        $answer = ([string](Read-Host "Turn Melodious off and restart the hub? [y/N]")).Trim().ToLowerInvariant()
+        if ($answer -ne "y" -and $answer -ne "yes") {
+            Info "Nothing was changed."
+            return 1
+        }
+    }
+
+    Step "Turning Melodious off"
+    $result = Invoke-TurnOffScript "apply"
+    if (-not $result.ContainsKey("result") -or $result["result"][0] -ne "off") {
+        throw "the turn-off script didn't report a result"
+    }
+    Info "What changed is backed up in $($result['backup'][0])"
+
+    Step "Restarting the hub"
+    Invoke-Remote "(/bin/sleep 2; /sbin/reboot || reboot) >/dev/null 2>&1 & echo rebooting" $null 30000 | Out-Null
+    Start-Sleep -Seconds 8
+    Wait-TcpPort $HubHost $Port 180 "SSH"
+
+    Step "Checking the hub after the restart"
+    $after = Invoke-TurnOffScript "check"
+    if (-not (Test-NoChanges $after)) {
+        throw "after the restart the hub still has some of Melodious running; see the lines above"
+    }
+
+    Step "Done"
+    Info "Melodious is off: the cloud blocker is off and Melodious no longer starts at boot."
+    Info "Next, open the Harmony app and sync the hub. The app's copy of your setup"
+    Info "replaces the hub's, so devices and activities you made only in Melodious go away."
+    if ($after.ContainsKey("internet_route") -and $after["internet_route"][0] -eq "no") {
+        Info "The hub has no internet route yet. It gets one when it renews its address;"
+        Info "if the Harmony app can't reach it in a few minutes, unplug the hub and plug it back in."
+    }
+    Info "To turn Melodious back on, run this installer again without -TurnOff."
+    return 0
+}
+
 # ------------------------------------------------------------------ main
 
 $HubHost = Prompt-IfMissing $HubHost "Harmony Hub IP address" -Required
@@ -1437,6 +1676,7 @@ if (-not $KeyPath -and $defaultKeyPath -and (Test-Path -LiteralPath $defaultKeyP
 $KeyPath = Prompt-IfMissing $KeyPath "SSH private key path for root login" -Required
 $KeyPath = (Resolve-Path -LiteralPath $KeyPath).Path
 if (-not (Test-Path -LiteralPath $KeyPath)) { throw "SSH key not found: $KeyPath" }
+if ($TurnOff -and $CleanInstall) { throw "-TurnOff can't be combined with -CleanInstall" }
 
 if (-not $NoPrompt -and -not $MqttExplicitSupplied -and -not $MqttDisabled) {
     if ($CleanInstall) {
@@ -1461,8 +1701,14 @@ Step "Checking SSH"
 $identity = Invoke-Remote "id; uname -a" $null 30000
 Write-Host $identity.Trim()
 
+if ($TurnOff) { exit (Invoke-TurnOff) }
+
 Step "Resolving hub id"
 Resolve-HubIdentity
+$TurningBackOn = Test-MelodiousOff
+if ($TurningBackOn) {
+    Info "Melodious was turned off on this hub (-TurnOff). This run turns it back on, cloud blocker included."
+}
 
 Step "Building candidate inventory"
 Build-Inventory
@@ -1593,6 +1839,9 @@ try {
 
 Show-FlashAfterInstall
 Remove-StagingTree
+if ($TurningBackOn) {
+    Invoke-Remote "rm -f $MelodiousOffMarker" $null 30000 | Out-Null
+}
 
 $cloudChanged = Test-CloudBlockerChanged
 if ($cloudChanged -and -not $NoApplyCloudRestart) {
@@ -1605,6 +1854,9 @@ if ($cloudChanged -and -not $NoApplyCloudRestart) {
 }
 
 Step "Done"
+if ($TurningBackOn) {
+    Info "Melodious is back on."
+}
 if ($FirstInstall) {
     Info "Install finished as a first install (configuration written)."
 } elseif ($CleanInstall) {
