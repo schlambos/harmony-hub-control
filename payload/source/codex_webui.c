@@ -8589,6 +8589,15 @@ static int bt_key_usage(const char *key) {
     if (strcmp(key, "directiondown") == 0 || strcmp(key, "down") == 0) return 0x51;
     if (strcmp(key, "directionup") == 0 || strcmp(key, "up") == 0) return 0x52;
     if (strcmp(key, "menu") == 0 || strcmp(key, "application") == 0) return 0x65;
+    /* Consumer page (0x0C) - Remote control keys */
+    if (strcmp(key, "achome") == 0) return 0x223;
+    if (strcmp(key, "acback") == 0) return 0x224;
+    if (strcmp(key, "acmenu") == 0) return 0x225;
+    if (strcmp(key, "acsearch") == 0) return 0x226;
+    if (strcmp(key, "acguide") == 0) return 0x227;
+    if (strcmp(key, "acinfo") == 0) return 0x228;
+    if (strcmp(key, "acsettings") == 0) return 0x229;
+    if (strcmp(key, "acexit") == 0) return 0x22a;
     return -1;
 }
 
@@ -8647,8 +8656,16 @@ static int bt_keyboard_report_hex(const char *input, char *press, size_t pressle
         snprintf(err, errlen, "unsupported Bluetooth keyboard command: %s", input);
         return -1;
     }
-    snprintf(press, presslen, "A101%02X00%02X0000000000", mod & 0xff, usage & 0xff);
-    snprintf(release, releaselen, "A1010000000000000000");
+    if (usage >= 0x200) {
+        /* Consumer control report (ID 0x03, length 5 bytes per pair agent) */
+        snprintf(press, presslen, "A103%02X%02X000000",
+            usage & 0xff, (usage >> 8) & 0xff);
+        snprintf(release, releaselen, "A1030000000000");
+    } else {
+        /* Keyboard report (ID 0x01) */
+        snprintf(press, presslen, "A101%02X00%02X0000000000", mod & 0xff, usage & 0xff);
+        snprintf(release, releaselen, "A1010000000000000000");
+    }
     return 0;
 }
 
