@@ -57,6 +57,27 @@ grep -q 'load_all_link_keys' \
   "$ROOT/payload/source/codex_bt_pair_agent.c"
 grep -q 'close_inherited_fds' \
   "$ROOT/payload/source/codex_bt_pair_agent.c"
+# #91: hciconfig/hcitool live under /usr/sbin on the hub; try both locations.
+grep -q '"/usr/sbin/hciconfig"' \
+  "$ROOT/payload/source/codex_bt_pair_agent.c"
+grep -q '"/usr/bin/hciconfig"' \
+  "$ROOT/payload/source/codex_bt_pair_agent.c"
+grep -q '"/usr/sbin/hcitool"' \
+  "$ROOT/payload/source/codex_bt_pair_agent.c"
+grep -q '"/usr/bin/hcitool"' \
+  "$ROOT/payload/source/codex_bt_pair_agent.c"
+! grep -q '#define HCICONFIG_CLIENT' \
+  "$ROOT/payload/source/codex_bt_pair_agent.c"
+! grep -q '#define HCITOOL_CLIENT' \
+  "$ROOT/payload/source/codex_bt_pair_agent.c"
+# Exec failure and a helper's non-zero exit must stay distinguishable.
+grep -q 'exec %s: not found' \
+  "$ROOT/payload/source/codex_bt_pair_agent.c"
+grep -q '%s exit status=%d' \
+  "$ROOT/payload/source/codex_bt_pair_agent.c"
+# No shell lookup or helper invocation.
+! grep -q 'system(' "$ROOT/payload/source/codex_bt_pair_agent.c"
+! grep -q 'popen(' "$ROOT/payload/source/codex_bt_pair_agent.c"
 ! grep -q 'link-key peer=%s key=' \
   "$ROOT/payload/source/codex_bt_pair_agent.c"
 grep -q 'codex-bt-hid-control.pid' \

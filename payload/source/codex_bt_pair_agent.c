@@ -52,8 +52,21 @@
 #define OGF_LINK_CTL 0x01
 #define OCF_USER_CONFIRM_REPLY 0x002c
 
-#define HCICONFIG_CLIENT "/usr/bin/hciconfig"
-#define HCITOOL_CLIENT "/usr/bin/hcitool"
+/*
+ * BlueZ installs these helpers under /usr/sbin on the hub firmware, while
+ * some images expose them under /usr/bin.  Resolve the first executable at
+ * runtime instead of baking in one directory.
+ */
+static const char *const hciconfig_clients[] = {
+    "/usr/sbin/hciconfig",
+    "/usr/bin/hciconfig",
+    NULL
+};
+static const char *const hcitool_clients[] = {
+    "/usr/sbin/hcitool",
+    "/usr/bin/hcitool",
+    NULL
+};
 #define BT_STORAGE_ROOT "/var/lib/bluetooth"
 #define HCI_ADDRESS_PATH "/sys/class/bluetooth/hci0/address"
 #define PIN_FIFO_PATH "/etc/bluetooth/pin_exchange_fifo"
@@ -298,25 +311,82 @@ static int persist_link_key(const char *peer, const unsigned char *key,
     return 0;
 }
 
-static int load_link_key(const char *peer) {
+static const char *resolve_client(const char *const *candidates) {
+    size_t i;
+    for (i = 0; candidates[i] != NULL; i++) {
+        if (access(candidates[i], X_OK) == 0) return candidates[i];
+    }
+    return NULL;
+}
+
+/*
+ * Run a hub Bluetooth helper without a shell.  On failure, write a
+ * human-readable reason that distinguishes "could not execute" from "ran and
+ * returned non-zero", so the log does not collapse both into EIO.
+ */
+static int run_client(const char *const *candidates, const char *name,
+                      const char *arg1, const char *arg2, const char *arg3,
+                      char *reason, size_t reason_len) {
+    const char *path;
     pid_t pid;
     int status;
 
+    path = resolve_client(candidates);
+    if (!path) {
+        snprintf(reason, reason_len,
+            "exec %s: not found (tried /usr/sbin and /usr/bin)", name);
+        errno = ENOENT;
+        return -1;
+    }
     pid = fork();
-    if (pid < 0) return -1;
+    if (pid < 0) {
+        snprintf(reason, reason_len, "fork %s: %s", name, strerror(errno));
+        return -1;
+    }
     if (pid == 0) {
-        execl(HCICONFIG_CLIENT, "hciconfig", "hci0", "putkey",
-            peer, (char *)NULL);
+        execl(path, name, arg1, arg2, arg3, (char *)NULL);
         _exit(127);
     }
     while (waitpid(pid, &status, 0) < 0) {
-        if (errno != EINTR) return -1;
+        if (errno != EINTR) {
+            snprintf(reason, reason_len, "wait %s: %s", name, strerror(errno));
+            return -1;
+        }
     }
-    if (!WIFEXITED(status) || WEXITSTATUS(status) != 0) {
+    if (WIFEXITED(status)) {
+        int code = WEXITSTATUS(status);
+        if (code == 0) return 0;
+        if (code == 127) {
+            snprintf(reason, reason_len,
+                "exec %s: failed (child exit 127, path=%s)", name, path);
+            errno = ENOENT;
+            return -1;
+        }
+        snprintf(reason, reason_len, "%s exit status=%d", name, code);
         errno = EIO;
         return -1;
     }
-    return 0;
+    if (WIFSIGNALED(status)) {
+        snprintf(reason, reason_len, "%s killed by signal %d",
+            name, WTERMSIG(status));
+        errno = EIO;
+        return -1;
+    }
+    snprintf(reason, reason_len, "%s ended abnormally", name);
+    errno = EIO;
+    return -1;
+}
+
+static int load_link_key(const char *peer) {
+    char reason[192];
+
+    if (run_client(hciconfig_clients, "hciconfig", "hci0", "putkey", peer,
+            reason, sizeof(reason)) == 0) {
+        return 0;
+    }
+    fprintf(stderr, "pair-agent link-key-load peer=%s failed: %s\n",
+        peer, reason);
+    return -1;
 }
 
 static int load_all_link_keys(void) {
@@ -335,9 +405,6 @@ static int load_all_link_keys(void) {
         if (load_link_key(peer) == 0) {
             loaded++;
             printf("pair-agent link-key-loaded peer=%s\n", peer);
-        } else {
-            fprintf(stderr, "pair-agent link-key-load peer=%s failed: %s\n",
-                peer, strerror(errno));
         }
     }
     fclose(input);
@@ -345,23 +412,15 @@ static int load_all_link_keys(void) {
 }
 
 static int run_hcitool(const char *action, const char *peer) {
-    pid_t pid;
-    int status;
+    char reason[192];
 
-    pid = fork();
-    if (pid < 0) return -1;
-    if (pid == 0) {
-        execl(HCITOOL_CLIENT, "hcitool", action, peer, (char *)NULL);
-        _exit(127);
+    if (run_client(hcitool_clients, "hcitool", action, peer, NULL,
+            reason, sizeof(reason)) == 0) {
+        return 0;
     }
-    while (waitpid(pid, &status, 0) < 0) {
-        if (errno != EINTR) return -1;
-    }
-    if (!WIFEXITED(status) || WEXITSTATUS(status) != 0) {
-        errno = EIO;
-        return -1;
-    }
-    return 0;
+    fprintf(stderr, "pair-agent hcitool %s peer=%s failed: %s\n",
+        action, peer, reason);
+    return -1;
 }
 
 static int direct_acl_connect(const char *peer) {
