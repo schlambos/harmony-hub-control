@@ -235,6 +235,31 @@ accepts the `androidtv.constants.KEYS` names (`UP`, `DOWN`, `LEFT`, `RIGHT`,
 `ENTER`, `BACK`, `HOME`, `MENU`, digits). The same profile handles it with a
 different key table.
 
+### 2.4a Cross-device duplicates (amendment, 2026-11-07, from the owner's dump)
+
+The owner's dump (HA 2026.1.2) showed that both proving TVs exist **twice**
+in the device registry: the real integration's device and a separate **Cast
+twin** device entry for the same physical hardware:
+
+- LG TV: `media_player.lg_webos_tv_oled65c4pua_2` (`webostv`) vs
+  `media_player.lg_webos_tv_oled65c4pua` (`cast`), in two device entries.
+- Living Room TV (SEI Robotics Box R 4K Plus, Google TV):
+  `media_player.box_r_4k_plus` + `remote.box_r_4k_plus`
+  (`androidtv_remote`) vs `media_player.living_room_tv_4` (`cast`), in two
+  device entries.
+
+The Phase 1 Configure flow must therefore not assume one device entry per
+physical device. It must either (a) let the user group several selected HA
+devices into one Harmony device, or (b) suppress a Cast twin when its real
+device is selected. Either mechanism is acceptable; the requirement is that
+a Cast twin never becomes a second Harmony device alongside the real one,
+and Cast commands are never merged into a device that already has the real
+entity set. Cast remains a fallback only when no webOS/Android TV device is
+selected (see §3.4). The owner's LG has no TURN_ON feature bit, so its
+profile uses `PowerToggle` (`webostv.button` `POWER`) with the discrete
+`PowerOff`, per §3.2; the Google TV's `activity_list` is empty, so it gets
+no `App <name>` commands.
+
 ### 2.4 What the dump must confirm
 
 1. **LG power:** does `media_player` report `TURN_ON` (Wake-on-LAN
