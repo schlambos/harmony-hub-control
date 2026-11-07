@@ -226,6 +226,13 @@ you can type searches and passwords and send keys. Paired targets are saved
 along with their keystroke scripts. Bluetooth commands go on remote buttons
 like any other command.
 
+The keyboard page also has the TV keys a Chromecast with Google TV remote
+uses: Home and Back (Consumer-page usages `0x223` and `0x224`), plus Menu,
+Search, Guide, Info, Settings, Exit, Voice and Quick settings. They travel in
+the consumer-control report the hub's keyboard profile already declares, so
+an existing pairing keeps working. The stock Bluetooth device template also
+has Home and Back commands for physical remote buttons.
+
 ## Home Assistant
 
 Melodious connects the hub and Home Assistant in both directions.

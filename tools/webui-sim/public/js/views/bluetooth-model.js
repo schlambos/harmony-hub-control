@@ -219,7 +219,14 @@ export function textHelperRemedy(status) {
 
 /** Explicit, user-triggered key buttons. Every code is accepted by the hub's
     bt_key_usage()/modifier parser (codex_webui.c), so each button maps to a
-    valid HID report. Combo codes are the normalized forms the hub matches. */
+    valid HID report. Combo codes are the normalized forms the hub matches.
+
+    The ac* keys are HID Consumer page (0x0C) usages.  They travel in report
+    ID 3, which the stock btkeyboard descriptor already declares, so they need
+    no re-pairing.  achome/acback are the two the Chromecast with Google TV
+    remote sends; acvoice/acpanel are the verified Chromecast alternatives for
+    search and settings.  The keyboard-page home/menu/escape keys stay for
+    ordinary text entry and existing saved scripts. */
 export const QUICK_KEYS = [
   { code: "directionup", label: "Up" },
   { code: "directiondown", label: "Down" },
@@ -229,6 +236,16 @@ export const QUICK_KEYS = [
   { code: "escape", label: "Back" },
   { code: "menu", label: "Menu" },
   { code: "home", label: "Home" },
+  { code: "achome", label: "Home (TV)" },
+  { code: "acback", label: "Back (TV)" },
+  { code: "acmenu", label: "Menu (TV)" },
+  { code: "acsearch", label: "Search (TV)" },
+  { code: "acguide", label: "Guide (TV)" },
+  { code: "acinfo", label: "Info (TV)" },
+  { code: "acsettings", label: "Settings (TV)" },
+  { code: "acexit", label: "Exit (TV)" },
+  { code: "acvoice", label: "Voice (TV)" },
+  { code: "acpanel", label: "Quick settings (TV)" },
   { code: "backspace", label: "Backspace" },
   { code: "space", label: "Space" },
   { code: "tab", label: "Tab" },

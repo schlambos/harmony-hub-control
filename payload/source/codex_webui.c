@@ -8589,6 +8589,23 @@ static int bt_key_usage(const char *key) {
     if (strcmp(key, "directiondown") == 0 || strcmp(key, "down") == 0) return 0x51;
     if (strcmp(key, "directionup") == 0 || strcmp(key, "up") == 0) return 0x52;
     if (strcmp(key, "menu") == 0 || strcmp(key, "application") == 0) return 0x65;
+    /*
+     * Consumer page (0x0C) remote keys.  The stock btkeyboard HID report
+     * descriptor already declares report ID 3 as a Consumer Control
+     * collection with two 16-bit usages, so these need no re-pairing.
+     * 0x223/0x224 are the usages the Chromecast with Google TV remote sends;
+     * the rest are standard HID usages (see docs/API.md for the host map).
+     */
+    if (strcmp(key, "achome") == 0) return 0x223;      /* AC Home */
+    if (strcmp(key, "acback") == 0) return 0x224;      /* AC Back */
+    if (strcmp(key, "acmenu") == 0) return 0x040;      /* Menu */
+    if (strcmp(key, "acsearch") == 0) return 0x221;    /* AC Search */
+    if (strcmp(key, "acguide") == 0) return 0x08d;     /* Media Select Program Guide */
+    if (strcmp(key, "acinfo") == 0) return 0x1bd;      /* AL OEM Features/Tips/Tutorial Browser */
+    if (strcmp(key, "acsettings") == 0) return 0x096;  /* Media Select Tape (Google TV SETTINGS) */
+    if (strcmp(key, "acexit") == 0) return 0x204;      /* AC Exit */
+    if (strcmp(key, "acvoice") == 0) return 0x0cf;     /* Voice Command */
+    if (strcmp(key, "acpanel") == 0) return 0x2a2;     /* AC Desktop Show All Applications */
     return -1;
 }
 
@@ -8647,8 +8664,21 @@ static int bt_keyboard_report_hex(const char *input, char *press, size_t pressle
         snprintf(err, errlen, "unsupported Bluetooth keyboard command: %s", input);
         return -1;
     }
-    snprintf(press, presslen, "A101%02X00%02X0000000000", mod & 0xff, usage & 0xff);
-    snprintf(release, releaselen, "A1010000000000000000");
+    if (usage >= 0x200) {
+        /*
+         * Consumer Control report ID 3: A1 (HID DATA input) + 03 + two
+         * 16-bit usages = 6 bytes.  The descriptor's second usage field is
+         * zero (one key at a time).  Do not add padding: the report is
+         * exactly 4 payload bytes after the report ID.
+         */
+        snprintf(press, presslen, "A103%02X%02X0000",
+            usage & 0xff, (usage >> 8) & 0xff);
+        snprintf(release, releaselen, "A10300000000");
+    } else {
+        /* Keyboard report ID 1: A1 + 01 + modifier + reserved + 6 keys. */
+        snprintf(press, presslen, "A101%02X00%02X0000000000", mod & 0xff, usage & 0xff);
+        snprintf(release, releaselen, "A1010000000000000000");
+    }
     return 0;
 }
 

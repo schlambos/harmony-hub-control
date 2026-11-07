@@ -439,6 +439,19 @@ fun KeyboardSurface(
                 "Tab" to "tab",
                 "Esc" to "escape",
                 "Home" to "home",
+                // Consumer page (0x0C) keys: report ID 3, already declared by
+                // the hub's btkeyboard descriptor.  Home/Back are what the
+                // Chromecast with Google TV remote sends.
+                "Home (TV)" to "achome",
+                "Back (TV)" to "acback",
+                "Menu (TV)" to "acmenu",
+                "Search (TV)" to "acsearch",
+                "Guide (TV)" to "acguide",
+                "Info (TV)" to "acinfo",
+                "Settings (TV)" to "acsettings",
+                "Exit (TV)" to "acexit",
+                "Voice (TV)" to "acvoice",
+                "Quick settings (TV)" to "acpanel",
             ).forEach { (label, code) ->
                 AssistChip(
                     onClick = { haptics.tap(); onSendKey(code) },

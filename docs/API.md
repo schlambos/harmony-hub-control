@@ -660,6 +660,44 @@ Invoke-RestMethod "http://<hub-ip>:8080/api/bt-call" -Method Post -Body @{
 }
 ```
 
+### Consumer-page TV keys
+
+The hub's `btkeyboard` HID report descriptor already declares report ID 3 as
+a Consumer Control collection (Usage Page `0x0C`, two 16-bit usages).  These
+names send that report, so they need no re-pairing:
+
+| Name | Usage | Key |
+| --- | --- | --- |
+| `achome` | `0x223` | AC Home |
+| `acback` | `0x224` | AC Back |
+| `acmenu` | `0x040` | Menu |
+| `acsearch` | `0x221` | AC Search |
+| `acguide` | `0x08D` | Media Select Program Guide |
+| `acinfo` | `0x1BD` | AL OEM Features/Tips/Tutorial Browser (INFO) |
+| `acsettings` | `0x096` | Media Select Tape (Google TV SETTINGS) |
+| `acexit` | `0x204` | AC Exit |
+| `acvoice` | `0x0CF` | Voice Command |
+| `acpanel` | `0x2A2` | AC Desktop Show All Applications |
+
+`achome` and `acback` are the two usages the Chromecast with Google TV remote
+sends and are the verified Home/Back path.  On the Chromecast, `acmenu`,
+`acguide`, `acvoice`, and `acpanel` are also mapped by the Google TV key
+layout; `acsearch`, `acinfo`, `acsettings`, and `acexit` are the standard
+usages but the Chromecast may ignore them (other Android TV hosts map some of
+them).  The keyboard-page names (`home`, `menu`, `escape`, ...) are unchanged
+and still produce the old report ID 1 keyboard report.
+
+The press report is exactly six bytes: `A1 03` + the usage as two
+little-endian bytes + two zero bytes (the second usage field).  The release is
+`A1 03 00 00 00 00`.  Do not add padding; the descriptor's consumer report is
+four payload bytes after the report ID.
+
+A stock Bluetooth HID device profile (for example the NVIDIA Shield template
+in the repo fixtures) already carries `Home` (`0C000223`) and `Back`
+(`0C000224`) commands, so a physical remote button bound to those commands
+sends the same consumer reports.  The `ac*` script names are for the web UI,
+Android keyboard surface, and HTTP API; they are not new device command names.
+
 Send a saved device's Bluetooth command (`render_bt_saved_command_json()`):
 
 ```powershell
