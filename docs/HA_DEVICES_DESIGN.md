@@ -317,16 +317,22 @@ editor. The dumper records `entity_category`, `disabled_by` and
 | `Info` | `button:INFO` | always |
 | `Exit` | `button:EXIT` | always |
 | `0`–`9` | `button:0`–`button:9` | always |
+| `Dash` | `button:DASH` | always |
+| `Record` | `button:RECORD` | always |
+| `Red` / `Green` / `Yellow` / `Blue` | `button:RED` / `GREEN` / `YELLOW` / `BLUE` | always |
 | `ChannelUp` / `ChannelDown` | `button:CHANNELUP` / `button:CHANNELDOWN` | always |
 
 Notes:
 
 - **No absolute volume.** `VOLUME_SET` is not used; Harmony commands are
   step-based. The profile never invents a `Volume 35` command.
-- **Power:** prefer `turn_on`/`turn_off` when the feature bits are present.
-  Otherwise emit `PowerToggle` and let the Touch's one-shot self-long
-  prevent double toggles (`codexactivity.lua` `ONE_SHOT_COMMANDS`). Do not
-  emit both `PowerOn` and `PowerToggle`.
+- **Power:** prefer `turn_on`/`turn_off` when both feature bits are
+  present. If only one discrete direction is present, use the toggle pair
+  for the activity and keep the discrete command for manual use; the
+  activity's power assumption is then toggle-based. If neither is present,
+  emit `PowerToggle` and let the Touch's one-shot self-long prevent double
+  toggles (`codexactivity.lua` `ONE_SHOT_COMMANDS`). Do not emit both
+  `PowerOn` and `PowerToggle` in the same power pair.
 - **Inputs vs apps:** `source_list` mixes inputs and apps. The profile
   classifies an entry as an input when its name looks like an input
   (`HDMI`, `AV`, `Component`, `Live TV`, `Antenna`, `USB`) or when the
@@ -362,6 +368,8 @@ Two sub-profiles:
 | `Home` | `send_command:HOME` | remote |
 | `Menu` | `send_command:MENU` | remote |
 | `0`–`9` | `send_command:0`–`9` | remote |
+| `Dash` | `send_command:MINUS` | remote, if the key table has it |
+| `Record` / colour keys | `send_command:RECORD` / `PROG_RED` … | remote, only if the key table has them |
 | `App <name>` | `turn_on` with `activity:<name>` on the remote | remote `activity_list` |
 
 **`androidtv` (ADB, older Android TV / Fire TV)**
@@ -863,6 +871,15 @@ out-of-order guard; `updated` is only for display, so clock skew between HA
 and the hub cannot drop a newer snapshot.
 
 ### 5.2 Endpoint
+
+**Why a new endpoint, not piggyback.** `/api/ha-devices` is a flash-writing,
+Touch-syncing writer: a state change every few seconds would consume the
+hub's jffs2 and make the Touch pull a new revision. `/api/state` is a
+read-only engine digest and `/api/activity-config` is a read-only snapshot;
+neither accepts a push. A separate volatile endpoint is the only option
+that meets the "never write state to flash" rule. It is also independently
+rate-limited and can be absent on older hubs without breaking the device
+writer.
 
 New hub route:
 
@@ -1666,6 +1683,9 @@ match.
 | `Exit` | `clear`, `cancel` | Exit |
 | `ChannelUp` / `ChannelDown` | `chup`, `chdown`, `pageup`, `pagedown` | channel |
 | `0`–`9` | `digit0`, `number0`, `num0` | digits |
+| `Dash` | `hyphen`, `separator`, `dot`, `period`, `minus` | dash |
+| `Record` | `rec` | record |
+| `Red` / `Green` / `Yellow` / `Blue` | — | colour keys |
 | `Input <source>` | — | input selection |
 | `App <name>` | — | app launch (not an input) |
 | `Open` / `Close` | — | cover |
