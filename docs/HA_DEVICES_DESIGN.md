@@ -1516,6 +1516,7 @@ D-pad/OK/Back/Home — with no IR/BT configured for those two.
 - Sim tests; regenerate the web bundle and rebuild `codex_webui` if JS
   changed (pinned bun/Zig, update pins).
 - Android parity check; no port of web-only editors.
+- Docs: role/power-order notes in `HOME_ASSISTANT.md` and the web UI guide.
 
 **Gate:** owner runs the mixed activity (LG TV + Google TV + AVR + lights)
 for an evening; IR/BT fallbacks for the two TVs removed or disabled.
