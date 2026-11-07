@@ -21,6 +21,7 @@ function usage(message) {
   node tools/ha_devices.mjs apply  --hub ... (same as plan)
   node tools/ha_devices.mjs revert --hub ...
   node tools/ha_devices.mjs send   --hub ... --entity ID --command NAME
+  (--entity matches the device key: the entity ID for v1, the key for v2)
   node tools/ha_devices.mjs listen [--port 8770]
 
 Without --set, the set is one test device for --entity (default
