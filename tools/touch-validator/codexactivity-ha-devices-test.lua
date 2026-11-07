@@ -512,5 +512,131 @@ local broken = processRequest('{"id":"x42","op":"CommitHaDevices","set":{')
 check("a request that is not JSON is answered with its id",
   broken.ok == false and broken.id == "x42", encodeJson(broken))
 
+-- Spec v2: one Harmony device from N entities ------------------------------
+local function merged(extra)
+  local device = {
+    key = "media_player.living_room_tv",
+    name = "Living Room TV",
+    model = "Google TV",
+    entities = {
+      { alias = "media_player.living_room_tv", entity = "media_player.living_room_tv" },
+      { alias = "remote.living_room_tv", entity = "remote.living_room_tv" },
+    },
+    commands = {
+      { name = "PowerOn", value = "media_player.living_room_tv:turn_on" },
+      { name = "PowerOff", value = "media_player.living_room_tv:turn_off" },
+      { name = "DirectionUp", value = "remote.living_room_tv:send_command:DPAD_UP" },
+    },
+    power = { on = "PowerOn", off = "PowerOff" },
+    inputs = {},
+  }
+  for key, value in pairs(extra or {}) do device[key] = value end
+  return device
+end
+
+resetHub(seedState())
+local v2rejects = {
+  { "unknown alias in a v2 value", { webhook = WEBHOOK, devices = { merged({ commands = {
+    { name = "PowerOn", value = "media_player.other:turn_on" } }, power = NULL }) } } },
+  { "v2 value without an action", { webhook = WEBHOOK, devices = { merged({ commands = {
+    { name = "PowerOn", value = "media_player.living_room_tv:" } }, power = NULL }) } } },
+  { "v2 entities listed twice", { webhook = WEBHOOK, devices = { merged({ entities = {
+    { alias = "media_player.living_room_tv", entity = "media_player.living_room_tv" },
+    { alias = "media_player.living_room_tv", entity = "light.other" } } }) } } },
+  { "v2 entity in two devices", { webhook = WEBHOOK, devices = {
+    merged(), merged({ key = "media_player.other", name = "Other" }) } } },
+}
+for _, case in ipairs(v2rejects) do
+  local response = commit(case[2])
+  check("v2 rejects " .. case[1], response.ok == false and #hub.saves == 0, response.error)
+end
+
+local v2added = commit({ webhook = WEBHOOK, devices = { merged() } })
+check("v2 adds the merged device",
+  v2added.ok and v2added.changed and v2added.added[1] == "Living Room TV", encodeJson(v2added))
+check("v2 reports the key and entities",
+  v2added.devices[1].key == "media_player.living_room_tv" and
+    #v2added.devices[1].entities == 2, encodeJson(v2added.devices[1]))
+local v2entry
+for _, entry in ipairs(stored("DeviceList").DevicesWithFeatures) do
+  if entry.Device.Manufacturer == "Home Assistant" then v2entry = entry end
+end
+check("v2 stores the key in {d}",
+  v2entry.Device.Tokens.Parameters[1].Value == "media_player.living_room_tv")
+local v2deviceId = v2entry.Device["Id-"]
+check("v2 keeps {c} values opaque",
+  v2entry.Commands[3].Parameters[1].Value == "remote.living_room_tv:send_command:DPAD_UP")
+
+-- v1 -> v2 migration preserves the device and command IDs -------------------
+local oldIds = {}
+for _, command in ipairs(v2entry.Commands) do oldIds[command.Name] = command["Id-"] end
+resetHub(seedState())
+local v1first = commit({ webhook = WEBHOOK, devices = { {
+  entity = "media_player.living_room_tv", name = "Living Room TV",
+  commands = {
+    { name = "PowerOn", value = "turn_on" },
+    { name = "DirectionUp", value = "send_command:DPAD_UP" },
+  },
+  power = { on = "PowerOn", off = "PowerOff" }, inputs = {},
+} } })
+local v1entry
+for _, entry in ipairs(stored("DeviceList").DevicesWithFeatures) do
+  if entry.Device.Manufacturer == "Home Assistant" then v1entry = entry end
+end
+local v1deviceId = v1entry.Device["Id-"]
+local migrated = commit({ webhook = WEBHOOK, devices = { merged({
+  commands = {
+    { name = "PowerOn", value = "media_player.living_room_tv:turn_on" },
+    { name = "PowerOff", value = "media_player.living_room_tv:turn_off" },
+    { name = "DirectionUp", value = "remote.living_room_tv:send_command:DPAD_UP" },
+  }, power = { on = "PowerOn", off = "PowerOff" } }) } })
+local migratedEntry
+for _, entry in ipairs(stored("DeviceList").DevicesWithFeatures) do
+  if entry.Device.Manufacturer == "Home Assistant" then migratedEntry = entry end
+end
+check("v1->v2 keeps the device ID",
+  migrated.ok and migratedEntry.Device["Id-"] == v1deviceId, encodeJson(migrated))
+check("v1->v2 reports what it migrated",
+  migrated.devices[1].migratedFrom == "media_player.living_room_tv", encodeJson(migrated.devices[1]))
+check("v1->v2 re-sends the same {d} after migration",
+  migratedEntry.Device.Tokens.Parameters[1].Value == "media_player.living_room_tv")
+
+-- Absorbed referenced devices are retained -----------------------------------
+local activities = stored("ActivityList")
+local secondId
+do
+  local second = commit({ webhook = WEBHOOK, devices = { merged(), {
+    entity = "remote.living_room_tv", name = "Living Room Remote",
+    commands = { { name = "Press", value = "press" } }, power = NULL, inputs = {},
+  } } })
+  for _, device in ipairs(second.devices) do
+    if device.name == "Living Room Remote" then secondId = device.deviceId end
+  end
+end
+activities = stored("ActivityList")
+activities.Activities[1].Roles[2] = { ["DeviceId-"] = tonumber(secondId), __type = "VolumeActivityRole" }
+hub.files.ActivityList.text = encodeJson(activities)
+local absorbed = commit({ webhook = WEBHOOK, devices = { merged({
+  commands = {
+    { name = "PowerOn", value = "media_player.living_room_tv:turn_on" },
+    { name = "DirectionUp", value = "remote.living_room_tv:send_command:DPAD_UP" },
+    { name = "Press", value = "remote.living_room_tv:press" },
+  }, power = NULL }) } })
+check("a referenced absorbed device is retained, not deleted",
+  absorbed.ok and #absorbed.retained == 1 and
+    absorbed.retained[1].name == "Living Room Remote", encodeJson(absorbed))
+local stillThere = false
+for _, entry in ipairs(stored("DeviceList").DevicesWithFeatures) do
+  if tostring(entry.Device["Id-"]) == tostring(secondId) then stillThere = true end
+end
+check("the retained device is still in DeviceList", stillThere)
+check("an unchanged v2 set saves nothing",
+  commit({ webhook = WEBHOOK, devices = { merged({
+    commands = {
+      { name = "PowerOn", value = "media_player.living_room_tv:turn_on" },
+      { name = "DirectionUp", value = "remote.living_room_tv:send_command:DPAD_UP" },
+      { name = "Press", value = "remote.living_room_tv:press" },
+    }, power = NULL }) } }).changed == false)
+
 print(string.format("%d/%d checks passed", count - failures, count))
 os.exit(failures == 0 and 0 or 1)
