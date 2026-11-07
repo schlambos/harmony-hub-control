@@ -242,6 +242,8 @@ describe("QUICK_KEYS", () => {
       "directionup", "directiondown", "directionleft", "directionright",
       "enter", "escape", "menu", "home", "backspace", "space", "tab", "delete",
       "pageup", "pagedown", "insert", "end",
+      "achome", "acback", "acmenu", "acsearch", "acguide", "acinfo",
+      "acsettings", "acexit", "acvoice", "acpanel",
       "number1", "number2", "number3", "number4", "number5",
       "number6", "number7", "number8", "number9", "number0",
       "ctrll", "alttab", "altf4", "ctrlaltdelete",
