@@ -163,15 +163,16 @@ never writes to Home Assistant.
 
 ```sh
 python3 -m pip install aiohttp
-python3 tools/ha_device_inventory.py \
+HA_TOKEN=... python3 tools/ha_device_inventory.py \
   --url http://homeassistant.local:8123 \
-  --token "$HA_TOKEN" \
   --device "LG" --device "Google" \
   --out ha-inventory.json
 ```
 
 Create a long-lived token under **Profile → Security → Long-lived access
-tokens**. The output removes serial numbers, unique IDs, identifiers,
+tokens**. Pass it with `--token-file` or the `HA_TOKEN` environment
+variable, not `--token` on the command line, so it does not appear in the
+process list. The output removes serial numbers, unique IDs, identifiers,
 connections, configuration URLs, MAC addresses and IPv4 addresses. Add
 `--anonymise` to replace device names and entity object IDs with stable
 placeholders; the domain and platform stay visible, which is what the

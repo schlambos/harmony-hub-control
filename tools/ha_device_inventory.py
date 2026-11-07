@@ -14,10 +14,13 @@ Requirements: Python 3.10+ and aiohttp (``pip install aiohttp``).
 
 Usage:
 
-    python3 tools/ha_device_inventory.py \
+    HA_TOKEN=... python3 tools/ha_device_inventory.py \
         --url http://homeassistant.local:8123 \
-        --token "$HA_TOKEN" \
         --out ha-inventory.json
+
+The token is read from ``--token``, ``--token-file`` or the ``HA_TOKEN``
+environment variable, in that order. Prefer the file or the environment so
+the token does not appear in the process list.
 
 Create a long-lived access token in Home Assistant under
 Profile -> Security -> Long-lived access tokens. The token is only sent to
@@ -36,6 +39,7 @@ from __future__ import annotations
 import argparse
 import asyncio
 import json
+import os
 import re
 import sys
 from datetime import datetime, timezone
@@ -320,7 +324,15 @@ def print_summary(inventory: dict[str, Any]) -> None:
 def parse_args(argv: list[str]) -> argparse.Namespace:
     parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     parser.add_argument("--url", required=True, help="Home Assistant URL, e.g. http://homeassistant.local:8123")
-    parser.add_argument("--token", required=True, help="long-lived access token")
+    parser.add_argument(
+        "--token",
+        default=os.environ.get("HA_TOKEN"),
+        help="long-lived access token (or set HA_TOKEN)",
+    )
+    parser.add_argument(
+        "--token-file",
+        help="file whose first line is the long-lived access token",
+    )
     parser.add_argument("--out", default="ha-inventory.json", help="output JSON file")
     parser.add_argument(
         "--device",
@@ -338,8 +350,22 @@ def parse_args(argv: list[str]) -> argparse.Namespace:
 
 async def async_main(argv: list[str]) -> int:
     args = parse_args(argv)
+    token = args.token
+    if args.token_file:
+        try:
+            with open(args.token_file, encoding="utf-8") as handle:
+                token = handle.readline().strip()
+        except OSError as err:
+            print(f"error: cannot read {args.token_file}: {err}", file=sys.stderr)
+            return 1
+    if not token:
+        print(
+            "error: give --token, --token-file or set HA_TOKEN",
+            file=sys.stderr,
+        )
+        return 1
     try:
-        raw = await fetch_inventory(args.url, args.token)
+        raw = await fetch_inventory(args.url, token)
     except Exception as err:  # aiohttp errors, timeouts, auth refusals
         print(f"error: {err}", file=sys.stderr)
         return 1
