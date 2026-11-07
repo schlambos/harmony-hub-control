@@ -266,23 +266,56 @@ Content-Type: application/json
 Each device becomes an ordinary Harmony device whose commands are IP
 commands (`TransportType` 64). They can sit in activities and on buttons
 like any other device. When one runs, the Hub engine posts
-`{"device":"<entity>","command":"<value>"}` to the webhook. The body goes
+`{"device":"<key>","command":"<value>"}` to the webhook, where `<key>` is
+the device's key and `<value>` is the command value. The body goes
 to the offline writer as a `CommitHaDevices` operation (at most 256 KiB),
 after a resource backup unless `dryRun` is true.
 
+Two spec shapes are accepted, and may be mixed in one set:
+
+- **v1** (as above): `entity` names the device's single Home Assistant
+  entity; command values are bare actions (`turn_on`).
+- **v2** (one Harmony device from N entities): `key` is the stable device
+  key, `entities` lists up to 32 `{alias, entity}` objects, and each
+  command value is `<entity-alias>:<action>` naming an alias from the
+  table (`ha-devices-v2` in `GET /api/version`):
+
+```json
+{
+  "key": "media_player.living_room_tv",
+  "name": "Living Room TV",
+  "entities": [
+    {"alias": "media_player.living_room_tv", "entity": "media_player.living_room_tv"},
+    {"alias": "remote.living_room_tv", "entity": "remote.living_room_tv"}
+  ],
+  "commands": [
+    {"name": "PowerOn", "value": "media_player.living_room_tv:turn_on"},
+    {"name": "DirectionUp", "value": "remote.living_room_tv:send_command:DPAD_UP"}
+  ],
+  "power": {"on": "PowerOn", "off": "PowerOff"}
+}
+```
+
 - The writer owns the devices whose `AutoDetectedDevice.Id` starts with
-  `melodious-ha-` and matches them by `entity`. It adds, updates and
-  removes only those, and keeps device and command IDs across updates.
-  It never touches other devices.
+  `melodious-ha-`. It matches a spec by its key first, else by any of its
+  entities (v1 migration), adds, updates and removes only those, and
+  keeps device and command IDs across updates. It never touches other
+  devices.
+- A v1 device absorbed into a merged v2 device is removed when nothing
+  references it, and **retained** (reported in `retained` with its users)
+  when an activity, button or sequence still uses it. Re-point the
+  activity to the merged device and it is removed on the next push.
 - `power` is `{"on","off"}`, `{"toggle"}` or absent. Each input names
   one of the device's commands.
 - `webhook` must be plain `http://`: the Hub cannot verify Let's Encrypt
   certificates. An empty `devices` list needs no webhook; it removes
   every Home Assistant device and their protocol.
-- Command values may not contain quotes, backslashes, `%` or braces.
+- Command values (and v2 aliases) may not contain quotes, backslashes, `%`
+  or braces; a v2 value must start with a known alias.
 - It refuses to remove a device, command or input that an activity,
-  button or sequence still uses. It also refuses a name another device
-  already has.
+  button or sequence still uses (except via retention above). It also
+  refuses a name another device already has, and an entity listed in two
+  devices of the same set.
 - A changed set saves DeviceList and ProtocolList with new etags, reloads
   the engine and publishes a new revision, so a paired Touch pulls it. An
   unchanged set saves nothing.
@@ -294,8 +327,9 @@ after a resource backup unless `dryRun` is true.
   reloaded with it.
 
 The writer's reply is the body: `200` with `ok`, `changed`, `dryRun`,
-`screensChanged`, the `added`, `updated`, `removed` and `unchanged`
-device names, and `devices` (`entity`, `deviceId`, `name`). A non-object body gives `400`;
+`screensChanged`, the `added`, `updated`, `removed`, `unchanged` and
+`retained` device names, and `devices` (`key` or `entity`, `entities`,
+`deviceId`, `name`, `migratedFrom`). A non-object body gives `400`;
 a writer refusal gives `422` with `error`; a writer that cannot be
 reached gives `503`. See [HOME_ASSISTANT.md](HOME_ASSISTANT.md).
 

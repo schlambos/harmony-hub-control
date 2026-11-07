@@ -1920,24 +1920,78 @@ local function haList(value)
 end
 
 -- Check one device of the set; command references resolve to the spelling
--- the device itself uses.
+-- the device itself uses. v1 devices carry {entity}; v2 devices carry
+-- {key, entities = {{alias, entity}}} and command values <alias>:<action>.
+local HA_DEFAULT_V2_MODEL = "Home Assistant device"
+
+local function haAlias(value)
+  if type(value) ~= "string" or value == "" or #value > 64 or
+      string.find(value, ":") or not string.match(value, "^[a-z0-9_.]+$") then
+    return nil
+  end
+  return value
+end
+
 local function haDeviceSpecFrom(raw, index)
   local label = "device " .. index
   if type(raw) ~= "table" then
     return nil, label .. " must be an object"
   end
+  local isV2 = raw.key ~= nil or raw.entities ~= nil
   local spec = {
-    entity = haValue(raw.entity, 128),
     name = haLabel(raw.name, 64),
-    model = (raw.model == nil or raw.model == json.null) and HA_DEFAULT_MODEL or
+    model = (raw.model == nil or raw.model == json.null) and
+      (isV2 and HA_DEFAULT_V2_MODEL or HA_DEFAULT_MODEL) or
       haLabel(raw.model, 64),
     commands = {},
     inputs = {}
   }
-  if not spec.entity or not string.match(spec.entity, "^[a-z0-9_]+%.[a-z0-9_]+$") then
-    return nil, label .. " needs an entity ID such as light.kitchen"
+  if isV2 then
+    spec.key = haValue(raw.key, 128)
+    if not spec.key or not string.match(spec.key, "^[a-z0-9_]+%.[a-z0-9_]+$") then
+      return nil, label .. " needs a key such as media_player.living_room"
+    end
+    label = spec.key
+    local entities = haList(raw.entities)
+    if not entities or #entities == 0 or #entities > 32 then
+      return nil, label .. ": entities must list 1 to 32 objects"
+    end
+    spec.entities = {}
+    spec.aliasToEntity = {}
+    local seenAlias, seenEntity = {}, {}
+    for i, item in ipairs(entities) do
+      if type(item) ~= "table" then
+        return nil, label .. ": entity " .. i .. " must be an object"
+      end
+      local alias = haAlias(item.alias)
+      local entity = haValue(item.entity, 128)
+      if not alias then
+        return nil, label .. ": entity " .. i .. " needs an alias of letters, digits, . or _"
+      end
+      if not entity or not string.match(entity, "^[a-z0-9_]+%.[a-z0-9_]+$") then
+        return nil, label .. ": entity " .. i .. " needs an entity ID such as light.kitchen"
+      end
+      if seenAlias[string.lower(alias)] then
+        return nil, label .. ": alias " .. alias .. " is listed twice"
+      end
+      if seenEntity[entity] then
+        return nil, label .. ": " .. entity .. " is listed twice"
+      end
+      seenAlias[string.lower(alias)] = true
+      seenEntity[entity] = true
+      spec.entities[i] = {alias = alias, entity = entity}
+      spec.aliasToEntity[alias] = entity
+    end
+  else
+    spec.key = nil
+    spec.entity = haValue(raw.entity, 128)
+    if not spec.entity or not string.match(spec.entity, "^[a-z0-9_]+%.[a-z0-9_]+$") then
+      return nil, label .. " needs an entity ID such as light.kitchen"
+    end
+    label = spec.entity
+    spec.entities = {{alias = spec.entity, entity = spec.entity}}
+    spec.aliasToEntity = {[spec.entity] = spec.entity}
   end
-  label = spec.entity
   if not spec.name then
     return nil, label .. ": name must be 1-64 characters without quotes or backslashes"
   end
@@ -1962,6 +2016,17 @@ local function haDeviceSpecFrom(raw, index)
     if not value then
       return nil, label .. ": command " .. name ..
         " needs a value without quotes, backslashes, % or braces"
+    end
+    if isV2 then
+      local alias = string.match(value, "^([^:]+):(.+)$")
+      if not alias or not spec.aliasToEntity[alias] then
+        return nil, label .. ": command " .. name ..
+          " must start with a known alias"
+      end
+      local action = string.sub(value, #alias + 2)
+      if action == "" then
+        return nil, label .. ": command " .. name .. " needs an action after the alias"
+      end
     end
     byName[string.lower(name)] = name
     spec.commands[i] = {name = name, value = value}
@@ -2020,20 +2085,27 @@ local function haSetFrom(set)
   if #devices > 0 and not out.webhook then
     return nil, "webhook must be a plain http:// URL the hub can reach"
   end
-  local entities, names = {}, {}
+  local keys, entities, names = {}, {}, {}
   for i, raw in ipairs(devices) do
     local spec, specError = haDeviceSpecFrom(raw, i)
     if not spec then
       return nil, specError
     end
-    if entities[spec.entity] then
-      return nil, spec.entity .. " is listed twice"
+    local key = spec.key or spec.entity
+    if keys[key] then
+      return nil, key .. " is listed twice"
     end
     if names[string.lower(spec.name)] then
       return nil, "two devices are named " .. spec.name
     end
-    entities[spec.entity] = true
+    keys[key] = true
     names[string.lower(spec.name)] = true
+    for _, item in ipairs(spec.entities) do
+      if entities[item.entity] then
+        return nil, item.entity .. " is listed in two devices"
+      end
+      entities[item.entity] = key
+    end
     out.devices[i] = spec
   end
   return out
@@ -2140,7 +2212,7 @@ local function haDeviceEntry(spec, old, deviceId, protocolId, nextId, now)
   device.Manufacturer = HA_MANUFACTURER
   device.ParentDeviceManufacturer = HA_MANUFACTURER
   device.Transport = 64
-  device.Tokens = {Parameters = {{Key = "{d}", Value = spec.entity}}}
+  device.Tokens = {Parameters = {{Key = "{d}", Value = spec.key or spec.entity}}}
   device.AutoDetectedDevice = {Id = HA_DEVICE_TAG .. deviceId}
   local previous = {}
   for _, command in ipairs(type(entry.Commands) == "table" and entry.Commands or {}) do
@@ -2267,11 +2339,12 @@ local function commitHaDevices(request)
     }
   end
 
-  local owned, kept, otherNames = {}, {}, {}
+  local owned, ownedByEntity, kept, otherNames = {}, {}, {}, {}
   for _, entry in ipairs(deviceList.DevicesWithFeatures) do
     local device = type(entry) == "table" and entry.Device or {}
     if isHaDevice(entry) and haEntityOf(entry) then
       owned[haEntityOf(entry)] = entry
+      ownedByEntity[haEntityOf(entry)] = entry
     else
       kept[#kept + 1] = entry
       if type(device.Name) == "string" then
@@ -2305,7 +2378,7 @@ local function commitHaDevices(request)
   end
 
   local now = "/Date(" .. tostring(os.time() or 0) .. "000+0000)/"
-  local result = {added = {}, updated = {}, removed = {}, unchanged = {}, devices = {}}
+  local result = {added = {}, updated = {}, removed = {}, unchanged = {}, retained = {}, devices = {}}
   local wanted, screens, gone = {}, {}, {}
   for _, spec in ipairs(set.devices) do
     if otherNames[string.lower(spec.name)] then
@@ -2315,9 +2388,37 @@ local function commitHaDevices(request)
         error = "another device is already named " .. spec.name
       }
     end
-    local old = owned[spec.entity]
+    local key = spec.key or spec.entity
+    -- Exact key match first; otherwise the first old device whose {d}
+    -- equals an entity of the spec (v1 migration, in spec order).
+    local old = owned[key]
+    local migratedFrom
+    if not old then
+      for _, item in ipairs(spec.entities) do
+        if ownedByEntity[item.entity] and ownedByEntity[item.entity] ~= true then
+          old = ownedByEntity[item.entity]
+          migratedFrom = item.entity
+          break
+        end
+      end
+    end
+    local absorbedOwns = {}
+    if old then
+      for entity, entry in pairs(ownedByEntity) do
+        if entry ~= old and entry ~= true then
+          for _, item in ipairs(spec.entities) do
+            if item.entity == entity then
+              absorbedOwns[#absorbedOwns + 1] = {entity = entity, entry = entry}
+              break
+            end
+          end
+        end
+      end
+    end
     local deviceId
     if old then
+      -- {d} may differ from the spec key after migration; the entry
+      -- writer updates it, so match the old device by key from here on.
       deviceId = normalizedId(old.Device["Id-"])
       local ref = refs[deviceId]
       for name in pairs(ref and ref.commands or {}) do
@@ -2351,20 +2452,62 @@ local function commitHaDevices(request)
     end
     local before = old and copyValue(old) or nil
     local entry = haDeviceEntry(spec, old, deviceId, protocolId, nextId, now)
-    wanted[spec.entity] = true
+    wanted[key] = true
+    for _, item in ipairs(spec.entities) do
+      wanted[item.entity] = true
+    end
     kept[#kept + 1] = entry
     screens[#screens + 1] = {deviceId = deviceId, entry = entry}
     local bucket = not old and result.added or
       (sameValue(before, entry) and result.unchanged or result.updated)
     bucket[#bucket + 1] = spec.name
-    result.devices[#result.devices + 1] = {
-      entity = spec.entity,
+    local record = {
+      key = key,
       deviceId = deviceId,
       name = spec.name
     }
+    if spec.key then
+      record.entities = {}
+      for _, item in ipairs(spec.entities) do
+        record.entities[#record.entities + 1] = {alias = item.alias, entity = item.entity}
+      end
+    else
+      record.entity = spec.entity
+    end
+    if migratedFrom then
+      record.migratedFrom = migratedFrom
+    end
+    result.devices[#result.devices + 1] = record
+    -- Absorbed old devices: retain when referenced, else drop with screens.
+    for _, absorbed in ipairs(absorbedOwns) do
+      local absorbedId = normalizedId(absorbed.entry.Device["Id-"])
+      local ref = refs[absorbedId]
+      if ref then
+        local where = {}
+        for name in pairs(ref.resources) do
+          where[#where + 1] = name
+        end
+        table.sort(where)
+        kept[#kept + 1] = absorbed.entry
+        ownedByEntity[absorbed.entity] = true
+        result.retained[#result.retained + 1] = {
+          name = tostring(absorbed.entry.Device.Name),
+          deviceId = absorbedId,
+          usedBy = where
+        }
+      else
+        result.removed[#result.removed + 1] = tostring(absorbed.entry.Device.Name)
+        gone[#gone + 1] = absorbedId
+        owned[absorbed.entity] = nil
+        ownedByEntity[absorbed.entity] = true
+      end
+    end
+    if old then
+      owned[key] = true
+    end
   end
-  for entity, entry in pairs(owned) do
-    if not wanted[entity] then
+  for entity, entry in pairs(ownedByEntity) do
+    if entry ~= true and not wanted[entity] then
       local deviceId = normalizedId(entry.Device["Id-"])
       local ref = refs[deviceId]
       if ref then

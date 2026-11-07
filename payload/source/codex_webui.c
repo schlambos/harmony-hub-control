@@ -9086,6 +9086,7 @@ static void render_version_json(int fd) {
         "device-screen",
         "device-settings",
         "ha-devices",
+        "ha-devices-v2",
         "irdb-import",
         "remote-pair"
     };

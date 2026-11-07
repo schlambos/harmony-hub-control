@@ -5,7 +5,10 @@ integration (WebSocket on 8088). This page covers the other direction:
 Home Assistant entities as ordinary Harmony devices on the Hub and the
 Harmony Touch—usable on their own Touch device screens, as activity
 members, or bound directly to any activity's hard keys, on-screen rows,
-and swipe gestures.
+and swipe gestures. A device may also be a **merged v2 device**: one
+Harmony device built from several entities of one Home Assistant device
+(see [API.md](API.md#home-assistant-devices)); the hub routes each
+command to its entity via the `<alias>:<action>` value.
 
 ## How a command reaches Home Assistant
 
