@@ -385,6 +385,9 @@ def writer_respond(request_id, ok, error=None, extra=None):
     write_atomic(RESPONSE_FILE, json.dumps(payload))
 
 
+_ha_last_set = {}
+
+
 def process_ha_devices(request_id, request):
     # The real reconciliation runs in codexactivity.lua (tested under
     # luajit). This stand-in only proves codex_webui's plumbing: the set
@@ -396,10 +399,23 @@ def process_ha_devices(request_id, request):
         add_event("ha-devices-rejected")
         return
     dry_run = request.get("dryRun") is True
+    # Like the real writer: a device named "Refuse..." stands for one an
+    # activity still uses, and a set equal to the last one changes nothing.
+    refused = next((d.get("name") for d in devices if isinstance(d, dict)
+                    and str(d.get("name", "")).startswith("Refuse")), None)
+    if refused:
+        writer_respond(request_id, False, f"{refused}: activities still use inputs this change removes",
+                       extra={"localOnly": True})
+        add_event("ha-devices-refused", dryRun=dry_run)
+        return
+    text = json.dumps(device_set, sort_keys=True)
+    changed = bool(devices) and text != _ha_last_set.get(request.get("op"))
+    if changed and not dry_run:
+        _ha_last_set[request.get("op")] = text
     writer_respond(request_id, True, extra={
         "localOnly": True,
         "dryRun": dry_run,
-        "changed": bool(devices),
+        "changed": changed,
         "devices": [{"entity": d.get("entity"), "name": d.get("name")}
                     for d in devices if isinstance(d, dict)],
     })

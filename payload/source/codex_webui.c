@@ -2865,6 +2865,66 @@ out:
     free(request);
 }
 
+/* A device set the hub already holds must cost nothing: Home Assistant re-sends
+   its set whenever it thinks it changed, and each full pass copies every
+   resource to flash (JFFS2 GC) and parks the engine in the writer, so remote
+   presses time out. The memo in RAM keys the last committed set by its hash
+   plus the resources' identities; a match skips the backup, and once the
+   writer has answered "unchanged" for it, the writer too. */
+#define DEVICE_SET_MEMO_FMT "/var/volatile/codex-%s.last"
+
+static void device_set_memo_key(char *out, size_t out_len, unsigned int set_hash) {
+    static const char *const paths[] = {
+        DEVICE_LIST, PROTOCOL_LIST, MAP_LIST, ACTIVITY_LIST, FUNCTION_LIST
+    };
+    struct stat st;
+    size_t used, i;
+    int n = snprintf(out, out_len, "%08x", set_hash);
+    used = n > 0 ? (size_t)n : 0;
+    for (i = 0; i < sizeof(paths) / sizeof(paths[0]) && used < out_len; i++) {
+        if (stat(paths[i], &st) != 0) memset(&st, 0, sizeof(st));
+        n = snprintf(out + used, out_len - used, " %lu.%ld.%ld",
+            (unsigned long)st.st_ino, (long)st.st_size, (long)st.st_mtime);
+        if (n < 0) break;
+        used += (size_t)n;
+    }
+}
+
+/* Memo layout: "<key>\n<0|1><reply>", 1 marking a refusal. Returns 1 when
+   the memo holds this key; *cached gets the stored writer reply, if any. */
+static int device_set_memo_lookup(const char *path, const char *key, int *refused, char **cached) {
+    size_t len = 0, key_len = strlen(key);
+    char *data = read_file_alloc(path, MAX_HA_DEVICE_REPLY + 512, &len);
+    *cached = NULL;
+    *refused = 0;
+    if (!data) return 0;
+    if (len <= key_len + 1 || strncmp(data, key, key_len) != 0 || data[key_len] != '\n') {
+        free(data);
+        return 0;
+    }
+    *refused = data[key_len + 1] == '1';
+    if (data[key_len + 2] == '{') {
+        *cached = strdup(data + key_len + 2);
+    }
+    free(data);
+    return 1;
+}
+
+static void device_set_memo_store(const char *path, const char *key, int refused, const char *reply) {
+    size_t key_len = strlen(key), reply_len = reply ? strlen(reply) : 0;
+    char *data = (char *)malloc(key_len + reply_len + 3);
+    if (!data) {
+        unlink(path);
+        return;
+    }
+    memcpy(data, key, key_len);
+    data[key_len] = '\n';
+    data[key_len + 1] = refused ? '1' : '0';
+    if (reply_len) memcpy(data + key_len + 2, reply, reply_len);
+    if (write_file_atomic(path, data, key_len + 2 + reply_len) != 0) unlink(path);
+    free(data);
+}
+
 /* The Home Assistant device set: {"webhook":..,"devices":[..],"dryRun":bool}.
    codexactivity validates it, reconciles the devices it owns, saves DeviceList
    and ProtocolList with new etags, reloads the engine and publishes, so the
@@ -2874,10 +2934,11 @@ out:
    Android/Google TVs driven by codex_androidtv). */
 static void render_device_set_json(int fd, const struct request *req, const char *op, const char *label) {
     const char *start = req->body, *end = NULL, *trail;
-    char request_id[96], msg[768];
-    char *request = NULL, *reply = NULL;
+    char request_id[96], msg[768], memo_path[96], memo_key[160];
+    char *request = NULL, *reply = NULL, *cached = NULL;
     size_t set_len = 0, request_len;
-    int written, rc, dry_run;
+    int written, rc, dry_run, memo_hit = 0, refused = 0;
+    unsigned int set_hash;
     FILE *f;
     while (start && *start && isspace((unsigned char)*start)) start++;
     if (start && *start == '{') end = find_matching_json(start, '{', '}');
@@ -2897,8 +2958,26 @@ static void render_device_set_json(int fd, const struct request *req, const char
         return;
     }
     dry_run = json_bool(start, "dryRun", 0);
+    set_hash = resource_hash(start, set_len);
+    snprintf(memo_path, sizeof(memo_path), DEVICE_SET_MEMO_FMT, op);
+    if (!dry_run) {
+        device_set_memo_key(memo_key, sizeof(memo_key), set_hash);
+        memo_hit = device_set_memo_lookup(memo_path, memo_key, &refused, &cached);
+        if (cached) {
+            size_t n = strlen(cached);
+            while (n && isspace((unsigned char)cached[n - 1])) cached[--n] = 0;
+            f = send_json_start(fd, refused ? "422 Unprocessable Entity" : "200 OK");
+            if (f) {
+                fputs(cached, f);
+                fputc('\n', f);
+                fclose(f);
+            }
+            free(cached);
+            return;
+        }
+    }
     snprintf(request_id, sizeof(request_id), "%ld-%ld-%08x",
-        (long)getpid(), (long)time(NULL), resource_hash(start, set_len));
+        (long)getpid(), (long)time(NULL), set_hash);
     request_len = set_len + strlen(request_id) + 128;
     request = (char *)malloc(request_len);
     reply = (char *)malloc(MAX_HA_DEVICE_REPLY);
@@ -2913,11 +2992,26 @@ static void render_device_set_json(int fd, const struct request *req, const char
     written = snprintf(request, request_len,
         "{\"id\":\"%s\",\"op\":\"%s\",\"dryRun\":%s,\"set\":%.*s}",
         request_id, op, dry_run ? "true" : "false", (int)set_len, start);
-    if (!dry_run) backup_resources();
+    if (!dry_run && !memo_hit) backup_resources();
     reply[0] = 0;
     msg[0] = 0;
     rc = offline_writer_request(request, (size_t)written, request_id,
         reply, MAX_HA_DEVICE_REPLY, msg, sizeof(msg));
+    if (!dry_run) {
+        if (rc == 0 && reply[0] == '{') {
+            /* After a write the files have new identities; key on those. Only
+               an "unchanged" reply is safe to replay for the same set. */
+            device_set_memo_key(memo_key, sizeof(memo_key), set_hash);
+            device_set_memo_store(memo_path, memo_key, 0,
+                json_bool(reply, "changed", 1) ? NULL : reply);
+        } else if (reply[0] == '{') {
+            /* A refusal depends only on the set and the files, which it left
+               alone; the same set gets the same answer. */
+            device_set_memo_store(memo_path, memo_key, 1, reply);
+        } else {
+            unlink(memo_path);
+        }
+    }
     if (reply[0] == '{') {
         f = send_json_start(fd, rc == 0 ? "200 OK" : "422 Unprocessable Entity");
         if (f) {
