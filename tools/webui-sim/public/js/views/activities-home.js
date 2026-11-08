@@ -1,9 +1,8 @@
 /* Activities tab (#activities): the app's ActivitiesScreen. The running
-   activity sits in a card with Open remote and Turn off; every other
-   activity is a row with Start and a ⋮ menu (edit, set up buttons, the
-   Touch's on-screen buttons, try the buttons, the advanced editor, reorder,
-   delete). Setup goes through the
-   wizard (#wizard). */
+   activity sits in a card with On-screen buttons, Open remote and Turn off;
+   every other activity is a row with Start and a ⋮ menu (edit, set up
+   buttons, the Touch's on-screen buttons, try the buttons, the advanced
+   editor, reorder, delete). Setup goes through the wizard (#wizard). */
 
 import * as hub from "../state.js";
 import { deleteActivityGraph, reorderActivityGraph } from "../wizard-model.js";
@@ -76,6 +75,7 @@ export function createActivitiesHomeView(section) {
             <h3 class="run-card-name">${escapeHtml(name)}</h3>
             <p class="run-card-meta">${escapeHtml(deviceNamesFor(a, devices).join(" · "))}</p>
           </div>
+          <a class="icon-btn" href="#touch/${encodeURIComponent(id)}" aria-label="On-screen buttons for ${escapeHtml(name)}" title="On-screen buttons">${icon("tune_outlined")}</a>
           <a class="icon-btn" href="#wizard/${encodeURIComponent(id)}" aria-label="Edit ${escapeHtml(name)}" title="Edit">${icon("edit_outlined")}</a>
         </div>
         <div class="run-card-actions">
