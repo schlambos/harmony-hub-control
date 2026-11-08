@@ -927,7 +927,13 @@ function seedOneTouchScreen({ target, activityId, draft, config, alloc }) {
       activityId, buttonId: alloc.id(),
     }));
   }
-  const members = [...new Set((draft.roles ?? []).map((r) => String(r?.deviceId)).filter(Boolean))];
+  const roleOrder = draft.roles ?? [];
+  const members = [...new Set(
+    [
+      ...roleOrder.filter((r) => /^Play/.test(String(r?.roleType ?? ""))),
+      ...roleOrder,
+    ].map((r) => String(r?.deviceId)).filter(Boolean),
+  )];
   const entryById = new Map(
     (config?.deviceList?.DevicesWithFeatures ?? [])
       .map((entry) => [String(entry?.Device?.["Id-"] ?? ""), entry]),

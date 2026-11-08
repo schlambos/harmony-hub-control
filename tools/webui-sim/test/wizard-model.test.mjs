@@ -857,8 +857,8 @@ describe("wizard Touch on-screen seeding", () => {
     const onScreen = soft(touch).filter((b) => b.FunctionGroupType === 0);
     assert.deepEqual(
       onScreen.map((b) => [b.MenuItem.IndexInMenu, b.TextOnRemote, b.ButtonAction.CommandName, b.ButtonAction["DeviceId-"]]),
-      [[0, "Home", "Home", 74521691]],
-      "the LG's Home command becomes an on-screen button",
+      [[0, "Home", "Home", 66690268]],
+      "the player's Home command wins over the display's (the way Logitech's setup chose)",
     );
     assert.ok(touch.Buttons.every((b) => b.ButtonLongPressAction === null || b.__type === "HardRemoteButton"));
     assertNoActionlessActivityButtons([touch]);

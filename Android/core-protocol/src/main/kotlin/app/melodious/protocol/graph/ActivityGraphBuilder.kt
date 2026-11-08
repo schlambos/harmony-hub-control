@@ -709,7 +709,11 @@ object ActivityGraphBuilder {
                     )
                 )
             }
-            val members = draft.roles.map { it.deviceId }.filter { it.isNotBlank() }.distinct()
+            val members = draft.roles
+                .sortedBy { if (it.roleType.startsWith("Play")) 0 else 1 }
+                .map { it.deviceId }
+                .filter { it.isNotBlank() }
+                .distinct()
             outer@ for (id in members) {
                 val home = deviceCommands[id].orEmpty().firstOrNull {
                     it.text("Name")?.equals("Home", ignoreCase = true) == true
