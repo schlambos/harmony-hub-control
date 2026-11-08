@@ -1,9 +1,9 @@
 /* Remote tab (#remote, #remote/<activityId>): the app's RemoteScreen.
    Nothing running: "Everything's off", one card per activity.
    Starting or stopping: a busy state until the hub answers.
-   Running: the activity remote. Header with a switch-activity sheet, Fix it
-   and power; Buttons and Keyboard tabs; More keys (a sheet on phones, a side
-   panel on wide screens).
+   Running: the activity remote. Header with a switch-activity sheet,
+   On-screen buttons, Fix it and power; Buttons and Keyboard tabs; More keys
+   (a sheet on phones, a side panel on wide screens).
    #remote/<id> opens an activity that is not running, to try its keys. */
 
 import * as api from "../api.js";
@@ -182,6 +182,7 @@ export function createRemoteView(section) {
           <span class="remote-name">${escapeHtml(name)}${icon("keyboard_arrow_down", { cls: "remote-caret" })}</span>
           <span class="remote-sub">${p.live ? statusDot(true) : ""}${escapeHtml(p.live ? names || "On" : "Not running")}</span>
         </button>
+        ${p.live ? `<a class="icon-btn icon-btn-tonal" href="#touch/${encodeURIComponent(p.id)}" aria-label="On-screen buttons for ${escapeHtml(name)}" title="On-screen buttons">${icon("tune_outlined")}</a>` : ""}
         ${p.live ? `<button type="button" class="icon-btn icon-btn-tonal" data-act="fixit" aria-label="Fix it: something didn't turn on or switch input" title="Fix it">${icon("build_outlined")}</button>` : ""}
         ${p.live
           ? `<button type="button" class="power-btn" data-act="poweroff" aria-label="Turn off ${escapeHtml(name)}" title="Turn off">${icon("power_settings_new")}</button>`

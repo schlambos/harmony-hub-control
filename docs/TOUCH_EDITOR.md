@@ -160,7 +160,9 @@ the Touch) and with `Dvr` spelled `DVR`.
   `EventType: 2`, auto-default for `PowerToggle`, `PlayPause`, `Mute`,
   `SkipForward`, `SkipBack`, `Run`, `Activate`, `Press`), and Short +
   Separate Long. One-shot fires exactly once at release (<600ms) or once at
-  the 2nd hold (≥600ms) on both hard and soft rows.
+  the 2nd hold (≥600ms) on both hard and soft rows. The hard-key sheet uses
+  the same device/command picker as an on-screen button for the separate
+  hold command, and won't save Custom Hold until one is chosen.
 - Gestures (`SwipeUp/Down/Left/Right`, `Tap` plus Hold/Double-tap) resolve
   locally on the Touch against `16417Device<id>` (P18). The editor runs the
   lookup simulator live, warns on raw toggles (no hub one-shot on gestures)
