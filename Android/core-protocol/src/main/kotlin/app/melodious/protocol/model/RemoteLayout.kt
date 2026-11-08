@@ -123,7 +123,7 @@ object RemoteLayout {
         RemoteHotspot("Guide", "guide|epg", 36.40f, 36.95f, 26.40f, 5.05f),
         RemoteHotspot("Info", "info|information|displayinfo|settings|setting|setup|option|options", 62.80f, 36.95f, 26.75f, 5.05f),
         RemoteHotspot("Exit", "exit|clear|cancel", 9.10f, 45.45f, 36.05f, 4.95f),
-        RemoteHotspot("Menu", "menu|home", 53.95f, 45.45f, 35.70f, 4.95f),
+        RemoteHotspot("Menu", "menu", 53.95f, 45.45f, 35.70f, 4.95f),
         RemoteHotspot("Up", "up|directionup|arrowup|cursorup", 36.40f, 49.85f, 27.60f, 6.30f),
         RemoteHotspot("Left", "left|directionleft|arrowleft|cursorleft", 28.80f, 54.70f, 14.90f, 12.10f),
         RemoteHotspot("Right", "right|directionright|arrowright|cursorright", 56.30f, 54.70f, 14.90f, 12.10f),

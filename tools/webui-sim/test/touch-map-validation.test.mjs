@@ -94,7 +94,7 @@ describe("codexactivity.lua validateGraph (LuaJIT)", () => {
       cwd: new URL("../../../", import.meta.url).pathname,
       encoding: "utf8",
     });
-    assert.match(out, /15\/15 checks passed/);
+    assert.match(out, /18\/18 checks passed/);
   });
 });
 

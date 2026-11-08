@@ -872,6 +872,87 @@ export function mirrorTouchHardButtons(args) {
   mirrorHardButtons({ ...args, prefix: "16417" });
 }
 
+/* The Touch's number-pad slots, as Logitech's own activity maps lay the pad
+   out: 1-9 at slots 0-8 and 0 at slot 10, each in the pad's own group
+   (FunctionGroupType 2). The Touch has no hard digit keys. */
+const TOUCH_PAD_SLOTS = [
+  ["Number1", "1", 0], ["Number2", "2", 1], ["Number3", "3", 2],
+  ["Number4", "4", 3], ["Number5", "5", 4], ["Number6", "6", 5],
+  ["Number7", "7", 6], ["Number8", "8", 7], ["Number9", "9", 8],
+  ["Number0", "0", 10],
+];
+
+/* One on-screen button in Logitech's key order, mirroring the Touch editor's
+   newButton (touch-model.js). */
+function touchSoftButton({ group, slot, label, deviceId, command, activityId, buttonId }) {
+  return {
+    FunctionGroupType: group,
+    ButtonImageKey: null,
+    "ImageId-": 0,
+    MenuItem: { IndexInMenu: slot, MenuName: `Activity.${activityId}` },
+    ButtonId: buttonId,
+    ButtonState: 1,
+    ButtonAction: commandAction(deviceId, command, 0),
+    TextOnRemote: label,
+    __type: "SoftRemoteButton",
+    ButtonImagePath: null,
+    ButtonDoublePressAction: null,
+    ButtonLongPressAction: null,
+  };
+}
+
+/* A brand-new activity's on-screen buttons on the Touch, seeded from the
+   wizard's own mapping the way Logitech's setup did: the number pad (from
+   the wizard's Number0-9) and the first member command the wizard's keys
+   have no key for (Home). Existing activities are never reseeded; what an
+   owner edited, or left empty, stays. */
+function seedTouchOnScreenButtons({ buttonMaps, activityId, draft, config, alloc }) {
+  const targets = buttonMaps.filter((m) => String(m?.ButtonMapIdentifier ?? "") === `16417Activity${activityId}`);
+  for (const target of targets) {
+    seedOneTouchScreen({ target, activityId, draft, config, alloc });
+  }
+}
+
+function seedOneTouchScreen({ target, activityId, draft, config, alloc }) {
+  if (!target || !Array.isArray(target.Buttons)) return;
+  if (target.Buttons.some((b) => b?.__type === "SoftRemoteButton")) return;
+  const soft = [];
+  for (const [key, label, slot] of TOUCH_PAD_SLOTS) {
+    const mapping = draft.buttons?.[key];
+    if (!mapping?.command) continue;
+    soft.push(touchSoftButton({
+      group: 2, slot, label,
+      deviceId: mapping.deviceId,
+      command: { name: mapping.command.name, functionId: mapping.command.functionId },
+      activityId, buttonId: alloc.id(),
+    }));
+  }
+  const members = [...new Set((draft.roles ?? []).map((r) => String(r?.deviceId)).filter(Boolean))];
+  const entryById = new Map(
+    (config?.deviceList?.DevicesWithFeatures ?? [])
+      .map((entry) => [String(entry?.Device?.["Id-"] ?? ""), entry]),
+  );
+  for (const id of members) {
+    const home = (entryById.get(id)?.Commands ?? [])
+      .find((command) => String(command?.Name ?? "").toLowerCase() === "home");
+    if (!home) continue;
+    const onHardKey = target.Buttons.some((b) => b?.__type === "HardRemoteButton"
+      && String(b.ButtonAction?.["DeviceId-"] ?? "") === id
+      && String(b.ButtonAction?.CommandName ?? "").toLowerCase() === "home");
+    if (!onHardKey) {
+      soft.push(touchSoftButton({
+        group: 0, slot: 0, label: "Home",
+        deviceId: id, command: { name: home.Name, functionId: home["FunctionId-"] ?? 0 },
+        activityId, buttonId: alloc.id(),
+      }));
+    }
+    break;
+  }
+  if (!soft.length) return;
+  target.Buttons.push(...soft);
+  target.DateModified = harmonyDate();
+}
+
 /* Pure graph builder used by saveDraft and unit tests. Does not touch the network. */
 export function buildActivityGraph({ config, draft, editId }) {
   const alloc = createAllocator(config);
@@ -936,6 +1017,9 @@ export function buildActivityGraph({ config, draft, editId }) {
   }
   for (const prefix of ["16417", ...COMPANION_REMOTES]) {
     mirrorHardButtons({ buttonMaps: mergedMaps, activityId, wizardMap, previousWizardMap, alloc, prefix });
+  }
+  if (!editId) {
+    seedTouchOnScreenButtons({ buttonMaps: mergedMaps, activityId, draft, config, alloc });
   }
 
   const existingFunction = functionMaps.find((m) => isActivityFunctionMap(m, activityId));

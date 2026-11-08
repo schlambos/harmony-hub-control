@@ -626,6 +626,124 @@ object ActivityGraphBuilder {
         val functionList: JsonObject,
     )
 
+    /** The Touch's number-pad slots, as Logitech's own activity maps lay the pad out:
+     *  1-9 at slots 0-8 and 0 at slot 10, each in the pad's own group (FunctionGroupType 2). */
+    private val TOUCH_PAD_SLOTS = listOf(
+        "Number1" to ("1" to 0), "Number2" to ("2" to 1), "Number3" to ("3" to 2),
+        "Number4" to ("4" to 3), "Number5" to ("5" to 4), "Number6" to ("6" to 5),
+        "Number7" to ("7" to 6), "Number8" to ("8" to 7), "Number9" to ("9" to 8),
+        "Number0" to ("0" to 10),
+    )
+
+    private fun touchSoftButton(
+        group: Int, slot: Int, label: String, deviceId: String, commandName: String,
+        functionId: Int, activityId: Int, buttonId: Int,
+    ): JsonObject = JsonObject(
+        mapOf(
+            "FunctionGroupType" to JsonPrimitive(group),
+            "ButtonImageKey" to JsonNull,
+            "ImageId-" to JsonPrimitive(0),
+            "MenuItem" to JsonObject(
+                mapOf("IndexInMenu" to JsonPrimitive(slot), "MenuName" to JsonPrimitive("Activity.$activityId"))
+            ),
+            "ButtonId" to JsonPrimitive(buttonId),
+            "ButtonState" to JsonPrimitive(1),
+            "ButtonAction" to JsonObject(
+                mapOf(
+                    "DeviceId-" to JsonPrimitive(deviceId.toIntOrNull() ?: 0),
+                    "__type" to JsonPrimitive("ButtonCommandAction"),
+                    "FunctionId-" to JsonPrimitive(functionId),
+                    "Order" to JsonPrimitive(0),
+                    "CommandName" to JsonPrimitive(commandName),
+                    "EventType" to JsonPrimitive(0),
+                    "Id" to JsonPrimitive(0),
+                )
+            ),
+            "TextOnRemote" to JsonPrimitive(label),
+            "__type" to JsonPrimitive("SoftRemoteButton"),
+            "ButtonImagePath" to JsonNull,
+            "ButtonDoublePressAction" to JsonNull,
+            "ButtonLongPressAction" to JsonNull,
+        )
+    )
+
+    /**
+     * A brand-new activity's on-screen buttons on the Touch, seeded from the wizard's own
+     * mapping the way Logitech's setup did: the number pad (from the draft's Number0-9) and
+     * the first member command the wizard's keys have no key for (Home). Mirrors
+     * wizard-model.js seedTouchOnScreenButtons; existing activities are never reseeded.
+     */
+    private fun seedTouchOnScreenButtons(
+        maps: List<JsonObject>,
+        activityId: Int,
+        draft: ActivityWizardDraft,
+        snapshot: HubConfigSnapshot,
+        alloc: IdAllocator,
+        now: String,
+    ): List<JsonObject> {
+        val deviceCommands = buildMap<String, List<JsonObject>> {
+            for (element in (snapshot.deviceList["DevicesWithFeatures"] as? JsonArray).orEmpty()) {
+                val entry = element as? JsonObject ?: continue
+                val device = entry["Device"] as? JsonObject ?: continue
+                val id = (device["Id-"] as? JsonPrimitive)?.contentOrNull ?: continue
+                put(
+                    id,
+                    (entry["Commands"] as? JsonArray).orEmpty().mapNotNull { it as? JsonObject },
+                )
+            }
+        }
+        return maps.map { map ->
+            if (map.text("ButtonMapIdentifier") != "16417Activity$activityId") return@map map
+            val buttons = (map["Buttons"] as? JsonArray).orEmpty()
+            if (buttons.any { (it as? JsonObject)?.text("__type") == "SoftRemoteButton" }) return@map map
+            val seeded = mutableListOf<JsonElement>()
+            for ((key, pad) in TOUCH_PAD_SLOTS) {
+                val mapping = draft.buttons[key] ?: continue
+                if (mapping.commandName.isBlank()) continue
+                seeded.add(
+                    touchSoftButton(
+                        group = 2, slot = pad.second, label = pad.first,
+                        deviceId = mapping.deviceId, commandName = mapping.commandName,
+                        functionId = mapping.functionId, activityId = activityId,
+                        buttonId = alloc.allocateId(),
+                    )
+                )
+            }
+            val members = draft.roles.map { it.deviceId }.filter { it.isNotBlank() }.distinct()
+            outer@ for (id in members) {
+                val home = deviceCommands[id].orEmpty().firstOrNull {
+                    it.text("Name")?.equals("Home", ignoreCase = true) == true
+                } ?: continue
+                val onHardKey = buttons.any { element ->
+                    val button = element as? JsonObject
+                    if (button?.text("__type") != "HardRemoteButton") return@any false
+                    val action = button.get("ButtonAction") as? JsonObject ?: return@any false
+                    (action.get("DeviceId-") as? JsonPrimitive)?.contentOrNull == id &&
+                        ((action.get("CommandName") as? JsonPrimitive)?.contentOrNull)
+                            ?.equals("Home", ignoreCase = true) == true
+                }
+                if (!onHardKey) {
+                    seeded.add(
+                        touchSoftButton(
+                            group = 0, slot = 0, label = "Home",
+                            deviceId = id, commandName = home.text("Name") ?: "Home",
+                            functionId = home["FunctionId-"]?.jsonPrimitive?.intOrNull ?: 0,
+                            activityId = activityId, buttonId = alloc.allocateId(),
+                        )
+                    )
+                }
+                break@outer
+            }
+            if (seeded.isEmpty()) return@map map
+            JsonObject(
+                map.toMutableMap().apply {
+                    put("Buttons", JsonArray(buttons + seeded))
+                    put("DateModified", JsonPrimitive(now))
+                }
+            )
+        }
+    }
+
     /**
      * Build the three replacement resources (`activityList`, `mapList`, `functionList`)
      * for a wizard draft, preserving non-wizard-owned maps (`16420Activity<ID>`, second surfaces)
@@ -715,6 +833,11 @@ object ActivityGraphBuilder {
             alloc = alloc,
             now = now,
         )
+        val finalMaps = if (editId.isNullOrBlank()) {
+            seedTouchOnScreenButtons(mergedMaps, targetActivityId, draft, snapshot, alloc, now)
+        } else {
+            mergedMaps
+        }
 
         val existingFunctions = ((snapshot.functionList["FunctionMaps"] as? JsonArray) ?: JsonArray(emptyList()))
             .mapNotNull { it as? JsonObject }
@@ -746,7 +869,7 @@ object ActivityGraphBuilder {
             ),
             mapList = JsonObject(
                 snapshot.mapList.toMutableMap().apply {
-                    put("ButtonMaps", JsonArray(mergedMaps))
+                    put("ButtonMaps", JsonArray(finalMaps))
                 }
             ),
             functionList = JsonObject(
