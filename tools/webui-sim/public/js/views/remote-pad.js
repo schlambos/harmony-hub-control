@@ -10,7 +10,7 @@ import * as api from "../api.js";
 import * as hub from "../state.js";
 import { escapeHtml, icon, snackbar, statusDot, vibrate } from "../ui/shell.js";
 import { MAX_REPEAT_MS, REPEATABLE_KEYS, startRepeat } from "./key-repeat.js";
-import { KEY_LABELS, describeHaDeviceState, isHaCommandRedundant, sendsHome } from "./remote-model.js";
+import { KEY_LABELS, describeHaDeviceState, describeTheaterLink, isHaCommandRedundant, sendsHome } from "./remote-model.js";
 
 const HOLD_MS = 500;
 const LOG_MAX = 60;
@@ -142,7 +142,17 @@ export function repeatCommand(action, { label, activityId, status, note } = {}) 
  */
 export function haStateStripMarkup(devices, haState, { single = false } = {}) {
   const rows = (devices ?? [])
-    .map((device) => ({ device, info: describeHaDeviceState(device, haState) }))
+    .map((device) => {
+      const own = describeHaDeviceState(device, haState);
+      const link = describeTheaterLink(device, haState);
+      if (own && link?.known) {
+        // An HA device that is also linked to an LG port shows both.
+        const seen = new Set(own.chips.map((c) => c.label));
+        const extra = link.chips.filter((c) => !seen.has(c.label));
+        return { device, info: { ...own, chips: [...own.chips, ...extra], theaterLink: link.theaterLink } };
+      }
+      return { device, info: own ?? link };
+    })
     .filter(({ info }) => Boolean(info));
   if (!rows.length) return "";
   return `<div class="ha-state-strip" role="region" aria-label="Home Assistant device state">${rows
@@ -153,9 +163,12 @@ export function haStateStripMarkup(devices, haState, { single = false } = {}) {
           return `<span class="ha-chip ha-chip-${escapeHtml(c.kind)}">${dot}${escapeHtml(c.label)}</span>`;
         })
         .join("");
+      const detail = info.theater?.portsText
+        ? `<div class="ha-state-detail">${escapeHtml(info.theater.portsText)}</div>`
+        : "";
       return `<div class="ha-state-row" data-ha-device="${escapeHtml(device.id)}">
           ${single ? "" : `<span class="ha-state-name">${escapeHtml(device.name)}</span>`}
-          <div class="ha-state-chips">${chips}</div>
+          <div class="ha-state-chips">${chips}</div>${detail}
         </div>`;
     })
     .join("")}</div>`;

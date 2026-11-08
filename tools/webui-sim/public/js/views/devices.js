@@ -32,7 +32,7 @@ import { changeNote, hubChange, openCommandSheet, openDeviceSheet, openLearnShee
 import { createDeviceSweep } from "./device-sweep.js";
 import { createIrLab, labNote } from "./ir-lab.js";
 import { LIMITS, deviceUsage, touchScreenState, withoutDeviceMaps } from "./ir-model.js";
-import { describeHaDeviceState, deviceIconName, deviceKeys, isHaCommandRedundant } from "./remote-model.js";
+import { describeHaDeviceState, describeTheaterLink, deviceIconName, deviceKeys, isHaCommandRedundant } from "./remote-model.js";
 import {
   describe,
   flash,
@@ -104,7 +104,7 @@ export function createDevicesView(section) {
     }
     return `<div class="m-list">${rows
       .map(({ d, commandHits }) => {
-        const haInfo = d.isHa ? describeHaDeviceState(d, hub.state.haState) : null;
+        const haInfo = describeHaDeviceState(d, hub.state.haState) ?? describeTheaterLink(d, hub.state.haState);
         const subtitle = commandHits
           ? `${commandHits} matching command${commandHits === 1 ? "" : "s"}`
           : [
@@ -187,7 +187,7 @@ export function createDevicesView(section) {
 
   function commandRows() {
     const q = commandQuery.trim().toLowerCase();
-    const haInfo = device.isHa ? describeHaDeviceState(device, hub.state.haState) : null;
+    const haInfo = describeHaDeviceState(device, hub.state.haState) ?? describeTheaterLink(device, hub.state.haState);
     const list = device.commands
       .map((c, i) => ({ c, i }))
       .filter(({ c }) => !q || c.name.toLowerCase().includes(q));
@@ -243,7 +243,7 @@ export function createDevicesView(section) {
         <button type="button" role="tab" class="seg-tab" data-tab="remote" aria-selected="${tab === "remote"}">Remote</button>
         <button type="button" role="tab" class="seg-tab" data-tab="commands" aria-selected="${tab === "commands"}">Commands (${device.commands.length})</button>
       </div>`;
-    const haStrip = device.isHa ? haStateStripMarkup([device], hub.state.haState, { single: true }) : "";
+    const haStrip = haStateStripMarkup([device], hub.state.haState, { single: true });
     const body = tab === "remote"
       ? `<div class="remote">
           <div class="remote-main">
@@ -287,14 +287,14 @@ export function createDevicesView(section) {
         d.isBluetooth,
         d.isHa,
         d.commands.length,
-        d.isHa ? describeHaDeviceState(d, hub.state.haState)?.summary ?? "" : "",
+        (describeHaDeviceState(d, hub.state.haState) ?? describeTheaterLink(d, hub.state.haState))?.summary ?? "",
       ]));
     }
     if (page === "device") {
       const d = hub.deviceById(deviceId);
       return JSON.stringify([
         d?.entry ?? null,
-        d?.isHa ? describeHaDeviceState(d, hub.state.haState) : null,
+        d ? (describeHaDeviceState(d, hub.state.haState) ?? describeTheaterLink(d, hub.state.haState)) : null,
       ]);
     }
     return hub.state.config;
