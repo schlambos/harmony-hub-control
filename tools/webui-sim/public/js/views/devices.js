@@ -32,10 +32,11 @@ import { changeNote, hubChange, openCommandSheet, openDeviceSheet, openLearnShee
 import { createDeviceSweep } from "./device-sweep.js";
 import { createIrLab, labNote } from "./ir-lab.js";
 import { LIMITS, deviceUsage, touchScreenState, withoutDeviceMaps } from "./ir-model.js";
-import { deviceIconName, deviceKeys } from "./remote-model.js";
+import { describeHaDeviceState, deviceIconName, deviceKeys, isHaCommandRedundant } from "./remote-model.js";
 import {
   describe,
   flash,
+  haStateStripMarkup,
   moreKeysMarkup,
   padMarkup,
   repeatCommand,
@@ -103,10 +104,17 @@ export function createDevicesView(section) {
     }
     return `<div class="m-list">${rows
       .map(({ d, commandHits }) => {
+        const haInfo = d.isHa ? describeHaDeviceState(d, hub.state.haState) : null;
         const subtitle = commandHits
           ? `${commandHits} matching command${commandHits === 1 ? "" : "s"}`
-          : [d.model || d.manufacturer, `${d.commands.length} command${d.commands.length === 1 ? "" : "s"}`].filter(Boolean).join(" · ");
-        const badge = `<span class="badge${d.isBluetooth ? " badge-bluetooth" : ""}">${d.isBluetooth ? "Bluetooth" : "IR"}</span>`;
+          : [
+              haInfo ? haInfo.summary : "",
+              d.model || d.manufacturer,
+              `${d.commands.length} command${d.commands.length === 1 ? "" : "s"}`,
+            ].filter(Boolean).join(" · ");
+        const badgeCls = d.isHa ? " badge-ha" : d.isBluetooth ? " badge-bluetooth" : "";
+        const badgeLabel = d.isHa ? "Home Assistant" : d.isBluetooth ? "Bluetooth" : "IR";
+        const badge = `<span class="badge${badgeCls}">${badgeLabel}</span>`;
         return listRow({
           title: d.name,
           subtitle,
@@ -179,6 +187,7 @@ export function createDevicesView(section) {
 
   function commandRows() {
     const q = commandQuery.trim().toLowerCase();
+    const haInfo = device.isHa ? describeHaDeviceState(device, hub.state.haState) : null;
     const list = device.commands
       .map((c, i) => ({ c, i }))
       .filter(({ c }) => !q || c.name.toLowerCase().includes(q));
@@ -186,12 +195,18 @@ export function createDevicesView(section) {
       return `<p class="list-note">${q ? `Nothing matches “${escapeHtml(commandQuery.trim())}”.` : "No commands yet. Learn a button or import codes."}</p>`;
     }
     return `<div class="cmd-list">${list
-      .map(({ c, i }) => `<div class="cmd-item">
+      .map(({ c, i }) => {
+        const redundant = isHaCommandRedundant(c.name, haInfo);
+        const tag = redundant
+          ? `<span class="cmd-tag">Current</span>`
+          : c.learned ? `<span class="cmd-tag">Learned</span>` : "";
+        return `<div class="cmd-item${redundant ? " is-redundant" : ""}">
           <button type="button" class="cmd-row" data-cmd-device="${escapeHtml(device.id)}" data-cmd="${i}">
-            <span class="cmd-name">${escapeHtml(c.name)}</span>${c.learned ? `<span class="cmd-tag">Learned</span>` : ""}
+            <span class="cmd-name">${escapeHtml(c.name)}</span>${tag}
           </button>
           <button type="button" class="icon-btn cmd-more" data-cmd-menu="${i}" aria-haspopup="menu" aria-label="More for ${escapeHtml(c.name)}">${icon("more_vert")}</button>
-        </div>`)
+        </div>`;
+      })
       .join("")}</div>`;
   }
 
@@ -228,9 +243,11 @@ export function createDevicesView(section) {
         <button type="button" role="tab" class="seg-tab" data-tab="remote" aria-selected="${tab === "remote"}">Remote</button>
         <button type="button" role="tab" class="seg-tab" data-tab="commands" aria-selected="${tab === "commands"}">Commands (${device.commands.length})</button>
       </div>`;
+    const haStrip = device.isHa ? haStateStripMarkup([device], hub.state.haState, { single: true }) : "";
     const body = tab === "remote"
       ? `<div class="remote">
           <div class="remote-main">
+            ${haStrip}
             <p class="remote-status" id="deviceStatus" role="status" aria-live="polite"></p>
             ${tabs}
             <div class="remote-surface">${padMarkup(keys)}</div>
@@ -238,6 +255,7 @@ export function createDevicesView(section) {
           <aside class="remote-side" aria-label="More keys">${moreKeysMarkup(keys, { title: device.name })}</aside>
         </div>`
       : `<div class="page">
+          ${haStrip}
           <p class="remote-status" id="deviceStatus" role="status" aria-live="polite"></p>
           ${tabs}
           <div class="cmd-tools">
@@ -261,9 +279,24 @@ export function createDevicesView(section) {
      refresh for something else leaves the page (and its search) alone. */
   function pageData() {
     if (page === "list") {
-      return JSON.stringify(hub.devices().map((d) => [d.id, d.name, d.model, d.manufacturer, d.isBluetooth, d.commands.length]));
+      return JSON.stringify(hub.devices().map((d) => [
+        d.id,
+        d.name,
+        d.model,
+        d.manufacturer,
+        d.isBluetooth,
+        d.isHa,
+        d.commands.length,
+        d.isHa ? describeHaDeviceState(d, hub.state.haState)?.summary ?? "" : "",
+      ]));
     }
-    if (page === "device") return JSON.stringify(hub.deviceById(deviceId)?.entry ?? null);
+    if (page === "device") {
+      const d = hub.deviceById(deviceId);
+      return JSON.stringify([
+        d?.entry ?? null,
+        d?.isHa ? describeHaDeviceState(d, hub.state.haState) : null,
+      ]);
+    }
     return hub.state.config;
   }
 

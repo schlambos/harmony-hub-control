@@ -593,6 +593,11 @@ button.m-row:focus-visible {
   color: var(--badge-bluetooth);
 }
 
+.badge-ha {
+  background: var(--secondary-container);
+  color: var(--on-secondary-container);
+}
+
 .list-note {
   margin: var(--space-3) var(--space-1);
   color: var(--on-surface-variant);

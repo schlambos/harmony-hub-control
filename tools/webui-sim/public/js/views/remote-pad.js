@@ -8,9 +8,9 @@
 
 import * as api from "../api.js";
 import * as hub from "../state.js";
-import { escapeHtml, icon, snackbar, vibrate } from "../ui/shell.js";
+import { escapeHtml, icon, snackbar, statusDot, vibrate } from "../ui/shell.js";
 import { MAX_REPEAT_MS, REPEATABLE_KEYS, startRepeat } from "./key-repeat.js";
-import { KEY_LABELS, sendsHome } from "./remote-model.js";
+import { KEY_LABELS, describeHaDeviceState, isHaCommandRedundant, sendsHome } from "./remote-model.js";
 
 const HOLD_MS = 500;
 const LOG_MAX = 60;
@@ -135,6 +135,32 @@ export function repeatCommand(action, { label, activityId, status, note } = {}) 
 
 /* -- Markup ------------------------------------------------------------------- */
 
+/**
+ * Live state strip for Home Assistant-backed devices on the remote and device
+ * screens. Shows power, source/input, app, playing, volume and mute; when
+ * stale or missing, shows a "State unknown" badge — never "Off".
+ */
+export function haStateStripMarkup(devices, haState, { single = false } = {}) {
+  const rows = (devices ?? [])
+    .map((device) => ({ device, info: describeHaDeviceState(device, haState) }))
+    .filter(({ info }) => Boolean(info));
+  if (!rows.length) return "";
+  return `<div class="ha-state-strip" role="region" aria-label="Home Assistant device state">${rows
+    .map(({ device, info }) => {
+      const chips = info.chips
+        .map((c) => {
+          const dot = c.kind === "on" ? statusDot(true) : c.kind === "off" ? statusDot(false) : "";
+          return `<span class="ha-chip ha-chip-${escapeHtml(c.kind)}">${dot}${escapeHtml(c.label)}</span>`;
+        })
+        .join("");
+      return `<div class="ha-state-row" data-ha-device="${escapeHtml(device.id)}">
+          ${single ? "" : `<span class="ha-state-name">${escapeHtml(device.name)}</span>`}
+          <div class="ha-state-chips">${chips}</div>
+        </div>`;
+    })
+    .join("")}</div>`;
+}
+
 function keyLabel(keys, key, label) {
   const entry = keys.get(key);
   const name = label ?? KEY_LABELS[key] ?? key;
@@ -144,8 +170,11 @@ function keyLabel(keys, key, label) {
 }
 
 function key(keys, k, inner, { cls = "", label } = {}) {
-  const mapped = keys.has(k);
-  return `<button type="button" class="rk${cls ? ` ${cls}` : ""}${keys.get(k)?.hold ? " has-hold" : ""}" data-key="${k}" aria-label="${escapeHtml(keyLabel(keys, k, label))}"${mapped ? "" : " disabled"}>${inner}</button>`;
+  const entry = keys.get(k);
+  const mapped = Boolean(entry);
+  const haInfo = entry?.press?.deviceId ? hub.haDeviceState(entry.press.deviceId) : null;
+  const redundant = mapped && isHaCommandRedundant(entry.press.command, haInfo);
+  return `<button type="button" class="rk${cls ? ` ${cls}` : ""}${entry?.hold ? " has-hold" : ""}${redundant ? " is-redundant" : ""}" data-key="${k}" aria-label="${escapeHtml(keyLabel(keys, k, label))}"${mapped ? "" : " disabled"}>${inner}</button>`;
 }
 
 function captionKey(keys, k, label, iconName) {
@@ -246,10 +275,16 @@ export function allCommandsMarkup(devices, query = "") {
     return `<p class="mk-empty">${q ? `Nothing matches “${escapeHtml(query.trim())}”.` : "No commands."}</p>`;
   }
   return groups
-    .map(({ d, cmds }) => `<h3 class="m-section">${escapeHtml(d.name)}</h3>
+    .map(({ d, cmds }) => {
+      const haInfo = d.isHa ? hub.haDeviceState(d) : null;
+      return `<h3 class="m-section">${escapeHtml(d.name)}</h3>
       <div class="cmd-list">${cmds
-        .map(({ c, i }) => `<button type="button" class="cmd-row" data-cmd-device="${escapeHtml(d.id)}" data-cmd="${i}">${escapeHtml(c.name)}</button>`)
-        .join("")}</div>`)
+        .map(({ c, i }) => {
+          const redundant = isHaCommandRedundant(c.name, haInfo);
+          return `<button type="button" class="cmd-row${redundant ? " is-redundant" : ""}" data-cmd-device="${escapeHtml(d.id)}" data-cmd="${i}">${escapeHtml(c.name)}</button>`;
+        })
+        .join("")}</div>`;
+    })
     .join("");
 }
 
@@ -324,7 +359,7 @@ export function wireMoreKeys(panel, { source, send, onPress, onRepeat, keyEvents
     } else if (act === "clear-log") {
       clearSendLog();
     } else if (act === "refresh") {
-      hub.refreshState().then(() => snackbar("Hub state refreshed"));
+      Promise.all([hub.refreshState(), hub.pollHaState()]).then(() => snackbar("Hub state refreshed"));
     }
   });
   panel.addEventListener("input", (event) => {

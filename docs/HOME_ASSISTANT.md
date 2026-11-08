@@ -226,7 +226,16 @@ it; the Hub refuses then, and Home Assistant shows a notification.
 - **A webhook call runs only a command the integration set up for that
   entity.** It answers `200` immediately and dispatches the service call
   in the background.
-- **Deleting the integration** asks the Hub to remove its devices.
+- **Live state (`POST /api/ha-state`, `GET /api/ha-state?since=<version>`):**
+  when the hub reports `ha-state` in `GET /api/version`, the integration
+  pushes a volatile snapshot of each exposed device's power, input/source,
+  volume, mute, playing state and current app (debounced to 2 s with a 30 s
+  heartbeat). The hub stores it only in `/var/volatile/codex-ha-state.json`
+  (never flash) and marks it stale after 90 s without a push so the web and
+  Android apps show "State unknown", never "Off", when Home Assistant is
+  unreachable.
+- **Deleting the integration** leaves the Hub's devices intact unless
+  they are unticked in Configure first.
 
 ## Command-line tool (`tools/ha_devices.mjs`)
 

@@ -32,6 +32,7 @@ import {
 import {
   describe,
   flash,
+  haStateStripMarkup,
   moreKeysMarkup,
   padMarkup,
   repeatCommand,
@@ -189,10 +190,12 @@ export function createRemoteView(section) {
     const preview = p.live
       ? ""
       : `<p class="remote-preview">${icon("info_outlined", { size: 18 })}<span>${escapeHtml(name)} isn't running. Keys still send, straight to its devices.</span></p>`;
+    const haStrip = haStateStripMarkup(ctx.devices, hub.state.haState);
     root.innerHTML = `<div class="remote">
         <div class="remote-main">
           ${head}
           ${preview}
+          <div id="remoteHaStrip">${haStrip}</div>
           <p class="remote-status" id="remoteStatus" role="status" aria-live="polite"></p>
           <div class="seg-tabs" role="tablist" aria-label="Remote mode">
             <button type="button" role="tab" class="seg-tab" data-mode="buttons" aria-selected="${mode === "buttons"}">Buttons</button>
@@ -219,6 +222,10 @@ export function createRemoteView(section) {
     const sub = root.querySelector(".remote-sub");
     if (sub && ctx?.live) {
       sub.innerHTML = `${statusDot(true)}${escapeHtml(deviceNamesFor(ctx.activity, hub.devices()).join(", ") || "On")}`;
+    }
+    const strip = root.querySelector("#remoteHaStrip");
+    if (strip && ctx) {
+      strip.innerHTML = haStateStripMarkup(ctx.devices, hub.state.haState);
     }
   }
 
@@ -334,7 +341,7 @@ export function createRemoteView(section) {
 
   function openFixIt() {
     closeSheet();
-    const fixes = fixItDevices(ctx.activity, hub.devices());
+    const fixes = fixItDevices(ctx.activity, hub.devices(), hub.state.haState);
     const needsPower = fixes.filter((f) => f.powerOn || f.powerToggle);
     const allDiscrete = needsPower.every((f) => f.powerOn);
     const bulk = fixes.flatMap((f) => [
@@ -352,7 +359,10 @@ export function createRemoteView(section) {
           ${fixes.map((f, i) => `<div class="fix-card">
               <div class="fix-card-head">
                 ${iconTile(deviceIconName(f.device), { size: 40 })}
-                <span class="fix-card-text"><span class="fix-card-name">${escapeHtml(f.device.name)}</span><span class="fix-card-roles">${escapeHtml(f.roles.join(" · "))}</span></span>
+                <span class="fix-card-text">
+                  <span class="fix-card-name">${escapeHtml(f.device.name)}</span>
+                  <span class="fix-card-roles">${escapeHtml([f.roles.join(" · "), f.haHint].filter(Boolean).join(" · "))}</span>
+                </span>
               </div>
               <div class="fix-card-actions">
                 ${f.powerOn ? `<button type="button" class="btn btn-tonal" data-fix="${i}" data-fix-kind="power">It's off</button>` : ""}
