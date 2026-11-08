@@ -935,7 +935,8 @@ Invoke-RestMethod "http://<hub-ip>:8080/api/remote-pair" -Method Post `
 - After a pair, stock hal unpairs any older remote of the **same kind** (it
   keeps one per EquadID). Remotes of other kinds are never touched, so a
   Smart Control joins a Touch but replaces an older Smart Control. With
-  `multiRemote` only a remote with a screen (16417) replaces an older one; a
+  `multiRemote` only a remote with a screen (16417) or a keyboard (16420)
+  replaces an older one; a
   second Smart Control joins the first and shares its maps. `before` and
   `after` are the slot tables either side of the window; compare them to
   see what changed (`pairOutcome()` in `views/remotes-model.js`).
@@ -988,7 +989,7 @@ Invoke-RestMethod "http://<hub-ip>:8080/api/multi-remote"
 {"ok":true,"enabled":false,"active":false,"supported":true,
  "halMd5":"a3fdd823440c43f36e235fe51c45f008",
  "stockMd5":"a3fdd823440c43f36e235fe51c45f008",
- "patchedMd5":"1d63db17f1471c703d699bb777f7a69d","reason":""}
+ "patchedMd5":"cafdd7930309c7d74a6a41a87642f0c1","reason":""}
 ```
 
 - `enabled`: `/data/codex/multi_remote.conf` says `1`.
@@ -1029,6 +1030,15 @@ Invoke-RestMethod "http://<hub-ip>:8080/api/multi-remote" -Method Post `
   - `502` when the radio doesn't list its remotes (off only).
   - `403` for a request that isn't same-origin JSON (as for
     `/api/remote-unpair`).
+- **Forced off:** `{"enabled":false,"force":true}` skips the pairing lock and
+  the slot table check, for a radio that has stopped answering (the plain
+  "off" answers `502` then). It writes `0` and reboots; the answer adds
+  `"forced":true`. If two remotes of one model are still paired the stock
+  `hal` hangs too; turning it back on doesn't need the radio. `force` must be
+  `true` or `false` (`400` otherwise) and means nothing when turning it on.
+- `enabled` while `active` is false and `supported` is false means the hub's
+  `hal` changed since it was switched on (a firmware update): `rcS.local`
+  won't bind the copy, and turning it off clears the setting.
 
 A remote without a screen (the Smart Control, 16414, or the Companion,
 16422 or 16423) keeps no setup and never syncs. hal names its keys from one

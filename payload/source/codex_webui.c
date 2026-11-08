@@ -8690,7 +8690,8 @@ static void render_led_json(int fd, const struct request *req) {
  * slots, rf.pairing opens its pairing window and rf.unpair frees a slot.
  * After a pair stock hal unpairs any older remote of the same kind (it keeps
  * one per EquadID); with multi-remote on (docs/MULTI_REMOTE.md) rcS.local has
- * bind-mounted a hal that keeps that rule for remotes with a screen only.
+ * bind-mounted a hal that keeps that rule only for remotes with a screen and
+ * the keyboard.
  * Either way the pair reply carries the slot table from before and after the
  * window for the page to compare. While a window is open nothing here reads
  * rf.info: hal reads the same slot registers to decide what to unpair, and
@@ -8855,7 +8856,7 @@ static void render_remote_pair_json(int fd, const struct request *req) {
 #define MULTI_REMOTE_LOCK "/var/run/codex-multi-remote.lock"
 #define HAL_SIZE 363640
 #define HAL_STOCK_MD5 "a3fdd823440c43f36e235fe51c45f008"
-#define HAL_MULTI_MD5 "1d63db17f1471c703d699bb777f7a69d"
+#define HAL_MULTI_MD5 "cafdd7930309c7d74a6a41a87642f0c1"
 /* Free flash the copy needs: its size plus a margin (jffs2 compresses it to about half). */
 #define HAL_MULTI_FLASH_NEED (HAL_SIZE + 128 * 1024)
 
@@ -8901,8 +8902,11 @@ static const struct hal_edit HAL_MULTI_EDITS[] = {
     {0x08fa4, {0x26, 0xe4, 0x3e, 0x28}, {0x8c, 0xf0, 0x00, 0x14}},
     {0x08fa8, {0x08, 0x10, 0x23, 0xaf}, {0x00, 0x00, 0x00, 0x00}},
     {0x08fac, {0x24, 0x10, 0x00, 0x02}, {0x00, 0x00, 0x00, 0x00}},
-    {0x27cdc, {0x34, 0x06, 0x88, 0x0e}, {0x34, 0x06, 0x40, 0x21}},
-    {0x27ce0, {0x10, 0x66, 0xff, 0xdb}, {0x14, 0x66, 0xff, 0xdb}},
+    {0x27cdc, {0x34, 0x06, 0x88, 0x0e}, {0x24, 0x66, 0xbf, 0xdf}},
+    {0x27ce0, {0x10, 0x66, 0xff, 0xdb}, {0x2c, 0xc6, 0x00, 0x04}},
+    {0x27ce4, {0x24, 0x42, 0x00, 0x18}, {0x10, 0xc0, 0xff, 0xd9}},
+    {0x27ce8, {0x24, 0x02, 0x40, 0x21}, {0x30, 0x66, 0x00, 0x01}},
+    {0x27cec, {0x14, 0x62, 0x00, 0x04}, {0x10, 0xc0, 0x00, 0x04}},
 };
 
 /* Set under the RF pairing lock once turning multi-remote off has checked the
@@ -9099,13 +9103,18 @@ static void send_multi_remote_error(int fd, const char *status, const char *erro
 
 static void render_multi_remote_set_json(int fd, const struct request *req) {
     char md5[40], reason[512], info[4096], dups[160], msg[384];
-    int want, lock_fd, rf_lock, reboot;
+    int want, force, lock_fd, rf_lock, reboot;
     FILE *f;
     want = req->body ? json_top_bool(req->body, "enabled", -1) : -1;
-    if (want < 0) {
-        send_multi_remote_error(fd, "400 Bad Request", "Send {\"enabled\": true} or {\"enabled\": false}.", NULL, NULL);
+    /* "force" (off only): for a radio that has stopped answering, skip the slot
+       table check and the pairing lock, and just write 0 and restart. */
+    force = req->body ? json_top_bool(req->body, "force", -1) : -1;
+    if (want < 0 || (force < 0 && req->body && json_top_member(req->body, "force"))) {
+        send_multi_remote_error(fd, "400 Bad Request",
+            "Send {\"enabled\": true} or {\"enabled\": false} (and optionally \"force\": true to turn it off).", NULL, NULL);
         return;
     }
+    force = force == 1 && !want;
     lock_fd = open(MULTI_REMOTE_LOCK, O_RDWR | O_CREAT, 0600);
     if (lock_fd < 0 || flock(lock_fd, LOCK_EX | LOCK_NB) != 0) {
         if (lock_fd >= 0) close(lock_fd);
@@ -9129,6 +9138,25 @@ static void render_multi_remote_set_json(int fd, const struct request *req) {
             return;
         }
         reboot = !multi_remote_active();
+    } else if (force) {
+        /* The radio may be hung, so nothing here asks hal anything, and a pair
+           stuck behind it may hold the pairing lock. The guard is best effort.
+           If two remotes of one model are still paired the stock hal hangs too;
+           turning this back on (which doesn't need the radio) recovers. */
+        rf_lock = rf_pair_lock();
+        if (multi_remote_active()) mark_multi_remote_off_pending();
+        if (rf_lock >= 0) close(rf_lock);
+        if (write_file_atomic(MULTI_REMOTE_CONF, "0", 1) != 0) {
+            unlink(MULTI_REMOTE_PENDING);
+            close(lock_fd);
+            send_multi_remote_error(fd, "500 Internal Server Error", "The setting couldn't be saved.", NULL, NULL);
+            return;
+        }
+        reboot = multi_remote_active();
+        if (!reboot) {
+            unlink(HAL_MULTI_PATH);
+            sync();
+        }
     } else {
         /* Stock hal hangs its radio on two remotes of one model: refuse until they're unpaired. */
         rf_lock = rf_pair_lock();
@@ -9179,7 +9207,8 @@ static void render_multi_remote_set_json(int fd, const struct request *req) {
     close(lock_fd);
     f = send_json_start(fd, "200 OK");
     if (f) {
-        fprintf(f, "{\"ok\":true,\"enabled\":%s,\"rebooting\":%s}\n", want ? "true" : "false", reboot ? "true" : "false");
+        fprintf(f, "{\"ok\":true,\"enabled\":%s,\"rebooting\":%s%s}\n", want ? "true" : "false", reboot ? "true" : "false",
+            force ? ",\"forced\":true" : "");
         fclose(f);
     }
     if (reboot) {

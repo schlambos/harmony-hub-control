@@ -77,6 +77,26 @@ describe("simulator multiple remotes", () => {
     assert.equal(off.enabled, false);
   });
 
+  it("turns off with force when the radio doesn't answer, like the hub", async () => {
+    await post("/api/sim/multi-remote", { on: true, radioHung: true });
+    const refused = await post("/api/multi-remote", { enabled: false });
+    assert.equal(refused.status, 502);
+    assert.equal((await postRaw("/api/multi-remote", '{"enabled":false,"force":1}')).status, 400);
+    const forced = await (await post("/api/multi-remote", { enabled: false, force: true })).json();
+    assert.deepEqual([forced.ok, forced.enabled, forced.rebooting, forced.forced], [true, false, true, true]);
+  });
+
+  it("forces nothing past two remotes of one model unless asked", async () => {
+    await post("/api/sim/multi-remote", { on: true });
+    await post("/api/sim/remotes", { devices: [
+      { EquadID: "16414", SkinId: "", DeviceIndex: "1" }, { EquadID: "16414", SkinId: "", DeviceIndex: "2" }] });
+    assert.equal((await post("/api/multi-remote", { enabled: false })).status, 409);
+    assert.equal((await post("/api/multi-remote", { enabled: false, force: false })).status, 409);
+    // "force" means nothing when turning it on.
+    const on = await (await post("/api/multi-remote", { enabled: true, force: true })).json();
+    assert.equal(on.forced, undefined);
+  });
+
   it("takes changes only as same-origin JSON, like request_same_origin_json()", async () => {
     const send = (path, headers, body) => fetch(`${BASE}${path}`, { method: "POST", headers, body });
     const cross = [

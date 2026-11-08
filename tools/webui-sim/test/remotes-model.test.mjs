@@ -407,6 +407,8 @@ describe("multiRemoteStatus", () => {
     assert.equal(multiRemoteStatus(null), "Couldn't check this setting");
     assert.equal(multiRemoteStatus({ enabled: true, active: true, supported: true }), "On");
     assert.equal(multiRemoteStatus({ enabled: true, active: false, supported: true }), "On after the hub restarts");
+    // Switched on, but the hub's hal changed (a firmware update): rcS.local won't bind the copy.
+    assert.match(multiRemoteStatus({ enabled: true, active: false, supported: false }), /^Not available.*turn it off/);
     assert.equal(multiRemoteStatus({ enabled: false, active: true, supported: true }), "Off after the hub restarts");
     assert.equal(multiRemoteStatus({ enabled: false, active: false, supported: true }), "Off");
     assert.equal(multiRemoteStatus({ enabled: false, active: false, supported: false }), "Not available on this hub");

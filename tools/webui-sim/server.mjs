@@ -548,7 +548,8 @@ let captureArmed = false;
    lasts a few seconds here; then a new Smart Control joins the first free
    slot and, as hal does, the older one of its kind goes. With multi-remote on
    (POST /api/sim/multi-remote {"on":true}, or SIM_MULTI_REMOTE=1) only a
-   remote with a screen replaces an older one, so the new Smart Control joins. */
+   remote with a screen or a keyboard replaces an older one, so the new Smart
+   Control joins. */
 const SIM_PAIR_MS = 3000;
 const SIM_RF_SLOTS = 6;
 let simRemotes = [];
@@ -558,9 +559,10 @@ let simMultiRemote = false; // the multi-remote hal runs (bind-mounted)
 let simMultiEnabled = false; // multi_remote.conf says 1
 let simHalSupported = true; // /usr/bin/hal is the stock 4.15.600 build
 let simOffPendingUntil = 0; // like codex_webui's pending-restart guard: no pairing until then
+let simRadioHung = false; // rf.info doesn't answer (a hung hal): off needs "force"
 const SIM_RESTART_MS = 4000;
 const SIM_HAL_STOCK_MD5 = "a3fdd823440c43f36e235fe51c45f008";
-const SIM_HAL_MULTI_MD5 = "1d63db17f1471c703d699bb777f7a69d";
+const SIM_HAL_MULTI_MD5 = "cafdd7930309c7d74a6a41a87642f0c1";
 
 function resetSimRemotes() {
   simRemotes = [
@@ -572,6 +574,7 @@ function resetSimRemotes() {
   simMultiEnabled = simMultiRemote;
   simHalSupported = true;
   simOffPendingUntil = 0;
+  simRadioHung = false;
 }
 
 /* The raw text of a top-level JSON member's value, like codex_webui's
@@ -619,18 +622,29 @@ function handleMultiRemoteSet(res, params) {
     sendJson(res, 400, { ok: false, error: 'Send {"enabled": true} or {"enabled": false}.' });
     return;
   }
+  const forceToken = jsonTopToken(params.__raw, "force");
+  if (forceToken !== null && forceToken !== "true" && forceToken !== "false") {
+    sendJson(res, 400, { ok: false, error: 'Send {"enabled": true} or {"enabled": false} (and optionally "force": true to turn it off).' });
+    return;
+  }
   params = { ...params, enabled: token === "true" };
+  // Like the hub: "force" (off only) skips the pairing and slot-table checks.
+  const force = forceToken === "true" && !params.enabled;
   const state = simMultiRemoteState();
   if (params.enabled && !state.supported) {
     sendJson(res, 409, { ok: false, error: state.reason, halMd5: state.halMd5 });
     return;
   }
-  if (!params.enabled && simPairing) {
+  if (!params.enabled && !force && simPairing) {
     // Like the hub: the slot table can't be vouched for while a window is open.
     sendJson(res, 409, { ok: false, error: "A pairing window is open on the hub. Try again when it closes." });
     return;
   }
-  if (!params.enabled) {
+  if (!params.enabled && !force && simRadioHung) {
+    sendJson(res, 502, { ok: false, error: "The hub's radio didn't list its paired remotes, so the setting wasn't changed." });
+    return;
+  }
+  if (!params.enabled && !force) {
     const counts = {};
     for (const r of simRemotes) if (["16414", "16422", "16423"].includes(r.EquadID)) (counts[r.EquadID] ??= []).push(r.DeviceIndex);
     const dups = Object.entries(counts).filter(([, slots]) => slots.length > 1).map(([id, slots]) => `${id} (slots ${slots.join(", ")})`).join("; ");
@@ -644,7 +658,7 @@ function handleMultiRemoteSet(res, params) {
   if (rebooting && !params.enabled) simOffPendingUntil = Date.now() + SIM_RESTART_MS;
   if (rebooting) setTimeout(() => { simMultiRemote = simMultiEnabled; }, SIM_RESTART_MS);
   logEvent({ kind: "multi-remote", message: `Multiple remotes of one model ${params.enabled ? "on" : "off"}${rebooting ? " (restarting)" : ""}` });
-  sendJson(res, 200, { ok: true, enabled: params.enabled, rebooting });
+  sendJson(res, 200, { ok: true, enabled: params.enabled, rebooting, ...(force ? { forced: true } : {}) });
 }
 
 function simRfInfo() {
@@ -681,7 +695,7 @@ async function handleRemotePair(res, params) {
     return;
   }
   const joined = { EquadID: "16414", SkinId: "", DeviceIndex: String(slot), RFID: String(simNextRfid++) };
-  if (!simMultiRemote || joined.EquadID === "16417") {
+  if (!simMultiRemote || joined.EquadID === "16417" || joined.EquadID === "16420") {
     simRemotes = simRemotes.filter((r) => r.EquadID !== joined.EquadID);
   }
   simRemotes.push(joined);
@@ -1672,10 +1686,13 @@ async function handleApi(req, res, pathname, url) {
       return;
     }
     case "POST /api/sim/multi-remote":
+      // Sim only: {"on": bool} runs that hal; optional "enabled" (the saved setting, e.g. on but
+      // not running after a firmware update), "halSupported" and "radioHung" (rf.info hangs).
       simMultiRemote = Boolean(params.on);
-      simMultiEnabled = simMultiRemote;
+      simMultiEnabled = typeof params.enabled === "boolean" ? params.enabled : simMultiRemote;
       if (typeof params.halSupported === "boolean") simHalSupported = params.halSupported;
-      sendJson(res, 200, { ok: true, multiRemote: simMultiRemote, halSupported: simHalSupported });
+      if (typeof params.radioHung === "boolean") simRadioHung = params.radioHung;
+      sendJson(res, 200, { ok: true, multiRemote: simMultiRemote, enabled: simMultiEnabled, halSupported: simHalSupported, radioHung: simRadioHung });
       return;
     case "GET /api/multi-remote":
       sendJson(res, 200, simMultiRemoteState());

@@ -125,8 +125,9 @@ export function getMultiRemote() {
   return request("/api/multi-remote");
 }
 
-export function setMultiRemote({ enabled }) {
-  return request("/api/multi-remote", { method: "POST", body: { enabled } });
+// `force` (off only) skips the hub's check of the radio's slot table, for a radio that stopped answering.
+export function setMultiRemote({ enabled, force = false }) {
+  return request("/api/multi-remote", { method: "POST", body: force ? { enabled, force: true } : { enabled } });
 }
 
 export function importCatalog({ deviceId, commands }) {

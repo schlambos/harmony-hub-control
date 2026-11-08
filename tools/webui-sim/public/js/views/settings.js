@@ -186,10 +186,26 @@ export function createSettingsView(section) {
       confirmLabel: enabled ? "Turn on and restart" : "Turn off and restart",
     });
     if (!ok) return;
+    await applyMulti(enabled);
+  }
+
+  /* Off can't be checked while the radio doesn't answer (the very thing a
+     hang in the changed hal breaks), so the hub offers to turn it off anyway. */
+  async function offerForcedOff() {
+    const ok = await confirmDialog({
+      title: "Turn off anyway?",
+      text: "The hub's radio isn't answering, so the hub can't check that no two remotes of one model are paired. It can still go back to its stock remote software and restart now. If two remotes of one model are still paired, the stock software hangs the same way: turn this back on, unpair the extra remote, then turn it off.",
+      confirmLabel: "Turn off and restart",
+    });
+    if (ok) await applyMulti(false, true);
+  }
+
+  async function applyMulti(enabled, force = false) {
     multiBusy = "saving";
     render();
+    let retryForced = false;
     try {
-      const res = await api.setMultiRemote({ enabled });
+      const res = await api.setMultiRemote({ enabled, force });
       if (res.rebooting) {
         multiBusy = "restarting";
         render();
@@ -201,16 +217,21 @@ export function createSettingsView(section) {
         snackbar(`Multiple remotes of one model is ${enabled ? "on" : "off"}.`);
       }
     } catch (error) {
-      await confirmDialog({
-        title: enabled ? "Couldn't turn this on" : "Couldn't turn this off",
-        text: error.message || "The hub didn't change the setting.",
-        confirmLabel: "OK",
-        cancel: false,
-      });
+      if (!enabled && !force && error.status === 502) {
+        retryForced = true;
+      } else {
+        await confirmDialog({
+          title: enabled ? "Couldn't turn this on" : "Couldn't turn this off",
+          text: error.message || "The hub didn't change the setting.",
+          confirmLabel: "OK",
+          cancel: false,
+        });
+      }
     } finally {
       multiBusy = "";
     }
     await loadMulti();
+    if (retryForced) await offerForcedOff();
   }
 
   root.addEventListener("change", (event) => {

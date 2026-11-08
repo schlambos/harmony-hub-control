@@ -72,8 +72,8 @@ fi
 # Multiple remotes of one model (optional, see docs/MULTI_REMOTE.md). rcS
 # starts /usr/bin/hal after sourcing this file; when the owner switched it on
 # and both files are exactly the builds it was made for, a copy of hal that
-# runs remote threads per slot (and keeps one remote per model only for
-# remotes with a screen) is bind-mounted over it. Anything else boots the stock hal, untouched.
+# runs remote threads per slot (and keeps one per model only for remotes
+# with a screen and the keyboard) is bind-mounted over it. Anything else boots the stock hal, untouched.
 if [ "$(cat /data/codex/multi_remote.conf 2>/dev/null)" != "1" ] && [ -f /data/codex/bin/hal_multiremote ]; then
 	# Switched off: the copy is no longer needed (it can't be deleted while it is bound).
 	rm -f /data/codex/bin/hal_multiremote
@@ -82,7 +82,7 @@ elif [ "$(cat /data/codex/multi_remote.conf 2>/dev/null)" = "1" ] && [ -f /data/
 	codex_hal_md5=$(md5sum /usr/bin/hal)
 	codex_hal_multi_md5=$(md5sum /data/codex/bin/hal_multiremote)
 	if [ "${codex_hal_md5%% *}" = "a3fdd823440c43f36e235fe51c45f008" ] &&
-		[ "${codex_hal_multi_md5%% *}" = "1d63db17f1471c703d699bb777f7a69d" ]; then
+		[ "${codex_hal_multi_md5%% *}" = "cafdd7930309c7d74a6a41a87642f0c1" ]; then
 		mount -o bind /data/codex/bin/hal_multiremote /usr/bin/hal &&
 			echo "$(date) codex multi-remote hal bound over /usr/bin/hal" >> /cache/codex-init.log
 	else

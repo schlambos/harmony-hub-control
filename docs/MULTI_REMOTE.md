@@ -18,9 +18,10 @@ experimental: it changes the hub's own remote software.
     copy's MD5 matches exactly.
   - Then it restarts, which takes about two minutes.
 - **Turning it off** restarts the hub too. It's refused while two remotes of
-  one model are paired; unpair the extras first.
-- **The installers** can do the same with `--multi-remote on|off`
-  (PowerShell: `-MultiRemote on|off`).
+  one model are paired; unpair the extras first. If the radio has stopped
+  answering, it can be forced off ([below](#if-the-radio-stops-answering)).
+- **The installers** can do the same with `--multi-remote on|off|force-off`
+  (PowerShell: `-MultiRemote on|off|force-off`).
 
 ## What you get
 
@@ -35,6 +36,9 @@ experimental: it changes the hub's own remote software.
 - **Remotes with a screen keep the stock rule.** A second Touch or Elite still
   replaces the first one, because the hub can sync its setup to only one
   remote with a screen.
+- **So does the Harmony keyboard.** `hal` gives it one thread with a static
+  radio subscriber, like the remotes' key threads below, so a second keyboard
+  would hang the radio the same way. It still replaces an older one.
 - Settings → Remotes lists every slot with an **Unpair** button (in both
   modes), and says how many of the 6 slots are used.
 
@@ -48,8 +52,12 @@ two places. Both have to change. Lifting only the first makes the second hang
    the radio's slot table from before and after the pair. It unpairs any older
    slot holding the same EquadID as a new one.
    - It already exempts one kind, the Harmony USB dongle (EquadID 34830).
-   - Multi-remote changes that to "every kind except remotes with a screen"
-     (16417), at offsets `0x27cdc` and `0x27ce0`.
+   - Multi-remote keeps it only for remotes with a screen (16417) and the
+     keyboard (16420), with five words at offsets `0x27cdc`–`0x27cec`:
+     `hal` lets only six models get that far, and 16417–16420 holds just those
+     two. The keyboard's thread subscribes one static structure (`0x463d70`)
+     whichever keyboard it serves, so two keyboards would hang the radio the
+     same way two Smart Controls did.
 2. **Per-model key threads.** Each remote without a screen gets a thread
    that receives its key reports. Stock `hal` keeps that thread's state per
    model:
@@ -77,13 +85,13 @@ two places. Both have to change. Lifting only the first makes the second hang
    nothing uses any more. The extra code sits in the per-model selection stubs
    it replaces.
 
-The 42 edits (4 bytes each) are in
+The 45 edits (4 bytes each) are in
 [`payload/helpers/hal_multiremote_patch.json`](../payload/helpers/hal_multiremote_patch.json):
 
 | | md5 | Size |
 | --- | --- | --- |
 | Stock `hal` (firmware 4.15.600) | `a3fdd823440c43f36e235fe51c45f008` | 363,640 |
-| Multi-remote `hal` | `1d63db17f1471c703d699bb777f7a69d` | 363,640 |
+| Multi-remote `hal` | `cafdd7930309c7d74a6a41a87642f0c1` | 363,640 |
 
 Nothing else changes:
 - Unknown models are still unpaired at once.
@@ -115,7 +123,12 @@ remote is unpaired.
   Otherwise the hub boots the stock `hal`. The stock file is never modified or
   overlaid.
 - **Reboot.** `hal` starts once at boot, so the installer reboots the hub when
-  the setting changes.
+  the setting changes, or when the `hal` that runs (it checks the bind mount)
+  isn't the one asked for. After the reboot it checks the mount again and
+  warns if `rcS.local` didn't do what was asked.
+- **After a firmware update** that changes `hal`, `rcS.local` no longer binds
+  the copy, and the switch says it isn't available on this hub's remote
+  software. Turning it off clears the setting.
 - **Flash cost.** The copy takes about 180 KB of flash.
 
 ### Turning it off
@@ -142,6 +155,22 @@ paired stay paired; the stock rule applies again from the next pair.
   before the stock `hal` starts.
 
 Leaving the option out keeps the hub as it is, on or off.
+
+### If the radio stops answering
+
+Turning off normally asks the radio for its slot table first, which a hang in
+the changed `hal` would block. So there is a forced off that asks the radio
+nothing: it writes `0` and reboots into the stock `hal`.
+
+- **Settings:** when "off" fails because the radio didn't answer, the page
+  offers **Turn off anyway** (`POST /api/multi-remote
+  {"enabled":false,"force":true}`).
+- **Installers:** `--multi-remote force-off` (`-MultiRemote force-off`).
+- **By hand, over SSH:** `echo 0 > /data/codex/multi_remote.conf; reboot`.
+
+If two remotes of one model are still paired, the stock `hal` hangs on them
+too. Turning it back on doesn't need the radio, so do that, unpair the extra
+remote, and turn it off again.
 
 ### Checking it
 

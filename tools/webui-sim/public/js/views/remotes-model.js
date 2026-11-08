@@ -7,7 +7,7 @@
    older remote of the same kind (one per EquadID). So a Smart Control joins a
    Touch, but replaces an older Smart Control. With multi-remote on
    (docs/MULTI_REMOTE.md; /api/remotes says `multiRemote`) only a remote with
-   a screen replaces an older one: a second Smart Control joins the first.
+   a screen or a keyboard replaces an older one: a second Smart Control joins the first.
    Remotes of one model send the same EquadID, so they share its maps and
    always do the same thing.
 
@@ -119,7 +119,9 @@ export function multiRemoteStatus(state, busy = "") {
   if (state === undefined) return "Checking…";
   if (!state) return "Couldn't check this setting";
   if (state.enabled && state.active) return "On";
-  if (state.enabled) return "On after the hub restarts";
+  // Switched on, but rcS.local won't bind the copy over a hal that isn't the
+  // stock build (after a firmware update, say): it stays off until turned off.
+  if (state.enabled) return state.supported ? "On after the hub restarts" : "Not available on this hub's remote software; turn it off to clear";
   if (state.active) return "Off after the hub restarts";
   return state.supported ? "Off" : "Not available on this hub";
 }

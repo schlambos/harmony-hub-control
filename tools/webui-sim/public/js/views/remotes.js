@@ -10,9 +10,10 @@
 
    Pairing never touches a remote of another kind: stock hal keeps one remote
    per kind and replaces only an older one of the same kind. With multi-remote
-   on (the hub says `multiRemote`) only a remote with a screen does that; a
-   second remote without a screen of the same model joins the first, and the
-   two share that model's maps, so the page shows one section per model. The
+   on (the hub says `multiRemote`) only a remote with a screen or a keyboard
+   does that; a second remote without a screen of the same model joins the
+   first, and the two share that model's maps, so the page shows one section
+   per model. The
    page reads the slot table before and after the window and says exactly
    what changed. Each slot can be unpaired. */
 
@@ -104,7 +105,7 @@ export function createRemotesView(section) {
     switch (outcome.status) {
       case "paired": {
         const replaced = outcome.replaced.length
-          ? ` It replaced the older ${list(outcome.replaced)}; ${multiRemote ? "the hub keeps one remote with a screen" : "the hub keeps one remote of each kind"}.`
+          ? ` It replaced the older ${list(outcome.replaced)}; ${multiRemote ? "the hub keeps one remote with a screen and one keyboard" : "the hub keeps one remote of each kind"}.`
           : "";
         const sharing = outcome.sharing?.length
           ? ` It does the same as the other ${escapeHtml(outcome.sharing[0].short)}: remotes of one model share their buttons.`
@@ -138,7 +139,7 @@ export function createRemotesView(section) {
       <div class="m-card">
         <p>The hub opens its pairing window. While it's open, put the remote in pairing mode. ${escapeHtml(SMART_CONTROL_STEPS)} Other remotes use their own pairing steps.</p>
         <p class="list-note">${multiRemote
-          ? "Remotes without a screen can be paired more than once: a second remote of the same model joins the first, and the two share their buttons. A remote with a screen still replaces an older one."
+          ? "Remotes without a screen can be paired more than once: a second remote of the same model joins the first, and the two share their buttons. A remote with a screen (or a Harmony keyboard) still replaces an older one."
           : "The hub keeps one remote of each kind: a new remote replaces an older one of the same kind, and remotes of other kinds stay paired."} The radio has ${RF_SLOTS} slots. Nothing goes through Logitech's servers.</p>
         ${multiRemote ? "" : `<p class="list-note">To pair two remotes of the same model, turn on <a href="#settings">Multiple remotes of one model</a> in Settings (experimental).</p>`}
         ${outcomeNotice()}
@@ -258,7 +259,7 @@ export function createRemotesView(section) {
     if (busy()) return;
     const now = paired().map((r) => `${r.name} (slot ${r.slot})`).join(", ");
     const rule = multiRemote
-      ? "A remote without a screen joins alongside them, even one of a model already paired; a remote with a screen replaces an older one."
+      ? "A remote without a screen joins alongside them, even one of a model already paired; a remote with a screen or a keyboard replaces an older one."
       : "A new remote of one of those kinds replaces that one; a remote of any other kind joins alongside them.";
     const ok = await confirmDialog({
       title: "Open the pairing window?",

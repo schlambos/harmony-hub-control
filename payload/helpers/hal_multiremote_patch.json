@@ -3,7 +3,7 @@
  "file": "/usr/bin/hal",
  "size": 363640,
  "stock_md5": "a3fdd823440c43f36e235fe51c45f008",
- "patched_md5": "1d63db17f1471c703d699bb777f7a69d",
+ "patched_md5": "cafdd7930309c7d74a6a41a87642f0c1",
  "edits": [
   {
    "offset": "0x07b04",
@@ -208,12 +208,27 @@
   {
    "offset": "0x27cdc",
    "stock": "3406880e",
-   "patched": "34064021"
+   "patched": "2466bfdf"
   },
   {
    "offset": "0x27ce0",
    "stock": "1066ffdb",
-   "patched": "1466ffdb"
+   "patched": "2cc60004"
+  },
+  {
+   "offset": "0x27ce4",
+   "stock": "24420018",
+   "patched": "10c0ffd9"
+  },
+  {
+   "offset": "0x27ce8",
+   "stock": "24024021",
+   "patched": "30660001"
+  },
+  {
+   "offset": "0x27cec",
+   "stock": "14620004",
+   "patched": "10c00004"
   }
  ]
 }
