@@ -205,6 +205,72 @@ check(
   JSON.stringify(haEvents),
 );
 
+// A set the hub already holds, or already refused, must cost no flash backup:
+// Home Assistant re-sent a refused set every 10 s, and each backup's JFFS2 GC
+// stalled the engine until remote presses timed out.
+const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
+const backupNames = async () =>
+  ((await req(CTRL, "/retention/inspect")).json?.families?.resources?.generations ?? []).map((g) => g.name);
+const writerCalls = async () =>
+  ((await req(CTRL, "/events")).json?.events ?? []).filter((e) => e.kind.startsWith("ha-devices")).length;
+const memoSet = {
+  webhook: haSet.webhook,
+  devices: [{ entity: "light.memo", name: "Memo lamp", commands: [{ name: "PowerOn", value: "turn_on" }] }],
+};
+const memoPost = async (set) => {
+  await sleep(1100); // backups are named by the second
+  const before = { backups: await backupNames(), calls: await writerCalls() };
+  const result = await req(API, "/api/ha-devices", jsonBody(set));
+  const after = { backups: await backupNames(), calls: await writerCalls() };
+  return {
+    ...result,
+    backedUp: after.backups.some((name) => !before.backups.includes(name)),
+    writerCalls: after.calls - before.calls,
+  };
+};
+const memoFirst = await memoPost(memoSet);
+check(
+  "a new HA set is backed up and written",
+  memoFirst.status === 200 && memoFirst.json?.changed === true && memoFirst.backedUp && memoFirst.writerCalls === 1,
+  JSON.stringify({ status: memoFirst.status, backedUp: memoFirst.backedUp, calls: memoFirst.writerCalls }),
+);
+const memoSecond = await memoPost(memoSet);
+check(
+  "the same set again: no backup; the writer answers unchanged",
+  memoSecond.status === 200 && memoSecond.json?.changed === false && !memoSecond.backedUp &&
+    memoSecond.writerCalls === 1,
+  JSON.stringify({ status: memoSecond.status, backedUp: memoSecond.backedUp, calls: memoSecond.writerCalls }),
+);
+const memoThird = await memoPost(memoSet);
+check(
+  "and again: the unchanged answer is replayed without the writer",
+  memoThird.status === 200 && memoThird.json?.ok === true && memoThird.json?.changed === false &&
+    !memoThird.backedUp && memoThird.writerCalls === 0,
+  JSON.stringify({ status: memoThird.status, backedUp: memoThird.backedUp, calls: memoThird.writerCalls }),
+);
+const refusedSet = { webhook: haSet.webhook, devices: [{ ...memoSet.devices[0], name: "Refused TV" }] };
+const refusedFirst = await memoPost(refusedSet);
+check(
+  "a refused set -> 422 from the writer",
+  refusedFirst.status === 422 && /activities still use/.test(refusedFirst.json?.error ?? "") &&
+    refusedFirst.writerCalls === 1,
+  JSON.stringify({ status: refusedFirst.status, calls: refusedFirst.writerCalls }),
+);
+const refusedAgain = await memoPost(refusedSet);
+check(
+  "the same refused set again: the same 422, with no backup and no writer",
+  refusedAgain.status === 422 && refusedAgain.json?.error === refusedFirst.json?.error &&
+    !refusedAgain.backedUp && refusedAgain.writerCalls === 0,
+  JSON.stringify({ status: refusedAgain.status, backedUp: refusedAgain.backedUp, calls: refusedAgain.writerCalls }),
+);
+const callsBeforeDry = await writerCalls();
+const memoDry = await req(API, "/api/ha-devices", jsonBody({ ...refusedSet, dryRun: true }));
+check(
+  "a dry run bypasses the memo",
+  memoDry.status === 422 && (await writerCalls()) === callsBeforeDry + 1,
+  `got ${memoDry.status}`,
+);
+
 console.log("\n== Touch device screens: codex_webui -> offline writer plumbing ==");
 // engine-emu stands in for codexactivity's CommitDeviceScreen; the real
 // builder is tested by tools/touch-validator/codexactivity-device-screens-test.lua.
