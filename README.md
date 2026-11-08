@@ -61,14 +61,28 @@ backups.
 </td>
 <td valign="top">
 
-- Home Assistant entities become devices on the hub: lights, media players,
-  switches, fans, covers, scripts, scenes and buttons.
-- Use them in activities, on any remote button, or on their own device
-  screen.
-- Hold a key to dim or change volume. Toggles fire once per press.
+- Whole Home Assistant devices (LG webOS TVs, Google TV and Android TV
+  boxes, AVRs and Cast players) merge into one Harmony device with power,
+  volume, inputs, apps, transport and D-pad — or expose single entities
+  (lights, switches, fans, covers, scripts, scenes and buttons) instead.
+  Use them in activities, on any remote button, or on their own device
+  screen. Hold a key to dim or change volume; toggles fire once per press.
+- **Live two-way state.** Home Assistant pushes live power, input, volume,
+  mute, playing state and the current app to the hub (in RAM, never flash),
+  shown on the web and Android remote and device screens and in Fix It —
+  including an LG webOS TV's HDMI port, CEC and ARC theater state, with
+  display-only links from a port to the device plugged into it.
+- **Smart startup.** A device Home Assistant reports as already on, or
+  already on the wanted input, isn't sent a redundant `PowerOn` or input
+  switch.
+- **The hub is a `remote` entity in Home Assistant** (`remote.turn_on`,
+  `remote.turn_off` and `remote.send_command` for IR, Bluetooth and Home
+  Assistant devices alike), and every Harmony button press on a Home
+  Assistant device fires a `melodious.command_received` event, so one
+  button can trigger any Home Assistant automation.
 - An MQTT bridge with discovery gives Home Assistant an activity selector,
-  status sensors and a power-off button.
-- Home Assistant's built-in Harmony integration keeps working, locally.
+  status sensors and a power-off button, and Home Assistant's built-in
+  Harmony integration keeps working, locally.
 
 </td>
 </tr>
@@ -183,6 +197,12 @@ please report what works and what doesn't (see [CONTRIBUTING.md](CONTRIBUTING.md
   - Inputs.
   - Buttons: 36 keys, each with a press action and a hold action.
   - Review.
+
+  For a new activity, the wizard orders the devices Display → Volume →
+  Player, with sensible warm-up waits (2.5 s for a TV, 1.5 s for an AVR or
+  soundbar, 1 s for a player), so the TV is awake before the hub switches
+  its input. An existing activity keeps the order and waits it was saved
+  with.
 - **Advanced editor.** It covers the roles, the button map for each remote
   surface, and the activity's JSON.
 - **Start and end** (Android app). Set the order devices turn on and off, and
@@ -253,10 +273,18 @@ Melodious connects the hub and Home Assistant in both directions.
 
 | Direction | How |
 | --- | --- |
-| **Harmony controls Home Assistant** | The [Melodious integration](https://github.com/schlambos/ha-melodious) turns the entities you pick into devices on the hub. Remote buttons, activities and the apps control them through a local webhook. |
-| **Home Assistant controls Harmony** | The MQTT bridge publishes the hub's state with Home Assistant discovery, and takes commands. Home Assistant's built-in Logitech Harmony integration also keeps working over the hub's local WebSocket. |
+| **Harmony controls Home Assistant** | The [Melodious integration](https://github.com/schlambos/ha-melodious) turns whole Home Assistant devices (merged) or single entities into ordinary devices on the hub (`TransportType: 64`). Activities, physical remote buttons, Touch screens and the apps drive them through a local webhook, and every command also fires a `melodious.command_received` event in Home Assistant, so a button can chain into any automation. |
+| **Home Assistant controls Harmony** | The Melodious integration also exposes the hub itself as a `remote` entity in Home Assistant: `turn_on` / `turn_off` start and stop activities, and `send_command` sends any command to any IR, Bluetooth or Home Assistant device on the hub (with `num_repeats`, `delay_secs` and `hold_secs`). The optional MQTT bridge and Home Assistant's built-in Logitech Harmony integration also keep working over the hub's local connections. |
+| **Live state back to Harmony** | Home Assistant pushes live device state (power, input/source, current app, playing or paused, volume and mute, plus an LG webOS TV's HDMI port and ARC status) to the hub's RAM-only `/api/ha-state` channel, where the web and Android apps show it. |
 
-### Entities as Harmony devices
+### Entities and devices as Harmony devices
+
+In the integration's **Configure** flow you can pick **whole Home
+Assistant devices**, which merge all of a device's entities into one
+Harmony device (a duplicate Cast twin of the same hardware is suppressed
+automatically), as well as individual entities. The review step lists
+each merged device's entities and commands, and you can untick any entity
+or command you don't want on the hub.
 
 Each entity you pick becomes an ordinary device on the hub that uses IP
 transport (`TransportType: 64`):
@@ -270,6 +298,29 @@ transport (`TransportType: 64`):
 | `cover` | `Open`, `Close`, `Stop` | None |
 | `script`, `scene` | `Run` / `Activate` | None |
 | `button`, `input_button` | `Press` | None |
+| `remote` | `DirectionUp`/`Down`/`Left`/`Right`, `Select`, `Back`, `Home`, `Menu`, digits and colour keys, where the platform's key table has them | — (merged with its `media_player`) |
+| `select` | One `Input <option>` per option (AVR source selectors), routed to `select.select_option` | — |
+
+A whole device merges its entities under a profile for its platform:
+
+- **LG webOS TV (`webostv`).** Discrete `PowerOn`/`PowerOff` when
+  Wake-on-LAN is enabled in Home Assistant (`PowerToggle` otherwise),
+  `VolumeUp`/`VolumeDown`/`Mute`, transport, the full D-pad with `Back`,
+  `Home`, `Menu`, `Guide`, `Info` and `Exit`, digits `0`–`9`, colour keys
+  and channel up/down. Inputs are stable `Input HDMI 1` to `Input HDMI 4`
+  commands, switched by hardware port ID (`tv/switchInput`), so a CEC
+  label change never breaks an activity. Apps get their own `App <name>`
+  commands.
+- **Google TV / Android TV (`androidtv_remote`, and the older `androidtv`
+  ADB integration).** Discrete `PowerOn`/`PowerOff`, volume and transport
+  come from the `media_player`, merged with the D-pad, `Select`, `Back`,
+  `Home`, `Menu`, digits and colour keys from the `remote`, plus
+  `App <name>` commands when the box reports an app list.
+- **AVRs and other source selectors.** Each option of a `select` entity
+  becomes an `Input <option>` command, so an activity picks the AVR's
+  input like any other.
+- **Cast players, lights, switches, fans, covers, scripts, scenes and
+  buttons** keep the per-domain commands in the table above.
 
 - **Default key mapping.** Command names match the wizard's key names, so
   Volume, Mute and the transport keys map by default.
@@ -304,9 +355,46 @@ transport (`TransportType: 64`):
   - power and inputs become on-screen buttons.
 - **From the apps.** Each device page has its own remote.
 
+### Live state and smart startup
+
+- **Live state in the apps.** Home Assistant pushes each device's power,
+  input, current app, playing state, volume and mute to the hub, which
+  keeps it in RAM only. The web and Android apps show it as a state strip
+  on the running activity's remote and on each device page (On/Off, input,
+  app, Playing/Paused, volume and mute). Fix It uses it too, hinting
+  *"already on · on HDMI 1"* and dimming commands the device doesn't need.
+  If Home Assistant is unreachable for 90 s, the apps show **State
+  unknown** — never **Off**.
+- **LG theater state and linked devices.** While an LG webOS TV is on, the
+  integration reads its external HDMI port list, which port is active, the
+  CEC device names, each port's signal status, and the ARC soundbar's
+  volume and mute. You can link an LG HDMI port to any device on the hub
+  (IR, Bluetooth or Home Assistant) so the apps can show which port it's
+  on. A link is for display only: it never merges devices or changes what
+  a button sends.
+- **Redundant commands are skipped.** When Home Assistant reports a
+  device is already on, a discrete `PowerOn` does nothing; when an LG TV
+  is already on the wanted HDMI port — or a player or selector is already
+  on that source — the input switch does nothing either. Activities start
+  faster and don't disturb a TV that's already showing the right thing.
+  The `melodious.command_received` event still fires, so automations
+  chained to the button always run.
+
 ### Controlling the hub from Home Assistant
 
-The MQTT bridge uses `harmony/hub` as its base topic and `homeassistant` as
+**The hub as a `remote` entity.** The Melodious integration adds one
+`remote` entity per hub. `remote.turn_on` starts an activity (by name or
+ID), `remote.turn_off` turns everything off, and `remote.send_command`
+sends any hub command by device and command name — IR, Bluetooth and Home
+Assistant devices alike — with `num_repeats`, `delay_secs` and `hold_secs`.
+It reports the running activity and the hub's devices, and shows
+unavailable (never off) when the hub can't be reached.
+
+Every command the hub sends to a Home Assistant device also fires a
+`melodious.command_received` event in Home Assistant (hub, device, entity
+and command), so a Harmony button can trigger any automation.
+
+**The MQTT bridge** uses `harmony/hub` as its base topic and `homeassistant` as
 its discovery prefix by default. You can change both.
 
 | Topic | Direction | Content |
@@ -338,11 +426,30 @@ Set the bridge up at install time or in Settings → MQTT.
    That URL must be plain `http://`, because the hub's certificate bundle
    lacks the Let's Encrypt root. It must also be reachable from the hub, so a
    Docker-internal address won't work.
-3. Open the integration's **Configure**, and pick entities.
+3. Open the integration's **Configure**, and pick whole devices and/or
+   single entities. The review step shows what each merged device will
+   get; untick anything you don't want on the hub.
 
 `tools/ha_devices.mjs` does the same from the command line. It can list, dry
 run, apply or revert a device set, send one command, and run a test webhook
 listener. See [docs/HOME_ASSISTANT.md](docs/HOME_ASSISTANT.md).
+
+### Hardware tested with Melodious
+
+Verified on a live hub, across both the hub's own control (IR, Bluetooth
+and network) and the Home Assistant integration:
+
+| Hardware | How it's controlled |
+| --- | --- |
+| Harmony Hub, firmware 4.15.600 | The hub itself, in both its 62 MB and 32 MB RAM versions |
+| Harmony Touch, Harmony Smart Control | Paired remotes (a user also reports the Harmony Elite works; see [Remotes](#remotes)) |
+| LG webOS OLED TV (`OLED65C4PUA`) | Via Home Assistant `webostv` with Wake-on-LAN: stable HDMI 1–4 port switching and live theater/ARC state; also by IR |
+| Hisense Google TV (`75U8H`) | Natively over the network (`codex_androidtv`, TLS) with Wake-on-LAN — see [Network TVs](#network-tvs) |
+| SEI Robotics Google TV box (`Box R 4K Plus`) | Via Home Assistant `androidtv_remote` (merged `media_player` + `remote`), and as a Bluetooth HID keyboard/remote target |
+| Chromecast with Google TV | Bluetooth HID, including the consumer-page Home/Back and TV keys |
+| Chromecast Audio | Via Home Assistant (`cast`) |
+| Nakamichi Shockwafe soundbar | By IR, linked to the LG's HDMI ARC port for theater state |
+| Philips Hue lights | Via Home Assistant (`light`) |
 
 ## Buttons, gestures and timing
 
@@ -361,10 +468,15 @@ Assistant commands.
 The timings and gesture behaviour above were measured on the Harmony Touch.
 
 - **On-screen buttons editor.** Open Activities → ⋮ → **On-screen buttons**
-  (`#touch/<activityId>`).
+  (`#touch/<activityId>`). The running activity's card and the Remote tab's
+  header have the same shortcut, so a running activity's on-screen buttons
+  are one tap away.
   - Tabs: on-screen buttons, hard keys and gestures.
   - Devices: the device picker groups Home Assistant devices, and you choose a
     press mode for each binding.
+  - Hold commands: the hard-key editor has a hold-command picker, so a
+    physical key can do one thing on a short press and another on a long
+    hold.
   - Gesture simulator: shows what each gesture will run, and offers a
     one-click fix when a hard key is missing.
   - The Android app edits on-screen buttons and sequences; hard keys and
@@ -407,7 +519,9 @@ so you can bookmark it.
 
 **Remote**
 - With nothing running, the tab shows "Everything's off" and a card for each
-  activity. While an activity runs, it shows that activity's remote.
+  activity. While an activity runs, it shows that activity's remote, and
+  the header has a direct **On-screen buttons** shortcut
+  (`#touch/<activityId>`) for it.
 - The power button turns everything off at once, without asking, like the
   physical remote.
 - **Keyboard** sends text and keys to the TV through the hub's Bluetooth
@@ -431,9 +545,9 @@ so you can bookmark it.
 </table>
 
 **Activities**
-- **The list.** The running activity's card has Open remote and Turn off.
-  Each other activity's row has Start and a ⋮ menu: Edit, Set up buttons,
-  On-screen buttons, Try the buttons (its remote, without starting it),
+- **The list.** The running activity's card has On-screen buttons, Open
+  remote and Turn off. Each other activity's row has Start and a ⋮ menu:
+  Edit, Set up buttons, On-screen buttons, Try the buttons (its remote, without starting it),
   Advanced editor, Move up, Move down and Delete.
 - **+** opens the setup wizard.
 
@@ -738,11 +852,15 @@ codex_webui
   ├─ codex_hbus ─────────► the hub's activity engine (activities, IR, learning)
   ├─ codexactivity.lua ──► the hub's resource manager (every activity, device,
   │                         Home Assistant and screen save; publishes revisions)
+  ├─ codex_androidtv ────► network Android/Google TVs (127.0.0.1:8095, BearSSL TLS)
   ├─ codex_hal_ltcp, codex_bthid_keyboard, codex_bt_pair_agent ──► Bluetooth
   └─ JSON files on the hub's flash (/data)
 
 Paired remote ◄── pull sync ── netservicestarter.lua (answers from local files)
 Home Assistant ◄── webhook POST ── engine IP commands (Transport 64)
+Home Assistant ──► POST /api/ha-state ──► RAM-only live state for the apps
+Home Assistant ◄── remote entity ── the Melodious integration (activities and
+                                    send_command back to the hub's API)
 Home Assistant ◄─► MQTT ── codexmqtt.lua
 Logitech cloud ✕  cloud tasks not started, hosts refused, WAN route removed
 ```
@@ -763,6 +881,9 @@ Logitech cloud ✕  cloud tasks not started, hosts refused, WAN route removed
     single writer for activities, device settings, Home Assistant devices and
     device screens.
   - `codexmqtt.lua` runs the MQTT bridge.
+  - `codex_androidtv` is a separate BearSSL TLS daemon on `127.0.0.1:8095`
+    that holds the connections to network Android and Google TVs;
+    `codex_webui` relays the `/api/androidtv/*` routes to it.
   - `netservicestarter.lua` blocks the cloud, answers the remote's sync, and
     keeps the clock.
 - **Saves.** Every activity change (from the wizard, the editors, a reorder
@@ -787,6 +908,13 @@ Logitech cloud ✕  cloud tasks not started, hosts refused, WAN route removed
   - Melodious writes these devices with the exact fields the engine needs.
     [docs/HOME_ASSISTANT.md](docs/HOME_ASSISTANT.md) lists the rules, each
     verified on hardware.
+  - The integration also exposes the hub as a `remote` entity, driving the
+    hub's own API, and pushes live device state to `POST /api/ha-state`.
+    The hub keeps that state only in `/var/volatile/codex-ha-state.json`
+    (RAM, never flash) and marks it stale after 90 s without a push.
+  - Repeated identical `/api/ha-devices` and `/api/androidtv/devices`
+    pushes are memoized in RAM, so an unchanged or refused device set
+    never triggers a flash backup or reloads the engine.
 - **Remote sync.** The hub never pushes; the remote pulls when it sees a new
   revision. While the cloud blocker is on, the hub answers each of the
   remote's requests from its own files. [docs/TOUCH_EDITOR.md](docs/TOUCH_EDITOR.md)
@@ -834,7 +962,13 @@ Logitech cloud ✕  cloud tasks not started, hosts refused, WAN route removed
 - **Logitech catalog lookup uses your account**, one device at a time, and
   changes nothing in it. Logitech's terms govern it. If Logitech closes this
   path, IRDB search, code files and learning still work.
-- **The macOS app is ad-hoc signed.** It doesn't update itself.
+- **App updates are opt-in.** The macOS app is ad-hoc signed. If you turn
+  on update checks, it can update itself from the GitHub release (checked
+  against the release's checksums before anything is swapped) and can
+  update the hub over SSH (see [Updating](#install-update-and-roll-back)).
+  The Android app likewise downloads the release APK and installs it over
+  itself only when you tap Install, after checking the checksum and the
+  signing key. Nothing updates until you opt in and confirm.
 - **Locked out of sign-in?** The Android app's SSH recovery clears it. You can
   also delete `/data/codex/webui_auth.conf` over SSH and restart
   `codex_webui`.
@@ -932,6 +1066,21 @@ dumps or rooting tools. Read [CONTRIBUTING.md](CONTRIBUTING.md) and
     [`third_party/material-icons/`](third_party/material-icons/);
   - Dropbear SSH, in [`third_party/dropbear-2025.89/`](third_party/dropbear-2025.89/),
     with its licence.
+
+**Contributors.** Thank you to everyone who has contributed code, pull
+requests, testing and issue reports so far:
+[@Ripthulhu](https://github.com/Ripthulhu),
+[@s7thamon](https://github.com/s7thamon),
+[@danielvijge](https://github.com/danielvijge),
+[@Bergasha](https://github.com/Bergasha),
+[@apnar](https://github.com/apnar),
+[@roosen5](https://github.com/roosen5),
+[@NemoN](https://github.com/NemoN),
+[@Tezzlicious](https://github.com/Tezzlicious),
+[@AXEBro](https://github.com/AXEBro),
+[@dramatic-paws](https://github.com/dramatic-paws),
+[@sumps71](https://github.com/sumps71) and
+[@boomfunks](https://github.com/boomfunks).
 
 **License**: see [LICENSE](LICENSE). Melodious code, meaning every change
 after this fork's upstream commit `d87ceba`, is under the MIT License. Code
