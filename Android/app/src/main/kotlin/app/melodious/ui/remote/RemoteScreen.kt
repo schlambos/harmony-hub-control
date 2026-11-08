@@ -28,6 +28,7 @@ import androidx.compose.material.icons.outlined.Build
 import androidx.compose.material.icons.outlined.NotificationsActive
 import app.melodious.protocol.model.DeviceCommand
 import app.melodious.protocol.model.FixIt
+import app.melodious.ui.components.HaStateStrip
 import app.melodious.protocol.model.FixItDevice
 import app.melodious.ui.components.RoleLabels
 import app.melodious.ui.components.deviceIcon
@@ -135,10 +136,13 @@ private fun ActivityRemote(
                 onDismiss = viewModel::dismissNotificationPrompt,
             )
         }
-        RemoteModeTabs(state.remoteMode, onSelect = { haptics.tick(); viewModel.setRemoteMode(it) })
-
         val deviceIds = activity.roles.map { it.deviceId }.toSet()
         val devices = state.devices.filter { it.id in deviceIds }
+        HaStateStrip(
+            devices.mapNotNull { d -> state.haStrip(d)?.let { d to it } },
+            Modifier.padding(horizontal = 16.dp, vertical = 4.dp),
+        )
+        RemoteModeTabs(state.remoteMode, onSelect = { haptics.tick(); viewModel.setRemoteMode(it) })
         when (state.remoteMode) {
             RemoteMode.BUTTONS -> ButtonsSurface(controller, onMoreKeys = { showMoreKeys = true }, Modifier.weight(1f))
             RemoteMode.TOUCHPAD -> TouchpadSurface(controller, onMoreKeys = { showMoreKeys = true }, Modifier.weight(1f))
@@ -158,6 +162,7 @@ private fun ActivityRemote(
                 fixes = FixIt.devicesFor(
                     activity, state.devices, RoleLabels::label,
                     powerOverrides = state.devices.mapNotNull { d -> state.deviceSettings(d.id)?.let { d.id to it } }.toMap(),
+                    haState = state.haState,
                 ),
                 onSend = { deviceId, command -> haptics.tap(); viewModel.sendFix(deviceId, command) },
                 onSendAll = { haptics.tap(); viewModel.sendFixes(it); showFixIt = false },
@@ -533,6 +538,14 @@ private fun FixItSheet(
                         Column(Modifier.weight(1f)) {
                             Text(fix.device.name, fontSize = 17.sp, fontWeight = FontWeight.Medium)
                             Text(fix.roleLabels.joinToString(" · "), fontSize = 13.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                            fix.haHint?.let { hint ->
+                                Text(
+                                    hint,
+                                    fontSize = 13.sp,
+                                    color = if (fix.haInfo?.let { it.known && it.power == "on" } == true) MelodiousColors.Live
+                                    else MaterialTheme.colorScheme.onSurfaceVariant,
+                                )
+                            }
                         }
                     }
                     val powerOn = fix.powerOn

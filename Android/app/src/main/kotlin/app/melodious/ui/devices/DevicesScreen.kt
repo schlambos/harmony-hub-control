@@ -1,5 +1,9 @@
 package app.melodious.ui.devices
 
+import app.melodious.protocol.model.HaDeviceInfo
+import app.melodious.protocol.model.HaState
+import app.melodious.ui.components.HaStateStrip
+import androidx.compose.ui.draw.alpha
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
@@ -112,7 +116,8 @@ fun DevicesTab(state: MelodiousUiState, onOpenDevice: (String) -> Unit) {
                     DeviceRow(
                         device = device,
                         subtitle = if (commandHits > 0) "$commandHits matching command${if (commandHits == 1) "" else "s"}"
-                        else listOf(device.model.ifBlank { device.manufacturer }, "${device.commands.size} commands").filter { it.isNotBlank() }.joinToString(" · "),
+                        else state.haStrip(device)?.summary
+                            ?: listOf(device.model.ifBlank { device.manufacturer }, "${device.commands.size} commands").filter { it.isNotBlank() }.joinToString(" · "),
                         onClick = { onOpenDevice(device.id) },
                     )
                     if (i < rows.lastIndex) GroupDivider()
@@ -153,7 +158,12 @@ private fun DeviceRow(device: HubDevice, subtitle: String, onClick: () -> Unit) 
 private fun TransportBadge(device: HubDevice) {
     val bt = device.isBluetoothHid
     Text(
-        if (bt) "Bluetooth" else "IR",
+        when {
+            bt -> "Bluetooth"
+            device.isHomeAssistant -> "Home Assistant"
+            device.isNetworkTv -> "Network"
+            else -> "IR"
+        },
         fontSize = 12.sp,
         fontWeight = FontWeight.Medium,
         color = if (bt) Color(0xFFB9CBFF) else Color(0xFFC3C8D2),
@@ -273,10 +283,14 @@ fun DeviceDetailScreen(
                     }
                 }
             }
+            state.haStrip(device)?.let { info ->
+                HaStateStrip(listOf(device to info), Modifier.padding(horizontal = 16.dp, vertical = 6.dp), single = true)
+            }
             when (tab) {
                 DeviceTab.REMOTE -> ButtonsSurface(controller, onMoreKeys = { showMoreKeys = true }, Modifier.weight(1f))
                 DeviceTab.COMMANDS -> CommandsList(
                     device = device,
+                    haInfo = state.haInfo(device),
                     onSend = { haptics.tap(); viewModel.sendDeviceCommand(device.id, it) },
                     onLearn = { showLearn = true },
                     onImport = { showImport = true },
@@ -302,6 +316,7 @@ fun DeviceDetailScreen(
 @Composable
 private fun CommandsList(
     device: HubDevice,
+    haInfo: HaDeviceInfo?,
     onSend: (String) -> Unit,
     onLearn: () -> Unit,
     onImport: () -> Unit,
@@ -340,7 +355,9 @@ private fun CommandsList(
             )
         }
         items(commands, key = { it.name }) { cmd ->
-            Column {
+            // Dimmed, still sendable: Home Assistant says it would change nothing right now.
+            val redundant = HaState.isCommandRedundant(cmd.name, haInfo)
+            Column(Modifier.alpha(if (redundant) 0.55f else 1f)) {
                 Row(
                     Modifier
                         .fillMaxWidth()

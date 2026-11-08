@@ -238,9 +238,10 @@ it; the Hub refuses then, and Home Assistant shows a notification.
   (active HDMI port, per-port connected/signal/CEC name, and the TV-reported
   sound output with volume and mute) and `theater_links` (explicit,
   display-only HDMI-port -> hub-device links from the integration's
-  options). The hub stores both without parsing them; the web app shows the
-  live/connected ports and "Sound: <bar> (ARC) · Vol <n>" on the LG's device
-  and remote screens, and the same observations on a linked device's screen.
+  options). The hub stores both without parsing them; the web and Android
+  apps show the live/connected ports and "Sound: <bar> (ARC) · Vol <n>" on
+  the LG's device and remote screens, and the same observations on a linked
+  device's screen.
   A link never implies the linked device's power: connection, video signal
   and ARC are observations, not measured power. Older integrations simply
   don't send these fields.

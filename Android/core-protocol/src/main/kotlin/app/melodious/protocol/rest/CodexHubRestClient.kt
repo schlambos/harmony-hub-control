@@ -4,6 +4,8 @@ import app.melodious.protocol.graph.ActivityGraphBuilder
 import app.melodious.protocol.ir.IrProtocolTools
 import app.melodious.protocol.model.BtAdapterStatus
 import app.melodious.protocol.model.BtTextHelperStatus
+import app.melodious.protocol.model.HaState
+import app.melodious.protocol.model.HaStateEnvelope
 import app.melodious.protocol.model.HubConfigSnapshot
 import app.melodious.protocol.model.HubEndpoint
 import app.melodious.protocol.model.IrCaptureAnalysis
@@ -37,6 +39,12 @@ import okhttp3.RequestBody.Companion.toRequestBody
 import java.io.IOException
 import java.util.Base64
 import java.util.concurrent.TimeUnit
+
+/** `GET /api/ha-state`: [changed] is false when nothing moved since the version asked about. */
+data class HaStatePoll(
+    val changed: Boolean,
+    val envelope: HaStateEnvelope,
+)
 
 /** One `/api/state` poll; activity fields are only filled when the digest changed. */
 data class HubStatePoll(
@@ -153,6 +161,19 @@ class CodexHubRestClient(
                 sleepTimer = if (changed) extractSleepTimer(reply) else null,
             )
         }
+
+    /**
+     * `GET /api/ha-state?since=<version>`: live Home Assistant device state. The hub always sends the
+     * states; `changed` is false when [since] is current and the state isn't stale.
+     */
+    suspend fun getHaState(endpoint: HubEndpoint, since: Long?): HaStatePoll = withContext(Dispatchers.IO) {
+        val query = if (since != null && since > 0) "?since=$since" else ""
+        val obj = getJson(endpoint, "/api/ha-state$query")
+        HaStatePoll(
+            changed = obj["changed"]?.jsonPrimitive?.booleanOrNull ?: true,
+            envelope = HaState.parseEnvelope(obj) ?: HaStateEnvelope(0, true, emptyList()),
+        )
+    }
 
     /**
      * `POST /api/activity-run`: Starts an activity, or powers off when `activityId == "-1"`.
