@@ -229,6 +229,66 @@
   white-space: nowrap;
 }
 
+/* Live Home Assistant device state strip on remote and device screens. */
+.ha-state-strip {
+  display: grid;
+  gap: 6px;
+  margin: var(--space-2) 0 var(--space-2);
+  padding: 8px 12px;
+  border-radius: var(--shape-md);
+  background: var(--card);
+}
+
+.ha-state-row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 6px 10px;
+  min-width: 0;
+}
+
+.ha-state-name {
+  color: var(--on-surface);
+  font-size: var(--fs-caption);
+  font-weight: 500;
+}
+
+.ha-state-chips {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px;
+}
+
+.ha-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  padding: 2px 8px;
+  border-radius: var(--shape-xs);
+  background: var(--surface-highest);
+  color: var(--on-surface);
+  font-size: var(--fs-caption);
+  font-weight: 500;
+}
+
+.ha-chip-on {
+  background: rgba(111, 211, 168, 0.14);
+  color: var(--live);
+}
+
+.ha-chip-off,
+.ha-chip-unknown {
+  color: var(--on-surface-variant);
+}
+
+.rk.is-redundant,
+.cmd-item.is-redundant > .cmd-row,
+.cmd-row.is-redundant {
+  opacity: 0.55;
+}
+
 .remote-status[data-kind="error"] {
   color: var(--error);
 }

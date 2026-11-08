@@ -35,8 +35,9 @@ device resources plus a conflict revision (`render_activity_config_json()`):
 GET /api/activity-config
 ```
 
-Returns `200` with `revision`, `activityList`, `mapList`, `functionList`
-and `deviceList`. A resource file that cannot be read gives `503`.
+Returns `200` with `revision`, `activityList`, `mapList`, `functionList`,
+`deviceList`, `haStateVersion` and `haState` (`version`, `stale`, `states`).
+A resource file that cannot be read gives `503`.
 
 Read or start the current activity (`render_activity_state_json()`,
 `render_activity_run_json()`):
@@ -332,6 +333,67 @@ The writer's reply is the body: `200` with `ok`, `changed`, `dryRun`,
 `deviceId`, `name`, `migratedFrom`). A non-object body gives `400`;
 a writer refusal gives `422` with `error`; a writer that cannot be
 reached gives `503`. See [HOME_ASSISTANT.md](HOME_ASSISTANT.md).
+
+### Home Assistant device state
+
+Push or read live state for Home Assistant-backed devices
+(`render_ha_state_post_json()`, `render_ha_state_get_json()`, `ha-state`
+in `GET /api/version`):
+
+```text
+POST /api/ha-state
+Content-Type: application/json
+```
+
+```json
+{
+  "states": [{
+    "key": "media_player.living_room_tv",
+    "available": true,
+    "power": "on",
+    "source": "HDMI 1",
+    "volume": 0.35,
+    "muted": false,
+    "playing": "playing",
+    "activity": "Netflix",
+    "seq": 17,
+    "updated": 1762500000,
+    "entities": {
+      "media_player.living_room_tv": "on",
+      "remote.living_room_tv": "on"
+    }
+  }]
+}
+```
+
+Response:
+
+```json
+{"ok": true, "version": 42, "stored": 1}
+```
+
+Read:
+
+```text
+GET /api/ha-state?since=<version>
+```
+
+```json
+{"ok": true, "code": 200, "version": 42, "changed": true, "stale": false, "states": [...]}
+```
+
+- Stored only in `/var/volatile/codex-ha-state.json` (tmpfs, never flash)
+  via temp file + rename.
+- A body over 64 KiB gives `413`; a non-object body, missing `states`
+  array or more than 64 state objects gives `400`.
+- Rate-limited to at most one push per second per source IP; faster pushes
+  get `429` with `Retry-After: 2`.
+- Marked `stale: true` after 90 s without a push (by the hub's receive
+  clock). When `since` matches the current version and the snapshot is not
+  stale, `GET /api/ha-state?since=<version>` answers `code: 304` and
+  `changed: false`.
+- `GET /api/activity-config` also includes `haStateVersion` and `haState`
+  (`version`, `stale`, `states`).
 
 ## Touch device screens
 
@@ -958,8 +1020,8 @@ Invoke-RestMethod "http://<hub-ip>:8080/api/version"
 ```json
 {"ok":true,"product":"melodious","version":"1.3.0","api":1,"update":{"protocol":0},
  "features":["activity-save","activity-sync","catalog-import","device-commands",
-             "device-screen","device-settings","ha-devices","irdb-import",
-             "remote-pair"]}
+             "device-screen","device-settings","ha-devices","ha-devices-v2",
+             "ha-state","irdb-import","remote-pair"]}
 ```
 
 - `version` is the release the hub software belongs to (`MELODIOUS_VERSION`).
@@ -1044,6 +1106,7 @@ carries.
 | POST | `/api/activity-save` | `render_activity_save_json()` |
 | POST | `/api/device-settings` | `render_device_settings_json()` |
 | POST | `/api/ha-devices` | `render_ha_devices_json()` |
+| GET, POST | `/api/ha-state` | `render_ha_state_get_json()`, `render_ha_state_post_json()` |
 | POST | `/api/device-screen` | `render_device_screen_json()` |
 | POST | `/api/activity-sync` | `render_activity_sync_json()` |
 | GET | `/api/inventory` | `render_inventory_json()` |

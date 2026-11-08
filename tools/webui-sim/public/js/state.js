@@ -1,5 +1,6 @@
 import * as api from "./api.js";
 import { inputNames } from "./views/device-settings-model.js";
+import { describeHaDeviceState, haDeviceKey } from "./views/remote-model.js";
 
 export const state = {
   config: null,
@@ -10,6 +11,8 @@ export const state = {
   reachable: true, // false after repeated failed state polls
   pendingId: "", // activity being started ("-1" = turning off) until the hub answers
   runError: null, // the last failed start / turn-off request
+  haState: null, // { version, stale, states: [...] } from /api/activity-config or /api/ha-state
+  haStateVersion: 0,
 };
 
 const subscribers = new Set();
@@ -52,6 +55,14 @@ function showConfig(read, config) {
   state.config = config;
   state.configError = null;
   state.configLoaded = true;
+  if (config?.haState && typeof config.haState === "object") {
+    state.haState = {
+      version: Number(config.haState.version ?? config.haStateVersion ?? 0),
+      stale: Boolean(config.haState.stale),
+      states: Array.isArray(config.haState.states) ? config.haState.states : [],
+    };
+    state.haStateVersion = state.haState.version;
+  }
   emit();
   return true;
 }
@@ -236,6 +247,7 @@ export async function pollStateDigest() {
   }
   pollFailures = 0;
   setReachable(true);
+  await pollHaState();
   if (!res || !res.changed) return false;
   const version = extractStateVersion(res.reply);
   if (version) lastStateVersion = version;
@@ -243,7 +255,38 @@ export async function pollStateDigest() {
   return true;
 }
 
-export function startStatePolling(intervalMs = 5000) {
+export async function pollHaState() {
+  if (!state.config || !devices().some((d) => d.isHa)) return false;
+  let res;
+  try {
+    res = await api.getHaState(state.haStateVersion > 0 ? state.haStateVersion : "");
+  } catch (_) {
+    return false;
+  }
+  if (!res || typeof res !== "object") return false;
+  const next = {
+    version: Number(res.version ?? 0),
+    stale: Boolean(res.stale),
+    states: Array.isArray(res.states) ? res.states : [],
+  };
+  const prev = state.haState;
+  const changed = Boolean(res.changed) ||
+    !prev ||
+    prev.version !== next.version ||
+    prev.stale !== next.stale;
+  if (!changed) return false;
+  state.haState = next;
+  state.haStateVersion = next.version;
+  emit();
+  return true;
+}
+
+export function haDeviceState(deviceOrId) {
+  const d = typeof deviceOrId === "object" && deviceOrId ? deviceOrId : deviceById(deviceOrId);
+  return d ? describeHaDeviceState(d, state.haState) : null;
+}
+
+export function startStatePolling(intervalMs = 3000) {
   if (statePollTimer) return;
   statePollTimer = setInterval(pollStateDigest, intervalMs);
 }
@@ -326,6 +369,7 @@ export function devices() {
       // Transport 32 is Bluetooth HID; 64 is Home Assistant IP; else IR.
       isBluetooth: transport === 32,
       isHa: transport === 64 || String(device.Manufacturer ?? "").toLowerCase().includes("home assistant"),
+      haKey: haDeviceKey(entry),
       entry,
       inputs: inputNames(entry),
       commands: (entry.Commands ?? []).map((c) => ({

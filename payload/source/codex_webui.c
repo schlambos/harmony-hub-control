@@ -45,6 +45,12 @@
 #define ACTIVITY_REQUEST_FILE "/var/volatile/codex-activity-request.json"
 #define ACTIVITY_RESPONSE_FILE "/var/volatile/codex-activity-response.json"
 #define ACTIVITY_LOCK_FILE "/var/volatile/codex-activity.lock"
+#ifndef HA_STATE_FILE
+#define HA_STATE_FILE "/var/volatile/codex-ha-state.json"
+#endif
+#ifndef HA_STATE_LOCK_FILE
+#define HA_STATE_LOCK_FILE "/var/volatile/codex-ha-state.lock"
+#endif
 #define IR_EVENT_LOG "/data/codex/ir-events.log"
 #define IR_CANCEL_PREFIX "/tmp/codex_ir_cancel_"
 #define BT_TEXT_FIFO "/tmp/bthid_input"
@@ -70,6 +76,10 @@
 #define MAX_DEVICE_SETTINGS 16384
 #define MAX_HA_DEVICE_SET (256 * 1024)
 #define MAX_HA_DEVICE_REPLY 32768
+#define MAX_HA_STATE_BODY 65536
+#define MAX_HA_STATES 64
+#define HA_STATE_STALE_SECONDS 90
+#define HA_STATE_RATE_LIMIT_MS 1000
 #define MAX_IR_DEVICES 32
 #define MAX_IR_COMMANDS 160
 #define MAX_IR_STORED_COMMANDS 2048
@@ -2984,10 +2994,331 @@ static int safe_activity_id(const char *value) {
     return id >= -1;
 }
 
+/* Volatile Home Assistant device state (POST/GET /api/ha-state).
+ * Stored only in /var/volatile (tmpfs, never flash) via temp file + rename.
+ * codex_webui forks per request, so version, last receive time and per-IP
+ * rate-limit timestamps live in the volatile file under an flock. */
+static long long now_unix_ms(void) {
+    struct timeval tv;
+    if (gettimeofday(&tv, NULL) != 0) return (long long)time(NULL) * 1000LL;
+    return (long long)tv.tv_sec * 1000LL + (long long)(tv.tv_usec / 1000);
+}
+
+static void peer_ip_string(int fd, char *out, size_t outlen) {
+    struct sockaddr_in addr;
+    socklen_t len = sizeof(addr);
+    if (!outlen) return;
+    snprintf(out, outlen, "local");
+    if (getpeername(fd, (struct sockaddr *)&addr, &len) == 0 &&
+            addr.sin_family == AF_INET) {
+        if (!inet_ntop(AF_INET, &addr.sin_addr, out, (socklen_t)outlen)) {
+            snprintf(out, outlen, "local");
+        }
+    }
+}
+
+static int parse_ha_states_array(
+    const char *raw,
+    const char **out_arr,
+    size_t *out_len,
+    int *out_count,
+    char *msg,
+    size_t msglen
+) {
+    const char *start = raw, *end = NULL, *trail, *field, *colon, *arr, *arr_end, *p;
+    int count = 0;
+    *out_arr = NULL;
+    *out_len = 0;
+    *out_count = 0;
+    if (!raw || !raw[0]) {
+        snprintf(msg, msglen, "body must be one JSON object with a states array");
+        return -1;
+    }
+    while (*start && isspace((unsigned char)*start)) start++;
+    if (*start != '{') {
+        snprintf(msg, msglen, "body must be one JSON object with a states array");
+        return -1;
+    }
+    end = find_matching_json(start, '{', '}');
+    if (!end) {
+        snprintf(msg, msglen, "body contains unbalanced JSON");
+        return -1;
+    }
+    for (trail = end + 1; *trail; trail++) {
+        if (!isspace((unsigned char)*trail)) {
+            snprintf(msg, msglen, "body must be one JSON object with a states array");
+            return -1;
+        }
+    }
+    field = find_key_range(start, end, "states");
+    colon = field ? strchr(field + 8, ':') : NULL;
+    if (!colon || colon >= end) {
+        snprintf(msg, msglen, "body is missing its states array");
+        return -1;
+    }
+    arr = colon + 1;
+    while (arr < end && isspace((unsigned char)*arr)) arr++;
+    if (arr >= end || *arr != '[') {
+        snprintf(msg, msglen, "states must be a JSON array");
+        return -1;
+    }
+    arr_end = find_matching_json(arr, '[', ']');
+    if (!arr_end || arr_end > end) {
+        snprintf(msg, msglen, "states array contains unbalanced JSON");
+        return -1;
+    }
+    p = arr + 1;
+    while (p < arr_end) {
+        while (p < arr_end && isspace((unsigned char)*p)) p++;
+        if (p >= arr_end) break;
+        if (*p != '{') {
+            snprintf(msg, msglen, "each entry in states must be a JSON object");
+            return -1;
+        }
+        const char *item_end = find_matching_json(p, '{', '}');
+        if (!item_end || item_end >= arr_end) {
+            snprintf(msg, msglen, "state entry contains unbalanced JSON");
+            return -1;
+        }
+        count++;
+        if (count > MAX_HA_STATES) {
+            snprintf(msg, msglen, "at most %d states are accepted per push", MAX_HA_STATES);
+            return -1;
+        }
+        p = item_end + 1;
+        while (p < arr_end && isspace((unsigned char)*p)) p++;
+        if (p < arr_end) {
+            if (*p != ',') {
+                snprintf(msg, msglen, "states array contains malformed JSON");
+                return -1;
+            }
+            p++;
+            while (p < arr_end && isspace((unsigned char)*p)) p++;
+            if (p >= arr_end) {
+                snprintf(msg, msglen, "states array contains trailing comma");
+                return -1;
+            }
+        }
+    }
+    *out_arr = arr;
+    *out_len = (size_t)(arr_end - arr) + 1;
+    *out_count = count;
+    return 0;
+}
+
+static void read_ha_state_snapshot(
+    long *out_version,
+    int *out_stale,
+    char **out_states,
+    size_t *out_states_len
+) {
+    char *raw = NULL;
+    size_t raw_len = 0, arr_len = 0;
+    const char *arr = NULL;
+    int count = 0;
+    char msg[128];
+    long version = 0, received = 0, now = (long)time(NULL);
+    *out_version = 0;
+    *out_stale = 1;
+    *out_states = NULL;
+    *out_states_len = 0;
+    raw = read_file_alloc(HA_STATE_FILE, MAX_HA_STATE_BODY + 4096, &raw_len);
+    if (!raw) return;
+    version = json_long_range(raw, raw + raw_len, "version", 0);
+    received = json_long_range(raw, raw + raw_len, "received", 0);
+    if (version > 0 && parse_ha_states_array(raw, &arr, &arr_len, &count, msg, sizeof(msg)) == 0) {
+        char *copy = (char *)malloc(arr_len + 1);
+        if (copy) {
+            memcpy(copy, arr, arr_len);
+            copy[arr_len] = 0;
+            *out_version = version;
+            *out_stale = (received <= 0 || now < received || (now - received) > HA_STATE_STALE_SECONDS) ? 1 : 0;
+            *out_states = copy;
+            *out_states_len = arr_len;
+        }
+    }
+    free(raw);
+}
+
+static void send_rate_limited_json(int fd) {
+    const char *body = "{\"ok\":false,\"error\":\"at most one state push per second is accepted\"}\n";
+    char hdr[320];
+    snprintf(hdr, sizeof(hdr),
+        "HTTP/1.1 429 Too Many Requests\r\n"
+        "Content-Type: application/json\r\n"
+        "Cache-Control: no-store\r\n"
+        "Retry-After: 2\r\n"
+        "Connection: close\r\n\r\n");
+    send(fd, hdr, strlen(hdr), 0);
+    send(fd, body, strlen(body), 0);
+}
+
+static void render_ha_state_post_json(int fd, const struct request *req) {
+    const char *arr = NULL;
+    size_t arr_len = 0, old_len = 0, stored_cap = 0;
+    int count = 0, lock_fd = -1, turn;
+    char msg[256], ip[64];
+    char *old_raw = NULL, *stored = NULL;
+    long version = 0, now_sec = (long)time(NULL);
+    long long now_ms = now_unix_ms();
+    struct rate_entry { char ip[64]; long long ms; } rates[8];
+    int rate_count = 0, rate_idx = -1, i;
+    FILE *f;
+
+    if (req->body_len > MAX_HA_STATE_BODY) {
+        f = send_json_start(fd, "413 Payload Too Large");
+        if (f) {
+            fputs("{\"ok\":false,\"error\":\"state push exceeds 64 KiB\"}\n", f);
+            fclose(f);
+        }
+        return;
+    }
+    msg[0] = 0;
+    if (parse_ha_states_array(req->body, &arr, &arr_len, &count, msg, sizeof(msg)) != 0) {
+        f = send_json_start(fd, "400 Bad Request");
+        if (f) {
+            fputs("{\"ok\":false,\"error\":", f);
+            json_write_string(f, msg[0] ? msg : "invalid state payload");
+            fputs("}\n", f);
+            fclose(f);
+        }
+        return;
+    }
+    peer_ip_string(fd, ip, sizeof(ip));
+    lock_fd = open(HA_STATE_LOCK_FILE, O_RDWR | O_CREAT, 0600);
+    if (lock_fd >= 0) {
+        for (turn = 0; turn < 50; turn++) {
+            if (flock(lock_fd, LOCK_EX | LOCK_NB) == 0) break;
+            usleep(20 * 1000);
+        }
+    }
+    old_raw = read_file_alloc(HA_STATE_FILE, MAX_HA_STATE_BODY + 4096, &old_len);
+    if (old_raw) {
+        const char *rfield = find_key_range(old_raw, old_raw + old_len, "rates");
+        const char *rcolon = rfield ? strchr(rfield + 7, ':') : NULL;
+        const char *rarr = rcolon ? strchr(rcolon + 1, '[') : NULL;
+        const char *rend = rarr ? find_matching_json(rarr, '[', ']') : NULL;
+        version = json_long_range(old_raw, old_raw + old_len, "version", 0);
+        if (rarr && rend) {
+            const char *p = strchr(rarr, '{');
+            while (p && p < rend && rate_count < 8) {
+                const char *e = find_matching_json(p, '{', '}');
+                if (!e || e >= rend) break;
+                rates[rate_count].ip[0] = 0;
+                json_string_range(p, e, "ip", rates[rate_count].ip, sizeof(rates[rate_count].ip));
+                const char *mfield = find_key_range(p, e, "ms");
+                const char *mcolon = mfield ? strchr(mfield + 4, ':') : NULL;
+                rates[rate_count].ms = mcolon ? strtoll(mcolon + 1, NULL, 10) : 0;
+                if (rates[rate_count].ip[0]) {
+                    if (strcmp(rates[rate_count].ip, ip) == 0) rate_idx = rate_count;
+                    rate_count++;
+                }
+                p = strchr(e + 1, '{');
+            }
+        }
+        free(old_raw);
+    }
+    if (rate_idx >= 0 && now_ms >= rates[rate_idx].ms &&
+            (now_ms - rates[rate_idx].ms) < HA_STATE_RATE_LIMIT_MS) {
+        if (lock_fd >= 0) close(lock_fd);
+        send_rate_limited_json(fd);
+        return;
+    }
+    if (rate_idx >= 0) {
+        rates[rate_idx].ms = now_ms;
+    } else if (rate_count < 8) {
+        snprintf(rates[rate_count].ip, sizeof(rates[rate_count].ip), "%s", ip);
+        rates[rate_count].ms = now_ms;
+        rate_count++;
+    } else {
+        int oldest = 0;
+        for (i = 1; i < rate_count; i++) {
+            if (rates[i].ms < rates[oldest].ms) oldest = i;
+        }
+        snprintf(rates[oldest].ip, sizeof(rates[oldest].ip), "%s", ip);
+        rates[oldest].ms = now_ms;
+    }
+    version = version > 0 ? version + 1 : 1;
+    stored_cap = arr_len + 1024;
+    stored = (char *)malloc(stored_cap);
+    if (!stored) {
+        if (lock_fd >= 0) close(lock_fd);
+        f = send_json_start(fd, "503 Service Unavailable");
+        if (f) {
+            fputs("{\"ok\":false,\"error\":\"not enough memory for Home Assistant state\"}\n", f);
+            fclose(f);
+        }
+        return;
+    }
+    {
+        size_t pos = (size_t)snprintf(stored, stored_cap,
+            "{\"version\":%ld,\"received\":%ld,\"rates\":[", version, now_sec);
+        for (i = 0; i < rate_count; i++) {
+            pos += (size_t)snprintf(stored + pos, stored_cap - pos,
+                "%s{\"ip\":\"%s\",\"ms\":%lld}", i ? "," : "", rates[i].ip, rates[i].ms);
+        }
+        pos += (size_t)snprintf(stored + pos, stored_cap - pos, "],\"states\":");
+        memcpy(stored + pos, arr, arr_len);
+        pos += arr_len;
+        stored[pos++] = '}';
+        stored[pos] = 0;
+        if (write_file_atomic(HA_STATE_FILE, stored, pos) != 0) {
+            free(stored);
+            if (lock_fd >= 0) close(lock_fd);
+            f = send_json_start(fd, "503 Service Unavailable");
+            if (f) {
+                fputs("{\"ok\":false,\"error\":\"could not store Home Assistant state\"}\n", f);
+                fclose(f);
+            }
+            return;
+        }
+    }
+    free(stored);
+    if (lock_fd >= 0) close(lock_fd);
+    f = send_json_start(fd, "200 OK");
+    if (f) {
+        fprintf(f, "{\"ok\":true,\"version\":%ld,\"stored\":%d}\n", version, count);
+        fclose(f);
+    }
+}
+
+static void render_ha_state_get_json(int fd, const struct request *req) {
+    char since_str[32];
+    long since = -1, version = 0;
+    int stale = 1, changed = 1, code = 200, i;
+    char *states = NULL;
+    size_t states_len = 0;
+    FILE *f;
+    query_value(req->path, "since", since_str, sizeof(since_str));
+    if (since_str[0]) {
+        for (i = 0; since_str[i]; i++) {
+            if (since_str[i] < '0' || since_str[i] > '9') break;
+        }
+        if (!since_str[i]) since = strtol(since_str, NULL, 10);
+    }
+    read_ha_state_snapshot(&version, &stale, &states, &states_len);
+    if (since >= 0 && since == version && !stale) {
+        changed = 0;
+        code = 304;
+    }
+    f = send_json_start(fd, "200 OK");
+    if (f) {
+        fprintf(f, "{\"ok\":true,\"code\":%d,\"version\":%ld,\"changed\":%s,\"stale\":%s,\"states\":",
+            code, version, changed ? "true" : "false", stale ? "true" : "false");
+        if (states && states_len) fwrite(states, 1, states_len, f);
+        else fputs("[]", f);
+        fputs("}\n", f);
+        fclose(f);
+    }
+    free(states);
+}
+
 static void render_activity_config_json(int fd) {
-    char *activities, *maps, *functions, *devices;
+    char *activities, *maps, *functions, *devices, *ha_states = NULL;
     size_t activities_len = 0, maps_len = 0;
-    size_t functions_len = 0, devices_len = 0;
+    size_t functions_len = 0, devices_len = 0, ha_states_len = 0;
+    long ha_version = 0;
+    int ha_stale = 1;
     char revision[40];
     FILE *f;
     activities = read_file_alloc(ACTIVITY_LIST, MAX_RESOURCE_FILE, &activities_len);
@@ -3007,9 +3338,10 @@ static void render_activity_config_json(int fd) {
         maps, maps_len,
         functions, functions_len,
         revision, sizeof(revision));
+    read_ha_state_snapshot(&ha_version, &ha_stale, &ha_states, &ha_states_len);
     f = send_json_start(fd, "200 OK");
     if (!f) {
-        free(activities); free(maps); free(functions); free(devices);
+        free(activities); free(maps); free(functions); free(devices); free(ha_states);
         return;
     }
     fputs("{\"ok\":true,\"revision\":", f);
@@ -3022,9 +3354,13 @@ static void render_activity_config_json(int fd) {
     fwrite(functions, 1, functions_len, f);
     fputs(",\"deviceList\":", f);
     fwrite(devices, 1, devices_len, f);
-    fputs("}\n", f);
+    fprintf(f, ",\"haStateVersion\":%ld,\"haState\":{\"version\":%ld,\"stale\":%s,\"states\":",
+        ha_version, ha_version, ha_stale ? "true" : "false");
+    if (ha_states && ha_states_len) fwrite(ha_states, 1, ha_states_len, f);
+    else fputs("[]", f);
+    fputs("}}\n", f);
     fclose(f);
-    free(activities); free(maps); free(functions); free(devices);
+    free(activities); free(maps); free(functions); free(devices); free(ha_states);
 }
 
 static void render_activity_state_json(int fd) {
@@ -9087,6 +9423,7 @@ static void render_version_json(int fd) {
         "device-settings",
         "ha-devices",
         "ha-devices-v2",
+        "ha-state",
         "irdb-import",
         "remote-pair"
     };
@@ -9911,6 +10248,12 @@ static void handle_client(int client) {
         render_device_settings_json(client, &req);
     } else if (strcmp(req.method, "POST") == 0 && strcmp(req.path, "/api/ha-devices") == 0) {
         render_ha_devices_json(client, &req);
+    } else if (strcmp(req.method, "POST") == 0 && strcmp(req.path, "/api/ha-state") == 0) {
+        render_ha_state_post_json(client, &req);
+    } else if (strcmp(req.method, "GET") == 0 &&
+        strncmp(req.path, "/api/ha-state", 13) == 0 &&
+        (req.path[13] == 0 || req.path[13] == '?')) {
+        render_ha_state_get_json(client, &req);
     } else if (strcmp(req.method, "POST") == 0 && strcmp(req.path, "/api/device-screen") == 0) {
         render_device_screen_json(client, &req);
     } else if (strcmp(req.method, "POST") == 0 && strcmp(req.path, "/api/activity-sync") == 0) {
@@ -10112,6 +10455,7 @@ static void start_touch_probe_sink(void) {
     }
 }
 
+#ifndef CODEX_WEBUI_NO_MAIN
 #ifdef CODEX_WEBUI_SEMANTIC_TEST
 static int touch_probe_hosts_case(const char *name, const char *current, int enabled, const char *expected) {
     char out[512];
@@ -10263,4 +10607,5 @@ int main(int argc, char **argv) {
         close(client);
     }
 }
+#endif
 #endif

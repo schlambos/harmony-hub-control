@@ -62,6 +62,7 @@ const state = {
   functionList: { FunctionMaps: [] },
   deviceList: { DevicesWithFeatures: [] },
   currentActivityId: "-1",
+  haState: { version: 0, receivedMs: 0, states: [], rates: new Map() },
   events: []
 };
 
@@ -79,6 +80,7 @@ function loadFixture() {
   state.functionList = parsed.functionList || { FunctionMaps: [] };
   state.deviceList = parsed.deviceList || { DevicesWithFeatures: [] };
   state.currentActivityId = "-1";
+  state.haState = { version: 0, receivedMs: 0, states: [], rates: new Map() };
 }
 
 function logEvent(entry) {
@@ -201,14 +203,98 @@ function stateReply() {
   return JSON.stringify({ result: state.currentActivityId, code: 200, msg: "OK" });
 }
 
+const HA_STATE_STALE_MS = 90000;
+const HA_STATE_RATE_LIMIT_MS = 1000;
+const MAX_HA_STATE_BODY = 65536;
+const MAX_HA_STATES = 64;
+
+function currentHaStateSnapshot() {
+  const version = state.haState.version;
+  const receivedMs = state.haState.receivedMs;
+  const stale = version <= 0 || !receivedMs || (Date.now() - receivedMs) > HA_STATE_STALE_MS;
+  return { version, stale, states: state.haState.states };
+}
+
+async function handleHaStatePost(req, res) {
+  let raw;
+  try {
+    raw = await readBody(req);
+  } catch (error) {
+    sendError(res, error.status || 413, error.message || "bad request body");
+    return;
+  }
+  if (Buffer.byteLength(raw, "utf8") > MAX_HA_STATE_BODY) {
+    sendError(res, 413, "state push exceeds 64 KiB");
+    return;
+  }
+  let parsed = null;
+  try {
+    parsed = raw ? JSON.parse(raw) : null;
+  } catch {
+    sendError(res, 400, "body contains unbalanced JSON");
+    return;
+  }
+  if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
+    sendError(res, 400, "body must be one JSON object with a states array");
+    return;
+  }
+  if (!("states" in parsed)) {
+    sendError(res, 400, "body is missing its states array");
+    return;
+  }
+  if (!Array.isArray(parsed.states)) {
+    sendError(res, 400, "states must be a JSON array");
+    return;
+  }
+  if (parsed.states.length > MAX_HA_STATES) {
+    sendError(res, 400, `at most ${MAX_HA_STATES} states are accepted per push`);
+    return;
+  }
+  if (parsed.states.some((item) => !item || typeof item !== "object" || Array.isArray(item))) {
+    sendError(res, 400, "each entry in states must be a JSON object");
+    return;
+  }
+  const ip = req.socket?.remoteAddress || "127.0.0.1";
+  const now = Date.now();
+  const lastMs = state.haState.rates.get(ip) || 0;
+  if (lastMs && now >= lastMs && (now - lastMs) < HA_STATE_RATE_LIMIT_MS) {
+    sendJson(res, 429, { ok: false, error: "at most one state push per second is accepted" }, { "Retry-After": "2" });
+    return;
+  }
+  state.haState.rates.set(ip, now);
+  state.haState.version += 1;
+  state.haState.receivedMs = now;
+  state.haState.states = parsed.states;
+  logEvent({ kind: "ha-state", version: state.haState.version, stored: parsed.states.length });
+  sendJson(res, 200, { ok: true, version: state.haState.version, stored: parsed.states.length });
+}
+
+function handleHaStateGet(res, params) {
+  const sinceRaw = String(params.since ?? "").trim();
+  const since = /^\d+$/.test(sinceRaw) ? Number(sinceRaw) : -1;
+  const snap = currentHaStateSnapshot();
+  const changed = !(since >= 0 && since === snap.version && !snap.stale);
+  sendJson(res, 200, {
+    ok: true,
+    code: changed ? 200 : 304,
+    version: snap.version,
+    changed,
+    stale: snap.stale,
+    states: snap.states
+  });
+}
+
 function handleActivityConfig(res) {
+  const ha = currentHaStateSnapshot();
   sendJson(res, 200, {
     ok: true,
     revision: state.revision,
     activityList: state.activityList,
     mapList: state.mapList,
     functionList: state.functionList,
-    deviceList: state.deviceList
+    deviceList: state.deviceList,
+    haStateVersion: ha.version,
+    haState: ha
   });
 }
 
@@ -1203,6 +1289,10 @@ function handleExport(res, pathname) {
 }
 
 async function handleApi(req, res, pathname, url) {
+  if (req.method === "POST" && pathname === "/api/ha-state") {
+    await handleHaStatePost(req, res);
+    return;
+  }
   let params;
   try {
     params = await parseParams(req, url);
@@ -1229,6 +1319,9 @@ async function handleApi(req, res, pathname, url) {
       return;
     case "POST /api/device-settings":
       handleDeviceSettings(res, params);
+      return;
+    case "GET /api/ha-state":
+      handleHaStateGet(res, params);
       return;
     case "POST /api/device-screen":
       // The hub builds Touch screens in codexactivity.lua; a copy here could drift.
@@ -1339,8 +1432,8 @@ async function handleApi(req, res, pathname, url) {
         update: { protocol: 0 },
         features: [
           "activity-save", "activity-sync", "catalog-import", "device-commands",
-          "device-screen", "device-settings", "ha-devices", "irdb-import",
-          "remote-pair"
+          "device-screen", "device-settings", "ha-devices", "ha-devices-v2",
+          "ha-state", "irdb-import", "remote-pair"
         ]
       });
       return;

@@ -75,6 +75,100 @@ export function isHaDevice(device) {
   return false;
 }
 
+/** The Home Assistant device key ({d} token) stored on a DeviceList entry, or null. */
+export function haDeviceKey(device) {
+  if (!device) return null;
+  if (typeof device.haKey === "string" && device.haKey) return device.haKey;
+  const entry = device.entry ?? device;
+  const d = entry?.Device ?? entry;
+  const params = d?.Tokens?.Parameters ?? [];
+  const token = Array.isArray(params) ? params.find((p) => p?.Key === "{d}") : null;
+  const value = token?.Value ? String(token.Value).trim() : "";
+  return value || null;
+}
+
+/**
+ * Normalize one Home Assistant device's live state against the hub's haState
+ * envelope. Never invents "off" when stale, missing or unavailable: returns
+ * { known: false, stale: true, power: "unknown", badge: "State unknown", ... }.
+ */
+export function describeHaDeviceState(device, haState) {
+  if (!isHaDevice(device)) return null;
+  const key = haDeviceKey(device);
+  const envelope = haState && typeof haState === "object" ? haState : null;
+  const list = Array.isArray(envelope?.states) ? envelope.states : [];
+  const snap = key ? list.find((s) => s && typeof s === "object" && String(s.key ?? "") === key) ?? null : null;
+  const stale = Boolean(!envelope || envelope.stale || !snap || snap.available === false);
+  const rawPower = !stale && typeof snap?.power === "string" ? snap.power.toLowerCase() : "unknown";
+  const power = rawPower === "on" || rawPower === "off" ? rawPower : "unknown";
+  const known = !stale && power !== "unknown";
+  const source = !stale && typeof snap?.source === "string" && snap.source.trim() ? snap.source.trim() : null;
+  const activity = !stale && typeof snap?.activity === "string" && snap.activity.trim() ? snap.activity.trim() : null;
+  const volume = !stale && typeof snap?.volume === "number" && Number.isFinite(snap.volume)
+    ? Math.max(0, Math.min(100, Math.round(snap.volume * 100)))
+    : null;
+  const muted = !stale && typeof snap?.muted === "boolean" ? snap.muted : null;
+  const rawPlaying = !stale && typeof snap?.playing === "string" ? snap.playing.toLowerCase() : null;
+  const playing = rawPlaying && ["playing", "paused", "idle"].includes(rawPlaying) ? rawPlaying : null;
+
+  const chips = [];
+  if (!known) {
+    chips.push({ kind: "unknown", label: "State unknown" });
+  } else {
+    chips.push({ kind: power === "on" ? "on" : "off", label: power === "on" ? "On" : "Off" });
+    if (source) chips.push({ kind: "source", label: source });
+    if (activity && activity.toLowerCase() !== (source ?? "").toLowerCase()) {
+      chips.push({ kind: "app", label: activity });
+    }
+    if (playing && (playing === "playing" || playing === "paused")) {
+      chips.push({ kind: "playing", label: playing === "playing" ? "Playing" : "Paused" });
+    }
+    if (muted === true) {
+      chips.push({ kind: "muted", label: volume != null ? `Muted (${volume}%)` : "Muted" });
+    } else if (volume != null) {
+      chips.push({ kind: "volume", label: `Vol ${volume}%` });
+    }
+  }
+  const summary = chips.map((c) => c.label).join(" · ");
+  return {
+    key,
+    known,
+    stale,
+    power,
+    source,
+    activity,
+    volume,
+    muted,
+    playing,
+    badge: !known ? "State unknown" : power === "on" ? "On" : "Off",
+    chips,
+    summary,
+  };
+}
+
+/**
+ * True when a command on an HA device is redundant given its fresh live state
+ * (for example PowerOn while already on, PowerOff while already off, Play
+ * while already playing, Pause while paused, or Input X while already on X).
+ * Never returns true when state is unknown or stale.
+ */
+export function isHaCommandRedundant(commandName, haInfo) {
+  if (!haInfo || !haInfo.known) return false;
+  const key = commandKey(commandName);
+  if (!key) return false;
+  if (haInfo.power === "on" && (key === "poweron" || key === "on")) return true;
+  if (haInfo.power === "off" && (key === "poweroff" || key === "off")) return true;
+  if (haInfo.playing === "playing" && key === "play") return true;
+  if (haInfo.playing === "paused" && key === "pause") return true;
+  if (haInfo.source) {
+    const srcKey = commandKey(haInfo.source);
+    if (srcKey && (key === `input${srcKey}` || (commandName.toLowerCase().startsWith("input ") && key === srcKey))) {
+      return true;
+    }
+  }
+  return false;
+}
+
 export function deviceDomainLabel(device) {
   const name = String(device?.name ?? "").toLowerCase();
   const commands = (device?.commands ?? []).map((c) => String(c?.name ?? c).toLowerCase());
@@ -575,9 +669,11 @@ function inputCommandFor(device, inputName) {
  * Fix it: per device in an activity, the one command that turns it on and the
  * one that selects the activity's input. Configured power commands (the
  * device's PowerFeature) beat name guessing; a toggle is offered separately
- * because resending it can turn the device off.
+ * because resending it can turn the device off. When `haState` is supplied,
+ * HA-backed devices also carry `haInfo` and a human `haHint` ("Already on ·
+ * HDMI 1", "Off in Home Assistant", "State unknown").
  */
-export function fixItDevices(activity, devices) {
+export function fixItDevices(activity, devices, haState = null) {
   const byId = new Map(devices.map((d) => [d.id, d]));
   const out = [];
   const seen = new Set();
@@ -603,6 +699,20 @@ export function fixItDevices(activity, devices) {
     const inputName = roles.find((r) => r.input)?.input ?? null;
     const inputCommand = inputName ? inputCommandFor(device, inputName) : null;
     if (!powerOn && !powerToggle && !inputCommand) continue;
+    const haInfo = haState ? describeHaDeviceState(device, haState) : null;
+    let haHint = null;
+    if (haInfo) {
+      if (!haInfo.known) {
+        haHint = "State unknown";
+      } else if (haInfo.power === "on") {
+        const parts = [`${device.name} is already on`];
+        if (haInfo.source) parts.push(`on ${haInfo.source}`);
+        else if (haInfo.activity) parts.push(`in ${haInfo.activity}`);
+        haHint = parts.join(" · ");
+      } else {
+        haHint = `${device.name} is off`;
+      }
+    }
     out.push({
       device,
       roles: [...new Set(roles.map((r) => roleLabel(r.roleType)))],
@@ -610,6 +720,8 @@ export function fixItDevices(activity, devices) {
       powerToggle: powerOn ? null : powerToggle,
       inputName,
       inputCommand,
+      haInfo,
+      haHint,
     });
   }
   return out;

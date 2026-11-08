@@ -61,6 +61,13 @@ export function getStateDigest(version) {
   return request("/api/state?version=" + encodeURIComponent(v));
 }
 
+// Volatile Home Assistant device state pushed by ha-melodious. Returns
+// changed:false (code 304) when `since` matches the current fresh version.
+export function getHaState(since) {
+  const s = since == null || since === "" ? "" : String(since);
+  return request("/api/ha-state?since=" + encodeURIComponent(s));
+}
+
 export function runActivity(activityId) {
   return request("/api/activity-run", {
     method: "POST",
