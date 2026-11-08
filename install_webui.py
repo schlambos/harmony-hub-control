@@ -102,6 +102,56 @@ ROOT_TOOL_DROPBEAR_REMOVE = (
     "rm -f " + " ".join(ROOT_TOOL_FILES) + " && echo removed; fi"
 )
 
+# Multiple remotes of one model (docs/MULTI_REMOTE.md). Stock hal keeps one
+# remote per model: it unpairs an older one after every pair, and its key
+# threads keep per-model state (one radio subscriber, one thread handle), so
+# two remotes of one model hang its radio dispatcher. --multi-remote on makes a
+# copy of the hub's own /usr/bin/hal with those made per slot and the
+# same-model unpair kept for remotes with a screen only; rcS.local bind-mounts
+# it over /usr/bin/hal at boot. The copy is built here from the hub's file
+# with the edits in payload/helpers/hal_multiremote_patch.json; hal itself is
+# never shipped.
+HAL_PATH = "/usr/bin/hal"
+HAL_MULTI_DEST = "/data/codex/bin/hal_multiremote"
+MULTI_REMOTE_CONF = "/data/codex/multi_remote.conf"
+HAL_PATCH_FILE = PAYLOAD / "helpers" / "hal_multiremote_patch.json"
+# Deletes the copy unless it is bind-mounted (then rcS.local deletes it at boot).
+MULTI_REMOTE_REMOVE = (
+    f"if grep ' {HAL_PATH} ' /proc/mounts >/dev/null 2>&1; then echo bound; "
+    f"else rm -f {HAL_MULTI_DEST} && echo removed; fi"
+)
+
+
+def load_hal_patch(path: Path = HAL_PATCH_FILE) -> tuple[str, str, list[tuple[int, bytes, bytes]]]:
+    """(stock md5, patched md5, [(offset, stock bytes, patched bytes)])."""
+    doc = json.loads(path.read_text(encoding="utf-8"))
+    edits = [(int(e["offset"], 16), bytes.fromhex(e["stock"]), bytes.fromhex(e["patched"])) for e in doc["edits"]]
+    return doc["stock_md5"], doc["patched_md5"], edits
+
+
+HAL_STOCK_MD5, HAL_MULTI_MD5, HAL_MULTI_PATCH = load_hal_patch()
+
+
+def patched_hal(data: bytes) -> bytes:
+    """The multi-remote hal from the hub's own /usr/bin/hal; fails closed."""
+    digest = hashlib.md5(data).hexdigest()
+    if digest == HAL_MULTI_MD5:
+        return data  # already the patched build (read while it is bind-mounted)
+    if digest != HAL_STOCK_MD5:
+        raise RuntimeError(
+            f"{HAL_PATH} on this hub is not the hal build multi-remote supports "
+            f"(md5 {digest}, expected {HAL_STOCK_MD5} from firmware 4.15.600)"
+        )
+    out = bytearray(data)
+    for offset, old, new in HAL_MULTI_PATCH:
+        if bytes(out[offset : offset + len(old)]) != old:
+            raise RuntimeError(f"{HAL_PATH}: unexpected bytes at {offset:#x}")
+        out[offset : offset + len(new)] = new
+    if hashlib.md5(out).hexdigest() != HAL_MULTI_MD5:
+        raise RuntimeError("the patched hal does not match its expected md5")
+    return bytes(out)
+
+
 HANDOFF_REQUIRED_PATHS = [
     "/etc/init.d/rcS.local",
     "/opt/luaworks/tasks/connectserver/netservicestarter.lua",
@@ -119,6 +169,7 @@ HANDOFF_REQUIRED_PATHS = [
 UPGRADE_PROTECTED_PATHS = [
     "/data/codex/hub_id",
     "/data/codex/cloud_blocker.conf",
+    MULTI_REMOTE_CONF,
     "/data/codexmqtt/config.json",
     "/data/codex/resource-backups",
     "/data/codex-backups",
@@ -309,12 +360,14 @@ class Candidate:
         text: str | None = None,
         sensitive: bool = False,
         condition: str = "always",
+        blob: bytes | None = None,
     ) -> None:
         self.dest = dest
         self.mode = mode
         self.kind = kind  # binary | runtime | plugin | config
         self.local = local
         self.text = text
+        self.blob = blob  # bytes built at install time (the multi-remote hal)
         self.sensitive = sensitive
         self.condition = condition  # always | if-missing
         self.bytes = 0
@@ -326,6 +379,8 @@ class Candidate:
         self.link_source = ""
 
     def data(self) -> bytes:
+        if self.blob is not None:
+            return self.blob
         if self.local is not None:
             return self.local.read_bytes()
         return (self.text or "").encode("utf-8")
@@ -470,6 +525,23 @@ class Installer:
             "StrictHostKeyChecking=accept-new",
             f"{self.args.ssh_user}@{self.args.hub_host}",
         ]
+
+    def run_remote_raw(self, command: str, timeout: int = 90) -> tuple[int, bytes, str]:
+        """Like run_remote_rc, with stdout left as bytes (for reading a binary)."""
+        proc = subprocess.run(
+            self.ssh_base_args() + [command],
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            timeout=timeout,
+            check=False,
+        )
+        return proc.returncode, proc.stdout, proc.stderr.decode("utf-8", "replace")
+
+    def read_remote_bytes(self, path: str, timeout: int = 120) -> bytes:
+        code, out, err = self.run_remote_raw(f"cat {remote_quote(path)}", timeout=timeout)
+        if code != 0:
+            raise RuntimeError(f"could not read {path} from the hub (exit {code}): {err.strip()}")
+        return out
 
     def run_remote_rc(
         self,
@@ -729,6 +801,14 @@ class Installer:
             ("/pkg/codexmqtt/manifest.json", '{"plugin":"codexmqtt"}\n'),
         ):
             candidates.append(Candidate(dest, "644", "config", text=text, condition="if-missing"))
+        # Multiple remotes of one model: only when asked, either way.
+        if self.args.multi_remote == "on":
+            hal = patched_hal(self.read_remote_bytes(HAL_PATH))
+            candidates.append(Candidate(HAL_MULTI_DEST, "755", "binary", blob=hal))
+            candidates.append(Candidate(MULTI_REMOTE_CONF, "644", "config", text="1\n"))
+        elif self.args.multi_remote == "off":
+            # The copy itself goes after a successful install (post_install_wiring).
+            candidates.append(Candidate(MULTI_REMOTE_CONF, "644", "config", text="0\n"))
         if clean or self.mqtt_explicit():
             candidates.append(
                 Candidate(
@@ -762,7 +842,7 @@ class Installer:
     def probe_destinations(self) -> None:
         step("Probing destination state (BusyBox ls -l / md5sum)")
         dests = [c.dest for c in self.candidates]
-        dests += [p for p in HANDOFF_REQUIRED_PATHS + [ROOT_TOOL_DROPBEAR] if p not in dests]
+        dests += [p for p in HANDOFF_REQUIRED_PATHS + [ROOT_TOOL_DROPBEAR, HAL_MULTI_DEST] if p not in dests]
         self.probe = self.file_status(dests)
         for cand in self.candidates:
             if self.probe[cand.dest]["kind"] in ("symlink", "other"):
@@ -1027,6 +1107,13 @@ class Installer:
                 "preserved unless a candidate explicitly replaces it."
             )
         kv(f"preflight_mode={'clean' if self.args.clean_install else 'upgrade'}")
+        kv(f"multi_remote={self.args.multi_remote or 'unchanged'}")
+        if self.args.multi_remote == "on":
+            info(
+                f"Multiple remotes of one model: {HAL_MULTI_DEST} is the hub's own hal "
+                f"(md5 {HAL_STOCK_MD5}) with per-slot remote threads and the one-remote-per-model "
+                "rule lifted for remotes without a screen; rcS.local runs it from the next boot."
+            )
         kv(f"candidate_count={len(self.candidates)}")
         kv(f"changed_count={len(self.active_candidates())}")
         info(
@@ -1483,6 +1570,17 @@ class Installer:
             "/bin/busybox sync 2>/dev/null || true"
         )
         self.run_remote(post, timeout=60, quiet=True)
+        self.remove_multi_remote_copy()
+
+    def remove_multi_remote_copy(self) -> None:
+        """--multi-remote off: delete the patched hal once nothing boots it.
+
+        While it is bind-mounted over /usr/bin/hal, deleting it would leave that
+        path a stale handle; rcS.local deletes it at the next boot instead."""
+        if self.args.multi_remote != "off" or self.probe.get(HAL_MULTI_DEST, {}).get("kind") != "regular":
+            return
+        out = self.run_remote(MULTI_REMOTE_REMOVE, timeout=30, quiet=True).strip()
+        kv(f"removed={HAL_MULTI_DEST}" if out == "removed" else f"kept_until_reboot={HAL_MULTI_DEST}")
 
     def start_services(self) -> None:
         start = (
@@ -1514,6 +1612,10 @@ class Installer:
     def cloud_blocker_changed(self) -> bool:
         cloud = {"/opt/luaworks/tasks/connectserver/netservicestarter.lua", "/data/codex/cloud_blocker.conf"}
         return any(c.dest in cloud for c in self.active_candidates())
+
+    def multi_remote_changed(self) -> bool:
+        # hal starts once at boot (rcS), so only a reboot swaps it.
+        return any(c.dest in (HAL_MULTI_DEST, MULTI_REMOTE_CONF) for c in self.active_candidates())
 
     def plugins_changed(self) -> bool:
         # The engine loads /pkg plugins once at start; only a reboot restarts it.
@@ -1579,6 +1681,7 @@ class Installer:
                 return 2
 
         if not self.active_candidates():
+            self.remove_multi_remote_copy()
             self.cleanup_stage()
             step("Done")
             info("The hub already matches this payload; nothing was installed or restarted.")
@@ -1645,12 +1748,16 @@ class Installer:
         self.report_flash_after_install()
         self.cleanup_stage()
 
-        if (self.cloud_blocker_changed() or self.plugins_changed()) and not self.args.no_apply_cloud_restart:
+        if (
+            self.cloud_blocker_changed() or self.plugins_changed() or self.multi_remote_changed()
+        ) and not self.args.no_apply_cloud_restart:
             step("Restarting the hub")
             if self.cloud_blocker_changed():
                 info("Rebooting the hub so Logitech cloud services restart in blocked mode.")
-            else:
+            elif self.plugins_changed():
                 info("Rebooting the hub so its engine loads the updated plugins.")
+            else:
+                info("Rebooting the hub so it starts the " + ("multi-remote" if self.args.multi_remote == "on" else "stock") + " hal.")
             self.run_remote("(/bin/sleep 2; /sbin/reboot || reboot) >/dev/null 2>&1 & echo rebooting", timeout=30, quiet=True)
             time.sleep(8)
             wait_for_port(self.args.hub_host, self.args.port, 180, "SSH")
@@ -1668,6 +1775,12 @@ class Installer:
         info("Web UI authentication: disabled")
         if not self.args.skip_cloud_suppression:
             info("Cloud blocker: enabled" + (" and applied" if self.cloud_blocker_changed() else " (unchanged)"))
+        if self.args.multi_remote:
+            info(
+                "Multiple remotes of one model: "
+                + ("on (remotes without a screen)" if self.args.multi_remote == "on" else "off")
+                + (" and applied" if self.multi_remote_changed() else " (unchanged)")
+            )
         info("If IR commands do not work, update /data/codex/hub_id with the correct hub id and restart codex_webui.")
         return 0
 
@@ -1706,7 +1819,17 @@ def parse_args(argv: list[str]) -> argparse.Namespace:
     parser.add_argument("--mqtt-client-id", default=None, help="MQTT client ID")
     parser.add_argument("--mqtt-disabled", action="store_true", default=None, help="Install with MQTT disabled")
     parser.add_argument("--skip-cloud-suppression", action="store_true", help="Do not replace netservicestarter.lua")
-    parser.add_argument("--no-apply-cloud-restart", action="store_true", help="Do not reboot after the Logitech cloud blocker files or engine plugins change")
+    parser.add_argument("--no-apply-cloud-restart", action="store_true", help="Do not reboot after the Logitech cloud blocker files, engine plugins or multi-remote setting change")
+    parser.add_argument(
+        "--multi-remote",
+        choices=("on", "off"),
+        default=None,
+        help=(
+            "Let the hub keep several remotes without a screen of the same model (they share one "
+            "button setup); 'off' restores the stock one-remote-per-model rule. Omitted: unchanged. "
+            "See docs/MULTI_REMOTE.md"
+        ),
+    )
     parser.add_argument("--no-prompt", action="store_true", help="Fail instead of asking for missing required values")
     parser.add_argument(
         "--remove-root-tool-leftovers",

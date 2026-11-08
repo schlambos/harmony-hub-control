@@ -3,6 +3,7 @@ import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import {
   PAIRING_STEPS,
+  RF_SLOTS,
   activityButtonsSaveOutcome,
   buildActivityButtonsMapList,
   keyComparison,
@@ -12,6 +13,9 @@ import {
   readActivityButtons,
   rootMapId,
   remoteKindName,
+  remoteModels,
+  multiRemoteStatus,
+  pairedMessage,
 } from "../public/js/views/remotes-model.js";
 import { validateMapList } from "../public/js/views/remote-model.js";
 import { deleteActivityResources } from "../public/js/wizard-model.js";
@@ -128,6 +132,38 @@ describe("pairOutcome", () => {
   it("is unknown when either table couldn't be read", () => {
     assert.equal(pairOutcome({ before: rfInfo([SMART]), after: "no response" }).status, "unknown");
     assert.equal(pairOutcome({}).status, "unknown");
+  });
+
+  it("with multi-remote, a second Smart Control joins the first and shares its buttons", () => {
+    const outcome = pairOutcome({
+      before: rfInfo([SMART, TOUCH]),
+      after: rfInfo([SMART, TOUCH, NEW_SMART]),
+      pair: pairReply(3, "16414"),
+    });
+    assert.equal(outcome.status, "paired");
+    assert.deepEqual(outcome.added.map((r) => r.slot), [3]);
+    assert.deepEqual(outcome.replaced, []);
+    assert.deepEqual(outcome.sharing.map((r) => r.slot), [3]);
+  });
+
+  it("a remote of a new model shares nothing", () => {
+    const outcome = pairOutcome({ before: rfInfo([SMART]), after: rfInfo([SMART, TOUCH]), pair: pairReply(2, "16417") });
+    assert.deepEqual(outcome.sharing, []);
+    assert.deepEqual(pairOutcome({}).sharing, []);
+  });
+});
+
+describe("remoteModels", () => {
+  it("groups remotes of one model, in slot order", () => {
+    const remotes = parseRfInfo(rfInfo([SMART, TOUCH, NEW_SMART])).remotes;
+    const models = remoteModels(remotes);
+    assert.deepEqual(models.map((m) => [m.equadId, m.slots]), [["16414", [1, 3]], ["16417", [2]]]);
+    assert.equal(models[0].short, "Smart Control");
+  });
+
+  it("is empty without remotes, and the radio has 6 slots", () => {
+    assert.deepEqual(remoteModels(undefined), []);
+    assert.equal(RF_SLOTS, 6);
   });
 });
 
@@ -362,5 +398,37 @@ describe("keys on both remotes", () => {
     const rows = keyComparison(config(), "16414", ["16417"]);
     assert.equal(rows.length, fixture.activityList.Activities.length);
     assert.ok(rows.filter((p) => p.hasMap && p.others[0].hasMap).length >= 4);
+  });
+});
+
+describe("multiRemoteStatus", () => {
+  it("says what the switch does now", () => {
+    assert.equal(multiRemoteStatus(undefined), "Checking…");
+    assert.equal(multiRemoteStatus(null), "Couldn't check this setting");
+    assert.equal(multiRemoteStatus({ enabled: true, active: true, supported: true }), "On");
+    assert.equal(multiRemoteStatus({ enabled: true, active: false, supported: true }), "On after the hub restarts");
+    assert.equal(multiRemoteStatus({ enabled: false, active: true, supported: true }), "Off after the hub restarts");
+    assert.equal(multiRemoteStatus({ enabled: false, active: false, supported: true }), "Off");
+    assert.equal(multiRemoteStatus({ enabled: false, active: false, supported: false }), "Not available on this hub");
+    assert.match(multiRemoteStatus({ enabled: false }, "restarting"), /Restarting the hub/);
+    assert.equal(multiRemoteStatus({ enabled: false }, "saving"), "Saving…");
+  });
+});
+
+describe("pairedMessage", () => {
+  it("names the model and slot, and the twin it shares buttons with", () => {
+    const outcome = pairOutcome({ before: rfInfo([SMART, TOUCH]), after: rfInfo([SMART, TOUCH, NEW_SMART]), pair: pairReply(3, "16414") });
+    assert.equal(pairedMessage(outcome),
+      "Harmony Smart Control remote paired in slot 3. It does the same as the Smart Control in slot 1: remotes of one model share their buttons.");
+  });
+  it("says which older remote a stock hub replaced", () => {
+    const outcome = pairOutcome({ before: rfInfo([SMART, TOUCH]), after: rfInfo([TOUCH, NEW_SMART]), pair: pairReply(3, "16414") });
+    assert.equal(pairedMessage(outcome), "Harmony Smart Control remote paired in slot 3. It replaced the older Smart Control in slot 1.");
+  });
+  it("covers a remote that was already paired, and stays quiet otherwise", () => {
+    const same = { before: rfInfo([SMART]), after: rfInfo([SMART]) };
+    assert.match(pairedMessage(pairOutcome({ ...same, pair: pairReply(1, "16414") })), /already paired/);
+    assert.equal(pairedMessage(pairOutcome({ ...same, pair: JSON.stringify({ id: 1, code: 500 }) })), "");
+    assert.equal(pairedMessage(null), "");
   });
 });

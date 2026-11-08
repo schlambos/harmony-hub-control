@@ -8,9 +8,13 @@
    unless a key is set for one remote only), so each activity row only says
    where they differ. Models in remotes-model.js.
 
-   Pairing never touches a remote of another kind: hal keeps one remote per
-   kind and replaces only an older one of the same kind. The page reads the
-   slot table before and after the window and says exactly what changed. */
+   Pairing never touches a remote of another kind: stock hal keeps one remote
+   per kind and replaces only an older one of the same kind. With multi-remote
+   on (the hub says `multiRemote`) only a remote with a screen does that; a
+   second remote without a screen of the same model joins the first, and the
+   two share that model's maps, so the page shows one section per model. The
+   page reads the slot table before and after the window and says exactly
+   what changed. Each slot can be unpaired. */
 
 import * as api from "../api.js";
 import * as hub from "../state.js";
@@ -18,11 +22,14 @@ import { confirmDialog, escapeHtml, iconTile, listRow, sectionLabel, snackbar, s
 import {
   ACTIVITY_BUTTONS,
   PAIRING_STEPS,
+  RF_SLOTS,
   SMART_CONTROL_EQUAD,
   keyComparison,
   pairOutcome,
+  pairedMessage,
   parseRfInfo,
   readActivityButtons,
+  remoteModels,
 } from "./remotes-model.js";
 import { hasRemoteMaps } from "./touch-model.js";
 
@@ -39,23 +46,30 @@ export function createRemotesView(section) {
   let windowSeconds = DEFAULT_WINDOW;
   let pairing = null; // { endsAt } while this page holds a window open
   let outcome = null; // pairOutcome of the last window
+  let multiRemote = false; // the hub runs the multi-remote hal
+  let unpairing = 0; // slot being unpaired
   let timer = null;
 
   section.innerHTML = `<div class="page" id="remotesRoot"></div>`;
   const root = section.querySelector("#remotesRoot");
 
-  const busy = () => Boolean(pairing);
+  const busy = () => Boolean(pairing) || Boolean(unpairing);
   const paired = () => remotes?.remotes ?? [];
-  // Paired remotes with keys per activity: with a screen, or without one.
-  const keyRemotes = () => paired().filter((r) => r.role === "screen" || r.role === "no-screen");
+  // One entry per model: remotes of one model share its maps.
+  const models = () => remoteModels(paired());
+  // Paired models with keys per activity: with a screen, or without one.
+  const keyRemotes = () => models().filter((r) => r.role === "screen" || r.role === "no-screen");
 
   function remoteRow(r) {
     // A screen remote other than the Touch shows its skin, which tells which model it is.
     const skin = r.role === "screen" && r.short === "screen remote" && r.skinId ? ` · skin ${r.skinId}` : "";
+    const twins = paired().filter((o) => o.equadId === r.equadId && o.slot !== r.slot).map((o) => o.slot);
+    const shares = twins.length ? ` · same buttons as slot ${twins.join(", ")}` : "";
     return listRow({
       title: r.name,
-      subtitle: `Slot ${r.slot}${skin}`,
+      subtitle: `Slot ${r.slot}${skin}${shares}`,
       leading: iconTile("settings_remote", { size: 44, tone: "hub" }),
+      trailing: `<button type="button" class="btn btn-text btn-sm" data-unpair="${r.slot}"${busy() || remotesBusy ? " disabled" : ""}>${unpairing === r.slot ? "Unpairing…" : "Unpair"}</button>`,
     });
   }
 
@@ -70,7 +84,8 @@ export function createRemotesView(section) {
     } else if (!remotes.remotes.length) {
       body = `<p class="list-note">No remotes are paired with this hub.</p>`;
     } else {
-      body = `<div class="m-list">${remotes.remotes.map(remoteRow).join("")}</div>`;
+      body = `<div class="m-list">${remotes.remotes.map(remoteRow).join("")}</div>
+        <p class="list-note">${remotes.remotes.length} of ${RF_SLOTS} radio slots used.</p>`;
     }
     return `${sectionLabel("Paired with this hub")}
       <div class="m-card">
@@ -89,9 +104,12 @@ export function createRemotesView(section) {
     switch (outcome.status) {
       case "paired": {
         const replaced = outcome.replaced.length
-          ? ` It replaced the older ${list(outcome.replaced)}; the hub keeps one remote of each kind.`
+          ? ` It replaced the older ${list(outcome.replaced)}; ${multiRemote ? "the hub keeps one remote with a screen" : "the hub keeps one remote of each kind"}.`
           : "";
-        return `<div class="notice notice-ok" role="status"><strong>Paired:</strong> ${list(outcome.added)}.${replaced}${keptText}</div>`;
+        const sharing = outcome.sharing?.length
+          ? ` It does the same as the other ${escapeHtml(outcome.sharing[0].short)}: remotes of one model share their buttons.`
+          : "";
+        return `<div class="notice notice-ok" role="status"><strong>Paired:</strong> ${list(outcome.added)}.${replaced}${sharing}${keptText}</div>`;
       }
       case "lost":
         return `<div class="notice notice-error" role="alert"><strong>A remote of another kind is no longer paired:</strong> ${list(outcome.lost)}.${outcome.added.length ? ` Joined: ${list(outcome.added)}.` : ""} Pair it again with its own steps.</div>`;
@@ -114,16 +132,21 @@ export function createRemotesView(section) {
           <p class="list-note">${left > 0 ? `${left} s left.` : "Closing the window…"} Don't press the button on the hub while it's open.</p>
         </div>`;
     }
+    const full = paired().length >= RF_SLOTS;
     const options = WINDOWS.map((s) => `<option value="${s}"${s === windowSeconds ? " selected" : ""}>${s} seconds</option>`).join("");
     return `${sectionLabel("Pair a remote")}
       <div class="m-card">
         <p>The hub opens its pairing window. While it's open, put the remote in pairing mode. ${escapeHtml(SMART_CONTROL_STEPS)} Other remotes use their own pairing steps.</p>
-        <p class="list-note">The hub keeps one remote of each kind: a new remote replaces an older one of the same kind, and remotes of other kinds stay paired. Nothing goes through Logitech's servers.</p>
+        <p class="list-note">${multiRemote
+          ? "Remotes without a screen can be paired more than once: a second remote of the same model joins the first, and the two share their buttons. A remote with a screen still replaces an older one."
+          : "The hub keeps one remote of each kind: a new remote replaces an older one of the same kind, and remotes of other kinds stay paired."} The radio has ${RF_SLOTS} slots. Nothing goes through Logitech's servers.</p>
+        ${multiRemote ? "" : `<p class="list-note">To pair two remotes of the same model, turn on <a href="#settings">Multiple remotes of one model</a> in Settings (experimental).</p>`}
         ${outcomeNotice()}
         <div class="actions">
           <label class="remotes-window">Window <select data-window${busy() ? " disabled" : ""}>${options}</select></label>
-          <button type="button" class="btn btn-filled" data-act="pair"${busy() || remotesBusy ? " disabled" : ""}>Open pairing window</button>
+          <button type="button" class="btn btn-filled" data-act="pair"${busy() || remotesBusy || full ? " disabled" : ""}>Open pairing window</button>
         </div>
+        ${full ? `<p class="list-note">All ${RF_SLOTS} slots are used. Unpair a remote to pair another.</p>` : ""}
       </div>`;
   }
 
@@ -193,12 +216,17 @@ export function createRemotesView(section) {
       </div>`;
   }
 
+  /* One section per model: remotes of one model share its maps. */
   function remoteSection(remote) {
     let body;
     if (remote.role === "no-screen") body = `${activityButtonsCard(remote)}${activitiesCard(remote)}`;
     else if (remote.role === "screen") body = activitiesCard(remote);
     else body = `<div class="m-card"><p class="list-note">Nothing to set for this remote here yet.</p></div>`;
-    return `${sectionLabel(remote.name)}<div class="remotes-section">${body}</div>`;
+    const count = remote.slots.length;
+    const shared = count > 1
+      ? `<p class="list-note">These ${count} remotes are the same model, so they share these settings (slots ${remote.slots.join(", ")}).</p>`
+      : "";
+    return `${sectionLabel(count > 1 ? `${remote.name} × ${count}` : remote.name)}<div class="remotes-section">${shared}${body}</div>`;
   }
 
   function render() {
@@ -207,7 +235,7 @@ export function createRemotesView(section) {
       root.innerHTML = `${remotesCard()}${pairCard()}<div class="m-center">${spinner("Loading")}</div>`;
       return;
     }
-    const sections = hub.state.config ? paired().map(remoteSection).join("") : "";
+    const sections = hub.state.config ? models().map(remoteSection).join("") : "";
     root.innerHTML = `${remotesCard()}${pairCard()}${sections}`;
   }
 
@@ -215,7 +243,10 @@ export function createRemotesView(section) {
     try {
       const reply = await api.getRemotes();
       remotesBusy = Boolean(reply.pairing);
-      if (!remotesBusy) remotes = parseRfInfo(reply.reply);
+      if (!remotesBusy) {
+        remotes = parseRfInfo(reply.reply);
+        multiRemote = Boolean(reply.multiRemote);
+      }
     } catch (_) {
       remotesBusy = false;
       remotes = null;
@@ -226,11 +257,14 @@ export function createRemotesView(section) {
   async function pair() {
     if (busy()) return;
     const now = paired().map((r) => `${r.name} (slot ${r.slot})`).join(", ");
+    const rule = multiRemote
+      ? "A remote without a screen joins alongside them, even one of a model already paired; a remote with a screen replaces an older one."
+      : "A new remote of one of those kinds replaces that one; a remote of any other kind joins alongside them.";
     const ok = await confirmDialog({
       title: "Open the pairing window?",
       text: now
-        ? `Paired now: ${now}. A new remote of one of those kinds replaces that one; a remote of any other kind joins alongside them.`
-        : "The hub keeps one remote of each kind. No remotes are paired with it now.",
+        ? `Paired now: ${now}. ${rule}`
+        : multiRemote ? "No remotes are paired with this hub now." : "The hub keeps one remote of each kind. No remotes are paired with it now.",
       confirmLabel: "Open window",
     });
     if (!ok) return;
@@ -241,6 +275,7 @@ export function createRemotesView(section) {
     render();
     try {
       const reply = await api.pairRemote({ seconds: windowSeconds });
+      if (typeof reply.multiRemote === "boolean") multiRemote = reply.multiRemote;
       outcome = pairOutcome(reply);
       if (outcome.remotes) remotes = parseRfInfo(reply.after);
       remotesBusy = false;
@@ -256,6 +291,37 @@ export function createRemotesView(section) {
       pairing = null;
     }
     if (!outcome || outcome.status === "unknown") await loadRemotes();
+    render();
+    const pairedText = pairedMessage(outcome);
+    if (pairedText && !section.hidden) {
+      await confirmDialog({ title: "Remote paired", text: pairedText, confirmLabel: "OK", cancel: false });
+    }
+  }
+
+  async function unpair(slot) {
+    const remote = paired().find((r) => r.slot === slot);
+    if (!remote || busy()) return;
+    const last = paired().length === 1;
+    const ok = await confirmDialog({
+      title: `Unpair the ${remote.short} in slot ${slot}?`,
+      text: `It stops controlling this hub until you pair it again.${last ? " It's the only remote paired with this hub." : ""}`,
+      confirmLabel: "Unpair",
+      destructive: true,
+    });
+    if (!ok) return;
+    unpairing = slot;
+    outcome = null;
+    render();
+    try {
+      const reply = await api.unpairRemote({ slot });
+      remotes = parseRfInfo(reply.after) ?? remotes;
+      snackbar(`Unpaired the ${remote.short} in slot ${slot}.`);
+    } catch (error) {
+      snackbar(error.status === 409 ? "A pairing window is open on the hub. Wait for it to close." : error.message || "The hub didn't unpair that remote.", { error: true });
+      unpairing = 0;
+      await loadRemotes();
+    }
+    unpairing = 0;
     render();
   }
 
@@ -273,6 +339,8 @@ export function createRemotesView(section) {
       loadRemotes();
       hub.reloadConfig();
     } else if (act === "pair") pair();
+    const slot = event.target.closest("[data-unpair]")?.dataset.unpair;
+    if (slot) unpair(Number(slot));
   });
 
   hub.subscribe(() => render());

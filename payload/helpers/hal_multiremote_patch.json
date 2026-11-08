@@ -1,0 +1,219 @@
+{
+ "description": "Multiple remotes of one model (docs/MULTI_REMOTE.md): edits to the hub's own /usr/bin/hal (firmware 4.15.600). The installers apply them to the hub's file; hal itself is never shipped.",
+ "file": "/usr/bin/hal",
+ "size": 363640,
+ "stock_md5": "a3fdd823440c43f36e235fe51c45f008",
+ "patched_md5": "1d63db17f1471c703d699bb777f7a69d",
+ "edits": [
+  {
+   "offset": "0x07b04",
+   "stock": "8c920000",
+   "patched": "00809021"
+  },
+  {
+   "offset": "0x07b60",
+   "stock": "2402401e",
+   "patched": "8fbc0018"
+  },
+  {
+   "offset": "0x07b64",
+   "stock": "1242018b",
+   "patched": "8f9985f0"
+  },
+  {
+   "offset": "0x07b68",
+   "stock": "8fbc0018",
+   "patched": "0320f809"
+  },
+  {
+   "offset": "0x07b6c",
+   "stock": "24034027",
+   "patched": "2404005c"
+  },
+  {
+   "offset": "0x07b70",
+   "stock": "1243018b",
+   "patched": "8fbc0018"
+  },
+  {
+   "offset": "0x07b74",
+   "stock": "3c060046",
+   "patched": "00408821"
+  },
+  {
+   "offset": "0x07b78",
+   "stock": "24044026",
+   "patched": "00104080"
+  },
+  {
+   "offset": "0x07b7c",
+   "stock": "1244018a",
+   "patched": "3c090046"
+  },
+  {
+   "offset": "0x07b80",
+   "stock": "3c070046",
+   "patched": "01284821"
+  },
+  {
+   "offset": "0x07b84",
+   "stock": "00008821",
+   "patched": "ad223e00"
+  },
+  {
+   "offset": "0x08194",
+   "stock": "3c110046",
+   "patched": "00104080"
+  },
+  {
+   "offset": "0x08198",
+   "stock": "08101ee2",
+   "patched": "3c090046"
+  },
+  {
+   "offset": "0x0819c",
+   "stock": "26313dcc",
+   "patched": "01284821"
+  },
+  {
+   "offset": "0x081a0",
+   "stock": "08101ee2",
+   "patched": "8d243e00"
+  },
+  {
+   "offset": "0x081a4",
+   "stock": "24d13e28",
+   "patched": "14800345"
+  },
+  {
+   "offset": "0x081a8",
+   "stock": "08101ee2",
+   "patched": "ad203e00"
+  },
+  {
+   "offset": "0x081ac",
+   "stock": "24f13e84",
+   "patched": "081022de"
+  },
+  {
+   "offset": "0x08be0",
+   "stock": "27de3ee8",
+   "patched": "27de3dcc"
+  },
+  {
+   "offset": "0x08ca0",
+   "stock": "0000a021",
+   "patched": "0140a021"
+  },
+  {
+   "offset": "0x08cdc",
+   "stock": "24e73ee0",
+   "patched": "8ce73ee0"
+  },
+  {
+   "offset": "0x08d50",
+   "stock": "24140001",
+   "patched": "0300a021"
+  },
+  {
+   "offset": "0x08d6c",
+   "stock": "24140002",
+   "patched": "0140a021"
+  },
+  {
+   "offset": "0x08e54",
+   "stock": "00008021",
+   "patched": "02a08021"
+  },
+  {
+   "offset": "0x08e70",
+   "stock": "24a33ee8",
+   "patched": "24a33dcc"
+  },
+  {
+   "offset": "0x08e9c",
+   "stock": "26c73ee0",
+   "patched": "8ec73ee0"
+  },
+  {
+   "offset": "0x08eb0",
+   "stock": "3c1e0046",
+   "patched": "08102065"
+  },
+  {
+   "offset": "0x08eb4",
+   "stock": "27c43dcc",
+   "patched": "8cf00014"
+  },
+  {
+   "offset": "0x08eb8",
+   "stock": "00008021",
+   "patched": "00000000"
+  },
+  {
+   "offset": "0x08ee0",
+   "stock": "258b3ee8",
+   "patched": "258b3dcc"
+  },
+  {
+   "offset": "0x08f30",
+   "stock": "24100001",
+   "patched": "02408021"
+  },
+  {
+   "offset": "0x08f34",
+   "stock": "3c040046",
+   "patched": "08102065"
+  },
+  {
+   "offset": "0x08f38",
+   "stock": "24843e84",
+   "patched": "8cf00014"
+  },
+  {
+   "offset": "0x08f3c",
+   "stock": "081023af",
+   "patched": "00000000"
+  },
+  {
+   "offset": "0x08f40",
+   "stock": "24100001",
+   "patched": "00000000"
+  },
+  {
+   "offset": "0x08f5c",
+   "stock": "24100002",
+   "patched": "01a08021"
+  },
+  {
+   "offset": "0x08fa0",
+   "stock": "3c170046",
+   "patched": "08102065"
+  },
+  {
+   "offset": "0x08fa4",
+   "stock": "26e43e28",
+   "patched": "8cf00014"
+  },
+  {
+   "offset": "0x08fa8",
+   "stock": "081023af",
+   "patched": "00000000"
+  },
+  {
+   "offset": "0x08fac",
+   "stock": "24100002",
+   "patched": "00000000"
+  },
+  {
+   "offset": "0x27cdc",
+   "stock": "3406880e",
+   "patched": "34064021"
+  },
+  {
+   "offset": "0x27ce0",
+   "stock": "1066ffdb",
+   "patched": "1466ffdb"
+  }
+ ]
+}

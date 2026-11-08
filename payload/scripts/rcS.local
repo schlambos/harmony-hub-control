@@ -69,6 +69,28 @@ if [ -e /etc/memtester ]; then
 	while true; do sleep 60; done
 fi
 
+# Multiple remotes of one model (optional, see docs/MULTI_REMOTE.md). rcS
+# starts /usr/bin/hal after sourcing this file; when the owner switched it on
+# and both files are exactly the builds it was made for, a copy of hal that
+# runs remote threads per slot (and keeps one remote per model only for
+# remotes with a screen) is bind-mounted over it. Anything else boots the stock hal, untouched.
+if [ "$(cat /data/codex/multi_remote.conf 2>/dev/null)" != "1" ] && [ -f /data/codex/bin/hal_multiremote ]; then
+	# Switched off: the copy is no longer needed (it can't be deleted while it is bound).
+	rm -f /data/codex/bin/hal_multiremote
+	echo "$(date) codex multi-remote off: removed /data/codex/bin/hal_multiremote" >> /cache/codex-init.log
+elif [ "$(cat /data/codex/multi_remote.conf 2>/dev/null)" = "1" ] && [ -f /data/codex/bin/hal_multiremote ]; then
+	codex_hal_md5=$(md5sum /usr/bin/hal)
+	codex_hal_multi_md5=$(md5sum /data/codex/bin/hal_multiremote)
+	if [ "${codex_hal_md5%% *}" = "a3fdd823440c43f36e235fe51c45f008" ] &&
+		[ "${codex_hal_multi_md5%% *}" = "1d63db17f1471c703d699bb777f7a69d" ]; then
+		mount -o bind /data/codex/bin/hal_multiremote /usr/bin/hal &&
+			echo "$(date) codex multi-remote hal bound over /usr/bin/hal" >> /cache/codex-init.log
+	else
+		echo "$(date) codex multi-remote hal skipped (unexpected hal build)" >> /cache/codex-init.log
+	fi
+	unset codex_hal_md5 codex_hal_multi_md5
+fi
+
 if [ -x /data/codex/init.sh ]; then
 	/data/codex/init.sh &
 fi

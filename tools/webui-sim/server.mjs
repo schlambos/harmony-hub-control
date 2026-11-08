@@ -540,14 +540,24 @@ const MAX_CANCELED_RUNS = 64;
 const canceledRuns = new Set();
 let captureArmed = false;
 
-/* RF remotes (GET /api/remotes, POST /api/remote-pair). The sim starts with
-   a Smart Control in slot 1 and a Touch in slot 2, with made-up radio IDs.
-   A pairing window lasts a few seconds here; then a new Smart Control joins
-   the first free slot and, as hal does, the older one of its kind goes. */
+/* RF remotes (GET /api/remotes, POST /api/remote-pair, POST
+   /api/remote-unpair). The sim starts with a Smart Control in slot 1 and a
+   Touch in slot 2, with made-up radio IDs, and the stock hal: a pairing window
+   lasts a few seconds here; then a new Smart Control joins the first free
+   slot and, as hal does, the older one of its kind goes. With multi-remote on
+   (POST /api/sim/multi-remote {"on":true}, or SIM_MULTI_REMOTE=1) only a
+   remote with a screen replaces an older one, so the new Smart Control joins. */
 const SIM_PAIR_MS = 3000;
+const SIM_RF_SLOTS = 6;
 let simRemotes = [];
 let simPairing = false;
 let simNextRfid = 3000000001;
+let simMultiRemote = false; // the multi-remote hal runs (bind-mounted)
+let simMultiEnabled = false; // multi_remote.conf says 1
+let simHalSupported = true; // /usr/bin/hal is the stock 4.15.600 build
+const SIM_RESTART_MS = 4000;
+const SIM_HAL_STOCK_MD5 = "a3fdd823440c43f36e235fe51c45f008";
+const SIM_HAL_MULTI_MD5 = "1d63db17f1471c703d699bb777f7a69d";
 
 function resetSimRemotes() {
   simRemotes = [
@@ -555,6 +565,47 @@ function resetSimRemotes() {
     { EquadID: "16417", SkinId: "99", DeviceIndex: "2", RFID: "2000000001" }
   ];
   simPairing = false;
+  simMultiRemote = process.env.SIM_MULTI_REMOTE === "1";
+  simMultiEnabled = simMultiRemote;
+  simHalSupported = true;
+}
+
+/* GET /api/multi-remote, like codex_webui's render_multi_remote_json(). */
+function simMultiRemoteState() {
+  const halMd5 = simMultiRemote ? SIM_HAL_MULTI_MD5 : simHalSupported ? SIM_HAL_STOCK_MD5 : "0123456789abcdef0123456789abcdef";
+  const supported = simMultiRemote || simHalSupported;
+  return {
+    ok: true, enabled: simMultiEnabled, active: simMultiRemote, supported, halMd5,
+    stockMd5: SIM_HAL_STOCK_MD5, patchedMd5: SIM_HAL_MULTI_MD5,
+    reason: supported ? "" : `This hub's hal is not the build the multi-remote change was made for, so it can't be turned on safely. Its MD5 is ${halMd5}; the change needs the Harmony Hub firmware 4.15.600 hal, MD5 ${SIM_HAL_STOCK_MD5}.`
+  };
+}
+
+/* POST /api/multi-remote: the sim "restarts" for a few seconds, then runs the new hal. */
+function handleMultiRemoteSet(res, params) {
+  if (typeof params.enabled !== "boolean") {
+    sendJson(res, 400, { ok: false, error: 'Send {"enabled": true} or {"enabled": false}.' });
+    return;
+  }
+  const state = simMultiRemoteState();
+  if (params.enabled && !state.supported) {
+    sendJson(res, 409, { ok: false, error: state.reason, halMd5: state.halMd5 });
+    return;
+  }
+  if (!params.enabled) {
+    const counts = {};
+    for (const r of simRemotes) if (["16414", "16422", "16423"].includes(r.EquadID)) (counts[r.EquadID] ??= []).push(r.DeviceIndex);
+    const dups = Object.entries(counts).filter(([, slots]) => slots.length > 1).map(([id, slots]) => `${id} (slots ${slots.join(", ")})`).join("; ");
+    if (dups) {
+      sendJson(res, 409, { ok: false, duplicates: dups, error: `More than one remote of the same model is paired (EquadID ${dups}). The hub's stock software can't run two of one model, so unpair the extra ones first.` });
+      return;
+    }
+  }
+  simMultiEnabled = params.enabled;
+  const rebooting = simMultiRemote !== params.enabled;
+  if (rebooting) setTimeout(() => { simMultiRemote = simMultiEnabled; }, SIM_RESTART_MS);
+  logEvent({ kind: "multi-remote", message: `Multiple remotes of one model ${params.enabled ? "on" : "off"}${rebooting ? " (restarting)" : ""}` });
+  sendJson(res, 200, { ok: true, enabled: params.enabled, rebooting });
 }
 
 function simRfInfo() {
@@ -578,8 +629,18 @@ async function handleRemotePair(res, params) {
   const used = new Set(simRemotes.map((r) => r.DeviceIndex));
   let slot = 1;
   while (used.has(String(slot))) slot += 1;
+  if (slot > SIM_RF_SLOTS) {
+    simPairing = false;
+    sendJson(res, 200, {
+      ok: true, seconds, elapsedMs: Date.now() - started, pairCode: 500, multiRemote: simMultiRemote,
+      pair: JSON.stringify({ id: 1, code: 500, msg: "all slots used" }), before, after: simRfInfo()
+    });
+    return;
+  }
   const joined = { EquadID: "16414", SkinId: "", DeviceIndex: String(slot), RFID: String(simNextRfid++) };
-  simRemotes = simRemotes.filter((r) => r.EquadID !== joined.EquadID);
+  if (!simMultiRemote || joined.EquadID === "16417") {
+    simRemotes = simRemotes.filter((r) => r.EquadID !== joined.EquadID);
+  }
   simRemotes.push(joined);
   simRemotes.sort((a, b) => Number(a.DeviceIndex) - Number(b.DeviceIndex));
   simPairing = false;
@@ -589,6 +650,7 @@ async function handleRemotePair(res, params) {
     seconds,
     elapsedMs: Date.now() - started,
     pairCode: 200,
+    multiRemote: simMultiRemote,
     pair: JSON.stringify({ id: 1, data: { ...joined }, code: 200 }),
     before,
     after: simRfInfo()
@@ -1518,7 +1580,41 @@ async function handleApi(req, res, pathname, url) {
       handleAndroidTvDevices(res, params);
       return;
     case "GET /api/remotes":
-      sendJson(res, 200, simPairing ? { ok: true, pairing: true } : { ok: true, pairing: false, reply: simRfInfo() });
+      sendJson(res, 200, simPairing
+        ? { ok: true, pairing: true }
+        : { ok: true, pairing: false, multiRemote: simMultiRemote, slots: SIM_RF_SLOTS, reply: simRfInfo() });
+      return;
+    case "POST /api/remote-unpair": {
+      const slot = Number(params.slot);
+      if (!Number.isInteger(slot) || slot < 1 || slot > SIM_RF_SLOTS) {
+        sendJson(res, 400, { ok: false, error: "Give the remote's slot, 1 to 6." });
+        return;
+      }
+      if (simPairing) {
+        sendJson(res, 409, { ok: false, pairing: true, error: "A pairing window is already open on the hub." });
+        return;
+      }
+      const before = simRfInfo();
+      if (!simRemotes.some((r) => r.DeviceIndex === String(slot))) {
+        sendJson(res, 404, { ok: false, error: `No remote is paired in slot ${slot}.`, before });
+        return;
+      }
+      simRemotes = simRemotes.filter((r) => r.DeviceIndex !== String(slot));
+      logEvent({ kind: "remote-unpair", message: `Remote in slot ${slot} unpaired` });
+      sendJson(res, 200, { ok: true, slot, code: 200, reply: JSON.stringify({ id: 1, code: 200 }), before, after: simRfInfo() });
+      return;
+    }
+    case "POST /api/sim/multi-remote":
+      simMultiRemote = Boolean(params.on);
+      simMultiEnabled = simMultiRemote;
+      if (typeof params.halSupported === "boolean") simHalSupported = params.halSupported;
+      sendJson(res, 200, { ok: true, multiRemote: simMultiRemote, halSupported: simHalSupported });
+      return;
+    case "GET /api/multi-remote":
+      sendJson(res, 200, simMultiRemoteState());
+      return;
+    case "POST /api/multi-remote":
+      handleMultiRemoteSet(res, params);
       return;
     case "POST /api/remote-pair":
       await handleRemotePair(res, params);

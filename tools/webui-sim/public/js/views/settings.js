@@ -1,12 +1,16 @@
 /* Settings tab (#settings): the app's SettingsScreen. A hub card, then the
    hub's own setup pages (Bluetooth keyboard, MQTT, Wi-Fi, Backup, System),
-   each opening as a sub-page. The simulator also lists its recent events
+   each opening as a sub-page, then Experimental: the switch for multiple
+   remotes of one model (docs/MULTI_REMOTE.md). It can be turned on only when
+   the hub's hal is exactly the build the change was made for, and turning it
+   on or off restarts the hub. The simulator also lists its recent events
    here (the old Home page's debug panel; gated on HARMONY_SIM so the
    production shell never calls a /sim/ route). */
 
 import * as api from "../api.js";
 import * as hub from "../state.js";
-import { escapeHtml, iconTile, listRow, screenTitle, sectionLabel } from "../ui/shell.js";
+import { confirmDialog, escapeHtml, iconTile, listRow, screenTitle, sectionLabel, snackbar } from "../ui/shell.js";
+import { multiRemoteStatus } from "./remotes-model.js";
 import { parseTextStatus } from "./bluetooth-model.js";
 
 const SIM = globalThis.HARMONY_SIM === true;
@@ -35,6 +39,8 @@ function eventLine(ev) {
 export function createSettingsView(section) {
   let keyboard = null; // parsed /api/bt-text-status, or { failed: true }
   let events; // undefined while loading, null when the sim has no event log
+  let multi; // /api/multi-remote; undefined while loading, null when it couldn't be read
+  let multiBusy = ""; // "" | "saving" | "restarting"
 
   section.innerHTML = `<div class="page" id="settingsRoot"></div>`;
   const root = section.querySelector("#settingsRoot");
@@ -98,6 +104,19 @@ export function createSettingsView(section) {
       </div>`;
   }
 
+  function experimentalMarkup() {
+    const status = multiRemoteStatus(multi, multiBusy);
+    const disabled = multi === undefined || multi === null || Boolean(multiBusy);
+    return `${sectionLabel("Experimental")}
+      <div class="m-list">
+        <label class="m-row ds-switch">
+          <span class="m-row-text"><span class="ds-title">Multiple remotes of one model</span><span class="m-row-sub" data-multi-status>${escapeHtml(status)}</span></span>
+          <input type="checkbox" role="switch" class="m-switch" data-multi-remote${multi?.enabled ? " checked" : ""}${disabled ? " disabled" : ""} aria-label="Multiple remotes of one model">
+        </label>
+      </div>
+      <p class="list-note">Lets the hub keep two or more remotes without a screen of the same model, such as two Smart Controls. They share one button setup. It changes the hub's own remote software, so it's experimental, and turning it on or off restarts the hub.</p>`;
+  }
+
   function render() {
     root.innerHTML = `${screenTitle("Settings")}
       ${hubCard()}
@@ -108,6 +127,7 @@ export function createSettingsView(section) {
         href: `#${route}`,
         chevron: true,
       })).join("")}</div>
+      ${experimentalMarkup()}
       ${eventsMarkup()}
       ${aboutMarkup()}`;
   }
@@ -120,6 +140,86 @@ export function createSettingsView(section) {
     }
     if (!section.hidden) render();
   }
+
+  async function loadMulti() {
+    try {
+      multi = await api.getMultiRemote();
+    } catch (_) {
+      multi = null;
+    }
+    if (!section.hidden) render();
+  }
+
+  const pause = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
+
+  /* After the hub restarts: poll until it answers with the new state (about 2 minutes). */
+  async function waitForRestart(enabled) {
+    await pause(5000);
+    for (let i = 0; i < 48; i++) {
+      try {
+        multi = await api.getMultiRemote();
+        if (multi.active === enabled) return true;
+      } catch (_) {
+        // still restarting
+      }
+      await pause(5000);
+    }
+    return false;
+  }
+
+  async function switchMulti(enabled) {
+    if (!multi || multiBusy) return;
+    if (enabled && !multi.supported) {
+      await confirmDialog({
+        title: "Can't turn this on",
+        text: multi.reason || "This hub's remote software isn't the build this change was made for.",
+        confirmLabel: "OK",
+        cancel: false,
+      });
+      return;
+    }
+    const ok = await confirmDialog({
+      title: enabled ? "Turn on multiple remotes of one model?" : "Turn off multiple remotes of one model?",
+      text: enabled
+        ? "Experimental. The hub makes a changed copy of its own remote software (hal), checks that it matches the expected checksum exactly, and runs it from now on. You can then pair more than one remote without a screen of the same model; they share their buttons. The hub restarts now to apply it. That takes about two minutes, and the remotes and this app won't respond until it's back."
+        : "The hub goes back to its stock remote software, which keeps one remote of each model. The hub restarts now. That takes about two minutes, and the remotes and this app won't respond until it's back.",
+      confirmLabel: enabled ? "Turn on and restart" : "Turn off and restart",
+    });
+    if (!ok) return;
+    multiBusy = "saving";
+    render();
+    try {
+      const res = await api.setMultiRemote({ enabled });
+      if (res.rebooting) {
+        multiBusy = "restarting";
+        render();
+        const back = await waitForRestart(enabled);
+        snackbar(back
+          ? `The hub restarted. Multiple remotes of one model is ${enabled ? "on" : "off"}.`
+          : "The hub hasn't come back with the new setting yet. Refresh in a minute.", { error: !back });
+      } else {
+        snackbar(`Multiple remotes of one model is ${enabled ? "on" : "off"}.`);
+      }
+    } catch (error) {
+      await confirmDialog({
+        title: enabled ? "Couldn't turn this on" : "Couldn't turn this off",
+        text: error.message || "The hub didn't change the setting.",
+        confirmLabel: "OK",
+        cancel: false,
+      });
+    } finally {
+      multiBusy = "";
+    }
+    await loadMulti();
+  }
+
+  root.addEventListener("change", (event) => {
+    const input = event.target.closest("[data-multi-remote]");
+    if (!input) return;
+    const enabled = input.checked;
+    input.checked = !enabled; // stays as it was until the hub has changed
+    switchMulti(enabled);
+  });
 
   async function loadEvents() {
     if (!SIM) return;
@@ -137,6 +237,7 @@ export function createSettingsView(section) {
       hub.reloadConfig();
       hub.refreshState();
       loadKeyboard();
+      loadMulti();
     } else if (act === "events") {
       loadEvents();
     }
@@ -151,6 +252,7 @@ export function createSettingsView(section) {
       hub.ensureConfig();
       render();
       loadKeyboard();
+      loadMulti();
       loadEvents();
     },
     onHide() {},

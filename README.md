@@ -150,6 +150,10 @@ and a user reports the Harmony Elite works.**
 | Other remotes that pair with the hub, such as the Harmony Ultimate or 950 | Expected to work, but not yet tested. Features that need a screen apply only to remotes that have one. |
 | Phones, tablets and computers | The web, Android and macOS apps. |
 
+Two or more remotes of the same model (e.g. two Smart Controls) can share a hub: turn on
+**Settings → Experimental → Multiple remotes of one model** (or install with `--multi-remote on`).
+They share one button setup. See [docs/MULTI_REMOTE.md](docs/MULTI_REMOTE.md).
+
 No remote needs modified firmware; reports for other remotes welcome ([CONTRIBUTING.md](CONTRIBUTING.md)).
 
 ### Activities

@@ -888,17 +888,18 @@ the state on its next event (for example when an activity starts). See
 
 ## RF remotes
 
-List the Harmony remotes paired with the hub's radio, and pair one more,
-with no cloud (`render_remotes_json()`, `render_remote_pair_json()`). hal
-pairs remotes itself: `rf.info` lists the radio's pairing slots and
-`rf.pairing` opens its pairing window.
+List the Harmony remotes paired with the hub's radio, pair one more, and
+unpair one, with no cloud (`render_remotes_json()`,
+`render_remote_pair_json()`, `render_remote_unpair_json()`). hal pairs
+remotes itself: `rf.info` lists the radio's 6 pairing slots, `rf.pairing`
+opens its pairing window and `rf.unpair` frees a slot.
 
 ```powershell
 Invoke-RestMethod "http://<hub-ip>:8080/api/remotes"
 ```
 
 ```json
-{"ok":true,"pairing":false,
+{"ok":true,"pairing":false,"multiRemote":false,"slots":6,
  "reply":"{\"id\":1,\"data\":{\"EquadID\":\"34827\",\"RFID\":\"…\",\"Devices\":[{\"EquadID\":\"16414\",\"SkinId\":\"\",\"DeviceIndex\":\"1\",\"RFID\":\"…\"},{\"EquadID\":\"16417\",\"SkinId\":\"99\",\"DeviceIndex\":\"2\",\"RFID\":\"…\"}],\"DeviceCount\":2},\"code\":200}"}
 ```
 
@@ -906,6 +907,9 @@ Invoke-RestMethod "http://<hub-ip>:8080/api/remotes"
   slot. `EquadID` is the kind of remote: 16414 Harmony Smart Control,
   16417 a remote with a screen (`SkinId` 99 is the Harmony Touch), 16420
   a keyboard, 16422/16423 Companion.
+- `multiRemote` is true while the hub runs the multi-remote `hal`
+  ([MULTI_REMOTE.md](MULTI_REMOTE.md)): `/usr/bin/hal` is bind-mounted.
+  `slots` is the radio's slot count.
 - While a pairing window is open the answer is `{"ok":true,"pairing":true}`
   with no `reply`: during the window hal reads the same slot registers to
   decide what to unpair, and a second reader can take its answers.
@@ -917,7 +921,7 @@ Invoke-RestMethod "http://<hub-ip>:8080/api/remote-pair" -Method Post `
 ```
 
 ```json
-{"ok":true,"seconds":60,"elapsedMs":21480,"pairCode":200,
+{"ok":true,"seconds":60,"elapsedMs":21480,"pairCode":200,"multiRemote":false,
  "pair":"{\"id\":1,\"data\":{\"DeviceIndex\":\"3\",\"EquadID\":\"16414\",\"RFID\":\"…\",\"SkinId\":\"\"},\"code\":200}",
  "before":"<rf.info text>","after":"<rf.info text>"}
 ```
@@ -928,9 +932,11 @@ Invoke-RestMethod "http://<hub-ip>:8080/api/remote-pair" -Method Post `
   5 seconds while it's open.
 - Only the RF window opens. The button on the hub also starts Bluetooth
   advertising; this route doesn't.
-- After a pair hal unpairs any older remote of the **same kind** (it keeps
-  one per EquadID). Remotes of other kinds are never touched, so a Smart
-  Control joins a Touch but replaces an older Smart Control. `before` and
+- After a pair, stock hal unpairs any older remote of the **same kind** (it
+  keeps one per EquadID). Remotes of other kinds are never touched, so a
+  Smart Control joins a Touch but replaces an older Smart Control. With
+  `multiRemote` only a remote with a screen (16417) replaces an older one; a
+  second Smart Control joins the first and shares its maps. `before` and
   `after` are the slot tables either side of the window; compare them to
   see what changed (`pairOutcome()` in `views/remotes-model.js`).
 - `pairCode` is hal's code for `rf.pairing`: `200` when a remote paired,
@@ -941,9 +947,76 @@ Invoke-RestMethod "http://<hub-ip>:8080/api/remote-pair" -Method Post `
   them the same, with `500`.
 - One window at a time: a second request gets `409`. If the "before" read
   fails the window doesn't open (`502`).
+- `multiRemote` is reported as in `/api/remotes`.
 - After a pair the engine tries to report it to Logitech
   (`RemoteManager/SavePairings`); behind the cloud blocker that fails at
   once and changes nothing.
+
+```powershell
+Invoke-RestMethod "http://<hub-ip>:8080/api/remote-unpair" -Method Post `
+  -ContentType "application/json" -Body '{"slot":3}'
+```
+
+```json
+{"ok":true,"slot":3,"code":200,"reply":"<rf.unpair text>",
+ "before":"<rf.info text>","after":"<rf.info text>"}
+```
+
+- Unpairs the remote in radio slot `slot` (1–6) with `rf.unpair`
+  (`{"deviceIdx":<slot>}`). The remote stops controlling the hub until it is
+  paired again.
+- `400` for a slot outside 1–6, `404` when no remote is paired there,
+  `409` while a pairing window is open, and `502` when the radio doesn't
+  list its slots or doesn't unpair (`ok:false`, with hal's `code`).
+
+### Multiple remotes of one model (experimental)
+
+The Settings switch for [MULTI_REMOTE.md](MULTI_REMOTE.md)
+(`render_multi_remote_json()`, `render_multi_remote_set_json()`).
+
+```powershell
+Invoke-RestMethod "http://<hub-ip>:8080/api/multi-remote"
+```
+
+```json
+{"ok":true,"enabled":false,"active":false,"supported":true,
+ "halMd5":"a3fdd823440c43f36e235fe51c45f008",
+ "stockMd5":"a3fdd823440c43f36e235fe51c45f008",
+ "patchedMd5":"1d63db17f1471c703d699bb777f7a69d","reason":""}
+```
+
+- `enabled`: `/data/codex/multi_remote.conf` says `1`.
+- `active`: the multi-remote `hal` runs (bind-mounted over `/usr/bin/hal`).
+- `supported`: `/usr/bin/hal` is exactly `stockMd5` (or already `patchedMd5`).
+  Otherwise `reason` says why it can't be turned on.
+
+```powershell
+Invoke-RestMethod "http://<hub-ip>:8080/api/multi-remote" -Method Post `
+  -ContentType "application/json" -Body '{"enabled":true}'
+```
+
+```json
+{"ok":true,"enabled":true,"rebooting":true}
+```
+
+- **On:**
+  1. Builds `/data/codex/bin/hal_multiremote` on the hub from its own
+     `/usr/bin/hal`, with the edits in `payload/helpers/hal_multiremote_patch.json`.
+  2. Keeps it only if its MD5 is exactly `patchedMd5`.
+  3. Writes the setting.
+  4. Answers, then reboots the hub about 3 seconds later (`rebooting`), since
+     `hal` starts once at boot.
+- **Off:** writes `0` and reboots if the copy was running. `rcS.local`
+  deletes the copy at that boot; a copy that isn't running is deleted at once.
+  It's refused with `409` (and `duplicates`, e.g. `"16414 (slots 1, 2)"`)
+  while two remotes of one model are paired: the stock `hal` hangs its radio
+  on them, so unpair the extra ones first.
+- **Errors:**
+  - `409` when the hub's `hal` isn't the supported build (`error` explains,
+    with `halMd5`), or another change is in progress.
+  - `500` when the copy can't be built or doesn't match (`error` says why),
+    or flash is short.
+  - `502` when the radio doesn't list its remotes (off only).
 
 A remote without a screen (the Smart Control, 16414, or the Companion,
 16422 or 16423) keeps no setup and never syncs. hal names its keys from one

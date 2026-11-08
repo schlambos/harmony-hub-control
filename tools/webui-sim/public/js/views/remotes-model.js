@@ -3,9 +3,13 @@
    views/remotes.js renders and saves.
 
    hal pairs Harmony RF remotes on the hub itself, with no cloud: rf.info
-   lists the radio's pairing slots, and after a pair hal unpairs any older
-   remote of the same kind (one per EquadID). So a Smart Control joins a
-   Touch, but replaces an older Smart Control.
+   lists the radio's 6 pairing slots, and after a pair stock hal unpairs any
+   older remote of the same kind (one per EquadID). So a Smart Control joins a
+   Touch, but replaces an older Smart Control. With multi-remote on
+   (docs/MULTI_REMOTE.md; /api/remotes says `multiRemote`) only a remote with
+   a screen replaces an older one: a second Smart Control joins the first.
+   Remotes of one model send the same EquadID, so they share its maps and
+   always do the same thing.
 
    A remote without a screen (hal's "Sprite" remotes: the Smart Control,
    EquadID 16414, and the Companion, 16422 or 16423) keeps no setup and never
@@ -21,6 +25,9 @@ import { NO_SCREEN_REMOTES, keyOn } from "./touch-model.js";
 
 export const SMART_CONTROL_EQUAD = "16414";
 export const TOUCH_EQUAD = "16417";
+
+/** Pairing slots on the hub's radio (remotes, the keyboard and dongles share them). */
+export const RF_SLOTS = 6;
 
 /** The root map a remote answers from while nothing runs. */
 export function rootMapId(remote = SMART_CONTROL_EQUAD) {
@@ -102,9 +109,58 @@ export function parseRfInfo(reply) {
 const remoteIdentity = (r) => `${r.slot}:${r.equadId}:${r.rfid}`;
 
 /**
+ * The Settings switch's status line for multiple remotes of one model, from
+ * /api/multi-remote (`undefined` while loading, `null` if it failed) and what
+ * the page is doing ("saving", "restarting" or "").
+ */
+export function multiRemoteStatus(state, busy = "") {
+  if (busy === "saving") return "Saving…";
+  if (busy === "restarting") return "Restarting the hub… about two minutes";
+  if (state === undefined) return "Checking…";
+  if (!state) return "Couldn't check this setting";
+  if (state.enabled && state.active) return "On";
+  if (state.enabled) return "On after the hub restarts";
+  if (state.active) return "Off after the hub restarts";
+  return state.supported ? "Off" : "Not available on this hub";
+}
+
+/** A line for the pairing pop-up about one pairing window's outcome; "" when there's nothing to celebrate. */
+export function pairedMessage(outcome) {
+  if (!outcome) return "";
+  if (outcome.status === "already") return "That remote was already paired with this hub, so it kept its slot and nothing else changed.";
+  if (outcome.status !== "paired" || !outcome.added?.length) return "";
+  const lines = outcome.added.map((r) => `${r.name} paired in slot ${r.slot}.`);
+  for (const r of outcome.sharing ?? []) {
+    const twins = (outcome.remotes ?? []).filter((o) => o.equadId === r.equadId && o.slot !== r.slot).map((o) => o.slot);
+    if (twins.length) lines.push(`It does the same as the ${r.short} in slot ${twins.join(", ")}: remotes of one model share their buttons.`);
+  }
+  if (outcome.replaced?.length) {
+    lines.push(`It replaced the older ${outcome.replaced.map((r) => `${r.short} in slot ${r.slot}`).join(", ")}.`);
+  }
+  return lines.join(" ");
+}
+
+/**
+ * Paired remotes grouped by model (EquadID), in slot order: one entry per
+ * model with its `slots`. Remotes of one model share that model's maps, so
+ * the page sets them up once.
+ */
+export function remoteModels(remotes) {
+  const byModel = new Map();
+  for (const r of remotes ?? []) {
+    const model = byModel.get(r.equadId);
+    if (model) model.slots.push(r.slot);
+    else byModel.set(r.equadId, { ...r, slots: [r.slot] });
+  }
+  return [...byModel.values()];
+}
+
+/**
  * What one pairing window did, from the slot tables read before and after
  * it. `status`:
- *   "paired"    a remote joined (`replaced` lists older ones of its kind hal dropped)
+ *   "paired"    a remote joined (`replaced` lists older ones of its kind hal
+ *               dropped; `sharing`, those that joined another remote of
+ *               their model and share its buttons)
  *   "lost"      a remote of another kind is gone; the page must say so loudly
  *   "already"   a remote paired but no slot changed: it was this hub's already and kept its slot
  *   "timeout"   nothing joined in the window
@@ -118,7 +174,7 @@ export function pairOutcome({ before, after, pair } = {}) {
   // data (seen on hardware 2026-10-31); a window nobody used gets 500.
   const halPaired = Number(reported?.code) === 200;
   if (!was || !now) {
-    return { status: "unknown", added: [], removed: [], replaced: [], lost: [], halPaired };
+    return { status: "unknown", added: [], removed: [], replaced: [], lost: [], sharing: [], halPaired };
   }
   const wasIds = new Set(was.remotes.map(remoteIdentity));
   const nowIds = new Set(now.remotes.map(remoteIdentity));
@@ -127,11 +183,12 @@ export function pairOutcome({ before, after, pair } = {}) {
   const addedKinds = new Set(added.map((r) => r.equadId));
   const replaced = removed.filter((r) => addedKinds.has(r.equadId));
   const lost = removed.filter((r) => !addedKinds.has(r.equadId));
+  const sharing = added.filter((r) => now.remotes.some((o) => o.equadId === r.equadId && o.slot !== r.slot));
   let status;
   if (lost.length) status = "lost";
   else if (added.length) status = "paired";
   else status = halPaired ? "already" : "timeout";
-  return { status, added, removed, replaced, lost, halPaired, remotes: now.remotes };
+  return { status, added, removed, replaced, lost, sharing, halPaired, remotes: now.remotes };
 }
 
 /* -- Activity buttons (<EquadID>Root) -----------------------------------------
