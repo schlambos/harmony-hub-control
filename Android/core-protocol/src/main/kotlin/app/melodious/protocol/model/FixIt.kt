@@ -14,6 +14,10 @@ data class FixItDevice(
     val powerToggle: DeviceCommand?,
     val inputName: String?,
     val inputCommand: DeviceCommand?,
+    /** Live Home Assistant state for an HA device; null for other devices or without state. */
+    val haInfo: HaDeviceInfo? = null,
+    /** "Living Room TV is already on · on HDMI 1", "… is off" or "State unknown". */
+    val haHint: String? = null,
 ) {
     val hasAnyFix: Boolean get() = powerOn != null || powerToggle != null || inputCommand != null
 }
@@ -31,6 +35,7 @@ object FixIt {
         devices: List<HubDevice>,
         roleLabel: (String) -> String,
         powerOverrides: Map<String, DeviceSettings> = emptyMap(),
+        haState: HaStateEnvelope? = null,
     ): List<FixItDevice> {
         val byId = devices.associateBy { it.id }
         return activity.roles
@@ -41,6 +46,7 @@ object FixIt {
                 val inputName = roles.firstNotNullOfOrNull { it.selectedInput?.takeIf(String::isNotBlank) }
                 val configured = powerOverrides[device.id]?.takeIf { it.hasPowerFeature }
                 fun named(name: String) = device.commands.firstOrNull { it.name.equals(name, ignoreCase = true) }
+                val haInfo = haState?.let { HaState.describe(device, it) }
                 FixItDevice(
                     device = device,
                     roleLabels = roles.map { roleLabel(it.roleType) }.distinct(),
@@ -56,6 +62,8 @@ object FixIt {
                     },
                     inputName = inputName,
                     inputCommand = inputName?.let { inputCommandFor(device, it) },
+                    haInfo = haInfo,
+                    haHint = HaState.fixItHint(device, haInfo),
                 )
             }
     }

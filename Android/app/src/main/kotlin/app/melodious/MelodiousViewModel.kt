@@ -26,6 +26,9 @@ import app.melodious.protocol.model.ActivityWizardDraft
 import app.melodious.protocol.model.BtAdapterStatus
 import app.melodious.protocol.model.BtTextHelperStatus
 import app.melodious.protocol.model.ButtonMappingSource
+import app.melodious.protocol.model.HaDeviceInfo
+import app.melodious.protocol.model.HaState
+import app.melodious.protocol.model.HaStateEnvelope
 import app.melodious.protocol.model.HubActivity
 import app.melodious.protocol.model.HubDevice
 import app.melodious.protocol.model.HubConfigSnapshot
@@ -131,6 +134,8 @@ data class MelodiousUiState(
     val hbusConnected: Boolean = false,
 
     val configSnapshot: HubConfigSnapshot? = null,
+    /** Live Home Assistant device state from the hub; null until the hub has sent any. */
+    val haState: HaStateEnvelope? = null,
     val currentActivityId: String = "-1",
     /** Activity the user asked to start (or "-1" for power off) while the hub is still switching. */
     val pendingActivityId: String? = null,
@@ -216,6 +221,12 @@ data class MelodiousUiState(
         get() = RemoteLayout.isEverythingOff(currentActivityId)
 
     fun device(id: String?): HubDevice? = devices.firstOrNull { it.id == id }
+
+    /** An HA device's own live state (null for other devices). */
+    fun haInfo(device: HubDevice?): HaDeviceInfo? = HaState.describe(device, haState)
+
+    /** What a device's state strip shows: its HA state, its LG port link, or both. */
+    fun haStrip(device: HubDevice?): HaDeviceInfo? = HaState.stripFor(device, haState)
 
     fun activity(id: String?): HubActivity? = activities.firstOrNull { it.id == id }
 
@@ -339,6 +350,7 @@ class MelodiousViewModel(application: Application) : AndroidViewModel(applicatio
 
     private val ids = AtomicLong(1)
     private var statePollJob: Job? = null
+    private var haStatePollJob: Job? = null
     private var lastStateVersion: String? = null
     private var repeatJob: Job? = null
     private var hbusHold: ResolvedButtonAction? = null
@@ -486,6 +498,7 @@ class MelodiousViewModel(application: Application) : AndroidViewModel(applicatio
                     connection = HubConnection.CONNECTED,
                     activeEndpoint = endpoint,
                     configSnapshot = config,
+                    haState = config.haState ?: it.haState,
                     currentActivityId = currentActId,
                     activityStatus = null,
                     pendingActivityId = null,
@@ -526,10 +539,11 @@ class MelodiousViewModel(application: Application) : AndroidViewModel(applicatio
 
     private suspend fun reloadConfig(endpoint: HubEndpoint) {
         val reloaded = restClient.getActivityConfig(endpoint)
-        _uiState.update { it.copy(configSnapshot = reloaded) }
+        _uiState.update { it.copy(configSnapshot = reloaded, haState = reloaded.haState ?: it.haState) }
     }
 
     private fun startStatePolling(endpoint: HubEndpoint) {
+        startHaStatePolling(endpoint)
         statePollJob?.cancel()
         lastStateVersion = null
         statePollJob = viewModelScope.launch {
@@ -542,6 +556,28 @@ class MelodiousViewModel(application: Application) : AndroidViewModel(applicatio
                     if (poll.changed) {
                         val actId = poll.activityId ?: restClient.getActivityState(endpoint)
                         applyHubState(actId, poll.activityStatus, poll.sleepTimer)
+                    }
+                }
+            }
+        }
+    }
+
+    /**
+     * Home Assistant pushes device state to the hub; read it every few seconds, like the web app,
+     * while the hub has Home Assistant devices. Hubs without `/api/ha-state` just fail quietly.
+     */
+    private fun startHaStatePolling(endpoint: HubEndpoint) {
+        haStatePollJob?.cancel()
+        haStatePollJob = viewModelScope.launch {
+            while (isActive) {
+                delay(HA_STATE_POLL_MS)
+                if (_uiState.value.devices.none { it.isHomeAssistant }) continue
+                runCatching {
+                    val current = _uiState.value.haState
+                    val poll = restClient.getHaState(endpoint, current?.version)
+                    val next = poll.envelope
+                    if (poll.changed || current == null || current.version != next.version || current.stale != next.stale) {
+                        _uiState.update { it.copy(haState = next) }
                     }
                 }
             }
@@ -570,6 +606,8 @@ class MelodiousViewModel(application: Application) : AndroidViewModel(applicatio
         postNotificationRemote()
         statePollJob?.cancel()
         statePollJob = null
+        haStatePollJob?.cancel()
+        haStatePollJob = null
         hbusClient.disconnect()
     }
 
@@ -1896,6 +1934,7 @@ class MelodiousViewModel(application: Application) : AndroidViewModel(applicatio
         /** Gap after each command even without an explicit wait, so back-to-back IR isn't merged. */
         private const val SEQUENCE_MIN_GAP_MS = 250L
         private const val PENDING_TIMEOUT_MS = 90_000L
+        private const val HA_STATE_POLL_MS = 3_000L
         const val STATUS_OFF = 0
         const val STATUS_STARTING = 1
         const val STATUS_RUNNING = 2

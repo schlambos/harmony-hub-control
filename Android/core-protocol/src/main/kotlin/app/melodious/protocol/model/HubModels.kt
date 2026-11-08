@@ -78,8 +78,19 @@ data class HubDevice(
     val inputs: List<String> = emptyList(),
     /** Input display name ("HDMI 2") -> command that selects it ("InputHdmi2"); empty when the hub lists no inputs. */
     val inputCommands: Map<String, String> = emptyMap(),
+    /** The Home Assistant device key (the `{d}` token), or null for other devices. */
+    val haKey: String? = null,
+    /** `AutoDetectedDevice.Id`: `melodious-ha-…` or `melodious-androidtv-…` for the hub's IP devices. */
+    val autoDetectedId: String = "",
 ) {
     val isBluetoothHid: Boolean get() = transport == 32
+
+    /** A network Android/Google TV the hub drives itself (an IP device, but not Home Assistant's). */
+    val isNetworkTv: Boolean get() = autoDetectedId.startsWith("melodious-androidtv-")
+
+    /** Transport 64 or a Home Assistant manufacturer, as the web app decides it. */
+    val isHomeAssistant: Boolean
+        get() = !isNetworkTv && (transport == 64 || manufacturer.contains("home assistant", ignoreCase = true))
 }
 
 @Serializable
@@ -194,6 +205,8 @@ data class HubConfigSnapshot(
     val deviceList: JsonObject,
     val activities: List<HubActivity>,
     val devices: List<HubDevice>,
+    /** Live Home Assistant device state from the same response; null on hubs without `ha-state`. */
+    val haState: HaStateEnvelope? = null,
 )
 
 @Serializable

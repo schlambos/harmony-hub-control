@@ -3,6 +3,7 @@ package app.melodious.protocol.graph
 import app.melodious.protocol.model.ActivityWizardDraft
 import app.melodious.protocol.model.ButtonMappingSource
 import app.melodious.protocol.model.DeviceCommand
+import app.melodious.protocol.model.HaState
 import app.melodious.protocol.model.HubActivity
 import app.melodious.protocol.model.HubDevice
 import app.melodious.protocol.model.HubRole
@@ -132,6 +133,7 @@ object ActivityGraphBuilder {
             deviceList = deviceList,
             activities = activities,
             devices = devices,
+            haState = HaState.parseEnvelope(root["haState"] as? JsonObject),
         )
     }
 
@@ -214,9 +216,20 @@ object ActivityGraphBuilder {
                 commands = commands,
                 inputs = inputs,
                 inputCommands = inputCommands,
+                haKey = deviceToken(dev, "{d}"),
+                autoDetectedId = (dev["AutoDetectedDevice"] as? JsonObject)?.get("Id")
+                    ?.let { (it as? JsonPrimitive)?.contentOrNull }.orEmpty(),
             )
         }
     }
+
+    /** One `Device.Tokens.Parameters` value by key, trimmed; null when absent or blank. */
+    private fun deviceToken(dev: JsonObject, key: String): String? =
+        ((dev["Tokens"] as? JsonObject)?.get("Parameters") as? JsonArray).orEmpty()
+            .mapNotNull { it as? JsonObject }
+            .firstOrNull { (it["Key"] as? JsonPrimitive)?.contentOrNull == key }
+            ?.let { (it["Value"] as? JsonPrimitive)?.contentOrNull?.trim() }
+            ?.takeIf { it.isNotEmpty() }
 
     /** `(InputName, IRCommandName)` pairs from `DeviceFeatures[].Inputs[]`, in `InputOrder`. */
     private fun parseFeatureInputs(entry: JsonObject): List<Pair<String, String>> {
