@@ -409,6 +409,74 @@ class ActivityGraphAndLayoutTest {
     }
 
     @Test
+    fun `new activity powers on by job priority with default waits`() {
+        val root = Json.parseToJsonElement(
+            """
+            {"revision":"r","functionList":{"FunctionMaps":[]},"mapList":{"ButtonMaps":[]},
+             "deviceList":{"DevicesWithFeatures":[
+               {"Device":{"Id-":1,"Name":"TV"},"Commands":[]},
+               {"Device":{"Id-":2,"Name":"Amp"},"Commands":[]},
+               {"Device":{"Id-":3,"Name":"Streamer"},"Commands":[]}]},
+             "activityList":{"Activities":[]}}
+            """.trimIndent()
+        ).jsonObject
+        // Jobs added player-first: the saved order must still be TV, amp, player.
+        val draft = ActivityWizardDraft(
+            name = "Movie", type = 2,
+            roles = listOf(
+                WizardRoleDraft("PlayMovieActivityRole", "3"),
+                WizardRoleDraft("VolumeActivityRole", "2"),
+                WizardRoleDraft("DisplayActivityRole", "1"),
+            ),
+        )
+        val built = ActivityGraphBuilder.buildActivityGraph(ActivityGraphBuilder.parseConfigSnapshot(root), draft)
+        val rolesOut = built.activityList["Activities"]!!.jsonArray[0].jsonObject["Roles"]!!.jsonArray.map { it.jsonObject }
+        fun field(dev: String, key: String) =
+            rolesOut.first { it["DeviceId-"]!!.jsonPrimitive.content == dev }[key]!!.jsonPrimitive.content
+        assertEquals(listOf("1", "2", "3"), listOf("1", "2", "3").map { field(it, "PowerOnOrder") })
+        assertEquals(listOf("2500", "1500", "1000"), listOf("1", "2", "3").map { field(it, "NextDevicePowerOnDelay") })
+    }
+
+    @Test
+    fun `editing keeps custom power order and waits, zero and unset included`() {
+        val root = Json.parseToJsonElement(
+            """
+            {"revision":"r","functionList":{"FunctionMaps":[]},"mapList":{"ButtonMaps":[]},
+             "deviceList":{"DevicesWithFeatures":[
+               {"Device":{"Id-":1,"Name":"TV"},"Commands":[]},
+               {"Device":{"Id-":2,"Name":"Amp"},"Commands":[]},
+               {"Device":{"Id-":3,"Name":"Streamer"},"Commands":[]}]},
+             "activityList":{"Activities":[{"Id-":5,"Name":"Watch TV","Type":1,"ActivityOrder":0,
+               "EnterActions":[],"LeaveActions":[],
+               "Roles":[
+                 {"Id-":11,"DeviceId-":3,"__type":"PlayMovieActivityRole","PowerOnOrder":1,"PowerOffOrder":1,"NextDevicePowerOnDelay":0},
+                 {"Id-":12,"DeviceId-":1,"__type":"DisplayActivityRole","PowerOnOrder":2,"PowerOffOrder":2},
+                 {"Id-":13,"DeviceId-":2,"__type":"VolumeActivityRole","PowerOnOrder":3,"PowerOffOrder":3,"NextDevicePowerOnDelay":7000}]}]}}
+            """.trimIndent()
+        ).jsonObject
+        val snapshot = ActivityGraphBuilder.parseConfigSnapshot(root)
+        val activity = snapshot.activities.single()
+        // The draft the editor builds from the hub's activity, untouched.
+        val draft = ActivityWizardDraft(
+            editActivityId = "5", name = "Watch TV", type = 1,
+            roles = activity.roles.map {
+                WizardRoleDraft(it.roleType, it.deviceId, it.selectedInput, it.nextDevicePowerOnDelay)
+            },
+            powerOnOrder = activity.roles.sortedBy { it.powerOnOrder }.map { it.deviceId }.distinct(),
+            powerOffOrder = activity.roles.sortedBy { it.powerOffOrder }.map { it.deviceId }.distinct(),
+        )
+        val built = ActivityGraphBuilder.buildActivityGraph(snapshot, draft)
+        val rolesOut = built.activityList["Activities"]!!.jsonArray[0].jsonObject["Roles"]!!.jsonArray.map { it.jsonObject }
+        fun role(dev: String) = rolesOut.first { it["DeviceId-"]!!.jsonPrimitive.content == dev }
+        assertEquals("1", role("3")["PowerOnOrder"]!!.jsonPrimitive.content)
+        assertEquals("2", role("1")["PowerOnOrder"]!!.jsonPrimitive.content)
+        assertEquals("3", role("2")["PowerOnOrder"]!!.jsonPrimitive.content)
+        assertEquals("0", role("3")["NextDevicePowerOnDelay"]!!.jsonPrimitive.content)
+        assertEquals(kotlinx.serialization.json.JsonNull, role("1")["NextDevicePowerOnDelay"])
+        assertEquals("7000", role("2")["NextDevicePowerOnDelay"]!!.jsonPrimitive.content)
+    }
+
+    @Test
     fun `device settings read the hub's power feature and build the hub's request`() {
         // Shapes from a live hub: Google TV powers on with Home and off with Sleep; the amp is toggle-only.
         val list = Json.parseToJsonElement(

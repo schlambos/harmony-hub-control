@@ -660,7 +660,10 @@ object ActivityGraphBuilder {
 
         val cleanName = draft.name.trim().ifEmpty { "New Activity" }
         val existingRolesForReuse = (baseActivityObj["Roles"] as? JsonArray).orEmpty().mapNotNull { it as? JsonObject }
-        val rolesJson = composeRolesJson(draft.roles, alloc, draft.powerOnOrder, draft.powerOffOrder, existingRolesForReuse)
+        val rolesJson = composeRolesJson(
+            draft.roles, alloc, draft.powerOnOrder, draft.powerOffOrder, existingRolesForReuse,
+            defaultDelays = editId.isNullOrBlank(),
+        )
         val updatedActivity = JsonObject(
             baseActivityObj.toMutableMap().apply {
                 put("Name", JsonPrimitive(cleanName))
@@ -828,13 +831,34 @@ object ActivityGraphBuilder {
         )
     }
 
+    /** Power-on priority by job (§6.3): display, volume, players, channel/keyboard. */
+    val ROLE_RANK: Map<String, Int> = listOf(
+        "DisplayActivityRole", "VolumeActivityRole", "PlayMovieActivityRole",
+        "PlayGameActivityRole", "PlayMediaActivityRole", "ChannelChangingActivityRole",
+        "KeyboardTextEntryActivityRole",
+    ).withIndex().associate { (i, type) -> type to i }
+
+    /** Default wait before the next device turns on, for a new activity (§6.3). */
+    fun defaultPowerDelay(roleType: String): Int = when (roleType) {
+        "DisplayActivityRole" -> 2500
+        "VolumeActivityRole" -> 1500
+        else -> 1000
+    }
+
     /**
      * Power-on/off order per device. Orders are table indexes in the stock loader
      * (`userconfigreader.lua:216,270`), so every device gets a distinct value or actions vanish.
+     * Devices the caller didn't order (a new activity orders none) follow in job
+     * priority; an edited activity passes the hub's saved order, so it is kept.
      */
     fun devicePowerOrders(roles: List<WizardRoleDraft>, preferred: List<String>): Map<String, Int> {
         val roleDevices = roles.map { it.deviceId }.filter { it.isNotBlank() }.distinct()
-        val ordered = preferred.filter { it in roleDevices } + roleDevices.filterNot { it in preferred }
+        val rank = { id: String ->
+            roles.filter { it.deviceId == id }.minOfOrNull { ROLE_RANK[it.roleType] ?: 99 } ?: 99
+        }
+        val rest = roleDevices.filterNot { it in preferred }
+            .sortedWith(compareBy({ rank(it) }, { roleDevices.indexOf(it) }))
+        val ordered = preferred.filter { it in roleDevices } + rest
         return ordered.withIndex().associate { (i, id) -> id to i + 1 }
     }
 
@@ -888,9 +912,22 @@ object ActivityGraphBuilder {
         powerOnOrder: List<String> = emptyList(),
         powerOffOrder: List<String> = emptyList(),
         existingRoles: List<JsonObject> = emptyList(),
+        defaultDelays: Boolean = false,
     ): JsonArray {
         val onOrders = devicePowerOrders(roles, powerOnOrder)
         val offOrders = devicePowerOrders(roles, powerOffOrder.ifEmpty { powerOnOrder })
+        // A device's wait is shared by its jobs. On a new activity an unset wait
+        // takes the default of the device's highest-priority job; a set value —
+        // including 0 — is kept. On edit nothing is defaulted (§6.3).
+        val delayByDevice: Map<String, Int> = if (!defaultDelays) emptyMap() else buildMap {
+            for (role in roles) role.powerDelay?.let { putIfAbsent(role.deviceId, it) }
+            for ((deviceId, deviceRoles) in roles.groupBy { it.deviceId }) {
+                if (deviceId !in this) {
+                    val best = deviceRoles.minByOrNull { ROLE_RANK[it.roleType] ?: 99 }
+                    put(deviceId, defaultPowerDelay(best?.roleType ?: ""))
+                }
+            }
+        }
         // P06 #8: reuse role and SelectedInput IDs by (device, type, input).
         val byKey = existingRoles.groupBy {
             "${it["DeviceId-"]?.jsonPrimitive?.content}|${it["__type"]?.jsonPrimitive?.content}"
@@ -927,7 +964,7 @@ object ActivityGraphBuilder {
                     "PowerOffOrder" to JsonPrimitive(offOrders[role.deviceId] ?: order),
                     "__type" to JsonPrimitive(role.roleType),
                     "PowerOnOrder" to JsonPrimitive(order),
-                    "NextDevicePowerOnDelay" to (role.powerDelay?.let { JsonPrimitive(it) } ?: JsonNull),
+                    "NextDevicePowerOnDelay" to ((role.powerDelay ?: delayByDevice[role.deviceId])?.let { JsonPrimitive(it) } ?: JsonNull),
                     "Id-" to JsonPrimitive(reuse?.get("Id-")?.jsonPrimitive?.intOrNull ?: alloc.allocateId()),
                 )
             )

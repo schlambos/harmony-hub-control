@@ -629,7 +629,8 @@ private fun StartEndStep(state: MelodiousUiState, viewModel: MelodiousViewModel)
                         {
                             Row(verticalAlignment = Alignment.CenterVertically) {
                                 Text("then wait", fontSize = 12.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
-                                TextButton(onClick = { viewModel.updateWizardPowerDelay(deviceId, (delayMs - 500).takeIf { it > 0 }) }, enabled = delayMs > 0) { Text("−") }
+                                // 0 is a chosen value, distinct from "never set" (null).
+                                TextButton(onClick = { viewModel.updateWizardPowerDelay(deviceId, (delayMs - 500).coerceAtLeast(0)) }, enabled = delayMs > 0) { Text("−") }
                                 Text(formatSeconds(delayMs / 1000.0), fontSize = 14.sp)
                                 TextButton(onClick = { viewModel.updateWizardPowerDelay(deviceId, (delayMs + 500).coerceAtMost(30_000)) }) { Text("+") }
                             }
