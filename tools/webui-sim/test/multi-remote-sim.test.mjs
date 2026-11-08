@@ -76,4 +76,26 @@ describe("simulator multiple remotes", () => {
     const off = await (await postRaw("/api/multi-remote", '{"metadata":{"enabled":true},"enabled":false}')).json();
     assert.equal(off.enabled, false);
   });
+
+  it("takes changes only as same-origin JSON, like request_same_origin_json()", async () => {
+    const send = (path, headers, body) => fetch(`${BASE}${path}`, { method: "POST", headers, body });
+    const cross = [
+      { "Content-Type": "text/plain" },
+      { "Content-Type": "application/x-www-form-urlencoded" },
+      {},
+      { "Content-Type": "application/jsonp" },
+      { "Content-Type": "application/json", Origin: "http://evil.example" },
+      { "Content-Type": "application/json", Origin: "null" },
+    ];
+    for (const headers of cross) {
+      for (const [path, body] of [["/api/remote-unpair", '{"slot":2}'], ["/api/multi-remote", '{"enabled":false}']]) {
+        const res = await send(path, headers, body);
+        assert.equal(res.status, 403, `${path} ${JSON.stringify(headers)}`);
+        assert.match((await res.json()).error, /application\/json/);
+      }
+    }
+    const same = await send("/api/remote-unpair",
+      { "Content-Type": "application/json; charset=utf-8", Origin: `http://127.0.0.1:${PORT}` }, '{"slot":2}');
+    assert.equal(same.status, 200);
+  });
 });

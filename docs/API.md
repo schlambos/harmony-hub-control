@@ -970,6 +970,10 @@ Invoke-RestMethod "http://<hub-ip>:8080/api/remote-unpair" -Method Post `
 - `400` for a slot outside 1–6, `404` when no remote is paired there,
   `409` while a pairing window is open, and `502` when the radio doesn't
   list its slots or doesn't unpair (`ok:false`, with hal's `code`).
+- `403` unless the request is `Content-Type: application/json` and any
+  `Origin` it carries is this hub (`request_same_origin_json()`), so another
+  web page can't send it from a browser while sign-in is off. The same goes
+  for `POST /api/multi-remote`.
 
 ### Multiple remotes of one model (experimental)
 
@@ -1023,6 +1027,8 @@ Invoke-RestMethod "http://<hub-ip>:8080/api/multi-remote" -Method Post `
   - `500` when the copy can't be built or doesn't match (`error` says why),
     or flash is short.
   - `502` when the radio doesn't list its remotes (off only).
+  - `403` for a request that isn't same-origin JSON (as for
+    `/api/remote-unpair`).
 
 A remote without a screen (the Smart Control, 16414, or the Companion,
 16422 or 16423) keeps no setup and never syncs. hal names its keys from one

@@ -125,6 +125,11 @@ struct request {
     char method[8];
     char path[256];
     char auth[512];
+    /* Content-Type's media type, Origin and Host, for request_same_origin_json(). */
+    char content_type[64];
+    char origin[256];
+    char host[256];
+    int has_origin;
     int body_truncated;
     char *body;
     size_t body_len;
@@ -11129,6 +11134,45 @@ static void free_request(struct request *req) {
     req->body_len = 0;
 }
 
+/* A header's value without surrounding blanks; a value too long for dst is
+ * stored as "\x01", which matches nothing. */
+static void request_header_copy(char *dst, size_t size, const char *v, const char *end) {
+    while (v < end && (*v == ' ' || *v == '\t')) v++;
+    while (end > v && (end[-1] == ' ' || end[-1] == '\t')) end--;
+    if ((size_t)(end - v) >= size) {
+        snprintf(dst, size, "\x01");
+        return;
+    }
+    memcpy(dst, v, (size_t)(end - v));
+    dst[end - v] = 0;
+}
+
+/* Routes that change the hub's radio or reboot it take only a JSON request
+ * from the hub's own pages: a Content-Type of application/json can't be sent
+ * cross-site without a CORS preflight, which this server never approves, and
+ * a browser's Origin, when present, must be this host. Clients that aren't
+ * browsers send no Origin. Without this, any web page open on the LAN could
+ * post a text/plain body here while sign-in is off. */
+static int request_same_origin_json(const struct request *req) {
+    const char *ct = req->content_type, *o = req->origin;
+    size_t n = strlen("application/json");
+    if (strncasecmp(ct, "application/json", n) != 0 ||
+        (ct[n] != 0 && ct[n] != ';' && ct[n] != ' ' && ct[n] != '\t')) return 0;
+    if (!req->has_origin) return 1;
+    if (strncasecmp(o, "http://", 7) == 0) o += 7;
+    else if (strncasecmp(o, "https://", 8) == 0) o += 8;
+    else return 0;
+    return req->host[0] && strcasecmp(o, req->host) == 0;
+}
+
+static void send_cross_site_refused(int fd) {
+    FILE *f = send_json_start(fd, "403 Forbidden");
+    if (!f) return;
+    fputs("{\"ok\":false,\"error\":\"This change takes a JSON request (Content-Type: application/json) "
+        "from the hub's own web app.\"}\n", f);
+    fclose(f);
+}
+
 static int read_request(int fd, struct request *req) {
     char *buf;
     char *header_end, *line_end, *p;
@@ -11172,6 +11216,13 @@ static int read_request(int fd, struct request *req) {
                     char *v = p + 14;
                     while (*v == ' ' || *v == '\t') v++;
                     snprintf(req->auth, sizeof(req->auth), "%.*s", (int)(e - v), v);
+                } else if (strncasecmp(p, "Content-Type:", 13) == 0) {
+                    request_header_copy(req->content_type, sizeof(req->content_type), p + 13, e);
+                } else if (strncasecmp(p, "Origin:", 7) == 0) {
+                    req->has_origin = 1;
+                    request_header_copy(req->origin, sizeof(req->origin), p + 7, e);
+                } else if (strncasecmp(p, "Host:", 5) == 0) {
+                    request_header_copy(req->host, sizeof(req->host), p + 5, e);
                 }
                 p = e + 2;
             }
@@ -11303,11 +11354,13 @@ static void handle_client(int client) {
     } else if (strcmp(req.method, "POST") == 0 && strcmp(req.path, "/api/remote-pair") == 0) {
         render_remote_pair_json(client, &req);
     } else if (strcmp(req.method, "POST") == 0 && strcmp(req.path, "/api/remote-unpair") == 0) {
-        render_remote_unpair_json(client, &req);
+        if (request_same_origin_json(&req)) render_remote_unpair_json(client, &req);
+        else send_cross_site_refused(client);
     } else if (strcmp(req.method, "GET") == 0 && strcmp(req.path, "/api/multi-remote") == 0) {
         render_multi_remote_json(client);
     } else if (strcmp(req.method, "POST") == 0 && strcmp(req.path, "/api/multi-remote") == 0) {
-        render_multi_remote_set_json(client, &req);
+        if (request_same_origin_json(&req)) render_multi_remote_set_json(client, &req);
+        else send_cross_site_refused(client);
     } else if (strcmp(req.method, "POST") == 0 && strcmp(req.path, "/api/ir-test-learned") == 0) {
         render_ir_test_learned_json(client, &req);
     } else if (strcmp(req.method, "POST") == 0 && strcmp(req.path, "/api/ir-batch-send") == 0) {

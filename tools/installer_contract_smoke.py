@@ -1629,10 +1629,14 @@ class PythonInstallerMultiRemote(unittest.TestCase):
             hub.fs[INST.HAL_MULTI_DEST] = {"data": fake_patched_hal(), "mode": "755"}
         return hub
 
-    def run_on(self, hub: FakeHub, *extra: str) -> tuple[int, str, str]:
+    def run_on(self, hub: FakeHub, *extra: str, restart: bool = True) -> tuple[int, str, str]:
         harness = InstallerHarness(hub)
         self.addCleanup(harness.close)
-        argv = [a for a in harness.base_argv(*extra) if a != "--no-apply-cloud-restart"]
+        argv = harness.base_argv(*extra)
+        if restart:
+            argv = [a for a in argv if a != "--no-apply-cloud-restart"]
+        elif "--no-apply-cloud-restart" not in argv:
+            argv.append("--no-apply-cloud-restart")
         return harness.run(argv)
 
     def writes(self, hub: FakeHub) -> list[str]:
@@ -1782,6 +1786,26 @@ class PythonInstallerMultiRemote(unittest.TestCase):
             self.assertNotEqual(code, 0, setup)
             self.assertIn(expected[setup], stdout + stderr)
             self.assertEqual(self.writes(hub), [], setup)
+
+    def test_off_without_restart_refused_while_the_copy_runs(self):
+        """[PYTHON BEHAVIORAL] --multi-remote off --no-apply-cloud-restart would
+        save 0 and leave the multi-remote hal running, with nothing blocking a
+        duplicate pair once the guard lapses: refused before any write, with no
+        guard left behind. With the stock hal already running it's harmless."""
+        hub = self.current_hub(conf=b"1\n", copy=True)
+        hub.hal_bound = True
+        code, stdout, stderr = self.run_on(hub, "--multi-remote", "off", restart=False)
+        self.assertNotEqual(code, 0)
+        self.assertIn("leave out --no-apply-cloud-restart", stdout + stderr)
+        self.assertEqual(self.writes(hub), [])
+        self.assertNotIn(("guard", INST.MULTI_REMOTE_PENDING), hub.events)
+        self.assertNotIn(("service", "reboot"), hub.events)
+        hub = self.current_hub(conf=b"1\n", copy=True)
+        code, stdout, stderr = self.run_on(hub, "--multi-remote", "off", restart=False)
+        self.assertEqual(code, 0, stderr or stdout)
+        self.assertEqual(kv_value(stdout, "multi_remote_off_check"), "inactive")
+        self.assertEqual(hub.fs[INST.MULTI_REMOTE_CONF]["data"], b"0\n")
+        self.assertNotIn(("service", "reboot"), hub.events)
 
     def test_off_preflight_checks_without_a_guard(self):
         """[PYTHON BEHAVIORAL] --preflight-only --multi-remote off reports the
@@ -1936,6 +1960,11 @@ class PowerShellStaticContract(unittest.TestCase):
             self.assertIn(fragment, python_command)
             self.assertIn(fragment, command)
         self.assertIn("-or $multiRemoteChanged) -and -not $NoApplyCloudRestart", self.main)
+        # Off without the restart is refused while the copy runs, before the guard.
+        check = self.text.split("function Test-MultiRemoteOff(", 1)[1].split("\nfunction ", 1)[0]
+        self.assertIn("$guard = (-not $PreflightOnly) -and (-not $NoApplyCloudRestart)", check)
+        self.assertLess(check.index('if ($out -eq "inactive")'), check.index("if ($NoApplyCloudRestart) {"))
+        self.assertLess(check.index("if ($NoApplyCloudRestart) {"), check.index('elseif ($out -eq "guard-failed")'))
         self.assertNotIn("FromHexString", self.text)  # Windows PowerShell 5.1
 
     def test_path_arrays_match_python(self):

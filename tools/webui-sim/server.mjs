@@ -1490,6 +1490,23 @@ function handleExport(res, pathname) {
   });
 }
 
+/* Like codex_webui's request_same_origin_json(): the routes that change the
+   radio or reboot the hub take only application/json, and a browser's Origin,
+   when sent, must be this host. */
+const SAME_ORIGIN_JSON_ROUTES = new Set(["POST /api/multi-remote", "POST /api/remote-unpair"]);
+const SAME_ORIGIN_JSON_ERROR =
+  "This change takes a JSON request (Content-Type: application/json) from the hub's own web app.";
+
+function sameOriginJson(req) {
+  const type = String(req.headers["content-type"] || "");
+  const m = /^application\/json(?:$|[;\s])/i.exec(type.trim());
+  if (!m) return false;
+  if (req.headers.origin === undefined) return true;
+  const o = /^https?:\/\/(.*)$/i.exec(String(req.headers.origin).trim());
+  const host = String(req.headers.host || "").trim();
+  return Boolean(o && host && o[1].toLowerCase() === host.toLowerCase());
+}
+
 async function handleApi(req, res, pathname, url) {
   if (req.method === "POST" && pathname === "/api/ha-state") {
     await handleHaStatePost(req, res);
@@ -1503,6 +1520,10 @@ async function handleApi(req, res, pathname, url) {
     return;
   }
   const route = `${req.method} ${pathname}`;
+  if (SAME_ORIGIN_JSON_ROUTES.has(route) && !sameOriginJson(req)) {
+    sendJson(res, 403, { ok: false, error: SAME_ORIGIN_JSON_ERROR });
+    return;
+  }
   switch (route) {
     case "GET /api/activity-config":
       handleActivityConfig(res);

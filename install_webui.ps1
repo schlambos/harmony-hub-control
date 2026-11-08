@@ -596,11 +596,16 @@ function Get-RfDuplicateModels([string]$Reply) {
 # table holds no two remotes of one model.
 function Test-MultiRemoteOff() {
     if ($MultiRemote -ne "off") { return }
-    $guard = -not $PreflightOnly
+    # Without the reboot the multi-remote hal keeps running on setting 0, and
+    # once the guard lapses a pair could add a duplicate that the stock hal
+    # hangs on at the next boot: refuse that before writing anything.
+    $guard = (-not $PreflightOnly) -and (-not $NoApplyCloudRestart)
     $out = (Invoke-Remote (Get-MultiRemoteOffCheckCommand $guard) $null 60000).Trim()
     if ($out -eq "inactive") { KV "multi_remote_off_check=inactive"; return }
     $problem = ""
-    if ($out -eq "guard-failed") {
+    if ($NoApplyCloudRestart) {
+        $problem = "the multi-remote hal is running, and -NoApplyCloudRestart would keep it running after the setting is saved, with nothing to stop a second remote of one model being paired before the stock hal starts; leave out -NoApplyCloudRestart so the hub restarts"
+    } elseif ($out -eq "guard-failed") {
         $problem = "the hub couldn't write $MultiRemotePending, which blocks new pairings until it restarts"
     } elseif ($out -eq "pairing") {
         $problem = "a pairing window is open on the hub; try again when it closes"

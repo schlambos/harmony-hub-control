@@ -1608,13 +1608,23 @@ class Installer:
         slot table holds no two remotes of one model (see MULTI_REMOTE_PENDING)."""
         if self.args.multi_remote != "off":
             return
-        guard = not self.args.preflight_only
+        # Without the reboot the multi-remote hal keeps running on setting 0, and
+        # once the guard lapses a pair could add a duplicate that the stock hal
+        # hangs on at the next boot: refuse that before writing anything.
+        no_restart = self.args.no_apply_cloud_restart
+        guard = not self.args.preflight_only and not no_restart
         out = self.run_remote(multi_remote_off_check_command(guard), timeout=60, quiet=True).strip()
         if out == "inactive":
             kv("multi_remote_off_check=inactive")
             return
         problem = ""
-        if out == "guard-failed":
+        if no_restart:
+            problem = (
+                "the multi-remote hal is running, and --no-apply-cloud-restart would keep it running after the "
+                "setting is saved, with nothing to stop a second remote of one model being paired before the "
+                "stock hal starts; leave out --no-apply-cloud-restart so the hub restarts"
+            )
+        elif out == "guard-failed":
             problem = f"the hub couldn't write {MULTI_REMOTE_PENDING}, which blocks new pairings until it restarts"
         elif out == "pairing":
             problem = "a pairing window is open on the hub; try again when it closes"

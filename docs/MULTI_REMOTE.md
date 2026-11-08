@@ -136,6 +136,10 @@ paired stay paired; the stock rule applies again from the next pair.
   guard file in RAM (`/var/run/codex-multi-remote-pending`), so no duplicate
   can join in between. It lapses after 10 minutes if no reboot comes.
   Pairing with the hub's own button isn't covered.
+- The installers refuse `--multi-remote off` with `--no-apply-cloud-restart`
+  (`-MultiRemote off -NoApplyCloudRestart`) while the copy runs: it would
+  keep running after the guard lapses, with nothing to stop a duplicate pair
+  before the stock `hal` starts.
 
 Leaving the option out keeps the hub as it is, on or off.
 
