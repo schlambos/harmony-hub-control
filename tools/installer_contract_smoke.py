@@ -1016,24 +1016,47 @@ class PythonInstallerMutating(unittest.TestCase):
         self.assertNotIn(other, rm_rf_targets)
         self.assertEqual(set(rm_rf_targets), set(old[:2]) | {self.hub.stage})
 
-    def test_reboot_only_when_cloud_blocker_changes(self):
+    def test_reboot_only_when_cloud_blocker_or_plugins_change(self):
         """[PYTHON BEHAVIORAL] without --no-apply-cloud-restart the hub reboots
-        only if netservicestarter.lua or cloud_blocker.conf changed."""
+        only if netservicestarter.lua, cloud_blocker.conf or an engine plugin
+        changed: the engine loads /pkg plugins once, at start."""
         argv = [a for a in self.harness.base_argv() if a != "--no-apply-cloud-restart"]
         code, stdout, stderr = self.harness.run(argv)
         self.assertEqual(code, 0, stderr or stdout)
         self.assertIn(("service", "reboot"), self.hub.events)
 
-        hub = FakeHub()
-        prime_upgrade_hub(hub)
-        nss = INST.PAYLOAD / "scripts" / "netservicestarter.lua"
-        hub.fs["/opt/luaworks/tasks/connectserver/netservicestarter.lua"] = {
-            "data": nss.read_bytes(), "mode": "644"}
+        def hub_matching_engine_files():
+            hub = FakeHub()
+            prime_upgrade_hub(hub)
+            same = {
+                "/opt/luaworks/tasks/connectserver/netservicestarter.lua":
+                    (INST.PAYLOAD / "scripts" / "netservicestarter.lua").read_bytes(),
+                "/pkg/codexactivity/codexactivity.lua":
+                    (INST.PAYLOAD / "activity" / "codexactivity.lua").read_bytes(),
+                "/pkg/codexmqtt/codexmqtt.lua":
+                    (INST.PAYLOAD / "mqtt" / "codexmqtt.lua").read_bytes(),
+                "/pkg/codexactivity/manifest.json": b'{"plugin":"codexactivity"}\n',
+                "/pkg/codexmqtt/manifest.json": b'{"plugin":"codexmqtt"}\n',
+            }
+            for path, data in same.items():
+                hub.fs[path] = {"data": data, "mode": "644"}
+            return hub
+
+        hub = hub_matching_engine_files()
         harness = InstallerHarness(hub)
         self.addCleanup(harness.close)
         code, stdout, stderr = harness.run(argv)
         self.assertEqual(code, 0, stderr or stdout)
         self.assertNotIn(("service", "reboot"), hub.events)
+
+        hub = hub_matching_engine_files()
+        hub.fs["/pkg/codexactivity/codexactivity.lua"]["data"] = b"-- older writer\n"
+        harness = InstallerHarness(hub)
+        self.addCleanup(harness.close)
+        code, stdout, stderr = harness.run(argv)
+        self.assertEqual(code, 0, stderr or stdout)
+        self.assertIn(("service", "reboot"), hub.events)
+        self.assertIn("engine loads the updated plugins", stdout)
 
 
 class PythonInstallerFirstInstall(unittest.TestCase):

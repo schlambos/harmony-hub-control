@@ -1508,6 +1508,10 @@ class Installer:
         cloud = {"/opt/luaworks/tasks/connectserver/netservicestarter.lua", "/data/codex/cloud_blocker.conf"}
         return any(c.dest in cloud for c in self.active_candidates())
 
+    def plugins_changed(self) -> bool:
+        # The engine loads /pkg plugins once at start; only a reboot restarts it.
+        return any(c.kind == "plugin" for c in self.active_candidates())
+
     def run(self) -> int:
         step("Checking SSH")
         identity = self.run_remote("id; uname -a", timeout=30)
@@ -1634,9 +1638,12 @@ class Installer:
         self.report_flash_after_install()
         self.cleanup_stage()
 
-        if self.cloud_blocker_changed() and not self.args.no_apply_cloud_restart:
-            step("Applying cloud blocker")
-            info("Rebooting the hub so Logitech cloud services restart in blocked mode.")
+        if (self.cloud_blocker_changed() or self.plugins_changed()) and not self.args.no_apply_cloud_restart:
+            step("Restarting the hub")
+            if self.cloud_blocker_changed():
+                info("Rebooting the hub so Logitech cloud services restart in blocked mode.")
+            else:
+                info("Rebooting the hub so its engine loads the updated plugins.")
             self.run_remote("(/bin/sleep 2; /sbin/reboot || reboot) >/dev/null 2>&1 & echo rebooting", timeout=30, quiet=True)
             time.sleep(8)
             wait_for_port(self.args.hub_host, self.args.port, 180, "SSH")
@@ -1692,7 +1699,7 @@ def parse_args(argv: list[str]) -> argparse.Namespace:
     parser.add_argument("--mqtt-client-id", default=None, help="MQTT client ID")
     parser.add_argument("--mqtt-disabled", action="store_true", default=None, help="Install with MQTT disabled")
     parser.add_argument("--skip-cloud-suppression", action="store_true", help="Do not replace netservicestarter.lua")
-    parser.add_argument("--no-apply-cloud-restart", action="store_true", help="Do not reboot after the Logitech cloud blocker files change")
+    parser.add_argument("--no-apply-cloud-restart", action="store_true", help="Do not reboot after the Logitech cloud blocker files or engine plugins change")
     parser.add_argument("--no-prompt", action="store_true", help="Fail instead of asking for missing required values")
     parser.add_argument(
         "--remove-root-tool-leftovers",

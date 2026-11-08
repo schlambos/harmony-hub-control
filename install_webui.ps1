@@ -1426,6 +1426,11 @@ function Test-CloudBlockerChanged() {
     return [bool](Get-ActiveCandidates | Where-Object { $cloud -contains $_.Dest })
 }
 
+# The engine loads /pkg plugins once at start; only a reboot restarts it.
+function Test-PluginsChanged() {
+    return [bool](Get-ActiveCandidates | Where-Object { $_.Kind -eq "plugin" })
+}
+
 # ------------------------------------------------------------------ main
 
 $HubHost = Prompt-IfMissing $HubHost "Harmony Hub IP address" -Required
@@ -1595,9 +1600,14 @@ Show-FlashAfterInstall
 Remove-StagingTree
 
 $cloudChanged = Test-CloudBlockerChanged
-if ($cloudChanged -and -not $NoApplyCloudRestart) {
-    Step "Applying cloud blocker"
-    Info "Rebooting the hub so Logitech cloud services restart in blocked mode."
+$pluginsChanged = Test-PluginsChanged
+if (($cloudChanged -or $pluginsChanged) -and -not $NoApplyCloudRestart) {
+    Step "Restarting the hub"
+    if ($cloudChanged) {
+        Info "Rebooting the hub so Logitech cloud services restart in blocked mode."
+    } else {
+        Info "Rebooting the hub so its engine loads the updated plugins."
+    }
     Invoke-Remote "(/bin/sleep 2; /sbin/reboot || reboot) >/dev/null 2>&1 & echo rebooting" $null 30000 | Out-Null
     Start-Sleep -Seconds 8
     Wait-TcpPort $HubHost $Port 180 "SSH"

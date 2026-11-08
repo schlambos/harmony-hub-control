@@ -650,7 +650,7 @@ Each run:
 | `--hub-id` | `-HubId` | The Hub ID. Without it, the installer reads it from the hub, then from the root tool's files in `~/.harmony-hub/`. |
 | `--no-prompt` | `-NoPrompt` | Fails instead of asking for a missing value. |
 | `--mqtt-broker`, `--mqtt-port`, `--mqtt-user`, `--mqtt-password`, `--mqtt-base-topic`, `--mqtt-discovery-prefix`, `--mqtt-client-id`, `--mqtt-disabled` | `-MqttBroker` … `-MqttDisabled` | Set up the MQTT bridge. Without them, an upgrade keeps the hub's MQTT settings. |
-| `--no-apply-cloud-restart` | `-NoApplyCloudRestart` | Skips the reboot after the cloud-blocker files change. |
+| `--no-apply-cloud-restart` | `-NoApplyCloudRestart` | Skips the reboot after the cloud-blocker files or an engine plugin (`codexactivity.lua`, `codexmqtt.lua`) change. Without that reboot the engine keeps running the old plugin. |
 | `--skip-cloud-suppression` | `-SkipCloudSuppression` | Leaves the hub's `netservicestarter.lua` as it is. With a clean install, it also writes the cloud blocker as off. |
 | `--remove-root-tool-leftovers` | `-RemoveRootToolLeftovers` | Deletes what harmony-hub-root left behind before installing (see below). |
 | `--skip-flash-check` | `-SkipFlashCheck` | Installs even when the measured free flash looks too small. If flash really runs out, the install still stops with nothing in use changed. |
