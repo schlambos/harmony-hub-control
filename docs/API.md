@@ -1016,6 +1016,14 @@ GET /export/bluetooth
 Exports are for backups and debugging. Do not share files containing local
 network or credential material.
 
+While web UI sign-in is disabled, `/export/wifi`, `/export/mqtt`, and the
+`mqtt-config.json` / `wpa_supplicant.conf` entries of `/export/bundle`
+redact the Wi-Fi PSK and MQTT password to `__REDACTED__` (served by
+`send_secret_download()` / `bundle_value_secret()`). With sign-in enabled
+the authenticated caller receives the full unredacted files. Importing a
+redacted Wi-Fi or MQTT payload (single-file or bundle) keeps the password
+already stored on the hub.
+
 The full bundle format is `harmony-owner-bundle-v2` and includes
 `ActivityList.json`, `MapList.json`, and `AutomationConfig.json`. Version 1
 bundles remain importable and leave those three resources unchanged.

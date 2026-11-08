@@ -942,8 +942,14 @@ Logitech cloud ✕  cloud tasks not started, hosts refused, WAN route removed
   - The hub doesn't check where a request comes from. A web page open on any
     device on your network could send it commands.
   - Never expose the hub to the internet.
-- **Exports contain secrets.** The MQTT, Wi-Fi and owner-bundle exports
-  include your MQTT password and Wi-Fi key.
+- **Exports protect secrets while sign-in is off.** With sign-in off (the
+  default), the MQTT, Wi-Fi and owner-bundle exports redact your MQTT
+  password and Wi-Fi key (`__REDACTED__`), and restoring one keeps the
+  password already on the hub. With sign-in on, exports include the real
+  passwords — treat those files as secrets. SSH also keeps root password
+  login enabled alongside keys, so a lost SSH key can't lock you out of the
+  hub; set a strong root password (`passwd`) if the hub shares a network
+  with devices you don't trust.
 - **MQTT is a control channel.** Anyone who can publish to the bridge's
   topics can start activities, send IR and run hub-engine commands. The
   bridge doesn't use TLS, so use a broker with authentication.

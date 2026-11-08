@@ -29,6 +29,10 @@
 
 #define MQTT_CONFIG "/data/codexmqtt/config.json"
 #define WPA_CONFIG "/etc/wpa_supplicant.conf"
+/* Placeholder served in place of the Wi-Fi / MQTT password in export
+   responses while web UI sign-in is off. Restoring a file that contains it
+   keeps the secret already stored on the hub. */
+#define REDACTED_SECRET "__REDACTED__"
 #define HUB_ID_FILE "/data/codex/hub_id"
 #define CLOUD_BLOCKER_CONFIG "/data/codex/cloud_blocker.conf"
 #define TIMEZONE_CONFIG "/data/codex/timezone.conf"
@@ -485,6 +489,12 @@ static int save_webui_auth(const struct webui_auth_config *cfg) {
     if (write_file_atomic(WEBUI_AUTH_CONFIG, data, strlen(data)) != 0) return -1;
     chmod(WEBUI_AUTH_CONFIG, 0600);
     return 0;
+}
+
+static int webui_auth_is_enabled(void) {
+    struct webui_auth_config cfg;
+    load_webui_auth(&cfg);
+    return cfg.enabled;
 }
 
 static void remove_tree_simple(const char *path) {
@@ -1276,11 +1286,44 @@ static void load_wifi(struct wifi_config *cfg) {
 static void wpa_write_quoted(FILE *f, const char *s) {
     fputc('"', f);
     while (*s) {
+        unsigned char c = (unsigned char)*s;
+        /* Never let a control character (incl. \n / \r) break out of the
+           quoted wpa_supplicant value and inject a new config line. */
+        if (c < 0x20 || c == 0x7f) {
+            s++;
+            continue;
+        }
         if (*s == '"' || *s == '\\') fputc('\\', f);
         fputc(*s, f);
         s++;
     }
     fputc('"', f);
+}
+
+static int valid_wifi_ssid(const char *s) {
+    size_t n = strlen(s), i;
+    if (n < 1 || n > 32) return 0;
+    for (i = 0; i < n; i++) {
+        unsigned char c = (unsigned char)s[i];
+        if (c < 0x20 || c == 0x7f) return 0;
+    }
+    return 1;
+}
+
+static int valid_wifi_password(const char *s) {
+    size_t n = strlen(s), i;
+    if (n == 64) {
+        for (i = 0; i < n; i++) {
+            if (!isxdigit((unsigned char)s[i])) break;
+        }
+        if (i == n) return 1; /* raw 64-hex PSK */
+    }
+    if (n < 8 || n > 63) return 0;
+    for (i = 0; i < n; i++) {
+        unsigned char c = (unsigned char)s[i];
+        if (c < 0x20 || c > 0x7e) return 0;
+    }
+    return 1;
 }
 
 static int save_wifi(const struct wifi_config *cfg) {
@@ -1306,6 +1349,230 @@ static int save_wifi(const struct wifi_config *cfg) {
     chmod(WPA_CONFIG, 0600);
     sync();
     return 0;
+}
+
+/* --- Secret redaction for exports (issue #88) -------------------------
+   While web UI sign-in is off, anyone on the LAN can read the exports, so
+   the Wi-Fi PSK and MQTT password are served as REDACTED_SECRET. With
+   sign-in on, the caller already authenticated and gets full backups.
+   Restoring a redacted file keeps the secret stored on the hub. */
+struct sbuf {
+    char *buf;
+    size_t len;
+    size_t cap;
+};
+
+static int sbuf_append(struct sbuf *sb, const char *s, size_t n) {
+    if (sb->len + n + 1 > sb->cap) {
+        size_t cap = sb->cap ? sb->cap : 256;
+        char *next;
+        while (cap < sb->len + n + 1) cap *= 2;
+        next = (char *)realloc(sb->buf, cap);
+        if (!next) return -1;
+        sb->buf = next;
+        sb->cap = cap;
+    }
+    memcpy(sb->buf + sb->len, s, n);
+    sb->len += n;
+    sb->buf[sb->len] = 0;
+    return 0;
+}
+
+/* Find the next psk= value at or after `from`. On success *span is the start
+   of "psk", [*vstart, *vend) is the raw value (without quotes), and *span_end
+   is one past the value (past the closing quote when quoted). */
+static int find_psk_value(const char *from, const char **span, const char **vstart,
+                          const char **vend, const char **span_end) {
+    const char *p = from;
+    while ((p = strstr(p, "psk=")) != NULL) {
+        const char *q;
+        if (p != from && p[-1] != '\n' && p[-1] != '\r' && p[-1] != '\t' && p[-1] != ' ') {
+            p += 4;
+            continue;
+        }
+        q = p + 4;
+        while (*q == ' ' || *q == '\t') q++;
+        *span = p;
+        if (*q == '"') {
+            const char *v = q + 1;
+            *vstart = v;
+            while (*v && *v != '"') {
+                if (*v == '\\' && v[1]) v++;
+                v++;
+            }
+            *vend = v;
+            *span_end = *v == '"' ? v + 1 : v;
+        } else {
+            const char *v = q;
+            *vstart = v;
+            while (*v && *v != '\n' && *v != '\r' && *v != ' ' && *v != '\t') v++;
+            *vend = v;
+            *span_end = v;
+        }
+        return 1;
+    }
+    return 0;
+}
+
+static char *redact_wpa_psk(const char *raw) {
+    struct sbuf out = {NULL, 0, 0};
+    const char *p = raw, *span, *vs, *ve, *se;
+    while (find_psk_value(p, &span, &vs, &ve, &se)) {
+        if (sbuf_append(&out, p, (size_t)(span - p)) != 0) goto oom;
+        if (ve == vs) {
+            if (sbuf_append(&out, span, (size_t)(se - span)) != 0) goto oom;
+        } else {
+            if (sbuf_append(&out, "psk=\"" REDACTED_SECRET "\"",
+                            strlen("psk=\"" REDACTED_SECRET "\"")) != 0) goto oom;
+        }
+        p = se;
+    }
+    if (sbuf_append(&out, p, strlen(p)) != 0) goto oom;
+    return out.buf;
+oom:
+    free(out.buf);
+    return NULL;
+}
+
+/* Find the next "password":"..." string value at or after `from`. */
+static int find_json_password_value(const char *from, const char **vstart,
+                                    const char **vend, const char **span_end) {
+    const char *p = from;
+    while ((p = strstr(p, "\"password\"")) != NULL) {
+        const char *q = strchr(p + 10, ':');
+        if (!q) return 0;
+        q++;
+        while (*q && isspace((unsigned char)*q)) q++;
+        if (*q != '"') {
+            p += 10;
+            continue;
+        }
+        q++;
+        *vstart = q;
+        while (*q && *q != '"') {
+            if (*q == '\\' && q[1]) q++;
+            q++;
+        }
+        *vend = q;
+        *span_end = *q == '"' ? q + 1 : q;
+        return 1;
+    }
+    return 0;
+}
+
+static char *redact_json_password(const char *raw) {
+    struct sbuf out = {NULL, 0, 0};
+    const char *p = raw, *vs, *ve, *se;
+    while (find_json_password_value(p, &vs, &ve, &se)) {
+        if (ve == vs) break; /* empty password: nothing to hide */
+        if (sbuf_append(&out, p, (size_t)(vs - p)) != 0) goto oom;
+        if (sbuf_append(&out, REDACTED_SECRET, strlen(REDACTED_SECRET)) != 0) goto oom;
+        p = ve;
+    }
+    if (sbuf_append(&out, p, strlen(p)) != 0) goto oom;
+    return out.buf;
+oom:
+    free(out.buf);
+    return NULL;
+}
+
+static int sbuf_append_wpa_escaped(struct sbuf *sb, const char *s) {
+    while (*s) {
+        unsigned char c = (unsigned char)*s;
+        if (c < 0x20 || c == 0x7f) {
+            s++;
+            continue;
+        }
+        if ((*s == '"' || *s == '\\') && sbuf_append(sb, "\\", 1) != 0) return -1;
+        if (sbuf_append(sb, s, 1) != 0) return -1;
+        s++;
+    }
+    return 0;
+}
+
+static int sbuf_append_json_escaped(struct sbuf *sb, const char *s) {
+    while (*s) {
+        const char *esc = NULL;
+        if (*s == '"' || *s == '\\') {
+            if (sbuf_append(sb, "\\", 1) != 0) return -1;
+            if (sbuf_append(sb, s, 1) != 0) return -1;
+        } else if (*s == '\n') esc = "\\n";
+        else if (*s == '\r') esc = "\\r";
+        else if (*s == '\t') esc = "\\t";
+        else if (sbuf_append(sb, s, 1) != 0) return -1;
+        if (esc && sbuf_append(sb, esc, 2) != 0) return -1;
+        s++;
+    }
+    return 0;
+}
+
+/* If `payload` is a redacted Wi-Fi export and the hub still has a PSK,
+   return a copy with the hub's PSK spliced back in; NULL otherwise. */
+static char *wifi_payload_with_restored_psk(const char *payload) {
+    const char *span, *vs, *ve, *se;
+    struct wifi_config cur;
+    struct sbuf out = {NULL, 0, 0};
+    if (!find_psk_value(payload, &span, &vs, &ve, &se)) return NULL;
+    if ((size_t)(ve - vs) != strlen(REDACTED_SECRET) ||
+        strncmp(vs, REDACTED_SECRET, (size_t)(ve - vs)) != 0) return NULL;
+    load_wifi(&cur);
+    if (!cur.psk[0] || cur.open) return NULL;
+    if (sbuf_append(&out, payload, (size_t)(span - payload)) != 0 ||
+        sbuf_append(&out, "psk=\"", 5) != 0 ||
+        sbuf_append_wpa_escaped(&out, cur.psk) != 0 ||
+        sbuf_append(&out, "\"", 1) != 0 ||
+        sbuf_append(&out, se, strlen(se)) != 0) {
+        free(out.buf);
+        return NULL;
+    }
+    return out.buf;
+}
+
+/* Same preservation for a redacted MQTT export. */
+static char *mqtt_payload_with_restored_password(const char *payload) {
+    char value[256];
+    const char *vs, *ve, *se;
+    struct mqtt_config cur;
+    struct sbuf out = {NULL, 0, 0};
+    json_string(payload, "password", value, sizeof(value));
+    if (strcmp(value, REDACTED_SECRET) != 0) return NULL;
+    if (!find_json_password_value(payload, &vs, &ve, &se)) return NULL;
+    load_mqtt(&cur);
+    if (!cur.password[0]) return NULL;
+    if (sbuf_append(&out, payload, (size_t)(vs - payload)) != 0 ||
+        sbuf_append_json_escaped(&out, cur.password) != 0 ||
+        sbuf_append(&out, ve, strlen(ve)) != 0) {
+        free(out.buf);
+        return NULL;
+    }
+    return out.buf;
+}
+
+static void send_secret_download(int fd, const char *path, const char *filename,
+                                 const char *ctype, int mqtt) {
+    char hdr[512];
+    char *data, *redacted = NULL;
+    const char *body;
+    size_t len = 0;
+    if (webui_auth_is_enabled()) {
+        send_file_download(fd, path, filename, ctype);
+        return;
+    }
+    data = read_file_alloc(path, MAX_RESOURCE_FILE, &len);
+    if (!data) {
+        send_text(fd, "404 Not Found", "file not available\n");
+        return;
+    }
+    redacted = mqtt ? redact_json_password(data) : redact_wpa_psk(data);
+    body = redacted ? redacted : data;
+    snprintf(hdr, sizeof(hdr),
+        "HTTP/1.1 200 OK\r\nContent-Type: %s\r\nContent-Length: %lu\r\n"
+        "Cache-Control: no-store\r\nContent-Disposition: attachment; filename=\"%s\"\r\nConnection: close\r\n\r\n",
+        ctype, (unsigned long)strlen(body), filename);
+    send_all(fd, hdr, strlen(hdr));
+    send_all(fd, body, strlen(body));
+    free(redacted);
+    free(data);
 }
 
 static int load_hub_id(char *hub_id, size_t hub_id_len) {
@@ -1860,6 +2127,25 @@ static void bundle_value(FILE *f, const char *key, const char *path, int comma) 
     free(data);
 }
 
+static void bundle_value_secret(FILE *f, const char *key, const char *path, int comma, int mqtt) {
+    char *data;
+    size_t len = 0;
+    if (comma) fputc(',', f);
+    json_write_string(f, key);
+    fputc(':', f);
+    data = read_file_alloc(path, MAX_RESOURCE_FILE, &len);
+    (void)len;
+    if (data && !webui_auth_is_enabled()) {
+        char *redacted = mqtt ? redact_json_password(data) : redact_wpa_psk(data);
+        if (redacted) {
+            free(data);
+            data = redacted;
+        }
+    }
+    json_write_string(f, data ? data : "");
+    free(data);
+}
+
 static void send_bundle_download(int fd) {
     const char *hdr =
         "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\n"
@@ -1877,8 +2163,8 @@ static void send_bundle_download(int fd) {
     bundle_value(f, "ActivityList.json", ACTIVITY_LIST, 1);
     bundle_value(f, "MapList.json", MAP_LIST, 1);
     bundle_value(f, "AutomationConfig.json", AUTOMATION_CONFIG, 1);
-    bundle_value(f, "mqtt-config.json", MQTT_CONFIG, 1);
-    bundle_value(f, "wpa_supplicant.conf", WPA_CONFIG, 1);
+    bundle_value_secret(f, "mqtt-config.json", MQTT_CONFIG, 1, 1);
+    bundle_value_secret(f, "wpa_supplicant.conf", WPA_CONFIG, 1, 0);
     bundle_value(f, "bt-devices.json", BT_DEVICE_STORE, 1);
     fputc(',', f);
     json_write_string(f, "cloud-blocker.conf");
@@ -7818,8 +8104,16 @@ static void handle_wifi(int fd, const struct request *req) {
         render_page(fd, "Wi-Fi SSID is required.");
         return;
     }
+    if (!valid_wifi_ssid(cfg.ssid)) {
+        render_page(fd, "Wi-Fi SSID must be 1-32 bytes with no control characters.");
+        return;
+    }
     if (!cfg.open && !cfg.psk[0]) {
         render_page(fd, "Wi-Fi password is required unless Open network is checked.");
+        return;
+    }
+    if (!cfg.open && !valid_wifi_password(cfg.psk)) {
+        render_page(fd, "Wi-Fi password must be 8-63 printable ASCII characters or a 64-digit hex PSK.");
         return;
     }
     if (save_wifi(&cfg) != 0) {
@@ -8025,6 +8319,8 @@ static void handle_import_bundle(int fd, const char *payload) {
     char *cloud_value;
     char *devices, *functions, *protocols, *activities, *maps, *automation;
     char *mqtt, *wifi, *bluetooth;
+    char *mqtt_restored = NULL, *wifi_restored = NULL;
+    const char *mqtt_out = NULL, *wifi_out = NULL;
     int is_v2 = strstr(payload, "harmony-owner-bundle-v2") != NULL;
     devices = (char *)malloc(MAX_REQUEST_BODY);
     functions = (char *)malloc(MAX_REQUEST_BODY);
@@ -8079,6 +8375,12 @@ static void handle_import_bundle(int fd, const char *payload) {
     if (cloud_value[0] && validate_import_payload("cloud", cloud_value, msg, sizeof(msg)) != 0) {
         goto done;
     }
+    /* A redacted backup (exported with sign-in off) keeps the secrets
+       already stored on this hub instead of overwriting them. */
+    mqtt_restored = mqtt_payload_with_restored_password(mqtt);
+    wifi_restored = wifi_payload_with_restored_psk(wifi);
+    mqtt_out = mqtt_restored ? mqtt_restored : mqtt;
+    wifi_out = wifi_restored ? wifi_restored : wifi;
     backup_resources();
     backup_settings();
     if (write_file_atomic(DEVICE_LIST, devices, strlen(devices)) != 0 ||
@@ -8087,8 +8389,8 @@ static void handle_import_bundle(int fd, const char *payload) {
         (activities[0] && write_file_atomic(ACTIVITY_LIST, activities, strlen(activities)) != 0) ||
         (maps[0] && write_file_atomic(MAP_LIST, maps, strlen(maps)) != 0) ||
         (automation[0] && write_file_atomic(AUTOMATION_CONFIG, automation, strlen(automation)) != 0) ||
-        write_file_atomic(MQTT_CONFIG, mqtt, strlen(mqtt)) != 0 ||
-        write_file_atomic(WPA_CONFIG, wifi, strlen(wifi)) != 0) {
+        write_file_atomic(MQTT_CONFIG, mqtt_out, strlen(mqtt_out)) != 0 ||
+        write_file_atomic(WPA_CONFIG, wifi_out, strlen(wifi_out)) != 0) {
         snprintf(msg, sizeof(msg), "Failed to import owner bundle.");
         goto done;
     }
@@ -8111,6 +8413,7 @@ done:
     free(devices); free(functions); free(protocols);
     free(activities); free(maps); free(automation);
     free(mqtt); free(wifi); free(bluetooth);
+    free(mqtt_restored); free(wifi_restored);
 }
 
 static void handle_import(int fd, const struct request *req) {
@@ -8145,19 +8448,30 @@ static void handle_import(int fd, const struct request *req) {
         free(payload_buf);
         return;
     }
-    len = strlen(payload);
-    if (strcmp(target, "devices") == 0 || strcmp(target, "functions") == 0 ||
-        strcmp(target, "protocols") == 0 || strcmp(target, "activities") == 0 ||
-        strcmp(target, "maps") == 0 || strcmp(target, "automation") == 0) {
-        backup_resources();
-    } else {
-        backup_settings();
-    }
-    if (write_file_atomic(path, payload, len) != 0) {
-        snprintf(msg, sizeof(msg), "Failed to import %s.", import_label_for_target(target));
-        render_page(fd, msg);
-        free(payload_buf);
-        return;
+    /* A redacted export (taken with sign-in off) keeps the secret already
+       stored on this hub instead of overwriting it with the placeholder. */
+    {
+        char *restored = NULL;
+        const char *out = payload;
+        if (strcmp(target, "wifi") == 0) restored = wifi_payload_with_restored_psk(payload);
+        else if (strcmp(target, "mqtt") == 0) restored = mqtt_payload_with_restored_password(payload);
+        if (restored) out = restored;
+        len = strlen(out);
+        if (strcmp(target, "devices") == 0 || strcmp(target, "functions") == 0 ||
+            strcmp(target, "protocols") == 0 || strcmp(target, "activities") == 0 ||
+            strcmp(target, "maps") == 0 || strcmp(target, "automation") == 0) {
+            backup_resources();
+        } else {
+            backup_settings();
+        }
+        if (write_file_atomic(path, out, len) != 0) {
+            snprintf(msg, sizeof(msg), "Failed to import %s.", import_label_for_target(target));
+            render_page(fd, msg);
+            free(restored);
+            free(payload_buf);
+            return;
+        }
+        free(restored);
     }
     if (strcmp(target, "mqtt") == 0) {
         chmod(MQTT_CONFIG, 0600);
@@ -10512,9 +10826,9 @@ static void handle_client(int client) {
     } else if (strcmp(req.method, "GET") == 0 && strcmp(req.path, "/export/automation") == 0) {
         send_file_download(client, AUTOMATION_CONFIG, "AutomationConfig.json", "application/json");
     } else if (strcmp(req.method, "GET") == 0 && strcmp(req.path, "/export/mqtt") == 0) {
-        send_file_download(client, MQTT_CONFIG, "mqtt-config.json", "application/json");
+        send_secret_download(client, MQTT_CONFIG, "mqtt-config.json", "application/json", 1);
     } else if (strcmp(req.method, "GET") == 0 && strcmp(req.path, "/export/wifi") == 0) {
-        send_file_download(client, WPA_CONFIG, "wpa_supplicant.conf", "text/plain");
+        send_secret_download(client, WPA_CONFIG, "wpa_supplicant.conf", "text/plain", 0);
     } else if (strcmp(req.method, "GET") == 0 && strcmp(req.path, "/export/cloud") == 0) {
         send_cloud_download(client);
     } else if (strcmp(req.method, "GET") == 0 && strcmp(req.path, "/export/timezone") == 0) {

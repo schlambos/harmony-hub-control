@@ -43,7 +43,7 @@ start_ap() {
   killall codex_dhcpd 2>/dev/null
   killall codex_portal 2>/dev/null
   /data/codex/bin/codex_dhcpd "$AP_IF" "$AP_IP" 192.168.76.100 192.168.76.150 >> "$LOG" 2>&1 &
-  /data/codex/bin/codex_portal 80 >> "$LOG" 2>&1 &
+  /data/codex/bin/codex_portal 80 "$AP_IP" >> "$LOG" 2>&1 &
   echo $! > /var/run/codex-recovery-ap.pid
   echo 3 > /sys/class/input/input0/led 2>/dev/null
 }

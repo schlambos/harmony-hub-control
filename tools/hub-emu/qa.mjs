@@ -443,8 +443,18 @@ check(
   "GET /export/mqtt -> seeded fake broker config (disabled, .invalid host)",
   expMqtt.status === 200 && expMqtt.json?.broker?.host === "mqtt.hub-emu.invalid" && expMqtt.json?.enabled === false
 );
+check(
+  "GET /export/mqtt redacts the broker password while sign-in is off (issue #88)",
+  expMqtt.json?.broker?.password === "__REDACTED__" && !expMqtt.text.includes("hub-emu-fake-password"),
+  expMqtt.text.slice(0, 200)
+);
 const expWifi = await req(API, "/export/wifi");
 check("GET /export/wifi -> seeded fake SSID", expWifi.status === 200 && expWifi.text.includes("HUB-EMU-FAKE-SSID"));
+check(
+  "GET /export/wifi redacts the PSK while sign-in is off (issue #88)",
+  expWifi.text.includes('psk="__REDACTED__"') && !expWifi.text.includes("hub-emu-fake-passphrase"),
+  expWifi.text.slice(0, 200)
+);
 const expBt = await req(API, "/export/bluetooth");
 check(
   "GET /export/bluetooth -> seeded empty store",
@@ -517,6 +527,50 @@ const expWifi2 = await req(API, "/export/wifi");
 check(
   "Wi-Fi save persisted to /etc/wpa_supplicant.conf",
   expWifi2.text.includes("HUB-EMU-QA-SSID") && expWifi2.text.includes("key_mgmt=WPA-PSK")
+);
+
+console.log("\n== secret exports: redacted while sign-in is off; redacted restore preserves (issue #88) ==");
+check(
+  "GET /export/wifi redacts the saved PSK",
+  expWifi2.text.includes('psk="__REDACTED__"') && !expWifi2.text.includes("hub-emu-qa-passphrase")
+);
+check(
+  "GET /export/mqtt redacts the saved broker password",
+  expMqtt2.json?.broker?.password === "__REDACTED__" && !expMqtt2.text.includes("hub-emu-qa-password")
+);
+const expBundle = await req(API, "/export/bundle");
+check(
+  "GET /export/bundle redacts both secrets",
+  expBundle.status === 200 &&
+    expBundle.text.includes("__REDACTED__") &&
+    !expBundle.text.includes("hub-emu-qa-passphrase") &&
+    !expBundle.text.includes("hub-emu-qa-password"),
+  expBundle.text.slice(0, 200)
+);
+// MD5 oracle: importing the unredacted equivalent and then the redacted
+// export must land on identical file bytes — the redacted restore splices
+// the on-hub secret back in instead of storing the placeholder.
+const secretPaths = ["/etc/wpa_supplicant.conf", "/data/codexmqtt/config.json"];
+await req(API, "/import", form({ target: "wifi", payload: expWifi2.text.replace("__REDACTED__", "hub-emu-qa-passphrase") }));
+await req(API, "/import", form({ target: "mqtt", payload: expMqtt2.text.replace("__REDACTED__", "hub-emu-qa-password") }));
+const md5Unredacted = await req(CTRL, "/step4a/md5", jsonBody({ paths: secretPaths }));
+const impWifiRedacted = await req(API, "/import", form({ target: "wifi", payload: expWifi2.text }));
+const impMqttRedacted = await req(API, "/import", form({ target: "mqtt", payload: expMqtt2.text }));
+const md5Redacted = await req(CTRL, "/step4a/md5", jsonBody({ paths: secretPaths }));
+check(
+  "restoring redacted wifi+mqtt exports preserves the on-hub secrets byte-for-byte",
+  impWifiRedacted.text.includes("Wi-Fi settings imported") &&
+    impMqttRedacted.text.includes("MQTT settings imported") &&
+    md5Unredacted.json?.exitCode === 0 &&
+    md5Redacted.json?.exitCode === 0 &&
+    md5Unredacted.json?.stdout === md5Redacted.json?.stdout,
+  `unredacted=${md5Unredacted.json?.stdout} redacted=${md5Redacted.json?.stdout}`
+);
+const wifiControlChar = await req(API, "/wifi", form({ ssid: "HUB-EMU-QA-SSID", password: "bad\npsk=injected", apply: "save" }));
+check(
+  "POST /wifi rejects a password containing a newline (no wpa_supplicant injection)",
+  wifiControlChar.status === 200 && wifiControlChar.text.includes("Wi-Fi password must be"),
+  wifiControlChar.text.slice(0, 160)
 );
 const cloudForm = await req(API, "/system", form({ action: "cloud", cloudBlocker: "on" }));
 check(
