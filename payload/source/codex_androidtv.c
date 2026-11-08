@@ -721,6 +721,9 @@ static short conn_events(const struct conn *c) {
 	short ev = POLLIN;
 	unsigned st = br_ssl_engine_current_state(&c->cc.eng);
 	if (st & BR_SSL_SENDREC) ev |= POLLOUT;
+	/* Queued output BearSSL can take now: wake at once instead of after the poll
+	 * timeout. The pump consumes it, so this doesn't spin. */
+	if (c->outn && (st & BR_SSL_SENDAPP)) ev |= POLLOUT;
 	return ev;
 }
 
@@ -742,6 +745,7 @@ struct tv {
 	br_rsa_public_key pk;
 	struct conn *c;
 	int ready, is_on, vol, vol_max, muted;
+	int state_known;                /* remote_start seen on this connection */
 	unsigned features;
 	long long next_attempt, unreachable_since, last_rediscover, last_wol;
 	int backoff;
@@ -870,6 +874,7 @@ static void tv_lost(struct tv *t, const char *why) {
 	if (t->c && t->c->fd >= 0) conn_close(t->c, why);
 	if (t->ready || t->c) logmsg("TV %s: %s", t->id, why);
 	t->ready = 0;
+	t->state_known = 0;
 	t->next_attempt = now_ms() + t->backoff;
 	t->backoff = t->backoff < 30000 ? t->backoff * 2 : 30000;
 	if (!t->unreachable_since) t->unreachable_since = now_ms();
@@ -914,6 +919,7 @@ static void tv_on_message(void *owner, const unsigned char *d, size_t len) {
 			int on = (int)pb_get_uint(f.d, f.len, 1);
 			if (on != t->is_on) logmsg("TV %s is %s", t->id, on ? "on" : "in standby");
 			t->is_on = on;
+			t->state_known = 1;
 			t->ready = 1;
 			break;
 		}
@@ -939,6 +945,7 @@ static void tv_connect(struct tv *t) {
 		t->c->fd = -1;
 	}
 	t->ready = 0;
+	t->state_known = 0;
 	t->next_attempt = now_ms() + t->backoff;
 	if (conn_open(t->c, t->host, REMOTE_PORT, &t->pk) < 0) {
 		tv_lost(t, t->c->error);
@@ -972,6 +979,9 @@ static void tv_flush(struct tv *t) {
 			struct pbuf out = { .n = 0 }, sub = { .n = 0 };
 			int code = c->code;
 			if (code == PSEUDO_POWER_ON || code == PSEUDO_POWER_OFF) {
+				/* remote_set_active carries no power state: wait for remote_start,
+				 * or a stale is_on could toggle the TV the wrong way. */
+				if (!t->state_known) return;
 				int want_on = code == PSEUDO_POWER_ON;
 				if (t->is_on == want_on) {
 					DBG("TV %s: already %s", t->id, want_on ? "on" : "off");
@@ -1220,7 +1230,7 @@ static const char *PSTATE[] = { "idle", "preparing", "connecting", "code", "chec
 static struct {
 	int state;
 	char host[16], name[65], error[160], tv_id[TV_ID_MAX];
-	long long started;
+	long long started, checking_since;
 	struct conn *c;
 } pair;
 
@@ -1267,10 +1277,17 @@ static void pair_on_message(void *owner, const unsigned char *d, size_t len) {
 			polo_send(30, &body);
 			break;
 		case 31: /* configuration_ack: the TV shows the code */
+			if (pair.state != P_CONNECTING) break;
 			pair.state = P_CODE;
 			logmsg("pairing with %s: the TV shows a code", pair.host);
 			break;
 		case 41: { /* secret_ack: paired */
+			/* Only after we sent the secret: the pairing connection accepts any
+			 * certificate, so an early ack must not skip the code check. */
+			if (pair.state != P_CHECKING) {
+				pair_fail("The TV answered out of order. Start again.");
+				return;
+			}
 			unsigned char h[32];
 			br_sha256_context sh;
 			br_sha256_init(&sh);
@@ -1395,6 +1412,7 @@ static const char *pair_finish(const char *code) {
 	pb_bytes(&body, 1, h, sizeof h);
 	polo_send(40, &body);
 	pair.state = P_CHECKING;
+	pair.checking_since = now_ms();
 	return NULL;
 }
 
@@ -1407,6 +1425,7 @@ static void tv_rehost(struct tv *t, const char *host) {
 	tvs_save();
 	if (t->c && t->c->fd >= 0) conn_close(t->c, "moved");
 	t->ready = 0;
+	t->state_known = 0;
 	t->backoff = 1000;
 	t->next_attempt = 0;
 }
@@ -1712,8 +1731,10 @@ int main(int argc, char **argv) {
 		identity_poll();
 		if (pair.state == P_PREPARING && ident.ready) pair_begin_connect();
 		if (pair.state == P_PREPARING && !ident.ready && ident.keygen_pid <= 0) identity_ensure();
-		if ((pair.state == P_CONNECTING || pair.state == P_CHECKING) && now - pair.started > 30000 && pair.state == P_CONNECTING)
+		if (pair.state == P_CONNECTING && now - pair.started > 30000)
 			pair_fail("The TV didn't answer. Is it on?");
+		if (pair.state == P_CHECKING && now - pair.checking_since > 15000)
+			pair_fail("The TV didn't confirm the code. Start again.");
 		if (pair.state == P_CODE && now - pair.started > 300000) pair_fail("The code expired. Start again.");
 		if (mdns.fd >= 0 && now > mdns.until && now - mdns.started > 30000) mdns_stop();
 
@@ -1753,13 +1774,17 @@ int main(int argc, char **argv) {
 			if (cfd >= 0) { http_handle(cfd); close(cfd); }
 		}
 		if (mi >= 0 && (p[mi].revents & POLLIN)) mdns_read();
-		if (pi >= 0 && p[pi].revents) {
+		/* The HTTP request above may have closed or replaced connections (pairing
+		 * restarted, TV forgotten or re-paired): only pump what is still the
+		 * polled descriptor. */
+		if (pi >= 0 && p[pi].revents && pair.c && pair.c->fd == p[pi].fd) {
 			if (conn_pump(pair.c, pair_on_message, NULL) < 0 && pair.state != P_PAIRED && pair.state != P_FAILED && pair.state != P_IDLE)
 				pair_fail(pair.c->error[0] ? pair.c->error : "The TV closed the connection.");
 		}
 		for (int k = 0; k < np; k++) {
 			struct tv *t = owner[k];
 			if (!t || !p[k].revents) continue;
+			if (!t->used || !t->c || t->c->fd != p[k].fd) continue;
 			if (conn_pump(t->c, tv_on_message, t) < 0) tv_lost(t, t->c->error);
 		}
 		/* queued output (keys, pings) goes out even without socket events */

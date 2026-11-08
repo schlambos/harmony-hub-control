@@ -5,10 +5,12 @@ Builds nothing: pass a native codex_androidtv binary (see docs/BUILD.md, "codex_
 
     python3 tools/androidtv/androidtv_smoke.py --codex-androidtv build/output/codex_androidtv-native
 
-It checks: the hub identity is made on first use, pairing (a mistyped code is caught
-before anything is sent, the right one pairs), the TV connects, PowerOff/PowerOn send
-the power key only when the state differs, keys arrive, an unknown command still gets
-HTTP 200, and forgetting the TV removes it.
+It checks: the hub identity is made on first use; a TV that acknowledges a secret it
+never got, or never confirms the code, fails the pairing; pairing (a mistyped code is
+caught before anything is sent, the right one pairs); the TV connects; PowerOff/PowerOn
+send the power key only when the state differs, and wait for the TV to report its state
+on a new connection; keys arrive; an unknown command still gets HTTP 200; and
+forgetting the TV removes it.
 
 MIT License, Copyright (c) 2026 Josh Lukens.
 """
@@ -75,8 +77,15 @@ def main() -> int:
     tmp = tempfile.mkdtemp(prefix="androidtv-smoke-")
     state = os.path.join(tmp, "androidtv")
     code_file = os.path.join(tmp, "code")
+    mode_file = os.path.join(tmp, "mode")
+
+    def set_mode(mode: str) -> None:
+        with open(mode_file, "w") as mf:
+            mf.write(mode)
+
     fake = Fake([sys.executable, "-I", os.path.join(HERE, "fake_tv.py"), "--host", "127.0.0.1",
-                 "--trust", os.path.join(state, "client.crt.der"), "--trust-wait", "--code-file", code_file])
+                 "--trust", os.path.join(state, "client.crt.der"), "--trust-wait", "--code-file", code_file,
+                 "--mode-file", mode_file])
     daemon = subprocess.Popen([args.codex_androidtv, "--dir", state, "--port", str(args.port), "-v",
                                "--log", os.path.join(tmp, "codex-androidtv.log")])
     ok = False
@@ -88,15 +97,41 @@ def main() -> int:
         # it can already be ready here.
         assert st["tvs"] == [] and st["identity"] in ("none", "preparing", "ready"), st
 
-        # Pairing: the identity is made first ("preparing"), then the TV shows a code.
+        def pair_until(states: tuple, timeout: float = 120) -> dict:
+            end = time.time() + timeout
+            while time.time() < end:
+                r = call(args.port, "/pair/status")
+                if r["state"] in states:
+                    return r
+                time.sleep(0.2)
+            return r
+
+        # The identity is made first ("preparing"). A peer that acknowledges a secret
+        # it never got must not pair.
+        set_mode("early-ack")
         r = call(args.port, "/pair/start", {"host": "127.0.0.1", "name": "Test TV"})
         assert r["state"] in ("preparing", "connecting"), r
-        end = time.time() + 120
-        while time.time() < end:
-            r = call(args.port, "/pair/status")
-            if r["state"] in ("code", "failed"):
-                break
-            time.sleep(0.2)
+        r = pair_until(("failed", "paired", "code"))
+        assert r["state"] == "failed" and "out of order" in r["error"], r
+        fake.wait_for("early_ack")
+        assert call(args.port, "/status")["tvs"] == []
+
+        # A TV that never confirms the code: pairing gives up instead of "checking" forever.
+        set_mode("no-ack")
+        call(args.port, "/pair/start", {"host": "127.0.0.1", "name": "Test TV"})
+        r = pair_until(("code", "failed"))
+        assert r["state"] == "code", r
+        r = call(args.port, "/pair/finish", {"code": open(code_file).read().strip()})
+        assert r["ok"] is True, r
+        fake.wait_for("secret_ignored")
+        r = pair_until(("failed", "paired"), timeout=25)
+        assert r["state"] == "failed" and "confirm" in r["error"], r
+        assert call(args.port, "/status")["tvs"] == []
+
+        # Pairing: the TV shows a code.
+        set_mode("")
+        call(args.port, "/pair/start", {"host": "127.0.0.1", "name": "Test TV"})
+        r = pair_until(("code", "failed"))
         assert r["state"] == "code", r
         assert call(args.port, "/status")["identity"] == "ready"
         code = open(code_file).read().strip()
@@ -113,6 +148,8 @@ def main() -> int:
         r = call(args.port, "/pair/status")
         assert r["state"] == "paired" and r["tvId"].startswith("androidtv"), r
         tv = r["tvId"]
+        # Cancelling after it finished names the TV, so the web app can tidy up.
+        assert call(args.port, "/pair/cancel", {})["tvId"] == tv
 
         # The remote session comes up by itself.
         fake.wait_for("remote_configured")
@@ -157,6 +194,24 @@ def main() -> int:
         mark = len(fake.events)
         daemon = subprocess.Popen([args.codex_androidtv, "--dir", state, "--port", str(args.port)])
         fake.wait_for("remote_configured", since=mark)
+
+        # A new connection reports the power state late (the TV is on; the new
+        # daemon starts not knowing). PowerOn must wait for remote_start rather
+        # than toggle the TV off.
+        daemon.terminate()
+        daemon.wait(5)
+        set_mode("start-delay=2")
+        mark = len(fake.events)
+        daemon = subprocess.Popen([args.codex_androidtv, "--dir", state, "--port", str(args.port)])
+        fake.wait_for("remote_configured", since=mark)
+        end = time.time() + 5
+        while not (call(args.port, "/status")["tvs"] or [{}])[0].get("connected") and time.time() < end:
+            time.sleep(0.05)
+        cmd("PowerOn")
+        fake.wait_for("remote_start_sent", since=mark)
+        time.sleep(0.8)
+        assert fake.count("key", since=mark) == 0, "PowerOn toggled a TV that was already on"
+        set_mode("")
 
         r = call(args.port, "/forget", {"id": tv})
         assert r["ok"], r

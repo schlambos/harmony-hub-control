@@ -20,9 +20,9 @@ exact SHA-256 digests and sizes are:
 
 | Binary | Size | SHA-256 |
 | --- | --- | --- |
-| `codex_webui` | 1220356 | `f08978f330b64ddb493902bfb3cf0c369bc426f5467f49697afadcbb03b5953b` |
+| `codex_webui` | 1220676 | `8d566344f5a7da03e0eb8eb639b3473fea65bdaaa5960a9050fdcf62dcae4e3c` |
 | `codex_hbus` | 74660 | `4be9e6ac2e09e7eb052f9c47e81480d1e32aee7190bedb6ef7f932cf07aab8f9` |
-| `codex_androidtv` | 266340 | `d549a33451da242b5e20aefed30ff70f6ccb1e46515e36d7e335e5cc64956e67` |
+| `codex_androidtv` | 266916 | `fbf0e953b47b10f29fb30a41a4d339f5a034e1cc7a26c12d79f4d3711161bba2` |
 
 The remaining six binaries (`codex_bt_pair_agent`, `codex_bthid_keyboard`,
 `codex_dhcpd`, `codex_hal_ltcp`, `codex_portal`, `dropbearmulti`) are pinned by
@@ -71,7 +71,7 @@ Both regenerators reproduce the committed headers byte-for-byte.
 Pinned source blobs:
 
 - `payload/source/codex_webui.c` — `cab523828c683145eb8ec3bd60338f3a7ccaf9ef`
-- `payload/source/harmony_shell_assets.h` — `351d4741959080ab7650c0284975504eb11184e4`
+- `payload/source/harmony_shell_assets.h` — `fefc5612989a498e73e54781599f53c97dda7fe8`
 - `payload/source/activity_ui_assets.h` — `f68a2bce58e71242b2480b2d483f405484c036da`
 - `payload/source/remote_skin_jpg.h` — `419611c5ff0713f1f5de2dd684d699f6d77238d5`
 
@@ -83,8 +83,8 @@ Pinned source blobs:
 ```
 
 Result must be `ELF 32-bit MSB executable, MIPS, MIPS32 rel2, statically
-linked, stripped`, size 1220356, SHA-256
-`f08978f330b64ddb493902bfb3cf0c369bc426f5467f49697afadcbb03b5953b`.
+linked, stripped`, size 1220676, SHA-256
+`8d566344f5a7da03e0eb8eb639b3473fea65bdaaa5960a9050fdcf62dcae4e3c`.
 
 To compare against a Homebrew-built box binary, strip the compiler stamp from
 both first:
@@ -136,9 +136,9 @@ cd build/tmp
 ```
 
 Result must be `ELF 32-bit MSB executable, MIPS, MIPS32 rel2`, statically
-linked, stripped, size 266340, SHA-256
-`d549a33451da242b5e20aefed30ff70f6ccb1e46515e36d7e335e5cc64956e67`
-(`payload/source/codex_androidtv.c` blob `d52aae0cc82f3169a2049b585eed7256732cf1cf`).
+linked, stripped, size 266916, SHA-256
+`fbf0e953b47b10f29fb30a41a4d339f5a034e1cc7a26c12d79f4d3711161bba2`
+(`payload/source/codex_androidtv.c` blob `21bde5a7e0b4a75d1cd305dc5b59dad611876a34`).
 The output doesn't depend on where the tree or BearSSL is unpacked. For the
 fake-TV smoke test, build the same way with `-target x86_64-linux-musl` (or
 your host) into `build/output/codex_androidtv-native`.

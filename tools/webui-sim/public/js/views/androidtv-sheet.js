@@ -7,7 +7,9 @@
      name   name it and add it as a hub device (CommitAndroidTvDevices)
 
    Closing before the device is added unpairs the TV again, so the hub never
-   keeps a pairing without a device for it. */
+   keeps a pairing without a device for it. A pairing a hub device uses is
+   never undone: the TV may already have been on the hub (paired again from a
+   typed address), or the save may have gone through. */
 
 import {
   cancelTvPairing,
@@ -30,6 +32,7 @@ import {
   nameProblem,
   normalizeCode,
   normalizeHost,
+  pairingToUndo,
   pairStateText,
 } from "./androidtv-model.js";
 import { fieldId, setMessage, textField } from "./device-sheets.js";
@@ -44,6 +47,8 @@ export function openAndroidTvSheet({ onDone } = {}) {
   let chosen = { host: "", name: "" };
   let tvId = "";
   let added = null;
+  let saving = null;     // the device save while it runs
+  let committed = false; // the save went through: the hub has a device for tvId
   let busy = false;
   let timer = null;
   let closed = false;
@@ -53,18 +58,29 @@ export function openAndroidTvSheet({ onDone } = {}) {
     clearTimeout(timer);
     timer = null;
   };
+  const devicesByTv = () => new Set(hub.devices().filter((d) => isAndroidTvEntry(d.entry)).map((d) => androidTvIdOf(d.entry)));
+  // Undo a pairing this sheet made, unless a hub device uses it.
+  const undoPairing = (id) => {
+    const undo = pairingToUndo(id, { committed, devicesByTv: devicesByTv() });
+    if (undo) forgetTv({ id: undo }).catch(() => {});
+  };
 
   return openSheet({
     label: "Add a network TV",
     onClose: () => {
       closed = true;
       stopTimer();
-      // A pairing that never became a device is undone.
-      if (step === "name" && tvId && !added) forgetTv({ id: tvId }).catch(() => {});
-      else if (step === "wait" || step === "code") cancelTvPairing().catch(() => {});
+      if (step === "name") {
+        // Closed while saving: decide once the save settles.
+        if (saving) saving.catch(() => undoPairing(tvId));
+        else undoPairing(tvId);
+      } else if (step === "wait" || step === "code") {
+        // The hub may have finished pairing since the last poll; the cancel
+        // answer names the TV then.
+        cancelTvPairing().then((res) => undoPairing(res?.tvId ?? ""), () => {});
+      }
     },
     render: (content, close) => {
-      const devicesByTv = () => new Set(hub.devices().filter((d) => isAndroidTvEntry(d.entry)).map((d) => androidTvIdOf(d.entry)));
 
       function draw(message = "", kind = "info") {
         if (closed) return;
@@ -185,7 +201,9 @@ export function openAndroidTvSheet({ onDone } = {}) {
           try {
             // The hub's own copy of the device list decides what the set is.
             const config = await getConfig();
-            await saveAndroidTvDevices(androidTvDeviceSet(config, { add: { entity: tvId, name, manufacturer, model } }));
+            saving = saveAndroidTvDevices(androidTvDeviceSet(config, { add: { entity: tvId, name, manufacturer, model } }));
+            await saving;
+            committed = true;
             await hub.refreshConfig().catch(() => {});
             added = hub.devices().find((d) => isAndroidTvEntry(d.entry) && androidTvIdOf(d.entry) === tvId) ?? null;
             const open = content.isConnected;
@@ -196,6 +214,7 @@ export function openAndroidTvSheet({ onDone } = {}) {
             setMessage(msg, err.message || "Adding the TV failed.", "error");
             form.querySelector("[type=submit]").disabled = false;
           } finally {
+            saving = null;
             busy = false;
           }
         });

@@ -176,6 +176,15 @@ class FakeTV:
         self.lock = threading.Lock()
         self.remote_conns: list[Framed] = []
 
+    def mode(self) -> str:
+        """Test misbehaviour, read from --mode-file at each step: early-ack,
+        no-ack or start-delay=<seconds>; empty for a well-behaved TV."""
+        path = self.args.mode_file
+        try:
+            return open(path).read().strip() if path else ""
+        except OSError:
+            return ""
+
     def context(self) -> ssl.SSLContext:
         ctx = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)
         ctx.load_cert_chain(self.crt, self.key)
@@ -218,8 +227,18 @@ class FakeTV:
                     with open(self.args.code_file, "w") as cf:
                         cf.write(code + "\n")
                 f.send(ok + field_bytes(31, b""))
+                if self.mode() == "early-ack":
+                    # A peer acknowledging a secret it never got.
+                    log("early_ack")
+                    f.send(ok + field_bytes(41, field_bytes(1, b"\0" * 32)))
             elif get(msg, 40) is not None:
                 secret = get(get(msg, 40), 1, b"")
+                if self.mode() == "no-ack":
+                    # Keep the connection open and never confirm the code.
+                    log("secret_ignored")
+                    while f.recv(120) is not None:
+                        pass
+                    return
                 if secret == self.expected:
                     self.paired_clients.add(hashlib.sha256(client_der).digest())
                     log("paired")
@@ -246,9 +265,14 @@ class FakeTV:
             self.remote_conns.append(f)
         log("remote_connected")
         last_ping = time.time()
+        start_at = None  # a delayed remote_start (mode start-delay=<s>)
         try:
             while True:
-                msg = f.recv(1.0)
+                msg = f.recv(0.2 if start_at else 1.0)
+                if start_at and time.time() >= start_at:
+                    start_at = None
+                    log("remote_start_sent")
+                    f.send(self.start_message())
                 if time.time() - last_ping > 5:
                     f.send(field_bytes(8, field_uint(1, int(time.time()) & 0xFFFF)))
                     last_ping = time.time()
@@ -259,7 +283,11 @@ class FakeTV:
                     log("remote_configured", features=get(get(msg, 1), 1, 0))
                     f.send(field_bytes(2, field_uint(1, FEATURES)))
                 elif get(msg, 2) is not None:
-                    f.send(self.start_message())
+                    mode = self.mode()
+                    if mode.startswith("start-delay="):
+                        start_at = time.time() + float(mode.split("=", 1)[1])
+                    else:
+                        f.send(self.start_message())
                     f.send(field_bytes(50, field_uint(6, 100) + field_uint(7, self.volume) + field_uint(8, 0)))
                 elif get(msg, 9) is not None:
                     pass  # ping response
@@ -317,6 +345,7 @@ def main() -> None:
     ap.add_argument("--code-file", help="write the pairing code here")
     ap.add_argument("--bt", default="AA:BB:CC:00:11:22", help="Bluetooth address in the certificate CN")
     ap.add_argument("--accept-unpaired", action="store_true")
+    ap.add_argument("--mode-file", help="misbehave as this file says (early-ack, no-ack, start-delay=<s>)")
     args = ap.parse_args()
     tv = FakeTV(args)
     threading.Thread(target=tv.serve, args=(args.pair_port, tv.pairing), daemon=True).start()
