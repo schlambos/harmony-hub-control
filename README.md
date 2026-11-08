@@ -65,6 +65,8 @@ This repository contains no rooting tools, exploits, private keys or personal ba
 - **The hub is a `remote` entity** (`turn_on`/`turn_off`/`send_command` for IR, Bluetooth and HA
   devices alike), and every Harmony press on an HA device fires `melodious.command_received` for
   automations.
+- **Hub devices in Home Assistant:** mirror hub-only devices (IR, Bluetooth, network) into HA as
+  power switches, input selectors, command buttons and activity sensors — opt-in per device.
 - MQTT discovery (activity selector, status sensors, Power Off), and HA's built-in Harmony
   integration keeps working locally.
 
@@ -144,7 +146,7 @@ and a user reports the Harmony Elite works.**
 | Harmony Touch | Validated, with stock remote firmware: offline sync, hard keys, on-screen buttons, the number pad, gestures, device screens and press modes. |
 | Harmony Smart Control remote | Validated, paired next to a Touch: pairing on the hub with no cloud (Settings → Remotes), its keys driving the same devices as the Touch's, and its activity buttons. It keeps no setup of its own; its buttons live on the hub. If it stops responding, take its coin cell out for 10 seconds, then pair it again. |
 | Harmony Elite | Works, per a user report; not yet tested here. |
-| Harmony Companion remote | Expected to work, but not yet tested here: its activity buttons and keys live in its own maps on the hub, edited the same way as the Smart Control's. |
+| Harmony Companion remote | Supported: activity buttons and per-activity keys in its own maps, edited the same way as the Smart Control's. Community-tested. |
 | Other remotes that pair with the hub, such as the Harmony Ultimate or 950 | Expected to work, but not yet tested. Features that need a screen apply only to remotes that have one. |
 | Phones, tablets and computers | The web, Android and macOS apps. |
 
@@ -154,7 +156,8 @@ No remote needs modified firmware; reports for other remotes welcome ([CONTRIBUT
 
 - **Setup wizard:** Name → Devices → Inputs → Buttons (36 keys, press + hold) → Review. New
   activities power on Display → Volume → Player with warm-up waits (2.5 s TV, 1.5 s AVR/soundbar, 1
-  s player); existing ones keep their saved order/waits.
+  s player) and get the Touch's number pad and on-screen Home button; existing ones keep their saved
+  order/waits.
 - **Advanced editor:** roles, per-remote button maps, activity JSON. Android adds **Start and end**
   (power order + start/end commands).
 - **Saves are transactions:** validated, written, read back, rolled back on failure; a setup changed
@@ -195,6 +198,7 @@ Melodious connects the hub and Home Assistant in both directions, with live stat
 | --- | --- |
 | **Harmony controls Home Assistant** | The [Melodious integration](https://github.com/schlambos/ha-melodious) turns whole Home Assistant devices (merged) or single entities into ordinary hub devices (`TransportType: 64`), driven by activities, remote buttons, Touch screens and the apps over a local webhook. Every command also fires a `melodious.command_received` event, so a button can chain into any automation. |
 | **Home Assistant controls Harmony** | The integration exposes the hub as a `remote` entity (`turn_on`, `turn_off`, `send_command` for IR, Bluetooth and Home Assistant devices alike). The optional MQTT bridge and Home Assistant's built-in Harmony integration also keep working locally. |
+| **Harmony devices in Home Assistant** | The integration mirrors selected hub-only devices (IR, Bluetooth, network) into HA as power switches, input selectors, command buttons and activity sensors. Opt-in per device in the integration's Configure; loop guard excludes mirrored entities from the HA→hub pickers. |
 | **Live state back to Harmony** | Home Assistant pushes live power, input/source, app, playing state, volume and mute — plus an LG webOS TV's HDMI port and ARC status — to the hub's RAM-only `/api/ha-state` channel for the apps to show. |
 
 ### What it allows for (merged devices & entities)
@@ -238,7 +242,9 @@ discovery: activity selector, status sensors, Power Off.
 2. Add the integration: hub address/port `8080` (plus sign-in if set) and the plain-`http://` URL
    the hub uses to reach HA, e.g. `http://<server-ip>:8123` (no Let's Encrypt root on the hub;
    Docker-internal won't work).
-3. In **Configure**, pick whole devices and/or single entities and review.
+3. In **Configure**, pick whole devices and/or single entities and review. To mirror hub devices into
+   HA, pick them in the **Mirror devices** section — each appears as power switch, input selector,
+   command buttons and an activity sensor.
 
 Full tables, profiles, MQTT topics and CLI: **[docs/HOME_ASSISTANT.md](docs/HOME_ASSISTANT.md)**.
 
@@ -521,7 +527,8 @@ tokens, hub backups, firmware dumps or rooting tools. Read [CONTRIBUTING.md](CON
 - **Rooting the hub:** [harmony-hub-root](https://github.com/Ripthulhu/harmony-hub-root), a separate
   project.
 - **Home Assistant integration:**
-  [schlambos/ha-melodious](https://github.com/schlambos/ha-melodious).
+  [schlambos/ha-melodious](https://github.com/schlambos/ha-melodious) (0.7.1+ for mirror
+  devices).
 - **Third-party code:**
   - Material Icons (Apache-2.0), in [`third_party/material-icons/`](third_party/material-icons/);
   - Dropbear SSH, in [`third_party/dropbear-2025.89/`](third_party/dropbear-2025.89/), with its
