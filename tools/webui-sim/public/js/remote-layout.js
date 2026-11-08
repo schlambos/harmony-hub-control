@@ -24,7 +24,7 @@ export const REMOTE_BUTTONS = [
   { label: "Guide", aliases: "guide|epg" },
   { label: "Info", aliases: "info|information|displayinfo|settings|setting|setup|option|options" },
   { label: "Exit", aliases: "exit|clear|cancel" },
-  { label: "Menu", aliases: "menu|home" },
+  { label: "Menu", aliases: "menu" },
   { label: "Up", aliases: "up|directionup|arrowup|cursorup" },
   { label: "Left", aliases: "left|directionleft|arrowleft|cursorleft" },
   { label: "Right", aliases: "right|directionright|arrowright|cursorright" },

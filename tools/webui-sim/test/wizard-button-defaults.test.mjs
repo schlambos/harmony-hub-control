@@ -95,6 +95,26 @@ describe("deriveDefaultButtons", () => {
     assert.deepEqual(defaults, {});
   });
 
+  it("Menu maps to Menu, never to a device's Home command", () => {
+    const both = device(60, ["Menu", "Home", "DirectionUp", "Select"]);
+    const defaults = deriveDefaultButtons(
+      [{ deviceId: "60", roleType: "PlayMovieActivityRole" }],
+      [both],
+    );
+    assert.equal(defaults.Menu?.command?.name, "Menu");
+    assert.equal(defaults.Menu?.deviceId, "60");
+  });
+
+  it("a Home-only device leaves Menu unmapped instead of folding Home onto it", () => {
+    const homeOnly = device(70, ["Home", "DirectionUp", "Select"]);
+    const defaults = deriveDefaultButtons(
+      [{ deviceId: "70", roleType: "PlayMovieActivityRole" }],
+      [homeOnly],
+    );
+    assert.equal(defaults.Menu, undefined);
+    assert.equal(defaults.DirectionUp?.command?.name, "DirectionUp");
+  });
+
   it("never invents action-less mappings", () => {
     const defaults = deriveDefaultButtons(movieRoles, [player, volume, display]);
     for (const mapping of Object.values(defaults)) {

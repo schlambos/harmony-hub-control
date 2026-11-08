@@ -270,8 +270,8 @@ describe("buildActivityGraph — map ownership", () => {
     assert.ok(secondSurface, "hub-wide second remote surface is cloned for the new activity");
     assert.deepEqual(
       secondSurface.Buttons.map((b) => [b.__type, b.ButtonKey, b.ButtonAction?.CommandName]),
-      [["HardRemoteButton", "Play", "Play"]],
-      "the Touch surface gets the wizard's hard buttons and nothing else",
+      [["HardRemoteButton", "Play", "Play"], ["SoftRemoteButton", undefined, "Home"]],
+      "the Touch surface gets the wizard's hard buttons and the seeded Home button",
     );
 
     /* Other activities keep every map they had. */
@@ -811,6 +811,79 @@ describe("Harmony Touch hard buttons", () => {
     const draft = { name: "No Touch", type: 1, roles: [], buttons: {} };
     const graph = buildActivityGraph({ config, draft, editId: null });
     assert.equal(touchMap(graph.mapList.ButtonMaps, graph.activityId), undefined);
+  });
+});
+
+describe("wizard Touch on-screen seeding", () => {
+  const touchMap = (maps, id) => maps.find((m) => isTouchActivityMap(m, id));
+  const soft = (map) => map.Buttons.filter((b) => b.__type === "SoftRemoteButton");
+  const command = (deviceId, name) => ({ deviceId, command: { name, functionId: 0 }, hold: null });
+
+  const seededDraft = () => ({
+    name: "Seeded",
+    type: 1,
+    roles: [
+      { deviceId: "74521691", roleType: "DisplayActivityRole", input: "", powerDelay: "" },
+      { deviceId: "66690268", roleType: "PlayMovieActivityRole", input: "", powerDelay: "" },
+    ],
+    buttons: {
+      VolumeUp: command("81897247", "VolumeUp"),
+      Number1: command("66690268", "1"),
+      Number2: command("66690268", "2"),
+      Number3: command("66690268", "3"),
+      Number4: command("66690268", "4"),
+      Number5: command("66690268", "5"),
+      Number6: command("66690268", "6"),
+      Number7: command("66690268", "7"),
+      Number8: command("66690268", "8"),
+      Number9: command("66690268", "9"),
+      Number0: command("66690268", "0"),
+    },
+  });
+
+  it("a new activity gets the number pad and a Home button on its Touch map", () => {
+    const graph = buildActivityGraph({ config: FIXTURE, draft: seededDraft(), editId: null });
+    const touch = touchMap(graph.mapList.ButtonMaps, graph.activityId);
+    assert.ok(touch, "the Touch surface is created");
+    const pad = soft(touch).filter((b) => b.FunctionGroupType === 2);
+    assert.deepEqual(
+      pad.map((b) => [b.MenuItem.IndexInMenu, b.TextOnRemote, b.ButtonAction.CommandName]),
+      [[0, "1", "1"], [1, "2", "2"], [2, "3", "3"], [3, "4", "4"], [4, "5", "5"],
+       [5, "6", "6"], [6, "7", "7"], [7, "8", "8"], [8, "9", "9"], [10, "0", "0"]],
+      "Logitech's pad layout: 1-9 at slots 0-8, 0 at slot 10",
+    );
+    assert.ok(pad.every((b) => b.ButtonAction["DeviceId-"] === 66690268));
+    assert.ok(pad.every((b) => b.ButtonAction.EventType === 0));
+    const onScreen = soft(touch).filter((b) => b.FunctionGroupType === 0);
+    assert.deepEqual(
+      onScreen.map((b) => [b.MenuItem.IndexInMenu, b.TextOnRemote, b.ButtonAction.CommandName, b.ButtonAction["DeviceId-"]]),
+      [[0, "Home", "Home", 74521691]],
+      "the LG's Home command becomes an on-screen button",
+    );
+    assert.ok(touch.Buttons.every((b) => b.ButtonLongPressAction === null || b.__type === "HardRemoteButton"));
+    assertNoActionlessActivityButtons([touch]);
+    assertUniqueIdentities(graph.mapList.ButtonMaps);
+  });
+
+  it("seeds nothing when the draft maps no digits and no member has Home", () => {
+    const draft = seededDraft();
+    for (const key of Object.keys(draft.buttons)) {
+      if (/^Number\d$/.test(key)) delete draft.buttons[key];
+    }
+    draft.roles = [{ deviceId: "81897247", roleType: "VolumeActivityRole", input: "", powerDelay: "" }];
+    const graph = buildActivityGraph({ config: FIXTURE, draft, editId: null });
+    const touch = touchMap(graph.mapList.ButtonMaps, graph.activityId);
+    assert.deepEqual(soft(touch), []);
+  });
+
+  it("an existing activity is never reseeded", () => {
+    const id = "48113644";
+    const config = structuredClone(FIXTURE);
+    const touch = touchMap(config.mapList.ButtonMaps, id);
+    touch.Buttons = touch.Buttons.filter((b) => b.__type !== "SoftRemoteButton");
+    const graph = buildActivityGraph({ config, draft: draftFromActivity(config, id), editId: id });
+    const after = touchMap(graph.mapList.ButtonMaps, id);
+    assert.deepEqual(soft(after), [], "what the owner left empty stays empty");
   });
 });
 

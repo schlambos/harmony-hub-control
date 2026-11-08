@@ -13,6 +13,7 @@ import app.melodious.protocol.model.WizardRoleDraft
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonArray
 import kotlinx.serialization.json.JsonObject
+import kotlinx.serialization.json.int
 import kotlinx.serialization.json.jsonArray
 import kotlinx.serialization.json.jsonObject
 import kotlinx.serialization.json.jsonPrimitive
@@ -527,5 +528,83 @@ class ActivityGraphAndLayoutTest {
             roles = listOf(app.melodious.protocol.model.HubRole(deviceId = "66690268", roleType = "PlayMovieActivityRole")))
         val fix = app.melodious.protocol.model.FixIt.devicesFor(activity, devices, roleLabel = { r: String -> r }, powerOverrides = mapOf("66690268" to gtv)).single()
         assertEquals("Home", fix.powerOn?.name)
+    }
+
+    private fun seededFixtureJson(): JsonObject {
+        val digits = (0..9).joinToString(",") { """{ "Name": "$it", "FunctionId-": ${20 + it} }""" }
+        return Json.parseToJsonElement("""
+            {
+              "revision": "rev-1",
+              "activityList": { "Activities": [ { "Id-": 100, "Name": "Old", "ActivityOrder": 0, "Roles": [] } ] },
+              "mapList": { "ButtonMaps": [
+                { "ButtonMapId-": 50000001, "ActivityId-": 100, "__type": "ActivityButtonMap",
+                  "ButtonMapIdentifier": "16414Activity100", "Buttons": [] },
+                { "ButtonMapId-": 52944100, "ActivityId-": 100, "__type": "ActivityButtonMap",
+                  "ButtonMapIdentifier": "16417Activity100", "SurfaceId-": 14551427,
+                  "ButtonMapSurfaceId-": 14551427, "RemoteId-": 15390924, "Buttons": [
+                    { "ButtonId": 1878030001, "ButtonKey": "Play", "ButtonState": 1, "__type": "HardRemoteButton",
+                      "ButtonAction": { "DeviceId-": 7001, "__type": "ButtonCommandAction", "CommandName": "Play", "EventType": 1, "Id": 0 } }
+                  ] }
+              ] },
+              "functionList": { "FunctionMaps": [] },
+              "deviceList": { "DevicesWithFeatures": [
+                { "Device": { "Id-": 7001, "Name": "Google TV", "Transport": 64 },
+                  "Commands": [ { "Name": "Select", "FunctionId-": 10 }, { "Name": "Home", "FunctionId-": 12 }, $digits ] }
+              ] }
+            }
+        """.trimIndent()).jsonObject
+    }
+
+    private fun seededDraft(edit: String? = null) = ActivityWizardDraft(
+        editActivityId = edit,
+        name = "Seeded",
+        type = 1,
+        roles = listOf(WizardRoleDraft(roleType = "PlayMovieActivityRole", deviceId = "7001")),
+        buttons = buildMap {
+            put("Select", WizardButtonMapping(deviceId = "7001", commandName = "Select", functionId = 10))
+            for (n in 1..9) put("Number$n", WizardButtonMapping(deviceId = "7001", commandName = "$n", functionId = 20 + n))
+            put("Number0", WizardButtonMapping(deviceId = "7001", commandName = "0", functionId = 20))
+        },
+    )
+
+    @Test
+    fun `a new activity seeds the Touch number pad and a Home button`() {
+        val snapshot = ActivityGraphBuilder.parseConfigSnapshot(seededFixtureJson())
+        val built = ActivityGraphBuilder.buildActivityGraph(snapshot, seededDraft())
+        val id = built.activityId
+        val touch = (built.mapList["ButtonMaps"] as JsonArray).map { it.jsonObject }
+            .first { it["ButtonMapIdentifier"]?.jsonPrimitive?.content == "16417Activity$id" }
+        val soft = touch["Buttons"]!!.jsonArray.map { it.jsonObject }
+            .filter { it["__type"]?.jsonPrimitive?.content == "SoftRemoteButton" }
+        val pad = soft.filter { it["FunctionGroupType"]?.jsonPrimitive?.int == 2 }
+        assertEquals(
+            listOf(
+                0 to "1", 1 to "2", 2 to "3", 3 to "4", 4 to "5",
+                5 to "6", 6 to "7", 7 to "8", 8 to "9", 10 to "0",
+            ),
+            pad.map {
+                it["MenuItem"]!!.jsonObject["IndexInMenu"]!!.jsonPrimitive.int to
+                    it["TextOnRemote"]!!.jsonPrimitive.content
+            },
+        )
+        assertTrue(pad.all { it["ButtonAction"]!!.jsonObject["CommandName"]!!.jsonPrimitive.content == it["TextOnRemote"]!!.jsonPrimitive.content })
+        assertTrue(pad.all { it["ButtonAction"]!!.jsonObject["DeviceId-"]!!.jsonPrimitive.int == 7001 })
+        val onScreen = soft.filter { it["FunctionGroupType"]?.jsonPrimitive?.int == 0 }
+        assertEquals(1, onScreen.size)
+        assertEquals("Home", onScreen[0]["TextOnRemote"]!!.jsonPrimitive.content)
+        assertEquals("Home", onScreen[0]["ButtonAction"]!!.jsonObject["CommandName"]!!.jsonPrimitive.content)
+        assertEquals(7001, onScreen[0]["ButtonAction"]!!.jsonObject["DeviceId-"]!!.jsonPrimitive.int)
+    }
+
+    @Test
+    fun `an edited activity is never reseeded`() {
+        val snapshot = ActivityGraphBuilder.parseConfigSnapshot(seededFixtureJson())
+        val built = ActivityGraphBuilder.buildActivityGraph(snapshot, seededDraft(edit = "100"))
+        val touch = (built.mapList["ButtonMaps"] as JsonArray).map { it.jsonObject }
+            .first { it["ButtonMapIdentifier"]?.jsonPrimitive?.content == "16417Activity100" }
+        assertTrue(
+            touch["Buttons"]!!.jsonArray.map { it.jsonObject }
+                .none { it["__type"]?.jsonPrimitive?.content == "SoftRemoteButton" },
+        )
     }
 }
