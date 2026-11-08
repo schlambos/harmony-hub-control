@@ -1298,7 +1298,11 @@ local TOUCH_SCREEN_KEYS = {
   {"Guide", "guide|epg"},
   {"Info", "info|information|displayinfo|settings|setting|setup|option|options"},
   {"Exit", "exit|clear|cancel"},
-  {"Menu", "menu|home"},
+  -- Home is its own Touch hard key (the firmware's 29-name key table has both
+  -- Menu and Home), so a Home-named command gets a real Home key instead of
+  -- hiding behind Menu.
+  {"Home", "home"},
+  {"Menu", "menu"},
   {"DirectionUp", "up|directionup|arrowup|cursorup"},
   {"DirectionLeft", "left|directionleft|arrowleft|cursorleft"},
   {"DirectionRight", "right|directionright|arrowright|cursorright"},

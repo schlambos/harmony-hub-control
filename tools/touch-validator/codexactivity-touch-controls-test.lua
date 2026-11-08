@@ -239,7 +239,7 @@ local function touchMaps()
   return { ButtonMaps = {
     { __type = "RootButtonMap", ButtonMapIdentifier = "16414Root", ["ButtonMapId-"] = 40550459,
       ["SurfaceId-"] = 13151460, ["ButtonMapSurfaceId-"] = 13151460, ["RemoteId-"] = 12345678, Buttons = {} },
-    { __type = "DeviceButtonMap", ButtonMapIdentifier = "16417Device200", ["ButtonMapId-"] = 46597140,
+    { __type = "DeviceButtonMap", ButtonMapIdentifier = "16417Device200", ["ButtonMapId-"] = 52944090,
       ["DeviceId-"] = 200, ["SurfaceId-"] = 14551427, ["ButtonMapSurfaceId-"] = 14551427,
       ["RemoteId-"] = 12345678, Sequences = NULL, Buttons = {} },
     { __type = "ActivityButtonMap", ButtonMapIdentifier = "16417Activity1", ["ButtonMapId-"] = 52944093,
@@ -298,6 +298,23 @@ for _, b in ipairs(lampMap and lampMap.Buttons or {}) do
     check(cmd .. " stays standard (no long)", b.ButtonLongPressAction == NULL, encodeJson(b.ButtonLongPressAction))
   end
 end
+
+-- A Home-named command gets the Touch's real Home hard key, not Menu -------
+local homeMade = screen({ deviceId = "200" })
+check("home device screen builds", homeMade.ok and homeMade.changed, encodeJson(homeMade))
+local homeMap
+for _, m in ipairs(decodeJson(hub.files.MapList.text).ButtonMaps) do
+  if m.ButtonMapIdentifier == "16417Device200" then homeMap = m break end
+end
+local homeHard, menuHard
+for _, b in ipairs(homeMap and homeMap.Buttons or {}) do
+  if b.ButtonKey == "Home" then homeHard = b end
+  if b.ButtonKey == "Menu" then menuHard = b end
+end
+check("Home command lands on the Home hard key",
+  homeHard ~= nil and homeHard.ButtonAction.CommandName == "Home",
+  encodeJson(homeHard))
+check("Menu stays unmapped when the device has no Menu command", menuHard == nil, encodeJson(menuHard))
 
 -- validateGraph accepts long on hard and soft (activity + device) -----------
 local function graphWithLong(buttonType, mapId, mapType)
