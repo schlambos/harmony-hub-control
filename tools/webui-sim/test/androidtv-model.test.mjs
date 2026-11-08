@@ -13,6 +13,7 @@ import {
   normalizeHost,
   pairingToUndo,
   pairStateText,
+  strandedTvs,
   tvStatusText,
 } from "../public/js/views/androidtv-model.js";
 import { deviceDomainLabel, isHaDevice } from "../public/js/views/remote-model.js";
@@ -161,5 +162,27 @@ describe("closing the Add a TV sheet", () => {
   it("has nothing to undo without a paired TV", () => {
     assert.equal(pairingToUndo("", { devicesByTv: onHub }), "");
     assert.equal(pairingToUndo(undefined), "");
+  });
+});
+
+describe("strandedTvs", () => {
+  const onHub = new Set(["androidtv1a2b3c4d"]);
+  it("lists only the paired TVs no hub device uses", () => {
+    const tvs = [
+      { id: "androidtv1a2b3c4d", name: "Game Room TV", host: "192.168.1.39" },
+      { id: "androidtv99887766", name: "Bedroom TV", host: "192.168.1.40" },
+    ];
+    assert.deepEqual(strandedTvs(tvs, onHub), [{ id: "androidtv99887766", name: "Bedroom TV", host: "192.168.1.40" }]);
+  });
+  it("names a TV by its address when it has no name, and sorts by name", () => {
+    const tvs = [
+      { id: "androidtv00000002", name: "Den", host: "192.168.1.42" },
+      { id: "androidtv00000001", name: "", host: "192.168.1.41" },
+    ];
+    assert.deepEqual(strandedTvs(tvs, new Set()).map((tv) => tv.name), ["192.168.1.41", "Den"]);
+  });
+  it("has nothing for a missing or malformed list", () => {
+    assert.deepEqual(strandedTvs(undefined, onHub), []);
+    assert.deepEqual(strandedTvs([null, { name: "no id" }], onHub), []);
   });
 });

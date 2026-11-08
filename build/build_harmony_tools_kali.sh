@@ -35,8 +35,9 @@ STRIP=mips-buildroot-linux-uclibc-strip
 # ---------------------------------------------------------------------------
 # Zig-built binaries.  Official Zig 0.16.0 (clang/LLD 21.1.0), fail-closed
 # pinned by executable SHA-256, version, and clang/LLD fingerprint, builds
-# all seven: WEBUI_ZIG (codex_webui) and OFFICIAL_ZIG (pair-agent, bthid,
-# HAL, HBus, dhcpd, portal) are separate variables but carry the same pin.
+# all eight: WEBUI_ZIG (codex_webui) and OFFICIAL_ZIG (pair-agent, bthid,
+# HAL, HBus, dhcpd, portal, codex_androidtv) are separate variables but carry
+# the same pin.
 #
 #   executable SHA-256
 #   e6cd688d25664983833aae272f501d4bceeae304875b8f1741209d15fd13a4ec
@@ -56,8 +57,8 @@ STRIP=mips-buildroot-linux-uclibc-strip
 # ---------------------------------------------------------------------------
 
 #: expected output digests (fail closed on any mismatch)
-WEBUI_EXPECT_SHA256=d84480898010aa90f919322453d4566286ea1fd9d98c97231ff870be7f9d08e6
-WEBUI_EXPECT_SIZE=1233220
+WEBUI_EXPECT_SHA256=b5f1684a708ca219c0762d7a59a89157802373a89750ac5d781cb6c07ebbe76e
+WEBUI_EXPECT_SIZE=1236468
 PAIR_EXPECT_SHA256=ab89be44f8d1db48e95a12ec3673145edfb8eb761f5e8db03f4e61acb8b01d72
 PAIR_EXPECT_SIZE=112708
 BTHID_EXPECT_SHA256=099b8a1428c2f34fe0b3428d280f65402cc6a5fd1e8e5723c56b462cc8ec2a86
@@ -70,6 +71,13 @@ DHCPD_EXPECT_SHA256=e9db51f4691511f1ae10182143518e758fc7aca0a84994fe9be602be3795
 DHCPD_EXPECT_SIZE=58328
 PORTAL_EXPECT_SHA256=1596f6cac03dad4ce0254ac118de5527c41789f10c7bc95357860d0d96c61b5f
 PORTAL_EXPECT_SIZE=76724
+ANDROIDTV_EXPECT_SHA256=fbf0e953b47b10f29fb30a41a4d339f5a034e1cc7a26c12d79f4d3711161bba2
+ANDROIDTV_EXPECT_SIZE=266916
+
+#: BearSSL 0.6 source for codex_androidtv (bearssl.org publishes no checksum; this
+#: is the tarball's SHA-256 as downloaded on 2026-11-07)
+BEARSSL_VERSION=0.6
+BEARSSL_SHA256=6705bba1714961b41a728dfc5debbe348d2966c117649392f8c8139efc83ff14
 #: committed dropbearmulti identity and its pinned upstream source tarball
 DROPBEAR_EXPECT_SHA256=e2ea632aed8b31dc5ea56b9673cbd983ec83260a97d33f891a0cebf51d5c6c8d
 DROPBEAR_EXPECT_SIZE=577296
@@ -212,6 +220,39 @@ if [ "$PORTAL_SHA256" != "$PORTAL_EXPECT_SHA256" ] || [ "$PORTAL_SIZE" != "$PORT
   exit 1
 fi
 
+# ---------------------------------------------------------------------------
+# codex_androidtv (network Android/Google TVs) — Official Zig 0.16.0 with BearSSL.
+# Built from inside $BUILD so BearSSL's paths are relative; the sorted file
+# list keeps the link order, and so the output, the same everywhere.
+# ---------------------------------------------------------------------------
+BEARSSL_TARBALL="$BUILD/bearssl-$BEARSSL_VERSION.tar.gz"
+BEARSSL_URL="https://www.bearssl.org/bearssl-$BEARSSL_VERSION.tar.gz"
+if [ ! -f "$BEARSSL_TARBALL" ]; then
+  wget -O "$BEARSSL_TARBALL" "$BEARSSL_URL"
+fi
+BEARSSL_FOUND_SHA256=$(sha256_of "$BEARSSL_TARBALL")
+if [ "$BEARSSL_FOUND_SHA256" != "$BEARSSL_SHA256" ]; then
+  echo "error: BearSSL tarball SHA-256 mismatch (found $BEARSSL_FOUND_SHA256, expected $BEARSSL_SHA256)" >&2
+  exit 1
+fi
+rm -rf "$BUILD/bearssl-$BEARSSL_VERSION"
+tar -C "$BUILD" -xzf "$BEARSSL_TARBALL"
+(
+  cd "$BUILD"
+  # shellcheck disable=SC2046
+  "$OFFICIAL_ZIG" cc -target mips-linux-musleabi -Os -static -s \
+    -ffunction-sections -fdata-sections -Wl,--gc-sections \
+    -Ibearssl-$BEARSSL_VERSION/inc -Ibearssl-$BEARSSL_VERSION/src \
+    -o "$OUT/codex_androidtv" "$SRC/codex_androidtv.c" \
+    $(find "bearssl-$BEARSSL_VERSION/src" -name '*.c' | LC_ALL=C sort)
+)
+ANDROIDTV_SHA256=$(sha256_of "$OUT/codex_androidtv")
+ANDROIDTV_SIZE=$(wc -c < "$OUT/codex_androidtv" | tr -d ' ')
+if [ "$ANDROIDTV_SHA256" != "$ANDROIDTV_EXPECT_SHA256" ] || [ "$ANDROIDTV_SIZE" != "$ANDROIDTV_EXPECT_SIZE" ]; then
+  echo "error: codex_androidtv build is not exact (size $ANDROIDTV_SIZE, sha256 $ANDROIDTV_SHA256; expected size $ANDROIDTV_EXPECT_SIZE, sha256 $ANDROIDTV_EXPECT_SHA256)" >&2
+  exit 1
+fi
+
 DROPBEAR_VERSION=2025.89
 DROPBEAR_TARBALL="$BUILD/dropbear-$DROPBEAR_VERSION.tar.bz2"
 DROPBEAR_URL="https://matt.ucc.asn.au/dropbear/releases/dropbear-$DROPBEAR_VERSION.tar.bz2"
@@ -262,7 +303,7 @@ fi
 cd "$OUT"
 ln -sf dropbearmulti dropbear
 ln -sf dropbearmulti dropbearkey
-md5sum codex_dhcpd codex_portal codex_hbus codex_hal_ltcp codex_bthid_keyboard codex_bt_pair_agent codex_webui dropbearmulti > MD5SUMS
-file codex_dhcpd codex_portal codex_hbus codex_hal_ltcp codex_bthid_keyboard codex_bt_pair_agent codex_webui dropbearmulti > FILES
-ls -l codex_dhcpd codex_portal codex_hbus codex_hal_ltcp codex_bthid_keyboard codex_bt_pair_agent codex_webui dropbearmulti > MANIFEST.txt
+md5sum codex_dhcpd codex_portal codex_hbus codex_hal_ltcp codex_bthid_keyboard codex_bt_pair_agent codex_androidtv codex_webui dropbearmulti > MD5SUMS
+file codex_dhcpd codex_portal codex_hbus codex_hal_ltcp codex_bthid_keyboard codex_bt_pair_agent codex_androidtv codex_webui dropbearmulti > FILES
+ls -l codex_dhcpd codex_portal codex_hbus codex_hal_ltcp codex_bthid_keyboard codex_bt_pair_agent codex_androidtv codex_webui dropbearmulti > MANIFEST.txt
 cat MD5SUMS >> MANIFEST.txt

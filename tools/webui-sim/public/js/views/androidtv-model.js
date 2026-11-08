@@ -130,6 +130,18 @@ export function pairingToUndo(tvId, { committed = false, devicesByTv = new Set()
   return id;
 }
 
+/**
+ * TVs codex_androidtv still has paired that no hub device uses, in a stable
+ * order: what a delete leaves behind when its unpair step fails. `tvs` is
+ * /api/androidtv/status's list; `devicesByTv` holds the ids hub devices use.
+ */
+export function strandedTvs(tvs, devicesByTv) {
+  return (Array.isArray(tvs) ? tvs : [])
+    .filter((tv) => tv?.id && !devicesByTv?.has?.(String(tv.id)))
+    .map((tv) => ({ id: String(tv.id), name: String(tv.name || tv.host || tv.id), host: String(tv.host ?? "") }))
+    .sort((a, b) => a.name.localeCompare(b.name) || a.id.localeCompare(b.id));
+}
+
 /** What the wait step says for codex_androidtv's pairing state. */
 export function pairStateText(state, name) {
   switch (state) {
