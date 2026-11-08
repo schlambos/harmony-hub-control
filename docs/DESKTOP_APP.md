@@ -12,6 +12,35 @@ account and pull a device's codes from Logitech's catalog.
   The downloaded package goes through the existing preview and
   `/api/catalog-import`. No Python helper, no terminal, no file to copy.
 
+## Install and first run (user guide)
+
+- **Install.** Download `Melodious-<version>-arm64.dmg` (Apple silicon)
+  or `-x64.dmg` (Intel) from the
+  [release page](https://github.com/schlambos/harmony-hub-control/releases),
+  open it and drag Melodious to Applications. It needs macOS 13 or
+  later, on Apple silicon or Intel. The app isn't signed with an Apple
+  Developer ID, so macOS asks before the first launch: Control-click
+  Melodious → Open, or System Settings → Privacy & Security → Open
+  Anyway. To build it yourself, see
+  [`desktop/README.md`](../desktop/README.md) (needs Node.js).
+- **First run.** When macOS asks whether Melodious may find and connect
+  to devices on your local network, choose **Allow**; without it, the
+  app can't reach the hub. The app then looks for the hub with SSDP, or
+  you type its address.
+- **Logitech catalog.** Open a device, then Import codes → Logitech
+  catalog: (1) **Sign in** — Logitech's sign-in opens in its own
+  window, and Google sign-in works too; (2) **Search** by brand and
+  model, then pick a match; (3) **Download and import** — the preview
+  shows what will import and why anything is skipped, and **Import**
+  adds the rest. Your Logitech tokens stay in the app's background
+  process, encrypted with your Keychain; the web page, the hub and the
+  logs never see them. The app has no telemetry. Without the app, the
+  same tab opens a package made with
+  `tools/catalog/harmony_catalog.py` (see
+  [its README](../tools/catalog/README.md)).
+- **Update hub…** over SSH is described in
+  [INSTALL.md](INSTALL.md#updating).
+
 Limits:
 - Reuse, don't rewrite: the UI is the existing bundle, built by
   `tools/package_harmony_shell.sh`. It isn't ported to Swift or React.

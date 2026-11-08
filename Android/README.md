@@ -55,6 +55,62 @@ Android/
 
 ---
 
+## User Guide
+
+The app is written in Kotlin with Jetpack Compose, its package is
+`app.melodious`, and it runs on Android 8.0 (API 26) and later. It
+isn't in an app store.
+
+**Install.** Download `melodious-<version>.apk` from the
+[latest release](https://github.com/schlambos/harmony-hub-control/releases/latest)
+and open it on your phone. Android asks you to allow installs from your
+browser or file manager.
+
+To build it from source:
+
+```bash
+Android/deploy_to_phone.sh                               # phone on USB, or already paired with adb
+Android/deploy_to_phone.sh --wireless <phone-ip>:<port>  # Android wireless debugging
+Android/deploy_to_phone.sh --build-only                  # build the APK and run the tests only
+```
+
+The script expects macOS with Homebrew. It installs the Android
+command-line tools and `adb` if they're missing, runs the unit tests,
+builds a debug APK and installs it. Building needs JDK 17 or 21 and
+the Android SDK.
+
+**What it does.** The app finds the hub with SSDP and then a scan of
+the subnet, or you type its address. It uses the same API on port
+8080, plus the hub's WebSocket on port 8088 for live state and
+press-and-hold. On top of the web app's features it adds:
+
+- **Touchpad**: swipe to move, tap for OK.
+- **Sleep timer**: the hub turns everything off after 15 minutes to
+  2 hours, even if the phone is off.
+- **Fix it → Resend everything**: the hub checks each device and
+  resends only the power and input commands it needs.
+- **Phone volume keys**: control the activity's volume while the app
+  is open.
+- **Start and end**: the order devices turn on and off, and the
+  commands sent when an activity starts or ends.
+- **Phone extras**: a Quick Settings tile ("Melodious: Turn off"), a
+  home-screen widget, lock-screen controls while something is on, and
+  `melodious://hub/poweroff` and `melodious://hub/activity/<id>` links.
+- **SSH recovery** (Settings → Advanced): with your SSH key, check the
+  hub, clear the web sign-in or restart Melodious's services. The key
+  isn't saved.
+- **Logitech catalog**: sign in with Chrome, search, preview and
+  import — or open a `harmony-catalog-*.json` package made on a
+  computer. See [docs/ANDROID_CATALOG.md](../docs/ANDROID_CATALOG.md).
+- **On-screen buttons**: the app edits on-screen buttons and
+  sequences; hard keys and gestures are edited in the web app (see
+  [docs/TOUCH_EDITOR.md](../docs/TOUCH_EDITOR.md)).
+
+Some things are web-only: adding and deleting devices, Edit details,
+device inputs, Find codes, Fetch from RemoteCentral, Type a code, the
+IR lab, the advanced editor, reordering activities, and the Wi-Fi,
+MQTT, Backup and System pages.
+
 ## Running Against the Existing Simulator or Hub Emulator
 
 1. Start the repository's zero-dependency UI simulator on your host machine:

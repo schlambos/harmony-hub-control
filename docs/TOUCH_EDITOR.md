@@ -46,7 +46,9 @@ editor produces must pass the validation rules below before it is saved.
   label.
 - **Single save transaction:** Saves go through `POST /api/activity-save`,
   which writes `ActivityList`, `MapList`, and `FunctionList` with new etags,
-  reloads the engine, and publishes a new configuration revision. Device
+  reloads the engine, and publishes a new configuration revision. The
+  advanced editor's "Refresh remote locally" republishes the stored setup
+  again without changing it. Device
   screen generation (`POST /api/device-screen`) and Home Assistant device
   updates (`POST /api/ha-devices`) use the same plugin save and publish
   path.
@@ -245,7 +247,12 @@ the hub validator over the same fixtures, so the two copies cannot drift.
 ## The web editor
 
 Activities → ⋮ → On-screen buttons (`#touch/<activityId>`) opens one
-activity's Touch screen. Its model is
+activity's Touch screen. The running activity's card and the Remote
+tab's header have the same shortcut, so a running activity's on-screen
+buttons are one tap away. The editor's tabs are on-screen buttons, hard
+keys and gestures; the device picker groups Home Assistant devices, and
+each binding has a press mode. The Android app edits on-screen buttons
+and sequences; hard keys and gestures are edited in the web app. Its model is
 `tools/webui-sim/public/js/views/touch-model.js`; it reads the activity's
 `16417Activity<id>` map and writes the whole `MapList` back through
 `POST /api/activity-save`, with `ActivityList` and `FunctionList` sent

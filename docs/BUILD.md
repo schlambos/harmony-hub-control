@@ -283,3 +283,33 @@ binaries.
 rooted hub. The installer does not replace `authorized_keys`; it only uploads
 Dropbear binaries/wrappers and starts the service if needed. Its build status is
 `UNVERIFIED_THIRD_PARTY` (see above).
+
+## Full test list
+
+The README's Development section has the short version. The full set:
+
+```bash
+node --test tools/webui-sim/test/                 # web app models and hub contracts
+node tools/harmony_shell_smoke.mjs                # rebuilds the embedded web app and checks it (needs bun)
+node tools/shipped_copy_hygiene.mjs               # no personal names or IDs in shipped files
+python3 tools/installer_contract_smoke.py         # the installers' contract, with a fake hub
+python3 -m unittest discover -s docker/tests      # the Docker manager
+for t in barrier device-screens ha-devices androidtv-devices touch-controls; do
+  luajit tools/touch-validator/codexactivity-$t-test.lua
+done                                              # the hub's writer: barrier, screens, Home Assistant, network TVs, press modes
+python3 tools/androidtv/androidtv_smoke.py --codex-androidtv build/output/codex_androidtv-native   # codex_androidtv against a fake TV
+luajit tools/touch-validator/codexactivity-validate-test.lua tools/webui-sim/fixtures/touch-maplist.json
+luajit tools/touch-validator/netservicestarter-guards-test.lua   # offline sync guards
+(cd Android && ./gradlew :core-protocol:test)    # Android protocol and graph tests
+node --test desktop/test/*.test.mjs               # macOS app units (after npm ci in desktop/)
+(cd desktop && npm run test:e2e)                  # macOS app end-to-end, against the simulator
+```
+
+The Android tests need JDK 17 or 21 and the Android SDK;
+`deploy_to_phone.sh` sets both up on macOS.
+
+**Rebuilding `codex_webui`.** After changing the web app, run
+`sh tools/package_harmony_shell.sh` to rebuild the embedded bundle.
+Then build the binary with the official Zig 0.16.0 (above). When
+`codex_webui` changes, update its pins in
+`build/build_harmony_tools_kali.sh` and `payload/bin/MANIFEST.txt`.

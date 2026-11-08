@@ -218,3 +218,73 @@ on Apple, Segoe on Windows. That costs 0 bytes. Sizes follow the app:
   - a key's hold action (a Press / Hold tab in the button picker);
   - the wait after a device turns on, on the Devices step. The app keeps
     it in its "Start & end" step, which is parity item P2.
+
+## Web app user guide (tab by tab)
+
+The hub serves the web app to any browser on your network, and nothing
+loads from the internet. It has four tabs: Remote, Activities, Devices
+and Settings. On phones they're a bottom bar; on screens 840 px and
+wider they're a navigation rail. Every screen has its own address,
+such as `#devices/<id>`, so you can bookmark it.
+
+**Remote**
+
+- With nothing running, the tab shows "Everything's off" and a card for
+  each activity. While an activity runs, it shows that activity's
+  remote, and the header has a direct **On-screen buttons** shortcut
+  (`#touch/<activityId>`) for it.
+- The power button turns everything off at once, without asking, like
+  the physical remote.
+- **Keyboard** sends text and keys to the TV through the hub's
+  Bluetooth keyboard.
+- **More keys** has the activity's on-screen buttons, the colour keys
+  and the number pad, "All device commands…", and the send log.
+- **Fix it** resends a device's power or input command when something
+  didn't turn on or switch input.
+- A status line shows what each key sends, as "key → device · command".
+- **Key timing:** keys fire when you lift your finger, and sliding off
+  cancels. A key with a hold action fires that action after 500 ms.
+  Volume, channel and the D-pad fire on touch and repeat while held;
+  the hub keeps the command going until you let go.
+
+**Activities**
+
+- The running activity's card has On-screen buttons, Open remote and
+  Turn off. Each other activity's row has Start and a ⋮ menu: Edit, Set
+  up buttons, On-screen buttons, Try the buttons (its remote, without
+  starting it), Advanced editor, Move up, Move down and Delete.
+- **+** opens the setup wizard.
+
+**Devices**
+
+- Search the list by device or command. **+** adds a device, and Tools
+  opens the IR lab.
+- A device page has Remote and Commands tabs. Its remote sends straight
+  to the device, outside any activity. On the Commands tab, tap a
+  command to send it; Learn a button, Import codes and Send all are
+  there too.
+- The ⋮ menu has Edit details, Delete device and the device screen
+  actions (Make, Rebuild or Remove Touch screen). A device that is
+  still in use can't be deleted, and the page says where it's used.
+
+**Settings**
+
+- **Hub**: whether the hub is connected, and its activity and device
+  counts.
+- **Remotes**: the remotes paired with the hub and a pairing window for
+  one more, with no cloud. The hub keeps one remote of each kind, so a
+  Smart Control joins a Touch but replaces an older Smart Control. Each
+  paired remote gets the same section: its buttons for each activity,
+  opening the same editor for every remote (a remote without a screen,
+  such as the Smart Control or Companion, also has its activity
+  buttons). Every remote's keys stay the same: a key you change goes on
+  all of them unless you set it for one remote only, and each activity
+  row says where they differ.
+- **Bluetooth keyboard**: pairing and saved devices.
+- **MQTT**: the broker, Home Assistant discovery and the topics.
+- **Wi-Fi**: the network the hub joins. Changes take effect after a
+  reboot.
+- **Backup**: downloads and restore.
+- **System**: status and logs, the cloud blocker, the time zone,
+  sign-in, the hub's software version, Home Assistant discovery and
+  reboot.
