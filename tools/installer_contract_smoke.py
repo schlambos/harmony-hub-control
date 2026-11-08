@@ -146,6 +146,8 @@ class FakeHub:
         # A pairing window is open, and hal's rf.info answer.
         self.rf_pairing = False
         self.rf_info = RF_INFO_ONE_SMART
+        # The pending-restart guard can't be written.
+        self.guard_fail = False
         # Short md5sum responses: these paths emit no output line.
         self.md5sum_drop_paths: set[str] = set()
 
@@ -292,6 +294,8 @@ class FakeHub:
             if not self.hal_bound:
                 return 0, "inactive\n", ""
             if c == INST.multi_remote_off_check_command(True):
+                if self.guard_fail:
+                    return 0, "guard-failed\n", ""
                 self.events.append(("guard", INST.MULTI_REMOTE_PENDING))
             if self.rf_pairing:
                 return 0, "pairing\n", ""
@@ -1760,18 +1764,23 @@ class PythonInstallerMultiRemote(unittest.TestCase):
         self.assertNotIn(("service", "reboot"), hub.events)
 
     def test_off_refused_during_pairing_or_without_a_slot_table(self):
-        """[PYTHON BEHAVIORAL] an open pairing window, or an rf.info answer that
-        can't be read, refuses off too: the check can't vouch for the table."""
-        for setup in ("pairing", "garbage"):
+        """[PYTHON BEHAVIORAL] an open pairing window, an rf.info answer that
+        can't be read, or a guard that can't be written refuses off too: the
+        check can't vouch for the table until the reboot."""
+        expected = {"pairing": "pairing window is open", "garbage": "didn't list its paired remotes",
+                    "guard": "couldn't write /var/run/codex-multi-remote-pending"}
+        for setup in ("pairing", "garbage", "guard"):
             hub = self.current_hub(conf=b"1\n", copy=True)
             hub.hal_bound = True
             if setup == "pairing":
                 hub.rf_pairing = True
+            elif setup == "guard":
+                hub.guard_fail = True
             else:
                 hub.rf_info = "decode_ltcp_payload failed (raw_len=0)"
             code, stdout, stderr = self.run_on(hub, "--multi-remote", "off")
             self.assertNotEqual(code, 0, setup)
-            self.assertIn("pairing window is open" if setup == "pairing" else "didn't list its paired remotes", stdout + stderr)
+            self.assertIn(expected[setup], stdout + stderr)
             self.assertEqual(self.writes(hub), [], setup)
 
     def test_off_preflight_checks_without_a_guard(self):
@@ -1921,8 +1930,9 @@ class PowerShellStaticContract(unittest.TestCase):
         self.assertIn('Resolve-HubIdentity\nTest-MultiRemoteOff\n', self.main)
         command = self.text.split("function Get-MultiRemoteOffCheckCommand(", 1)[1].split("\nfunction ", 1)[0]
         python_command = INST.multi_remote_off_check_command(True)
-        for fragment in ("then echo inactive; ", "if ps | grep '[r]f.pairing' >/dev/null 2>&1; then echo pairing; ",
-                         "else /data/codex/bin/codex_hal_ltcp rf.info '{}' 8 2>&1; fi; fi"):
+        for fragment in ("then echo inactive; ", "then echo guard-failed; ",
+                         "elif ps | grep '[r]f.pairing' >/dev/null 2>&1; then echo pairing; ",
+                         "else /data/codex/bin/codex_hal_ltcp rf.info '{}' 8 2>&1; fi"):
             self.assertIn(fragment, python_command)
             self.assertIn(fragment, command)
         self.assertIn("-or $multiRemoteChanged) -and -not $NoApplyCloudRestart", self.main)

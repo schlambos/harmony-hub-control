@@ -1079,21 +1079,63 @@ static int json_int(const char *json, const char *key, int def) {
     return atoi(p);
 }
 
-/* A plain integer JSON value for key: def when missing, or when it has a
+/* The value of a top-level member of a JSON object, or NULL: walks the text
+ * with string and nesting awareness, so a key of the same name inside a nested
+ * object or array, or inside a string, never matches. */
+static const char *json_top_member(const char *json, const char *key) {
+    const char *p = json;
+    size_t klen = strlen(key);
+    int depth = 0;
+    while (*p && isspace((unsigned char)*p)) p++;
+    if (*p != '{') return NULL;
+    for (; *p; p++) {
+        if (*p == '"') {
+            const char *start = ++p;
+            while (*p && *p != '"') {
+                if (*p == '\\' && p[1]) p++;
+                p++;
+            }
+            if (!*p) return NULL;
+            if (depth == 1 && (size_t)(p - start) == klen && strncmp(start, key, klen) == 0) {
+                const char *q = p + 1;
+                while (*q && isspace((unsigned char)*q)) q++;
+                if (*q == ':') {
+                    q++;
+                    while (*q && isspace((unsigned char)*q)) q++;
+                    return q;
+                }
+            }
+        } else if (*p == '{' || *p == '[') {
+            depth++;
+        } else if (*p == '}' || *p == ']') {
+            if (--depth == 0) return NULL;
+        }
+    }
+    return NULL;
+}
+
+/* A top-level boolean member: 1, 0, or def when missing or not true/false. */
+static int json_top_bool(const char *json, const char *key, int def) {
+    const char *v = json_top_member(json, key);
+    const char *end;
+    if (!v) return def;
+    if (strncmp(v, "true", 4) == 0) end = v + 4;
+    else if (strncmp(v, "false", 5) == 0) end = v + 5;
+    else return def;
+    while (*end && isspace((unsigned char)*end)) end++;
+    if (*end != ',' && *end != '}') return def;
+    return *v == 't';
+}
+
+/* A top-level plain-integer member: def when missing, or when it has a
  * fraction, an exponent or anything else after the digits. (json_int() uses
- * atoi(), so 1e1 or 1.5 read as 1.) */
-static int json_strict_int(const char *json, const char *key, int def) {
-    char needle[64];
-    const char *p;
+ * atoi() and matches the key anywhere, so 1e1 or 1.5 read as 1, and a nested
+ * "slot" could win.) */
+static int json_top_int(const char *json, const char *key, int def) {
+    const char *p = json_top_member(json, key);
     char *end;
     long v;
-    snprintf(needle, sizeof(needle), "\"%s\"", key);
-    p = strstr(json, needle);
     if (!p) return def;
-    p = strchr(p + strlen(needle), ':');
-    if (!p) return def;
-    p++;
-    while (*p && isspace((unsigned char)*p)) p++;
     if (*p != '-' && !isdigit((unsigned char)*p)) return def;
     errno = 0;
     v = strtol(p, &end, 10);
@@ -8874,14 +8916,14 @@ static int multi_remote_off_pending(void) {
     return age < MULTI_REMOTE_PENDING_SECONDS;
 }
 
-static void mark_multi_remote_off_pending(void) {
+/* 0 once the guard is written and reads as active; -1 otherwise. */
+static int mark_multi_remote_off_pending(void) {
     int fd = open(MULTI_REMOTE_PENDING, O_WRONLY | O_CREAT | O_TRUNC, 0644);
-    if (fd >= 0) {
-        if (write(fd, "1\n", 2) < 0) {
-            /* best effort: the switch still refused duplicates a moment ago */
-        }
-        close(fd);
-    }
+    int ok;
+    if (fd < 0) return -1;
+    ok = write(fd, "1\n", 2) == 2;
+    if (close(fd) != 0) ok = 0;
+    return ok && multi_remote_off_pending() ? 0 : -1;
 }
 
 static int multi_remote_enabled(void) {
@@ -8916,12 +8958,13 @@ static int multi_remote_supported(char *hal_md5, size_t md5len, char *reason, si
 
 /* Build HAL_MULTI_PATH from the hub's own hal; 0 on success, else -1 with the reason. */
 static int build_multi_remote_hal(char *reason, size_t reasonlen) {
-    char md5[40], tmp[96];
+    char md5[40] = "", tmp[96];
     unsigned char *buf;
     size_t len = 0, i, k;
     FILE *f;
     long long avail;
     if (file_md5(HAL_MULTI_PATH, md5, sizeof(md5)) == 0 && strcmp(md5, HAL_MULTI_MD5) == 0) return 0;
+    md5[0] = 0;
     avail = data_flash_free();
     if (avail >= 0 && avail < HAL_MULTI_FLASH_NEED) {
         snprintf(reason, reasonlen, "The hub's flash has %lld KB free; the multi-remote hal needs about %d KB.",
@@ -8934,7 +8977,13 @@ static int build_multi_remote_hal(char *reason, size_t reasonlen) {
         snprintf(reason, reasonlen, "The hub's hal couldn't be read whole.");
         return -1;
     }
-    if (file_md5(HAL_PATH, md5, sizeof(md5)) != 0 || strcmp(md5, HAL_STOCK_MD5) != 0) {
+    md5[0] = 0;
+    if (file_md5(HAL_PATH, md5, sizeof(md5)) != 0) {
+        free(buf);
+        snprintf(reason, reasonlen, "The hub's hal's MD5 couldn't be read.");
+        return -1;
+    }
+    if (strcmp(md5, HAL_STOCK_MD5) != 0) {
         /* Bind-mounted already: HAL_PATH is the multi-remote hal itself; copy it as is. */
         if (strcmp(md5, HAL_MULTI_MD5) != 0) {
             free(buf);
@@ -8968,6 +9017,7 @@ static int build_multi_remote_hal(char *reason, size_t reasonlen) {
         return -1;
     }
     sync();
+    md5[0] = 0;
     if (file_md5(tmp, md5, sizeof(md5)) != 0 || strcmp(md5, HAL_MULTI_MD5) != 0) {
         unlink(tmp);
         snprintf(reason, reasonlen, "The built multi-remote hal doesn't match its expected MD5 (%s), so it was discarded.",
@@ -9046,7 +9096,7 @@ static void render_multi_remote_set_json(int fd, const struct request *req) {
     char md5[40], reason[512], info[4096], dups[160], msg[384];
     int want, lock_fd, rf_lock, reboot;
     FILE *f;
-    want = req->body ? json_bool(req->body, "enabled", -1) : -1;
+    want = req->body ? json_top_bool(req->body, "enabled", -1) : -1;
     if (want < 0) {
         send_multi_remote_error(fd, "400 Bad Request", "Send {\"enabled\": true} or {\"enabled\": false}.", NULL, NULL);
         return;
@@ -9097,8 +9147,15 @@ static void render_multi_remote_set_json(int fd, const struct request *req) {
             send_multi_remote_error(fd, "409 Conflict", msg, "duplicates", dups);
             return;
         }
-        /* Still holding the pairing lock: block pairing until the reboot. */
-        if (multi_remote_active()) mark_multi_remote_off_pending();
+        /* Still holding the pairing lock: block pairing until the reboot, or don't go on. */
+        if (multi_remote_active() && mark_multi_remote_off_pending() != 0) {
+            unlink(MULTI_REMOTE_PENDING);
+            close(rf_lock);
+            close(lock_fd);
+            send_multi_remote_error(fd, "500 Internal Server Error",
+                "The hub couldn't block new pairings until it restarts, so the setting wasn't changed.", NULL, NULL);
+            return;
+        }
         close(rf_lock);
         if (write_file_atomic(MULTI_REMOTE_CONF, "0", 1) != 0) {
             unlink(MULTI_REMOTE_PENDING);
@@ -9129,7 +9186,7 @@ static void render_remote_unpair_json(int fd, const struct request *req) {
     char before[4096], after[4096], reply[1024], params[48];
     int lock, slot, code;
     FILE *f;
-    slot = req->body ? json_strict_int(req->body, "slot", 0) : 0;
+    slot = req->body ? json_top_int(req->body, "slot", 0) : 0;
     if (slot < 1 || slot > RF_SLOTS) {
         f = send_json_start(fd, "400 Bad Request");
         if (!f) return;

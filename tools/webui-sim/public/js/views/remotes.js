@@ -314,10 +314,20 @@ export function createRemotesView(section) {
     render();
     try {
       const reply = await api.unpairRemote({ slot });
-      remotes = parseRfInfo(reply.after) ?? remotes;
       snackbar(`Unpaired the ${remote.short} in slot ${slot}.`);
+      const after = parseRfInfo(reply.after);
+      if (after) remotes = after;
+      else {
+        // The hub unpaired it but couldn't list the slots afterwards: never keep
+        // showing the old list; read it again (loadRemotes() shows the radio as
+        // unavailable if that fails too).
+        unpairing = 0;
+        remotes = undefined;
+        render();
+        await loadRemotes();
+      }
     } catch (error) {
-      snackbar(error.status === 409 ? "A pairing window is open on the hub. Wait for it to close." : error.message || "The hub didn't unpair that remote.", { error: true });
+      snackbar(error.message || "The hub didn't unpair that remote.", { error: true });
       unpairing = 0;
       await loadRemotes();
     }

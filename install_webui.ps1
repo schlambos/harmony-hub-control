@@ -563,11 +563,13 @@ function Test-MqttExplicit() {
     return $script:MqttExplicitSupplied
 }
 
+# A guard that can't be written stops the check (guard-failed): without it,
+# nothing blocks a pair between the check and the reboot.
 function Get-MultiRemoteOffCheckCommand([bool]$Guard) {
-    $touch = if ($Guard) { "touch $MultiRemotePending; " } else { "" }
+    $touch = if ($Guard) { "elif ! touch $MultiRemotePending; then echo guard-failed; " } else { "" }
     return "if ! grep ' $HalPath ' /proc/mounts >/dev/null 2>&1; then echo inactive; " +
-        "else ${touch}if ps | grep '[r]f.pairing' >/dev/null 2>&1; then echo pairing; " +
-        "else /data/codex/bin/codex_hal_ltcp rf.info '{}' 8 2>&1; fi; fi"
+        "${touch}elif ps | grep '[r]f.pairing' >/dev/null 2>&1; then echo pairing; " +
+        "else /data/codex/bin/codex_hal_ltcp rf.info '{}' 8 2>&1; fi"
 }
 
 # Models without a screen paired more than once in hal's rf.info answer, as
@@ -598,7 +600,9 @@ function Test-MultiRemoteOff() {
     $out = (Invoke-Remote (Get-MultiRemoteOffCheckCommand $guard) $null 60000).Trim()
     if ($out -eq "inactive") { KV "multi_remote_off_check=inactive"; return }
     $problem = ""
-    if ($out -eq "pairing") {
+    if ($out -eq "guard-failed") {
+        $problem = "the hub couldn't write $MultiRemotePending, which blocks new pairings until it restarts"
+    } elseif ($out -eq "pairing") {
         $problem = "a pairing window is open on the hub; try again when it closes"
     } else {
         $dups = Get-RfDuplicateModels $out

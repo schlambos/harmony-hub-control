@@ -127,11 +127,13 @@ NO_SCREEN_EQUADS = ("16414", "16422", "16423")
 
 
 def multi_remote_off_check_command(guard: bool) -> str:
-    touch = f"touch {MULTI_REMOTE_PENDING}; " if guard else ""
+    # A guard that can't be written stops the check (guard-failed): without
+    # it, nothing blocks a pair between the check and the reboot.
+    touch = f"elif ! touch {MULTI_REMOTE_PENDING}; then echo guard-failed; " if guard else ""
     return (
         f"if ! grep ' {HAL_PATH} ' /proc/mounts >/dev/null 2>&1; then echo inactive; "
-        f"else {touch}if ps | grep '[r]f.pairing' >/dev/null 2>&1; then echo pairing; "
-        "else /data/codex/bin/codex_hal_ltcp rf.info '{}' 8 2>&1; fi; fi"
+        f"{touch}elif ps | grep '[r]f.pairing' >/dev/null 2>&1; then echo pairing; "
+        "else /data/codex/bin/codex_hal_ltcp rf.info '{}' 8 2>&1; fi"
     )
 
 
@@ -1612,7 +1614,9 @@ class Installer:
             kv("multi_remote_off_check=inactive")
             return
         problem = ""
-        if out == "pairing":
+        if out == "guard-failed":
+            problem = f"the hub couldn't write {MULTI_REMOTE_PENDING}, which blocks new pairings until it restarts"
+        elif out == "pairing":
             problem = "a pairing window is open on the hub; try again when it closes"
         else:
             dups = rf_duplicate_models(out)
