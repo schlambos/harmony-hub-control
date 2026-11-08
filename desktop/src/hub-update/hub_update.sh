@@ -86,6 +86,9 @@ apply() {
     ln -sf /data/codex/bin/codex_bthid_keyboard /cache/bin/bthid_keyboard
     /data/codex/bin/codex_webui 8080 >> /cache/codex-init.log 2>&1 &
     /data/codex/bin/codex_bthid_keyboard >> /cache/codex-init.log 2>&1 &
+    # codex_androidtv's service loop restarts it with the new binary.
+    killall codex_androidtv 2>/dev/null
+    if [ -x /data/codex/androidtv_service.sh ]; then /data/codex/androidtv_service.sh >/dev/null 2>&1 & fi
     sleep 1
     if [ -n "$HUB_ID" ]; then
       /data/codex/bin/codex_hbus "$HUB_ID" "harmony.automation?discover" '{"gatewayType":"codexactivity"}' >> /cache/codex-init.log 2>&1

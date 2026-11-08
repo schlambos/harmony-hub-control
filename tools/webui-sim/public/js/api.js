@@ -140,6 +140,41 @@ export function irSend({ deviceId, command, functionId, activityId, status, hold
 // Sim-only debug log (the simulator serves it at /api/sim/events). The path is
 // assembled at runtime so no routable /sim/ URL survives into the production
 // bundle; the production shell never calls this (gated on HARMONY_SIM).
+/* -- network Android/Google TVs (codex_androidtv, proxied by codex_webui) -- */
+
+export function getAndroidTvStatus() {
+  return request("/api/androidtv/status");
+}
+
+export function discoverTvs() {
+  return request("/api/androidtv/discover");
+}
+
+export function startTvPairing({ host, name }) {
+  return request("/api/androidtv/pair-start", { method: "POST", body: { host, name } });
+}
+
+export function getTvPairing() {
+  return request("/api/androidtv/pair-status");
+}
+
+export function finishTvPairing({ code }) {
+  return request("/api/androidtv/pair-finish", { method: "POST", body: { code } });
+}
+
+export function cancelTvPairing() {
+  return request("/api/androidtv/pair-cancel", { method: "POST", body: {} });
+}
+
+export function forgetTv({ id }) {
+  return request("/api/androidtv/forget", { method: "POST", body: { id } });
+}
+
+/** The hub's whole set of network TV devices (codexactivity CommitAndroidTvDevices). */
+export function saveAndroidTvDevices({ devices, dryRun = false }) {
+  return request("/api/androidtv/devices", { method: "POST", body: { devices, dryRun } });
+}
+
 export function getSimEvents() {
   return request(["/api", "sim", "events"].join("/"));
 }

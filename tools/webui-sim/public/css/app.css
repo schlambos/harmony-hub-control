@@ -577,7 +577,7 @@ button.m-row:focus-visible {
   background: var(--live);
 }
 
-/* Transport badge (IR / Bluetooth) */
+/* Transport badge (IR / Bluetooth / Network) */
 .badge {
   flex: none;
   padding: 4px 10px;
@@ -596,6 +596,11 @@ button.m-row:focus-visible {
 .badge-ha {
   background: var(--secondary-container);
   color: var(--on-secondary-container);
+}
+
+.badge-network {
+  background: var(--hub-tile);
+  color: var(--badge-network);
 }
 
 .list-note {

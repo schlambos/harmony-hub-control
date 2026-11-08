@@ -366,9 +366,12 @@ export function devices() {
       type: device.DeviceType ?? "",
       typeLabel: device.DeviceTypeDisplayName || device.DeviceType || "",
       transport,
-      // Transport 32 is Bluetooth HID; 64 is Home Assistant IP; else IR.
+      // Transport 32 is Bluetooth HID; 64 is IP (Home Assistant, or a
+      // network TV that codex_androidtv drives); else IR.
       isBluetooth: transport === 32,
-      isHa: transport === 64 || String(device.Manufacturer ?? "").toLowerCase().includes("home assistant"),
+      isAndroidTv: String(device.AutoDetectedDevice?.Id ?? "").startsWith("melodious-androidtv-"),
+      isHa: !String(device.AutoDetectedDevice?.Id ?? "").startsWith("melodious-androidtv-") &&
+        (transport === 64 || String(device.Manufacturer ?? "").toLowerCase().includes("home assistant")),
       haKey: haDeviceKey(entry),
       entry,
       inputs: inputNames(entry),

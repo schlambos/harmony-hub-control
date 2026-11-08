@@ -85,6 +85,11 @@ if [ -x /data/codex/bin/codex_bthid_keyboard ]; then
   fi
 fi
 
+if [ -x /data/codex/androidtv_service.sh ]; then
+  # Network Android/Google TVs: keeps codex_androidtv running (one copy, respawned).
+  /data/codex/androidtv_service.sh >/dev/null 2>&1 &
+fi
+
 if [ -x /data/codex/recovery_ap.sh ]; then
   if [ ! -f /var/run/codex-recovery-monitor.pid ]; then
     /data/codex/recovery_ap.sh monitor >> "$LOG" 2>&1 &

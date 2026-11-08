@@ -55,6 +55,8 @@ backups.
   gesture.
 - The hub can also act as a Bluetooth keyboard and remote for TVs and
   streaming boxes.
+- Android TV and Google TV sets pair over the network: power on and off from
+  standby, every key and inputs, with no IR.
 
 </td>
 <td valign="top">
@@ -217,6 +219,18 @@ please report what works and what doesn't (see [CONTRIBUTING.md](CONTRIBUTING.md
   - Send all: sends every command in turn, with a dry run, a set gap between
     commands and Stop.
   - IR lab: a scratch device for trying candidate codes.
+
+### Network TVs
+
+Android TV and Google TV sets can be controlled over the network instead of by
+IR. In Devices, + then **Android or Google TV on the network**: pick the TV the
+hub finds, type the code the TV shows, and name it. The hub pairs the way
+Google's TV remote app does, keeps a connection to the TV, and sends every key
+over the network, including power on from standby (with Wake-on-LAN when the TV
+sleeps deeply). The hub knows whether the TV is on, so PowerOn and PowerOff
+never toggle it the wrong way. A network TV is an ordinary device in
+activities, on buttons and on Touch screens. See
+[docs/ANDROID_TV.md](docs/ANDROID_TV.md).
 
 ### Bluetooth keyboard
 
@@ -858,9 +872,10 @@ node tools/harmony_shell_smoke.mjs                # rebuilds the embedded web ap
 node tools/shipped_copy_hygiene.mjs               # no personal names or IDs in shipped files
 python3 tools/installer_contract_smoke.py         # the installers' contract, with a fake hub
 python3 -m unittest discover -s docker/tests      # the Docker manager
-for t in barrier device-screens ha-devices touch-controls; do
+for t in barrier device-screens ha-devices androidtv-devices touch-controls; do
   luajit tools/touch-validator/codexactivity-$t-test.lua
-done                                              # the hub's writer: barrier, screens, Home Assistant, press modes
+done                                              # the hub's writer: barrier, screens, Home Assistant, network TVs, press modes
+python3 tools/androidtv/androidtv_smoke.py --codex-androidtv build/output/codex_androidtv-native   # codex_androidtv against a fake TV
 luajit tools/touch-validator/codexactivity-validate-test.lua tools/webui-sim/fixtures/touch-maplist.json
 luajit tools/touch-validator/netservicestarter-guards-test.lua   # offline sync guards
 (cd Android && ./gradlew :core-protocol:test)    # Android protocol and graph tests
@@ -883,6 +898,7 @@ the binary with the official Zig 0.16.0, as described in
 | --- | --- |
 | [docs/API.md](docs/API.md) | The hub's HTTP API, and the activity rules the paired remote needs |
 | [docs/HOME_ASSISTANT.md](docs/HOME_ASSISTANT.md) | Home Assistant entities as hub devices, webhook rules, press and hold behaviour, and setup |
+| [docs/ANDROID_TV.md](docs/ANDROID_TV.md) | Android TV and Google TV sets over the network: pairing, commands, power, codex_androidtv |
 | [docs/TOUCH_EDITOR.md](docs/TOUCH_EDITOR.md) | Remote sync, how presses and gestures resolve, on-screen buttons, device screens, slot rules and validation |
 | [docs/MELODIOUS_WEB_UI.md](docs/MELODIOUS_WEB_UI.md) | The web app's architecture, screen map, tokens and components |
 | [DESIGN.md](DESIGN.md) | The design system shared by the web and Android apps |

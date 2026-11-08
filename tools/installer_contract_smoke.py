@@ -474,6 +474,7 @@ def prime_upgrade_hub(hub: FakeHub, pre_modes: dict[str, str] | None = None) -> 
         "/data/codex/init.sh",
         "/data/codex/offline_egress_guard.sh",
         "/data/codex/recovery_ap.sh",
+        "/data/codex/androidtv_service.sh",
         "/etc/init.d/rcS.local",
     ):
         put(path, f"fake-original {path}\n".encode() * 3, pre_modes.get(path, "755"))
@@ -729,7 +730,10 @@ class PythonInstallerPreflight(unittest.TestCase):
         """[PYTHON BEHAVIORAL] a missing sensitive md5sum line is fatal,
         even though sensitive hashes are redacted from reports."""
         binary_count = len(INST.bin_manifest_names())
-        sensitive_index = binary_count + 13
+        # The fixed candidates after the binaries: dropbear, dropbearkey,
+        # init.sh, the egress guard, recovery_ap.sh, androidtv_service.sh, rcS.local,
+        # netservicestarter.lua, the two plugins, ... then config.json.
+        sensitive_index = binary_count + 14
         self.hub.md5sum_drop_paths.add(
             f"{self.hub.stage}/{sensitive_index:02d}-config.json"
         )

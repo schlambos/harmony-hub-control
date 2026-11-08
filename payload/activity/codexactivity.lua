@@ -1864,20 +1864,59 @@ local HA_MAX_COMMANDS = 128
 local HA_MIN_ID = 39000000
 local HA_REFERENCE_RESOURCES = {"ActivityList", "MapList", "FunctionList"}
 
+-- Android and Google TVs on the network (codex_androidtv). They are written the same
+-- way as Home Assistant devices: TransportType 64 commands rendered into an
+-- HTTP POST, here to codex_androidtv on the hub itself, which turns each command
+-- into an Android TV Remote key. {d} is the TV's id in codex_androidtv (androidtv<hex>),
+-- {c} the command name codex_androidtv knows. The command set is fixed, so a
+-- request names only the TV, its name and model.
+local ANDROIDTV_INPUTS = {
+  {name = "HDMI 1", command = "InputHdmi1"}, {name = "HDMI 2", command = "InputHdmi2"},
+  {name = "HDMI 3", command = "InputHdmi3"}, {name = "HDMI 4", command = "InputHdmi4"}
+}
+local ANDROIDTV_COMMAND_NAMES = {
+  "PowerOn", "PowerOff", "PowerToggle", "DirectionUp", "DirectionDown", "DirectionLeft",
+  "DirectionRight", "Select", "Back", "Home", "Menu", "Settings", "Info", "Guide",
+  "VolumeUp", "VolumeDown", "Mute", "ChannelUp", "ChannelDown", "PrevChannel", "Play",
+  "Pause", "PlayPause", "Stop", "FastForward", "Rewind", "SkipForward", "SkipBack",
+  "Record", "Captions", "Search", "Assistant", "InputHdmi1", "InputHdmi2", "InputHdmi3",
+  "InputHdmi4", "InputNext", "Red", "Green", "Yellow", "Blue", "Number0", "Number1",
+  "Number2", "Number3", "Number4", "Number5", "Number6", "Number7", "Number8", "Number9"
+}
+
+-- What differs between the two kinds of devices this writer owns. Only the
+-- Home Assistant family takes v2 (merged) devices.
+local HA_FAMILY = {
+  label = "Home Assistant", tag = HA_DEVICE_TAG, protocolName = HA_PROTOCOL_NAME,
+  manufacturer = HA_MANUFACTURER, defaultModel = HA_DEFAULT_MODEL,
+  deviceType = 44, typeName = "Home Appliance", icon = 44, mergedDevices = true,
+  idPattern = "^[a-z0-9_]+%.[a-z0-9_]+$", idHint = "an entity ID such as light.kitchen"
+}
+local ANDROIDTV_FAMILY = {
+  label = "Android TV", tag = "melodious-androidtv-", protocolName = "Melodious Android TV",
+  defaultManufacturer = "Android TV", defaultModel = "Android TV",
+  deviceType = 1, typeName = "Television", icon = 1,
+  idPattern = "^androidtv[0-9a-f]+$", idHint = "a paired TV id such as androidtv1a2b3c4d",
+  webhook = "http://127.0.0.1:8095/cmd",
+  commandNames = ANDROIDTV_COMMAND_NAMES, inputs = ANDROIDTV_INPUTS,
+  power = {on = "PowerOn", off = "PowerOff"}
+}
+
 -- The engine clears capodDeviceList[uid] after every answered IP command,
 -- and a device without AutoDetectedDevice.Id has no uid: that throws and
 -- kills the IP command task until the hub reboots. The tag is never a real
 -- SSDP uuid, so nothing else matches it, and it marks the devices this
 -- writer owns.
-local function isHaDevice(entry)
+local function isHaDevice(entry, family)
+  local tag = (family or HA_FAMILY).tag
   local device = type(entry) == "table" and entry.Device or nil
   local detected = type(device) == "table" and device.AutoDetectedDevice or nil
   return type(detected) == "table" and type(detected.Id) == "string" and
-    string.sub(detected.Id, 1, #HA_DEVICE_TAG) == HA_DEVICE_TAG
+    string.sub(detected.Id, 1, #tag) == tag
 end
 
-local function isHaProtocol(protocol)
-  return type(protocol) == "table" and protocol.Name == HA_PROTOCOL_NAME
+local function isHaProtocol(protocol, family)
+  return type(protocol) == "table" and protocol.Name == (family or HA_FAMILY).protocolName
 end
 
 -- A placeholder value lands in a JSON body and in string.gsub's
@@ -1932,17 +1971,21 @@ local function haAlias(value)
   return value
 end
 
-local function haDeviceSpecFrom(raw, index)
+local function haDeviceSpecFrom(raw, index, family)
+  family = family or HA_FAMILY
   local label = "device " .. index
   if type(raw) ~= "table" then
     return nil, label .. " must be an object"
   end
-  local isV2 = raw.key ~= nil or raw.entities ~= nil
+  local isV2 = family.mergedDevices and (raw.key ~= nil or raw.entities ~= nil) or false
   local spec = {
     name = haLabel(raw.name, 64),
     model = (raw.model == nil or raw.model == json.null) and
-      (isV2 and HA_DEFAULT_V2_MODEL or HA_DEFAULT_MODEL) or
+      (isV2 and HA_DEFAULT_V2_MODEL or family.defaultModel) or
       haLabel(raw.model, 64),
+    manufacturer = family.manufacturer or
+      ((raw.manufacturer == nil or raw.manufacturer == json.null) and family.defaultManufacturer or
+        haLabel(raw.manufacturer, 64)),
     commands = {},
     inputs = {}
   }
@@ -1985,8 +2028,8 @@ local function haDeviceSpecFrom(raw, index)
   else
     spec.key = nil
     spec.entity = haValue(raw.entity, 128)
-    if not spec.entity or not string.match(spec.entity, "^[a-z0-9_]+%.[a-z0-9_]+$") then
-      return nil, label .. " needs an entity ID such as light.kitchen"
+    if not spec.entity or not string.match(spec.entity, family.idPattern) then
+      return nil, label .. " needs " .. family.idHint
     end
     label = spec.entity
     spec.entities = {{alias = spec.entity, entity = spec.entity}}
@@ -1997,6 +2040,20 @@ local function haDeviceSpecFrom(raw, index)
   end
   if not spec.model then
     return nil, label .. ": model must be 1-64 characters without quotes or backslashes"
+  end
+  if not spec.manufacturer then
+    return nil, label .. ": manufacturer must be 1-64 characters without quotes or backslashes"
+  end
+  if family.commandNames then
+    -- A fixed command set: each command's value is its own name.
+    for i, name in ipairs(family.commandNames) do
+      spec.commands[i] = {name = name, value = name}
+    end
+    spec.power = {type = 1, on = family.power.on, off = family.power.off}
+    for i, input in ipairs(family.inputs) do
+      spec.inputs[i] = {name = input.name, command = input.command}
+    end
+    return spec
   end
   local commands = haList(raw.commands)
   if not commands or #commands == 0 or #commands > HA_MAX_COMMANDS then
@@ -2073,7 +2130,8 @@ local function haDeviceSpecFrom(raw, index)
   return spec
 end
 
-local function haSetFrom(set)
+local function haSetFrom(set, family)
+  family = family or HA_FAMILY
   if type(set) ~= "table" then
     return nil, "the device set must be an object"
   end
@@ -2081,13 +2139,13 @@ local function haSetFrom(set)
   if not devices or #devices > HA_MAX_DEVICES then
     return nil, "devices must be a list of at most " .. HA_MAX_DEVICES .. " devices"
   end
-  local out = {devices = {}, webhook = haWebhook(set.webhook)}
+  local out = {devices = {}, webhook = family.webhook or haWebhook(set.webhook)}
   if #devices > 0 and not out.webhook then
     return nil, "webhook must be a plain http:// URL the hub can reach"
   end
   local keys, entities, names = {}, {}, {}
   for i, raw in ipairs(devices) do
-    local spec, specError = haDeviceSpecFrom(raw, i)
+    local spec, specError = haDeviceSpecFrom(raw, i, family)
     if not spec then
       return nil, specError
     end
@@ -2181,12 +2239,13 @@ local function haReferences()
   return refs
 end
 
-local function haDeviceTable(spec, deviceId, now)
+local function haDeviceTable(spec, deviceId, now, family)
+  family = family or HA_FAMILY
   return {
-    DongleIndex = 0, InterDeviceDelay = 0, HoldInterKeyDelay = 0, DeviceType = 44,
+    DongleIndex = 0, InterDeviceDelay = 0, HoldInterKeyDelay = 0, DeviceType = family.deviceType,
     RegisterSection = json.null, ContentProfileKey = tonumber(deviceId), DeviceOrder = 0,
     DeviceProfileUri = "", SetupState = 1, DeviceSearchType = -1,
-    ["GlobalDeviceVersionId-"] = 0, DeviceTypeDisplayName = "Home Appliance",
+    ["GlobalDeviceVersionId-"] = 0, DeviceTypeDisplayName = family.typeName,
     FriendlyName = json.null, PressMinRepeats = 0, PrivateAddType = 1,
     RegionalCharset = json.null, BTAddress = json.null, DongleRFID = 0,
     ["GlobalLanguageVersionId-"] = 0, ParentDeviceId = json.null, DecodedEdid = json.null,
@@ -2194,7 +2253,7 @@ local function haDeviceTable(spec, deviceId, now)
     IsMultiCode = false, GroupName = json.null, DefaultInterDeviceDelay = 0,
     ["ParentDevice-"] = 0, DeviceAddedDate = now, AppLaunchConfigs = json.null,
     PictureId = json.null, IsKeyboardAssociated = false, IsScartCableSupported = false,
-    Icon = 44, ["Id-"] = tonumber(deviceId), IsInterKeyDelayOptimized = false,
+    Icon = family.icon, ["Id-"] = tonumber(deviceId), IsInterKeyDelayOptimized = false,
     SuggestedDisplay = "DEFAULT", ControlPort = 7, EncodedEdid = json.null,
     InterKeyDelay = 0, DeviceClassification = 0, DeviceCapabilitiesWithPriority = {},
     CopiedDeviceSource = -1, State = 1, HoldInterDeviceDelay = 0, ActivityIds = json.null,
@@ -2204,16 +2263,17 @@ end
 
 -- Build one device entry from its spec, keeping the IDs, dates and timing
 -- an earlier commit or the device settings editor left on it.
-local function haDeviceEntry(spec, old, deviceId, protocolId, nextId, now)
-  local entry = old or {Device = haDeviceTable(spec, deviceId, now), DeviceFeatures = {}}
+local function haDeviceEntry(spec, old, deviceId, protocolId, nextId, now, family)
+  family = family or HA_FAMILY
+  local entry = old or {Device = haDeviceTable(spec, deviceId, now, family), DeviceFeatures = {}}
   local device = entry.Device
   device.Name = spec.name
   device.Model = spec.model
-  device.Manufacturer = HA_MANUFACTURER
-  device.ParentDeviceManufacturer = HA_MANUFACTURER
+  device.Manufacturer = spec.manufacturer
+  device.ParentDeviceManufacturer = spec.manufacturer
   device.Transport = 64
   device.Tokens = {Parameters = {{Key = "{d}", Value = spec.key or spec.entity}}}
-  device.AutoDetectedDevice = {Id = HA_DEVICE_TAG .. deviceId}
+  device.AutoDetectedDevice = {Id = family.tag .. deviceId}
   local previous = {}
   for _, command in ipairs(type(entry.Commands) == "table" and entry.Commands or {}) do
     if type(command) == "table" and type(command.Name) == "string" then
@@ -2262,11 +2322,11 @@ local function haDeviceEntry(spec, old, deviceId, protocolId, nextId, now)
   return entry
 end
 
-local function haProtocol(protocolId, webhook)
+local function haProtocol(protocolId, webhook, family)
   return {
     Attributes = {}, IsPadded = false, IsFullSequence = false, Rating = json.null,
     NumberOfLinkedLanguage = 0, Status = json.null, IsPublic = false, HoldDelay = json.null,
-    PressMinimumRepeats = 0, SendingType = 0, Name = HA_PROTOCOL_NAME,
+    PressMinimumRepeats = 0, SendingType = 0, Name = (family or HA_FAMILY).protocolName,
     ControlSection = {
       Url = webhook,
       Method = "POST",
@@ -2284,10 +2344,12 @@ local function haProtocol(protocolId, webhook)
   }
 end
 
--- Make the hub's Home Assistant devices match the requested set: add,
--- update and remove the devices this writer owns, and keep one protocol
--- that points at the webhook. Other devices are never touched.
-local function commitHaDevices(request)
+-- Make the hub's Home Assistant (or Android TV) devices match the requested
+-- set: add, update and remove the devices this writer owns for that family,
+-- and keep one protocol that points at the webhook. Other devices, including
+-- the other family's, are never touched.
+local function commitHaDevices(request, family)
+  family = family or HA_FAMILY
   if not blockerActive() then
     return {
       ok = false,
@@ -2295,7 +2357,7 @@ local function commitHaDevices(request)
       error = "offline device writer refused to run because the cloud blocker is not active"
     }
   end
-  local set, setError = haSetFrom(request.set)
+  local set, setError = haSetFrom(request.set, family)
   if not set then
     return {ok = false, localOnly = true, error = setError}
   end
@@ -2342,7 +2404,7 @@ local function commitHaDevices(request)
   local owned, ownedByEntity, kept, otherNames = {}, {}, {}, {}
   for _, entry in ipairs(deviceList.DevicesWithFeatures) do
     local device = type(entry) == "table" and entry.Device or {}
-    if isHaDevice(entry) and haEntityOf(entry) then
+    if isHaDevice(entry, family) and haEntityOf(entry) then
       owned[haEntityOf(entry)] = entry
       ownedByEntity[haEntityOf(entry)] = entry
     else
@@ -2366,7 +2428,7 @@ local function commitHaDevices(request)
   protocolList.Protocols = {}
   local protocolId
   for _, protocol in ipairs(oldProtocols.resource.Protocols) do
-    if isHaProtocol(protocol) then
+    if isHaProtocol(protocol, family) then
       protocolId = protocolId or protocol["Id-"]
     else
       protocolList.Protocols[#protocolList.Protocols + 1] = protocol
@@ -2374,7 +2436,7 @@ local function commitHaDevices(request)
   end
   if #set.devices > 0 then
     protocolId = protocolId or nextId()
-    protocolList.Protocols[#protocolList.Protocols + 1] = haProtocol(protocolId, set.webhook)
+    protocolList.Protocols[#protocolList.Protocols + 1] = haProtocol(protocolId, set.webhook, family)
   end
 
   local now = "/Date(" .. tostring(os.time() or 0) .. "000+0000)/"
@@ -2451,7 +2513,7 @@ local function commitHaDevices(request)
       deviceId = tostring(nextId())
     end
     local before = old and copyValue(old) or nil
-    local entry = haDeviceEntry(spec, old, deviceId, protocolId, nextId, now)
+    local entry = haDeviceEntry(spec, old, deviceId, protocolId, nextId, now, family)
     wanted[key] = true
     for _, item in ipairs(spec.entities) do
       wanted[item.entity] = true
@@ -2623,7 +2685,7 @@ local function commitHaDevices(request)
       ok = false,
       localOnly = true,
       rolledBack = restored and true or false,
-      error = "Harmony engine rejected the Home Assistant device reload"
+      error = "Harmony engine rejected the " .. family.label .. " device reload"
     }
   end
   -- New etags plus a new revision: the Touch pulls both lists on its own.
@@ -2650,7 +2712,9 @@ local function processRequest(raw)
   elseif request.op == "CommitDeviceSettings" then
     response = commitDeviceSettings(request)
   elseif request.op == "CommitHaDevices" then
-    response = commitHaDevices(request)
+    response = commitHaDevices(request, HA_FAMILY)
+  elseif request.op == "CommitAndroidTvDevices" then
+    response = commitHaDevices(request, ANDROIDTV_FAMILY)
   elseif request.op == "CommitDeviceScreen" then
     response = commitDeviceScreen(request)
   elseif request.op == "Status" then

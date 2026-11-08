@@ -729,3 +729,14 @@ label.m-row:hover {
     transition: none;
   }
 }
+
+/* Add a network TV (androidtv-sheet.js) */
+.androidtv-entry { margin-bottom: 8px; }
+.m-row:disabled { opacity: 0.55; cursor: default; }
+input.androidtv-code {
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  font-size: 1.4rem;
+  letter-spacing: 0.3em;
+  text-transform: uppercase;
+}
+.androidtv-status { margin: 4px 0 12px; }
