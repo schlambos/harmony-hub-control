@@ -19,16 +19,12 @@
   <a href="docs/API.md">API</a>
 </p>
 
-Melodious is software for a Harmony Hub that has already been rooted with
-[harmony-hub-root](https://github.com/Ripthulhu/harmony-hub-root). It runs on
-the hub next to Logitech's own firmware. It takes over the jobs that used to
-need Logitech's cloud (adding devices, building activities, keeping the paired
-remote in sync), and it connects the hub and Home Assistant so each can
-control the other. You set it up from a web app the hub serves, from an
-Android app or from a macOS app.
+Melodious runs on a Harmony Hub already rooted with
+[harmony-hub-root](https://github.com/Ripthulhu/harmony-hub-root), next to Logitech's own firmware. It
+takes over the cloud's jobs (devices, activities, remote sync) and connects the hub and Home Assistant
+both ways. Set it up from the hub's web app, the Android app or the macOS app.
 
-This repository contains no rooting tools, exploits, private keys or personal
-backups.
+This repository contains no rooting tools, exploits, private keys or personal backups.
 
 <p align="center">
   <img src="docs/screenshots/web/remote.png" alt="The web app's remote on a phone" height="480">
@@ -46,64 +42,45 @@ backups.
 <tr>
 <td valign="top">
 
-- Runs offline. Logitech's cloud is blocked, and the paired remote syncs
-  from the hub.
+- Runs offline. Logitech's cloud is blocked, and the paired remote syncs from the hub.
 - Activities, devices, inputs and power order, all edited on the hub.
-- IR learning, and code import from IRDB, Flipper files, Pronto, RemoteCentral
-  or Logitech's catalog.
-- Any command can go on a hard key, an on-screen button, the number pad or a
-  gesture.
-- The hub can also act as a Bluetooth keyboard and remote for TVs and
-  streaming boxes.
-- Android TV and Google TV sets pair over the network: power on and off from
-  standby, every key and inputs, with no IR.
+- IR learning, and code import from IRDB, Flipper files, Pronto, RemoteCentral or Logitech's
+  catalog.
+- Any command can go on a hard key, an on-screen button, the number pad or a gesture.
+- The hub can also act as a Bluetooth keyboard and remote for TVs and streaming boxes.
+- Android TV and Google TV sets pair over the network: power on and off from standby, every key and
+  inputs, with no IR.
 
 </td>
 <td valign="top">
 
-- Whole Home Assistant devices (LG webOS TVs, Google TV and Android TV
-  boxes, AVRs and Cast players) merge into one Harmony device with power,
-  volume, inputs, apps, transport and D-pad — or expose single entities
-  (lights, switches, fans, covers, scripts, scenes and buttons) instead.
-  Use them in activities, on any remote button, or on their own device
-  screen. Hold a key to dim or change volume; toggles fire once per press.
-- **Live two-way state.** Home Assistant pushes live power, input, volume,
-  mute, playing state and the current app to the hub (in RAM, never flash),
-  shown on the web and Android remote and device screens and in Fix It —
-  including an LG webOS TV's HDMI port, CEC and ARC theater state, with
-  display-only links from a port to the device plugged into it.
-- **Smart startup.** A device Home Assistant reports as already on, or
-  already on the wanted input, isn't sent a redundant `PowerOn` or input
-  switch.
-- **The hub is a `remote` entity in Home Assistant** (`remote.turn_on`,
-  `remote.turn_off` and `remote.send_command` for IR, Bluetooth and Home
-  Assistant devices alike), and every Harmony button press on a Home
-  Assistant device fires a `melodious.command_received` event, so one
-  button can trigger any Home Assistant automation.
-- An MQTT bridge with discovery gives Home Assistant an activity selector,
-  status sensors and a power-off button, and Home Assistant's built-in
-  Harmony integration keeps working, locally.
+- Whole devices (LG webOS, Google/Android TV, AVRs, Cast) merge into one Harmony device — power,
+  volume, inputs, apps, transport, D-pad — or expose single entities (lights, switches, fans,
+  covers, scripts, scenes, buttons). Use them in activities, on any button, or on their own screen;
+  hold to dim/ramp, toggles fire once.
+- **Live two-way state:** power, input, volume, mute, playback and app (plus LG HDMI/CEC/ARC theater
+  state and display-only port links) pushed to the hub's RAM and shown in the apps and Fix It.
+- **Smart startup:** no redundant `PowerOn`/input switch for a device already on, or already on the
+  wanted input.
+- **The hub is a `remote` entity** (`turn_on`/`turn_off`/`send_command` for IR, Bluetooth and HA
+  devices alike), and every Harmony press on an HA device fires `melodious.command_received` for
+  automations.
+- MQTT discovery (activity selector, status sensors, Power Off), and HA's built-in Harmony
+  integration keeps working locally.
 
 </td>
 </tr>
 </table>
 
-Both sides share the same apps, the same button mapping and the same save
-path. To the hub, an IR code, a Bluetooth key and a Home Assistant action are
-all ordinary device commands.
+Both sides share the same apps, the same button mapping and the same save path. To the hub, an IR
+code, a Bluetooth key and a Home Assistant action are all ordinary device commands.
 
 ## Why Melodious
 
-Logitech stopped making Harmony remotes in 2021. A Harmony Hub depends on
-Logitech's app and cloud for its setup: adding a device, building an activity
-and updating the paired remote all go through Logitech's servers. If that
-service changes or goes away, the hub's setup is frozen.
-
-Melodious moves that work onto the hub. It keeps Logitech's engine for what
-the engine does well: sending IR, running activities and talking to the
-remote. It replaces only the parts that needed the cloud. Your setup lives in
-the hub's own files, where you can back it up, restore it and edit it without
-an account.
+Logitech stopped making Harmony remotes in 2021, yet a Hub still needs its app/cloud to add devices,
+build activities and update the remote — lose that service and your setup is frozen. Melodious moves
+the work on-hub (keeping Logitech's IR/activity/remote engine), with your setup in local files you
+can back up, restore and edit account-free.
 
 ## Requirements
 
@@ -112,7 +89,7 @@ an account.
 | Harmony Hub | Rooted with [harmony-hub-root](https://github.com/Ripthulhu/harmony-hub-root). Melodious doesn't root hubs. |
 | SSH key | The root tool's private key, `harmony_owner_*`, in `~/.ssh` (`%USERPROFILE%\.ssh` on Windows). |
 | Hub ID | The numeric Hub ID the root tool prints. Don't guess it: Melodious sends it with every command to the hub's engine. |
-| Free flash | About 1.4 MB of the hub's 5 MB data flash for the first install, or about 1 MB when the root tool's identical Dropbear can be reused. Each later web app update needs about 0.65 MB free. The installer measures it and stops before writing anything if there isn't enough (see [If the hub's flash is full](#if-the-hubs-flash-is-full)). |
+| Free flash | About 1.4 MB of the hub's 5 MB data flash for the first install (about 1 MB if the root tool's identical Dropbear can be reused); each later web app update needs about 0.65 MB. The installer measures it and stops before writing anything if there isn't enough — see [docs/INSTALL.md](docs/INSTALL.md#if-the-hubs-flash-is-full). |
 | Install computer | Windows with PowerShell, Linux or macOS with Python 3, or a Docker or Unraid host. The installer needs only `ssh`, not `scp` or `sftp`. |
 | Network | A trusted home network. The web app is plain HTTP. |
 | Home Assistant (optional) | Any recent Home Assistant with [HACS](https://hacs.xyz/), reachable from the hub over plain `http://`. An MQTT broker is needed only for the MQTT bridge. |
@@ -121,12 +98,11 @@ an account.
 
 ## Quick start
 
-1. Root the hub with harmony-hub-root. Keep the SSH key it creates
-   (`harmony_owner_*` in `~/.ssh`) and the numeric Hub ID it prints.
-2. Download `melodious-hub-<version>.zip` from the
-   [latest release](https://github.com/schlambos/harmony-hub-control/releases/latest)
-   and unzip it, or clone this repository. From a computer on the same
-   network, install Melodious:
+1. Root the hub with harmony-hub-root. Keep the SSH key it creates (`harmony_owner_*` in `~/.ssh`)
+   and the numeric Hub ID it prints.
+2. Download `melodious-hub-<version>.zip` from the [latest
+   release](https://github.com/schlambos/harmony-hub-control/releases/latest) and unzip it, or clone
+   this repository. From a computer on the same network, install Melodious:
 
    ```bash
    python3 install_webui.py --hub-host <hub-ip> --hub-id <hub-id>
@@ -138,43 +114,30 @@ an account.
    .\install_webui.ps1 -HubHost <hub-ip> -HubId <hub-id>
    ```
 
-   The first install turns on the cloud blocker, leaves MQTT off, and reboots
-   the hub once.
-3. Open `http://<hub-ip>:8080/` on your phone or computer. Your existing
-   activities and devices are there, including any set up with the Logitech
-   app before rooting.
+   The first install turns on the cloud blocker, leaves MQTT off, and reboots the hub once.
+3. Open `http://<hub-ip>:8080/` on your phone or computer. Your existing activities and devices are
+   there, including any set up with the Logitech app before rooting.
 4. Optional: add Home Assistant (see [Set up Home Assistant](#set-up-home-assistant)).
 
 ## Harmony
 
 ### Offline operation
 
-- **The cloud is blocked.** The hub doesn't start Logitech's cloud tasks
-  (cloud API, PubNub, the package manager), and requests to Logitech and
-  PubNub hosts fail cleanly. The internet route is removed and kept off,
-  while LAN and multicast routes stay up. Local control, SSDP/mDNS
-  discovery, MQTT and Home Assistant webhooks keep working.
-- **The paired remote syncs from the hub.** Each saved change publishes a new
-  configuration revision, and the remote pulls it by itself within seconds.
-  You don't need a MyHarmony account or a sync cable, and there's no cloud
-  copy to overwrite your edits.
-- **Syncs finish offline.** During a sync the remote checks connectivity,
-  asks for the time, and asks for device content records (`CD_<id>`). Devices
-  made on the hub don't have those records. The hub answers all three
-  locally.
-- **The hub keeps its own time.** Its clock is set over NTP; each query gets a
-  temporary route. You can set the time zone in System.
-- **Local edits are protected.** System → Cloud egress turns the cloud blocker
-  on, and the app has no control to turn it off. Activity and device changes
-  are refused while the blocker is off, so a local edit can't race a cloud
-  sync.
+- **The cloud is blocked.** Logitech's cloud tasks don't start, Logitech/PubNub requests fail
+  cleanly, and the internet route is removed — LAN, SSDP/mDNS discovery, MQTT and Home Assistant
+  keep working.
+- **The paired remote syncs from the hub.** Each save publishes a new revision, which the remote
+  pulls within seconds — no MyHarmony account and no cloud copy to overwrite your edits.
+- **Syncs finish offline:** the connectivity, time and device-content checks along the way are all
+  answered locally.
+- **The hub keeps its own time** over NTP (temporary route per query); set the time zone in System.
+- **Local edits are protected:** System → Cloud egress turns the blocker on (there's no off
+  control), and activity/device edits are refused while it's off.
 
 ### Remotes
 
-Melodious does its work on the hub, so it's designed for any Harmony remote
-that pairs with the hub. **It has been validated on hardware with the Harmony
-Touch and the Harmony Smart Control remote, and a user reports that the
-Harmony Elite works.**
+Designed for any remote that pairs with the hub; **validated on the Harmony Touch and Smart Control,
+and a user reports the Harmony Elite works.**
 
 | Remote | Status |
 | --- | --- |
@@ -185,259 +148,103 @@ Harmony Elite works.**
 | Other remotes that pair with the hub, such as the Harmony Ultimate or 950 | Expected to work, but not yet tested. Features that need a screen apply only to remotes that have one. |
 | Phones, tablets and computers | The web, Android and macOS apps. |
 
-No remote needs modified firmware. If you run Melodious with another remote,
-please report what works and what doesn't (see [CONTRIBUTING.md](CONTRIBUTING.md)).
+No remote needs modified firmware; reports for other remotes welcome ([CONTRIBUTING.md](CONTRIBUTING.md)).
 
 ### Activities
 
-- **Setup wizard.** It has five steps:
-  - Name.
-  - Devices: which device does each job, and how long to wait after each one
-    turns on.
-  - Inputs.
-  - Buttons: 36 keys, each with a press action and a hold action.
-  - Review.
-
-  For a new activity, the wizard orders the devices Display → Volume →
-  Player, with sensible warm-up waits (2.5 s for a TV, 1.5 s for an AVR or
-  soundbar, 1 s for a player), so the TV is awake before the hub switches
-  its input. An existing activity keeps the order and waits it was saved
-  with.
-- **Advanced editor.** It covers the roles, the button map for each remote
-  surface, and the activity's JSON.
-- **Start and end** (Android app). Set the order devices turn on and off, and
-  commands to send when the activity starts or ends.
-- **Saves are transactions.** The hub checks each save against the rules the
-  remote's own reader enforces, then writes it and reads it back. If anything
-  fails, it restores the previous version. If the setup changed after you
-  opened it, the save is refused and the latest copy loads.
+- **Setup wizard:** Name → Devices → Inputs → Buttons (36 keys, press + hold) → Review. New
+  activities power on Display → Volume → Player with warm-up waits (2.5 s TV, 1.5 s AVR/soundbar, 1
+  s player); existing ones keep their saved order/waits.
+- **Advanced editor:** roles, per-remote button maps, activity JSON. Android adds **Start and end**
+  (power order + start/end commands).
+- **Saves are transactions:** validated, written, read back, rolled back on failure; a setup changed
+  since opening refuses the save.
 
 ### Devices and codes
 
-- **Device settings.** You can set:
-  - power: separate On and Off commands, one toggle, or none;
-  - turning on: warm-up time, Always on, and Keep on between activities;
-  - inputs and timing.
-- **Learn a button.** Point the original remote at the hub, press the button,
-  then test and save it.
-- **Import codes.** The sources are:
-  - search IRDB;
-  - open Flipper `.ir` files;
-  - paste IRDB CSV, `name|mode|code` lines or Pronto hex;
-  - fetch a RemoteCentral page;
-  - type a code.
-
-  IRDB's NEC, NECx, Samsung, Pioneer, Sony, RC5, RC6, Panasonic, JVC, Denon
-  and Sharp codes are converted with each protocol's frame timing.
-- **Logitech catalog** (macOS and Android apps). Sign in with your own
-  Logitech account, search by brand and model, preview every command, and
-  import to the hub. The preview lists any command whose IR protocol the hub
-  lacks, with the reason, instead of dropping it silently. Your credentials
-  stay in the macOS Keychain or the Android Keystore, and the hub never sees
-  them.
-- **Find codes that work.**
-  - Send all: sends every command in turn, with a dry run, a set gap between
-    commands and Stop.
-  - IR lab: a scratch device for trying candidate codes.
+- **Device settings:** power mode (discrete/toggle/none), warm-up, Always on / Keep on, inputs,
+  timing. **Learn a button** from the original remote, then test and save.
+- **Import codes** via IRDB search, Flipper `.ir` files, pasted IRDB CSV / `name|mode|code` / Pronto
+  hex, a RemoteCentral fetch, or typing a code — NEC, Samsung, Sony, RC5/6 and more converted with
+  proper frame timing.
+- **Logitech catalog** (macOS/Android): sign in, search brand/model, preview (skips explained),
+  import. Credentials never reach the hub. See [docs/DESKTOP_APP.md](docs/DESKTOP_APP.md) ·
+  [docs/ANDROID_CATALOG.md](docs/ANDROID_CATALOG.md).
+- **Find what works:** Send all (dry run, set gap, Stop) or the IR lab scratch device.
 
 ### Network TVs
 
-Android TV and Google TV sets can be controlled over the network instead of by
-IR. In Devices, + then **Android or Google TV on the network**: pick the TV the
-hub finds, type the code the TV shows, and name it. The hub pairs the way
-Google's TV remote app does, keeps a connection to the TV, and sends every key
-over the network, including power on from standby (with Wake-on-LAN when the TV
-sleeps deeply). The hub knows whether the TV is on, so PowerOn and PowerOff
-never toggle it the wrong way. A network TV is an ordinary device in
-activities, on buttons and on Touch screens. See
-[docs/ANDROID_TV.md](docs/ANDROID_TV.md).
+Android/Google TV over the network, not IR: Devices → + → **Android or Google TV on the network**,
+type the on-screen pairing code, name it. Every key then goes over the network (power on from
+standby, Wake-on-LAN for deep sleep), PowerOn/Off never toggle wrong, and the TV works in
+activities, on buttons and on Touch screens. See [docs/ANDROID_TV.md](docs/ANDROID_TV.md).
 
 ### Bluetooth keyboard
 
-The hub can pair with a TV, a streaming box (such as an NVIDIA SHIELD or a
-Google TV) or a computer as a Bluetooth keyboard and remote. From your phone
-you can type searches and passwords and send keys. Paired targets are saved
-along with their keystroke scripts. Bluetooth commands go on remote buttons
-like any other command.
-
-The keyboard page also has the TV keys a Chromecast with Google TV remote
-uses: Home and Back (Consumer-page usages `0x223` and `0x224`), plus Menu,
-Search, Guide, Info, Settings, Exit, Voice and Quick settings. They travel in
-the consumer-control report the hub's keyboard profile already declares, so
-an existing pairing keeps working. The stock Bluetooth device template also
-has Home and Back commands for physical remote buttons.
+The hub pairs as a Bluetooth keyboard/remote with TVs, boxes (SHIELD, Google TV) and computers: type
+from your phone, save keystroke scripts, map commands to any button — including Chromecast with
+Google TV consumer keys (Home/Back `0x223`/`0x224`, Menu, Search, Guide, Info, Settings, Exit,
+Voice, Quick settings). See
+[docs/API.md](docs/API.md#consumer-page-tv-keys).
 
 ## Home Assistant
 
-Melodious connects the hub and Home Assistant in both directions.
+Melodious connects the hub and Home Assistant in both directions, with live state flowing back:
 
 | Direction | How |
 | --- | --- |
-| **Harmony controls Home Assistant** | The [Melodious integration](https://github.com/schlambos/ha-melodious) turns whole Home Assistant devices (merged) or single entities into ordinary devices on the hub (`TransportType: 64`). Activities, physical remote buttons, Touch screens and the apps drive them through a local webhook, and every command also fires a `melodious.command_received` event in Home Assistant, so a button can chain into any automation. |
-| **Home Assistant controls Harmony** | The Melodious integration also exposes the hub itself as a `remote` entity in Home Assistant: `turn_on` / `turn_off` start and stop activities, and `send_command` sends any command to any IR, Bluetooth or Home Assistant device on the hub (with `num_repeats`, `delay_secs` and `hold_secs`). The optional MQTT bridge and Home Assistant's built-in Logitech Harmony integration also keep working over the hub's local connections. |
-| **Live state back to Harmony** | Home Assistant pushes live device state (power, input/source, current app, playing or paused, volume and mute, plus an LG webOS TV's HDMI port and ARC status) to the hub's RAM-only `/api/ha-state` channel, where the web and Android apps show it. |
+| **Harmony controls Home Assistant** | The [Melodious integration](https://github.com/schlambos/ha-melodious) turns whole Home Assistant devices (merged) or single entities into ordinary hub devices (`TransportType: 64`), driven by activities, remote buttons, Touch screens and the apps over a local webhook. Every command also fires a `melodious.command_received` event, so a button can chain into any automation. |
+| **Home Assistant controls Harmony** | The integration exposes the hub as a `remote` entity (`turn_on`, `turn_off`, `send_command` for IR, Bluetooth and Home Assistant devices alike). The optional MQTT bridge and Home Assistant's built-in Harmony integration also keep working locally. |
+| **Live state back to Harmony** | Home Assistant pushes live power, input/source, app, playing state, volume and mute — plus an LG webOS TV's HDMI port and ARC status — to the hub's RAM-only `/api/ha-state` channel for the apps to show. |
 
-### Entities and devices as Harmony devices
+### What it allows for (merged devices & entities)
 
-In the integration's **Configure** flow you can pick **whole Home
-Assistant devices**, which merge all of a device's entities into one
-Harmony device (a duplicate Cast twin of the same hardware is suppressed
-automatically), as well as individual entities. The review step lists
-each merged device's entities and commands, and you can untick any entity
-or command you don't want on the hub.
+In **Configure**, pick **whole devices** (entities merged into one Harmony device; Cast twins
+suppressed) and/or **single entities**, unticking anything unwanted at review.
 
-Each entity you pick becomes an ordinary device on the hub that uses IP
-transport (`TransportType: 64`):
+- **Whole devices:** LG webOS TVs (discrete power via Wake-on-LAN; stable `Input HDMI 1`–`4` by
+  hardware port — CEC renames can't break activities), Google/Android TV (media player + remote
+  merged), AVRs (`select` options become inputs), Cast players.
+- **Single entities:** lights (hold to dim), switches, fans, covers, scripts, scenes, buttons —
+  toggles fire once per press ([Press modes](#press-modes)).
+- **Use anywhere:** activity member, any button as a non-member **Extra**, its own Touch screen
+  (auto-built), or its app device page.
+- **Never lost:** commands/inputs ever reported are kept (an off TV dropping its source list breaks
+  nothing; new capabilities land within 5 s). In-use removals are refused with a notification; no HA
+  token is stored on the hub.
 
-| Domain | Commands | Power and inputs |
-| --- | --- | --- |
-| `light` | `PowerOn`, `PowerOff`, `PowerToggle`, plus `BrightnessUp` and `BrightnessDown` (±10 %) when dimmable | On and off |
-| `media_player` | `PowerOn`, `PowerOff`, `VolumeUp`, `VolumeDown`, `Mute`, `Play`, `Pause`, `PlayPause`, `Stop`, `SkipForward`, `SkipBack`, each when the player supports it | On and off, plus one `Input <source>` per source |
-| `switch`, `input_boolean` | `PowerOn`, `PowerOff`, `PowerToggle` | On and off |
-| `fan` | As `switch`, plus `SpeedUp` and `SpeedDown` | On and off |
-| `cover` | `Open`, `Close`, `Stop` | None |
-| `script`, `scene` | `Run` / `Activate` | None |
-| `button`, `input_button` | `Press` | None |
-| `remote` | `DirectionUp`/`Down`/`Left`/`Right`, `Select`, `Back`, `Home`, `Menu`, digits and colour keys, where the platform's key table has them | — (merged with its `media_player`) |
-| `select` | One `Input <option>` per option (AVR source selectors), routed to `select.select_option` | — |
+### Live state, LG theater bridge, and smart startup
 
-A whole device merges its entities under a profile for its platform:
-
-- **LG webOS TV (`webostv`).** Discrete `PowerOn`/`PowerOff` when
-  Wake-on-LAN is enabled in Home Assistant (`PowerToggle` otherwise),
-  `VolumeUp`/`VolumeDown`/`Mute`, transport, the full D-pad with `Back`,
-  `Home`, `Menu`, `Guide`, `Info` and `Exit`, digits `0`–`9`, colour keys
-  and channel up/down. Inputs are stable `Input HDMI 1` to `Input HDMI 4`
-  commands, switched by hardware port ID (`tv/switchInput`), so a CEC
-  label change never breaks an activity. Apps get their own `App <name>`
-  commands.
-- **Google TV / Android TV (`androidtv_remote`, and the older `androidtv`
-  ADB integration).** Discrete `PowerOn`/`PowerOff`, volume and transport
-  come from the `media_player`, merged with the D-pad, `Select`, `Back`,
-  `Home`, `Menu`, digits and colour keys from the `remote`, plus
-  `App <name>` commands when the box reports an app list.
-- **AVRs and other source selectors.** Each option of a `select` entity
-  becomes an `Input <option>` command, so an activity picks the AVR's
-  input like any other.
-- **Cast players, lights, switches, fans, covers, scripts, scenes and
-  buttons** keep the per-domain commands in the table above.
-
-- **Default key mapping.** Command names match the wizard's key names, so
-  Volume, Mute and the transport keys map by default.
-- **Inputs.** A media player's sources become device inputs, and activities
-  select them like any other input.
-- **Commands are never lost.** A device keeps every command and input it has
-  ever reported. A player that's off often stops reporting its sources, and
-  merging instead of replacing keeps buttons bound to them working. When a
-  player gains `SkipForward` and `SkipBack` once media plays, the update
-  reaches the hub within 5 s.
-- **Safe removal.** If an activity or button still uses an entity, removing
-  it is refused, and Home Assistant shows a notification.
-- **No token on the hub.** No Home Assistant token is stored on the hub; the
-  webhook ID is the only secret.
-
-### Using them
-
-- **As an activity member.** The activity turns the device on and off, and
-  selects its input, when it starts and ends.
-- **On any button, without membership.** Examples:
-  - room lights on the colour keys;
-  - a scene on an on-screen button;
-  - a Chromecast Audio's transport keys in a Music activity.
-
-  The activity doesn't turn these devices on or off. The editors mark them
-  **Extra**, and saves keep them.
-- **On its own device screen.** On remotes with a screen, each Home Assistant
-  device gets a screen, which is rebuilt whenever the device set changes:
-  - brightness or volume goes on the volume rocker;
-  - transport commands go on their own keys (`SkipForward` → `FastForward`,
-    `SkipBack` → `Rewind`);
-  - power and inputs become on-screen buttons.
-- **From the apps.** Each device page has its own remote.
-
-### Live state and smart startup
-
-- **Live state in the apps.** Home Assistant pushes each device's power,
-  input, current app, playing state, volume and mute to the hub, which
-  keeps it in RAM only. The web and Android apps show it as a state strip
-  on the running activity's remote and on each device page (On/Off, input,
-  app, Playing/Paused, volume and mute). Fix It uses it too, hinting
-  *"already on · on HDMI 1"* and dimming commands the device doesn't need.
-  If Home Assistant is unreachable for 90 s, the apps show **State
-  unknown** — never **Off**.
-- **LG theater state and linked devices.** While an LG webOS TV is on, the
-  integration reads its external HDMI port list, which port is active, the
-  CEC device names, each port's signal status, and the ARC soundbar's
-  volume and mute. You can link an LG HDMI port to any device on the hub
-  (IR, Bluetooth or Home Assistant) so the apps can show which port it's
-  on. A link is for display only: it never merges devices or changes what
-  a button sends.
-- **Redundant commands are skipped.** When Home Assistant reports a
-  device is already on, a discrete `PowerOn` does nothing; when an LG TV
-  is already on the wanted HDMI port — or a player or selector is already
-  on that source — the input switch does nothing either. Activities start
-  faster and don't disturb a TV that's already showing the right thing.
-  The `melodious.command_received` event still fires, so automations
-  chained to the button always run.
+- **Live state strip** (web & Android remote + device pages, and Fix It hints like *"already on · on
+  HDMI 1"*): power, input, app, playback, volume, mute. Unreachable for 90 s shows **State
+  unknown**, never **Off**.
+- **LG theater bridge:** active HDMI port, per-port signal/CEC status and ARC volume/mute; ports can
+  link to any hub device for display only — links never merge devices or change buttons.
+- **Smart startup:** already on / already on the wanted input → no redundant `PowerOn` or input
+  switch (the automation event still fires).
 
 ### Controlling the hub from Home Assistant
 
-**The hub as a `remote` entity.** The Melodious integration adds one
-`remote` entity per hub. `remote.turn_on` starts an activity (by name or
-ID), `remote.turn_off` turns everything off, and `remote.send_command`
-sends any hub command by device and command name — IR, Bluetooth and Home
-Assistant devices alike — with `num_repeats`, `delay_secs` and `hold_secs`.
-It reports the running activity and the hub's devices, and shows
-unavailable (never off) when the hub can't be reached.
-
-Every command the hub sends to a Home Assistant device also fires a
-`melodious.command_received` event in Home Assistant (hub, device, entity
-and command), so a Harmony button can trigger any automation.
-
-**The MQTT bridge** uses `harmony/hub` as its base topic and `homeassistant` as
-its discovery prefix by default. You can change both.
-
-| Topic | Direction | Content |
-| --- | --- | --- |
-| `harmony/hub/status` | Published (retained) | `online` or `offline` |
-| `harmony/hub/state` | Published (retained) | The running activity, IP, firmware, and device and command counts, as JSON |
-| `harmony/hub/result` | Published | The result of each command |
-| `harmony/hub/activity/set` | Subscribed | An activity name or ID, or `off` |
-| `harmony/hub/command`, `harmony/hub/hbus` | Subscribed | An activity, a device command (`deviceId`, `command`), or a raw hub-engine command |
-
-Discovery creates:
-- an **Activity** selector;
-- sensors for the activity ID, IP address, firmware, and IR device and
-  command counts;
-- a **Power Off** button.
-
-Set the bridge up at install time or in Settings → MQTT.
+One `remote` entity per hub — `turn_on` (activity by name/ID), `turn_off`, `send_command` for any
+hub device (`num_repeats`/`delay_secs`/`hold_secs`), unavailable (never off) when unreachable. Each
+Harmony→HA command also fires `melodious.command_received` for automations. HA's built-in Harmony
+integration still works locally, and the optional MQTT bridge (`harmony/hub`, Settings → MQTT) adds
+discovery: activity selector, status sensors, Power Off.
 
 ### Set up Home Assistant
 
-1. In HACS, add `https://github.com/schlambos/ha-melodious` as a custom
-   repository of type **Integration**, then install Melodious.
-2. Go to Settings → Devices & services → Add integration → **Melodious**, and
-   enter:
-   - the hub's address and port (`8080`), and its sign-in if you set one;
-   - the URL the hub should use to reach Home Assistant, such as
-     `http://<server-ip>:8123`.
+1. In HACS add `https://github.com/schlambos/ha-melodious` (type **Integration**) and install
+   Melodious.
+2. Add the integration: hub address/port `8080` (plus sign-in if set) and the plain-`http://` URL
+   the hub uses to reach HA, e.g. `http://<server-ip>:8123` (no Let's Encrypt root on the hub;
+   Docker-internal won't work).
+3. In **Configure**, pick whole devices and/or single entities and review.
 
-   That URL must be plain `http://`, because the hub's certificate bundle
-   lacks the Let's Encrypt root. It must also be reachable from the hub, so a
-   Docker-internal address won't work.
-3. Open the integration's **Configure**, and pick whole devices and/or
-   single entities. The review step shows what each merged device will
-   get; untick anything you don't want on the hub.
-
-`tools/ha_devices.mjs` does the same from the command line. It can list, dry
-run, apply or revert a device set, send one command, and run a test webhook
-listener. See [docs/HOME_ASSISTANT.md](docs/HOME_ASSISTANT.md).
+Full tables, profiles, MQTT topics and CLI: **[docs/HOME_ASSISTANT.md](docs/HOME_ASSISTANT.md)**.
 
 ### Hardware tested with Melodious
 
-Verified on a live hub, across both the hub's own control (IR, Bluetooth
-and network) and the Home Assistant integration:
+Verified on a live hub, across hub control (IR/Bluetooth/network) and the HA integration:
 
 | Hardware | How it's controlled |
 | --- | --- |
@@ -453,8 +260,7 @@ and network) and the Home Assistant integration:
 
 ## Buttons, gestures and timing
 
-Everything in this section works the same way for IR, Bluetooth and Home
-Assistant commands.
+Same behaviour for IR, Bluetooth and Home Assistant commands; timings measured on the Harmony Touch.
 
 ### Where a command can go
 
@@ -465,26 +271,9 @@ Assistant commands.
 | Number pad | A single `fire` per digit | Kept in its own slot space. |
 | Gestures (`SwipeUp`, `SwipeDown`, `SwipeLeft`, `SwipeRight`, `Tap`) | Resolved on the remote, against the target device's screen, then sent as an ordinary press | The target device needs a screen with that command. If a gesture resolves to a hard key, the activity must map that key too. |
 
-The timings and gesture behaviour above were measured on the Harmony Touch.
-
-- **On-screen buttons editor.** Open Activities → ⋮ → **On-screen buttons**
-  (`#touch/<activityId>`). The running activity's card and the Remote tab's
-  header have the same shortcut, so a running activity's on-screen buttons
-  are one tap away.
-  - Tabs: on-screen buttons, hard keys and gestures.
-  - Devices: the device picker groups Home Assistant devices, and you choose a
-    press mode for each binding.
-  - Hold commands: the hard-key editor has a hold-command picker, so a
-    physical key can do one thing on a short press and another on a long
-    hold.
-  - Gesture simulator: shows what each gesture will run, and offers a
-    one-click fix when a hard key is missing.
-  - The Android app edits on-screen buttons and sequences; hard keys and
-    gestures are edited in the web app.
-- **Device screens.** On a device page, ⋮ → **Make Touch screen**, **Rebuild
-  Touch screen** or **Remove Touch screen** builds, rebuilds or removes the
-  device's screen from its commands (`POST /api/device-screen`). Home
-  Assistant devices get one automatically.
+Edit via Activities → ⋮ → **On-screen buttons** (`#touch/<id>`, one tap from the running activity):
+on-screen/hard-key/gesture tabs, hold picker, gesture simulator, device-screen Make/Rebuild/Remove
+(HA auto). Android: on-screen/buttons only. Details: **[docs/TOUCH_EDITOR.md](docs/TOUCH_EDITOR.md)**.
 
 ### Press modes
 
@@ -494,99 +283,47 @@ The timings and gesture behaviour above were measured on the Harmony Touch.
 | One-shot | Fires once: at release if you let go before about 600 ms, or at about 600 ms if you hold. Later holds are ignored | `PowerToggle`, `PlayPause`, `Mute`, `SkipForward`, `SkipBack`, `Run`, `Activate`, `Press` |
 | Short + long | One command for a tap, another for a hold | — |
 
-One-shot matters most for Home Assistant: each hold is another webhook call,
-so a held toggle would otherwise flip the device twice. It sets the button's
-long-press action to its own command, which engages the hub's built-in
-long-press handling on hard keys and on-screen buttons. Gestures resolve on
-the remote, so they can't use it; the editor warns when a gesture runs a
-toggle.
+One-shot reuses the hub's long-press handling so a held toggle fires a single webhook instead of
+flipping twice; gestures can't use it, so the editor warns on gesture toggles.
 
 ## The apps
 
-The web app, the Android app and the macOS app control the same hub and share
-one design ([DESIGN.md](DESIGN.md)). The hub serves the web app. The Android
-and macOS apps are downloads on the release page.
+One hub, three apps, one design ([DESIGN.md](DESIGN.md)): the hub serves the web app; Android and
+macOS are release downloads.
 
 ### The web app
 
-The hub serves the web app to any browser on your network, and nothing loads
-from the internet. It has four tabs: Remote, Activities, Devices and Settings.
-On phones they're a bottom bar; on screens 840 px and wider they're a
-navigation rail. Every screen has its own address, such as `#devices/<id>`,
-so you can bookmark it.
+Any browser on your network, nothing loaded from the internet. Four tabs — Remote, Activities,
+Devices, Settings (bottom bar on phones, rail ≥840 px, bookmarkable `#…` addresses).
 
 <p align="center"><img src="docs/screenshots/web/desktop-remote.png" alt="The web app on a computer, with the navigation rail and More keys beside the remote"><br><sub>On a computer: the navigation rail, with More keys beside the remote</sub></p>
 
-**Remote**
-- With nothing running, the tab shows "Everything's off" and a card for each
-  activity. While an activity runs, it shows that activity's remote, and
-  the header has a direct **On-screen buttons** shortcut
-  (`#touch/<activityId>`) for it.
-- The power button turns everything off at once, without asking, like the
-  physical remote.
-- **Keyboard** sends text and keys to the TV through the hub's Bluetooth
-  keyboard.
-- **More keys** has:
-  - the activity's on-screen buttons;
-  - the colour keys and the number pad;
-  - "All device commands…";
-  - the send log.
-- **Fix it** resends a device's power or input command when something didn't
-  turn on or switch input.
-- A status line shows what each key sends, as "key → device · command".
-- **Key timing:**
-  - Keys fire when you lift your finger, and sliding off cancels.
-  - A key with a hold action fires that action after 500 ms.
-  - Volume, channel and the D-pad fire on touch and repeat while held. The
-    hub keeps the command going until you let go.
+- **Remote:** activity cards when idle; the running activity's remote otherwise, with one-tap
+  power-off, **Keyboard**, **More keys**, **Fix it** resends and a key→command status line. Keys
+  fire on lift-off, hold actions after 500 ms, volume/D-pad repeat.
 
 <table>
 <tr><td align="center"><img src="docs/screenshots/web/remote.png" alt="The web app's remote with an activity running" width="200"><br><sub>Remote</sub></td><td align="center"><img src="docs/screenshots/web/remote-more-keys.png" alt="The More keys sheet with on-screen buttons, colour keys and the number pad" width="200"><br><sub>More keys</sub></td><td align="center"><img src="docs/screenshots/web/remote-fix-it.png" alt="The Fix it sheet with power and input resends for each device" width="200"><br><sub>Fix it</sub></td><td align="center"><img src="docs/screenshots/web/remote-switch.png" alt="The Switch activity sheet with Turn everything off" width="200"><br><sub>Switch activity</sub></td></tr>
 </table>
 
-**Activities**
-- **The list.** The running activity's card has On-screen buttons, Open
-  remote and Turn off. Each other activity's row has Start and a ⋮ menu:
-  Edit, Set up buttons, On-screen buttons, Try the buttons (its remote, without starting it),
-  Advanced editor, Move up, Move down and Delete.
-- **+** opens the setup wizard.
+- **Activities:** running card (On-screen buttons / Open remote / Turn off); others get Start + ⋮
+  (Edit, buttons, Try the buttons, Advanced, Move, Delete). **+** = wizard.
 
 <table>
 <tr><td align="center"><img src="docs/screenshots/web/activities.png" alt="The Activities tab with the running activity's card" width="200"><br><sub>Activities</sub></td><td align="center"><img src="docs/screenshots/web/activity-menu.png" alt="An activity's menu" width="200"><br><sub>Activity menu</sub></td><td align="center"><img src="docs/screenshots/web/wizard-devices.png" alt="The setup wizard's Devices step" width="200"><br><sub>Wizard: Devices</sub></td><td align="center"><img src="docs/screenshots/web/wizard-buttons.png" alt="The setup wizard's Buttons step" width="200"><br><sub>Wizard: Buttons</sub></td></tr>
 </table>
 
-**Devices**
-- **The list.** Search it by device or command. **+** adds a device, and
-  Tools opens the IR lab.
-- **A device page** has Remote and Commands tabs.
-  - Its remote sends straight to the device, outside any activity.
-  - On the Commands tab, tap a command to send it. Learn a button, Import
-    codes and Send all are there too.
-  - The ⋮ menu has Edit details, Delete device and the device screen actions.
-  - A device that is still in use can't be deleted, and the page says where
-    it's used.
+- **Devices:** search, **+** add, IR lab. Device pages: Remote + Commands tabs (Learn, Import, Send
+  all) and ⋮ for details/delete/Touch screen; in-use devices can't be deleted.
 
 <table>
 <tr><td align="center"><img src="docs/screenshots/web/devices.png" alt="The Devices tab" width="200"><br><sub>Devices</sub></td><td align="center"><img src="docs/screenshots/web/device-commands.png" alt="A device's Commands tab" width="200"><br><sub>Commands</sub></td><td align="center"><img src="docs/screenshots/web/import-find.png" alt="The Import codes sheet" width="200"><br><sub>Import codes</sub></td><td align="center"><img src="docs/screenshots/web/device-settings.png" alt="A device's settings" width="200"><br><sub>Device settings</sub></td></tr>
 </table>
 
-**Settings**
-- **Hub**: whether the hub is connected, and its activity and device counts.
-- **Remotes**: the remotes paired with the hub and a pairing window for one
-  more, with no cloud. The hub keeps one remote of each kind, so a Smart
-  Control joins a Touch but replaces an older Smart Control. Each paired
-  remote gets the same section: its buttons for each activity, opening the
-  same editor for every remote (a remote without a screen, such as the
-  Smart Control or Companion, also has its activity buttons). Every
-  remote's keys stay the same: a key you change goes on all of them unless
-  you set it for one remote only, and each activity row says where they
-  differ.
-- **Bluetooth keyboard**: pairing and saved devices.
-- **MQTT**: the broker, Home Assistant discovery and the topics.
-- **Wi-Fi**: the network the hub joins. Changes take effect after a reboot.
-- **Backup**: downloads and restore.
-- **System**: status and logs, the cloud blocker, the time zone, sign-in,
-  the hub's software version, Home Assistant discovery and reboot.
+- **Settings:** hub status, **Remotes** (cloud-free pairing, one of each kind, shared button
+  editing), Bluetooth, MQTT, Wi-Fi, Backup, System.
+
+Tab-by-tab detail: **[docs/MELODIOUS_WEB_UI.md](docs/MELODIOUS_WEB_UI.md)**.
 
 <details>
 <summary>More web app screenshots</summary>
@@ -604,58 +341,17 @@ so you can bookmark it.
 
 ### The Android app
 
-The app is in [`Android/`](Android/). It's written in Kotlin with Jetpack
-Compose, its package is `app.melodious`, and it runs on Android 8.0 (API 26)
-and later. It isn't in an app store.
+Native Kotlin/Compose ([`Android/`](Android/), `app.melodious`, Android 8.0+, no store).
+**Install:** open the release `melodious-<version>.apk` on your phone; build/install from source
+with `Android/deploy_to_phone.sh` ([`Android/README.md`](Android/README.md)).
 
-**Install**
-
-Download `melodious-<version>.apk` from the
-[latest release](https://github.com/schlambos/harmony-hub-control/releases/latest)
-and open it on your phone. Android asks you to allow installs from your
-browser or file manager.
-
-To build it from source:
-
-```bash
-Android/deploy_to_phone.sh                               # phone on USB, or already paired with adb
-Android/deploy_to_phone.sh --wireless <phone-ip>:<port>  # Android wireless debugging
-Android/deploy_to_phone.sh --build-only                  # build the APK and run the tests only
-```
-
-The script expects macOS with Homebrew. It installs the Android command-line
-tools and `adb` if they're missing, runs the unit tests, builds a debug APK
-and installs it.
-
-**What it does**
-
-The app finds the hub with SSDP and then a scan of the subnet, or you type its
-address. It uses the same API on port 8080, plus the hub's WebSocket on port
-8088 for live state and press-and-hold. On top of the web app's features it
-adds:
-
-- **Touchpad**: swipe to move, tap for OK.
-- **Sleep timer**: the hub turns everything off after 15 minutes to 2 hours,
-  even if the phone is off.
-- **Fix it → Resend everything**: the hub checks each device and resends only
-  the power and input commands it needs.
-- **Phone volume keys**: control the activity's volume while the app is open.
-- **Start and end**: the order devices turn on and off, and the commands sent
-  when an activity starts or ends.
-- **Phone extras**:
-  - a Quick Settings tile ("Melodious: Turn off");
-  - a home-screen widget;
-  - lock-screen controls while something is on;
-  - `melodious://hub/poweroff` and `melodious://hub/activity/<id>` links.
-- **SSH recovery** (Settings → Advanced): with your SSH key, check the hub,
-  clear the web sign-in or restart Melodious's services. The key isn't saved.
-- **Logitech catalog**: sign in with Chrome, search, preview and import. Or
-  open a `harmony-catalog-*.json` package made on a computer.
-
-Some things are web-only: adding and deleting devices, Edit details, device
-inputs, Find codes, Fetch from RemoteCentral, Type a code, the IR lab, the
-advanced editor, reordering activities, and the Wi-Fi, MQTT, Backup and
-System pages.
+Finds the hub by SSDP/subnet scan or typed address (API :8080 + WebSocket :8088 for live
+state/hold). Beyond the web app: swipe **touchpad**, hub-side **sleep timer**, **Resend
+everything**, phone **volume keys**, **Start and end** editing, Quick Settings
+tile/widget/lock-screen/`melodious://` extras, **SSH recovery**, and **Logitech catalog** (Chrome
+sign-in or a catalog package file). Device add/delete, IR lab, advanced editor and
+Wi-Fi/MQTT/Backup/System stay web-only. Details: [`Android/README.md`](Android/README.md) ·
+[docs/ANDROID_CATALOG.md](docs/ANDROID_CATALOG.md).
 
 <table>
 <tr><td align="center"><img src="docs/screenshots/android/touchpad.png" alt="The Touchpad remote mode" width="200"><br><sub>Touchpad</sub></td><td align="center"><img src="docs/screenshots/android/sleep-timer.png" alt="The Sleep timer sheet" width="200"><br><sub>Sleep timer</sub></td><td align="center"><img src="docs/screenshots/android/editor-start-end.png" alt="The activity editor's Start and end step" width="200"><br><sub>Start &amp; end</sub></td><td align="center"><img src="docs/screenshots/android/on-screen-buttons.png" alt="The on-screen buttons editor" width="200"><br><sub>On-screen buttons</sub></td></tr>
@@ -677,39 +373,12 @@ System pages.
 
 ### The macOS app
 
-The macOS app, in [`desktop/`](desktop/), is the web app in a Mac window. It's
-built with Electron for macOS 13 and later, and uses the same bundle the hub
-serves. It adds the one thing a page served by the hub can't do: sign in to
-your Logitech account and pull a device's codes from Logitech's catalog.
-
-**Install.** Download `Melodious-<version>-arm64.dmg` (Apple silicon) or
-`-x64.dmg` (Intel) from the
-[release page](https://github.com/schlambos/harmony-hub-control/releases),
-open it and drag Melodious to Applications. The app isn't signed with an
-Apple Developer ID, so macOS asks before the first launch. Control-click
-Melodious → Open, or use System Settings → Privacy & Security → Open Anyway.
-To build it yourself, see [`desktop/README.md`](desktop/README.md).
-
-**First run.** When macOS asks whether Melodious may find and connect to
-devices on your local network, choose **Allow**; without it, the app can't
-reach the hub. The app then looks for the hub with SSDP, or you type its
-address.
-
-**Logitech catalog.** Open a device, then Import codes → Logitech catalog:
-
-1. **Sign in.** Logitech's sign-in opens in its own window; Google sign-in
-   works too.
-2. **Search.** Type the brand and model, then pick a match.
-3. **Download and import.** The preview shows what will import and why
-   anything is skipped. **Import** adds the rest.
-
-Your Logitech tokens stay in the app's background process, encrypted with
-your Keychain. The web page, the hub and the logs never see them. The app has
-no telemetry. If you turn on update checks, it asks GitHub once a day for
-Melodious's releases; GitHub sees your IP address and the app's version,
-nothing else. Without the app, the same tab opens a
-package made with `tools/catalog/harmony_catalog.py` (see
-[its README](tools/catalog/README.md)).
+The web app in a Mac window ([`desktop/`](desktop/), Electron, macOS 13+, same bundle), plus native
+Logitech catalog lookup. **Install:** release `-arm64`/`-x64` dmg → drag to Applications; unsigned,
+so Control-click → Open first time, then **Allow** local-network access (hub via SSDP or typed
+address). Building: [`desktop/README.md`](desktop/README.md). **Catalog:** Import codes → Logitech
+catalog — sign in, search brand/model, import from a skip-explaining preview; tokens stay
+Keychain-encrypted, no telemetry. Design/security: **[docs/DESKTOP_APP.md](docs/DESKTOP_APP.md)**.
 
 <table>
 <tr><td align="center"><img src="docs/screenshots/desktop/catalog-search-1280.png" alt="Searching Logitech's catalog" width="420"><br><sub>Search and download</sub></td><td align="center"><img src="docs/screenshots/desktop/catalog-preview-1280.png" alt="The catalog preview with a skipped command" width="420"><br><sub>Preview, with skipped commands</sub></td></tr>
@@ -717,128 +386,31 @@ package made with `tools/catalog/harmony_catalog.py` (see
 
 ## More on the hub
 
-- **Backup and restore.** You can download:
-  - ten single exports: devices, functions, protocols, activities, button
-    maps, automation, MQTT, Wi-Fi, cloud blocker and Bluetooth;
-  - one owner bundle with all ten.
-
-  A restore from a file is checked before anything is written. The hub also
-  keeps rolling backups before every write.
-- **Wi-Fi recovery.** If the hub can't join your Wi-Fi, hold its reset button.
-  It starts an open recovery network, `Harmony-Recovery-xxxxxx`, with a setup
-  portal at `http://192.168.76.1/`.
-- **Sign-in.** An optional HTTP Basic username and password protects the web
-  app and its API.
-- **Local HTTP API.** Scripts and automations can use it to:
-  - start activities;
-  - send IR, Bluetooth or IP commands;
-  - manage device screens and Home Assistant devices;
-  - read or update the hub's setup.
-
-  See [docs/API.md](docs/API.md).
+- **Backup/restore:** ten single exports or one owner bundle — pre-checked restores, rolling backups.
+- **Wi-Fi recovery:** hold reset → open `Harmony-Recovery-xxxxxx` network, portal at
+  `http://192.168.76.1/`.
+- **Sign-in** (optional HTTP Basic) and a **local HTTP API** for scripts/automations:
+  [docs/API.md](docs/API.md).
 
 ## Install, update and roll back
 
-The first run on a hub writes Melodious's configuration: the Hub ID, the
-cloud blocker (on), and the MQTT settings (off, unless you pass the `--mqtt-*`
-options). Later runs upgrade in place and keep that configuration.
-`--clean-install` writes it from scratch.
+First run writes the config (Hub ID, cloud blocker on, MQTT off unless `--mqtt-*`); later runs
+upgrade in place (`--clean-install` rewrites it). Runs stage/verify in RAM, check flash+RAM fit
+(change + rollback), rename verified `.codex-new` copies in (`codex_webui` last), restart, and
+reboot only for cloud-blocker changes. Failure = nothing in use changes, or originals restored.
 
-Each run:
+Useful flags: `--preflight-only` (dry run in RAM), `--remove-root-tool-leftovers` (clears root-tool
+staging, ~0.5 MB each — the usual full-flash fix), `--skip-flash-check`. `--help` lists all.
 
-1. Finds your key: `--key-path`, or else the newest `harmony_owner_*` key in
-   `~/.ssh`.
-2. Uploads every file to a private folder in the hub's RAM
-   (`/var/volatile/codex-install-*`). It checks each MD5 and compares it with
-   the installed copy, so unchanged files aren't written.
-3. Checks that flash and RAM can hold the change and a rollback.
-   - **Flash:** a small probe, `payload/helpers/codex_flash_free`, runs from
-     the RAM folder and reports the free flash; it's never installed. The
-     installer estimates what the changed files take on the hub's compressed
-     flash, with a margin, and stops with `BLOCKED_CAPACITY` before writing
-     anything if they don't fit.
-   - **RAM:** it copies the files it will change into RAM, then writes a
-     handoff backup to `/data/codex-backups/webui-handoff-*`.
-4. Writes each changed file next to its target as `<file>.codex-new` and
-   verifies it, then renames the copies into place, `codex_webui` last.
-   - If harmony-hub-root left an identical `dropbearmulti` on the hub, the
-     installer hard-links it instead of writing a second copy.
-   - If flash runs out anyway, it removes the copies and nothing in use
-     changes.
-   - If a later step fails, it puts the originals back in reverse order and
-     verifies them.
-5. Restarts the web app and the Bluetooth keyboard service, registers the hub
-   plugins, and waits for the web app to answer.
-6. Reboots the hub only if the cloud-blocker files changed.
+- **Update:** re-run the installer, or macOS Settings → Updates → **Update hub…** (checksum-checked
+  download, SSH install with rollback, finishes on-hub if the Mac disconnects; settings unchanged).
+  Android only notifies — it never holds the SSH key.
+- **Roll back:** `.\restore_backup.ps1 -HubHost <hub-ip> -KeyPath "$env:USERPROFILE\.ssh\<key>"`
+  restores boot script, cloud blocker, SSH wrappers, Hub ID and MQTT from the newest handoff, then
+  reboot.
+- **Docker/Unraid:** same installer via env vars, then a small proxy — [UNRAID.md](UNRAID.md).
 
-| Python | PowerShell | What it does |
-| --- | --- | --- |
-| `--preflight-only` | `-PreflightOnly` | Stages and compares in RAM, prints what would change and a verdict, and writes nothing to flash. |
-| `--clean-install` | `-CleanInstall` | Writes the configuration from scratch. |
-| `--hub-id` | `-HubId` | The Hub ID. Without it, the installer reads it from the hub, then from the root tool's files in `~/.harmony-hub/`. |
-| `--no-prompt` | `-NoPrompt` | Fails instead of asking for a missing value. |
-| `--mqtt-broker`, `--mqtt-port`, `--mqtt-user`, `--mqtt-password`, `--mqtt-base-topic`, `--mqtt-discovery-prefix`, `--mqtt-client-id`, `--mqtt-disabled` | `-MqttBroker` … `-MqttDisabled` | Set up the MQTT bridge. Without them, an upgrade keeps the hub's MQTT settings. |
-| `--no-apply-cloud-restart` | `-NoApplyCloudRestart` | Skips the reboot after the cloud-blocker files or an engine plugin (`codexactivity.lua`, `codexmqtt.lua`) change. Without that reboot the engine keeps running the old plugin. |
-| `--skip-cloud-suppression` | `-SkipCloudSuppression` | Leaves the hub's `netservicestarter.lua` as it is. With a clean install, it also writes the cloud blocker as off. |
-| `--remove-root-tool-leftovers` | `-RemoveRootToolLeftovers` | Deletes what harmony-hub-root left behind before installing (see below). |
-| `--skip-flash-check` | `-SkipFlashCheck` | Installs even when the measured free flash looks too small. If flash really runs out, the install still stops with nothing in use changed. |
-
-`python3 install_webui.py --help` lists every option.
-
-### If the hub's flash is full
-
-Everything Melodious writes, and everything the hub keeps, shares one 5 MB
-flash partition. The preflight report shows the free flash (`flash_free_bytes`)
-and the estimate for this run (`flash_required_bytes`). If the estimate doesn't
-fit, the run stops with `BLOCKED_CAPACITY` before writing anything.
-
-- **harmony-hub-root's leftovers.** The root tool doesn't delete its staging
-  folders, `/data/codexssh_*_stage`: about 0.5 MB each, one per root attempt.
-  Once Melodious runs SSH, its copy of Dropbear in `/data/rootssh/bin` isn't
-  used either. The preflight lists them; `--remove-root-tool-leftovers`
-  deletes them before installing. It removes the root tool's Dropbear only
-  while SSH runs Melodious's copy.
-- **Old backups.** `/data/codex-backups` and
-  `/data/codex/resource-backups` hold older copies. Download a backup first,
-  then delete the ones you don't need over SSH.
-- **Updates need room too.** Replacing the web app needs about 0.65 MB free
-  while the old and new copies both exist. The installer warns when less
-  than that will be left. The macOS app's **Update hub…** doesn't measure
-  flash; if it runs out, it stops with nothing in use changed.
-
-- **Updating.** Get the latest release or the latest copy of this repository,
-  and run the installer again. Or let the macOS app do it: when a newer hub
-  release is out, Settings → Updates offers **Update hub…**. The Android app
-  only tells you a hub update is out; it never holds the hub's SSH key.
-  - **Download:** the app fetches the hub zip from the GitHub release, checks
-    it against the release's `SHA256SUMS.txt`, and sends only the files that
-    differ.
-  - **Key:** it connects over SSH with the same key as the installer, the
-    newest `~/.ssh/harmony_owner_*`, and your `~/.ssh/known_hosts`.
-  - **On the hub:** a short script does the installer's steps from a RAM
-    folder: check every file, copies in RAM, a handoff backup, `.codex-new`
-    then rename with `codex_webui` last, then a restart and a check that the
-    web app answers. If that check fails, it puts the old files back. It
-    reboots when the boot scripts or plugins changed. Because it runs on the
-    hub, it finishes even if the Mac drops off the network.
-  - **A new hub** still needs the installer once; the app only updates a hub
-    that already has Melodious.
-  - **Doesn't change:** the hub's settings (the Hub ID, cloud blocker, MQTT)
-    and its web routes.
-- **Rolling back.** In PowerShell, `restore_backup.ps1` restores these from
-  the newest handoff backup, then tells you to reboot the hub:
-  - the boot script;
-  - `netservicestarter.lua`;
-  - the SSH wrappers;
-  - the Hub ID;
-  - the MQTT settings.
-
-  ```powershell
-  .\restore_backup.ps1 -HubHost <hub-ip> -KeyPath "$env:USERPROFILE\.ssh\<key-file>"
-  ```
-- **Docker and Unraid.** The image runs the same installer with settings from
-  environment variables, then stays up as a small proxy to the hub's web app.
-  See [UNRAID.md](UNRAID.md) and `compose.yaml`.
+Full walkthrough, all flags and flash-full help: **[docs/INSTALL.md](docs/INSTALL.md)**.
 
 ## How it works
 
@@ -865,177 +437,62 @@ Home Assistant ◄─► MQTT ── codexmqtt.lua
 Logitech cloud ✕  cloud tasks not started, hosts refused, WAN route removed
 ```
 
-- **It builds on Logitech's engine.** Melodious drives the hub's stock
-  activity engine and resource manager instead of replacing them. Logitech's
-  IR handling, activity logic and remote protocol keep working, and every
-  change is saved the way the engine itself saves, so the remote accepts it.
-- **Server.** `payload/source/codex_webui.c` is built with Zig as a static,
-  stripped MIPS32 big-endian binary. It listens on port 8080 and forks for
-  each request. The web app is plain JavaScript modules in
-  `tools/webui-sim/public/`, with no framework.
-  `tools/package_harmony_shell.sh` bundles them into
-  `payload/source/harmony_shell_assets.h`, which is compiled into the server.
-  The hub serves one page, one script and one stylesheet.
-- **Hub plugins.**
-  - `codexactivity.lua` runs inside the hub's own Lua runtime and is the
-    single writer for activities, device settings, Home Assistant devices and
-    device screens.
-  - `codexmqtt.lua` runs the MQTT bridge.
-  - `codex_androidtv` is a separate BearSSL TLS daemon on `127.0.0.1:8095`
-    that holds the connections to network Android and Google TVs;
-    `codex_webui` relays the `/api/androidtv/*` routes to it.
-  - `netservicestarter.lua` blocks the cloud, answers the remote's sync, and
-    keeps the clock.
-- **Saves.** Every activity change (from the wizard, the editors, a reorder
-  or a delete) is one transaction:
-  1. The hub checks the activities, button maps and command maps against its
-     devices.
-  2. It backs up its resource files and writes the activity files.
-  3. It reads them back, reloads the engine, and waits for the engine.
-  4. It publishes a new configuration revision, and the paired remote pulls
-     it.
-
-  If any step fails, the hub restores the previous files. The advanced
-  editor's "Refresh remote locally" publishes the stored setup again without
-  changing it.
-- **Home Assistant devices.**
-  - Each entity is a device whose commands are IP commands. The engine sends
-    them as an HTTP `POST` of `{"device":"<entity>","command":"<action>"}` to
-    the integration's webhook.
-  - The integration answers at once and calls the Home Assistant service
-    afterwards, because the engine drops IP commands that wait more than
-    500 ms.
-  - Melodious writes these devices with the exact fields the engine needs.
-    [docs/HOME_ASSISTANT.md](docs/HOME_ASSISTANT.md) lists the rules, each
-    verified on hardware.
-  - The integration also exposes the hub as a `remote` entity, driving the
-    hub's own API, and pushes live device state to `POST /api/ha-state`.
-    The hub keeps that state only in `/var/volatile/codex-ha-state.json`
-    (RAM, never flash) and marks it stale after 90 s without a push.
-  - Repeated identical `/api/ha-devices` and `/api/androidtv/devices`
-    pushes are memoized in RAM, so an unchanged or refused device set
-    never triggers a flash backup or reloads the engine.
-- **Remote sync.** The hub never pushes; the remote pulls when it sees a new
-  revision. While the cloud blocker is on, the hub answers each of the
-  remote's requests from its own files. [docs/TOUCH_EDITOR.md](docs/TOUCH_EDITOR.md)
-  documents the sync, how presses resolve, slot rules and validation.
-- **Network access.**
-  - The apps load nothing from the internet.
-  - IRDB search runs in your browser, and fetches from the jsDelivr CDN only
-    when you click Search IRDB or Preview.
-  - The hub fetches a RemoteCentral page only when you click Fetch, and only
-    if it has a route to the internet, which the cloud blocker removes.
-  - The macOS and Android apps contact Logitech only for catalog lookup.
-- **Backups on the hub:**
-
-  | Backups | Folder | Kept |
-  | --- | --- | --- |
-  | Resource backups (`YYYYMMDD_HHMMSS`), taken before each write | `/data/codex/resource-backups` | Newest 5 |
-  | Installer handoffs (`webui-handoff-*`) | `/data/codex-backups` | Newest 3 |
-
-  Only folders with those exact names are ever removed.
+- **On Logitech's engine:** stock activity engine/resource manager do IR, activities and the remote
+  protocol; Melodious saves the engine's own way, so the remote accepts every change.
+- **Server:** one static Zig-built MIPS binary (:8080, fork per request) with the framework-free web
+  app compiled in (`harmony_shell_assets.h`) — one page, one script, one stylesheet.
+- **Plugins:** `codexactivity.lua` (single writer: activities/devices/HA/screens), `codexmqtt.lua`
+  (MQTT), `codex_androidtv` (network TVs, BearSSL :8095), `netservicestarter.lua` (cloud block,
+  sync, clock).
+- **Transactional saves:** validate → back up → write → read back → reload → publish revision;
+  failure restores prior files. Backups kept: 5 resource / 3 handoff
+  ([docs/INSTALL.md](docs/INSTALL.md#rolling-back)). The remote *pulls* revisions, answered locally
+  — [docs/TOUCH_EDITOR.md](docs/TOUCH_EDITOR.md).
+- **HA path:** IP commands POST to the integration webhook (instant 200, service after); back the
+  other way, a `remote` entity drives the hub API and live state lands in RAM-only `/api/ha-state`
+  (stale 90 s). Rules: [docs/HOME_ASSISTANT.md](docs/HOME_ASSISTANT.md) ·
+  [docs/API.md](docs/API.md).
+- **Network:** apps load nothing online — IRDB is browser-side on click, RemoteCentral fetch is on
+  click (route removed by the blocker), Logitech only for catalog lookup.
 
 ## Safety and limits
 
-- **Use a trusted network only.** The web app is plain HTTP on every interface
-  of the hub. Sign-in is optional and off by default.
-  - The hub doesn't check where a request comes from. A web page open on any
-    device on your network could send it commands.
-  - Never expose the hub to the internet.
-- **Exports protect secrets while sign-in is off.** With sign-in off (the
-  default), the MQTT, Wi-Fi and owner-bundle exports redact your MQTT
-  password and Wi-Fi key (`__REDACTED__`), and restoring one keeps the
-  password already on the hub. With sign-in on, exports include the real
-  passwords — treat those files as secrets. SSH also keeps root password
-  login enabled alongside keys, so a lost SSH key can't lock you out of the
-  hub; set a strong root password (`passwd`) if the hub shares a network
-  with devices you don't trust.
-- **MQTT is a control channel.** Anyone who can publish to the bridge's
-  topics can start activities, send IR and run hub-engine commands. The
-  bridge doesn't use TLS, so use a broker with authentication.
-- **Home Assistant webhooks are plain HTTP.** The webhook ID is the only
-  secret, so keep Home Assistant on your LAN.
-- **Update with the installer.** Updates aren't signed. Install from a copy of
-  this repository or a release you trust.
-- **Some actions interrupt the room.** Wi-Fi changes, reboots, restores and
-  updates can take the hub offline for a while; the web app asks you to
-  confirm them.
-- **The hub is small.** Flash and RAM are limited, so download a backup before
-  a big import. Limits: 32 devices, 2,048 commands per device and 1,024
-  commands per import.
-- **Offline is the supported mode.** Using the Logitech app or cloud sync
-  alongside Melodious isn't supported, and can overwrite local changes.
-- **Logitech catalog lookup uses your account**, one device at a time, and
-  changes nothing in it. Logitech's terms govern it. If Logitech closes this
-  path, IRDB search, code files and learning still work.
-- **App updates are opt-in.** The macOS app is ad-hoc signed. If you turn
-  on update checks, it can update itself from the GitHub release (checked
-  against the release's checksums before anything is swapped) and can
-  update the hub over SSH (see [Updating](#install-update-and-roll-back)).
-  The Android app likewise downloads the release APK and installs it over
-  itself only when you tap Install, after checking the checksum and the
-  signing key. Nothing updates until you opt in and confirm.
-- **Locked out of sign-in?** The Android app's SSH recovery clears it. You can
-  also delete `/data/codex/webui_auth.conf` over SSH and restart
+- **Trusted LAN only:** plain HTTP, optional sign-in (off by default), no origin checks — never
+  expose the hub to the internet.
+- **Secret-safe exports:** with sign-in off, MQTT/Wi-Fi passwords export as `__REDACTED__` (restores
+  keep the hub's); with it on, treat exports as secrets. SSH keeps password login as lockout
+  recovery — set a strong `passwd`.
+- **MQTT/HA webhooks are control channels** over plain HTTP (webhook ID = only secret): use an
+  authenticated broker and keep HA on the LAN.
+- **Unsigned updates:** install only from a repo copy or release you trust. Wi-Fi
+  changes/reboots/restores interrupt the room (confirmed in-app).
+- **Small hub:** back up before big imports. Limits: 32 devices · 2,048 commands/device ·
+  1,024/import. Offline is the supported mode — Logitech app/cloud use can overwrite local edits.
+- **Catalog lookup** uses your Logitech account under their terms (one device, read-only);
+  IRDB/files/learning still work if that path closes. App/hub self-updates are opt-in and
+  checksum-checked.
+- **Locked out?** Android SSH recovery, or delete `/data/codex/webui_auth.conf` via SSH and restart
   `codex_webui`.
-- **Hand-edited activity JSON must follow the remote's rules.** For example,
-  an activity button without an action makes the paired remote stop
-  responding until it's power-cycled. The wizard and the editors follow these
-  rules, and [docs/API.md](docs/API.md) lists them.
-  `tools/activity_graph_repair.mjs` checks a hub's activities and proposes
-  repairs. It writes only with `--apply`:
+- **Hand-edited JSON** must follow the remote's rules ([docs/API.md](docs/API.md)) — an action-less
+  button can freeze the remote. Audit with `node tools/activity_graph_repair.mjs --base-url
+  http://<hub-ip>:8080` (read-only without `--apply`).
 
-  ```bash
-  node tools/activity_graph_repair.mjs --base-url http://<hub-ip>:8080
-  ```
+More: **[docs/SECURITY.md](docs/SECURITY.md)**.
 
 ## Development and testing
 
-You don't need a hub to work on the web app.
-
-- **Simulator.** An in-memory hub with fixture data, on loopback only. It
-  never contacts a hub or sends IR.
-
-  ```bash
-  node tools/webui-sim/server.mjs   # then open http://127.0.0.1:8787/#remote
-  ```
-- **Hub emulator.** [`tools/hub-emu/`](tools/hub-emu/README.md) runs the real
-  `codex_webui` and `codex_hbus` binaries under QEMU in Docker, against an
-  emulated engine. Use it to test anything the hub's request handling
-  affects.
-
-**Tests**
-
-```bash
-node --test tools/webui-sim/test/                 # web app models and hub contracts
-node tools/harmony_shell_smoke.mjs                # rebuilds the embedded web app and checks it (needs bun)
-node tools/shipped_copy_hygiene.mjs               # no personal names or IDs in shipped files
-python3 tools/installer_contract_smoke.py         # the installers' contract, with a fake hub
-python3 -m unittest discover -s docker/tests      # the Docker manager
-for t in barrier device-screens ha-devices androidtv-devices touch-controls; do
-  luajit tools/touch-validator/codexactivity-$t-test.lua
-done                                              # the hub's writer: barrier, screens, Home Assistant, network TVs, press modes
-python3 tools/androidtv/androidtv_smoke.py --codex-androidtv build/output/codex_androidtv-native   # codex_androidtv against a fake TV
-luajit tools/touch-validator/codexactivity-validate-test.lua tools/webui-sim/fixtures/touch-maplist.json
-luajit tools/touch-validator/netservicestarter-guards-test.lua   # offline sync guards
-(cd Android && ./gradlew :core-protocol:test)    # Android protocol and graph tests
-node --test desktop/test/*.test.mjs               # macOS app units (after npm ci in desktop/)
-(cd desktop && npm run test:e2e)                  # macOS app end-to-end, against the simulator
-```
-
-The Android tests need JDK 17 or 21 and the Android SDK; `deploy_to_phone.sh`
-sets both up on macOS.
-
-**Rebuilding `codex_webui`.** After changing the web app, run
-`sh tools/package_harmony_shell.sh` to rebuild the embedded bundle. Then build
-the binary with the official Zig 0.16.0, as described in
-[docs/BUILD.md](docs/BUILD.md). When `codex_webui` changes, update its pins in
-`build/build_harmony_tools_kali.sh` and `payload/bin/MANIFEST.txt`.
+No hub needed: **simulator** (`node tools/webui-sim/server.mjs` → `http://127.0.0.1:8787/#remote`,
+in-memory, loopback) and **hub emulator** ([`tools/hub-emu/`](tools/hub-emu/README.md), real
+binaries under QEMU/Docker). Tests span the web models, installer contract, Lua writer, Android
+protocol and desktop suites — start with `node --test tools/webui-sim/test/` and `node
+tools/shipped_copy_hygiene.mjs`. Full test list and rebuilding `codex_webui` (Zig 0.16.0 + pins):
+**[docs/BUILD.md](docs/BUILD.md)**.
 
 ## Documentation
 
 | Document | What it covers |
 | --- | --- |
+| [docs/INSTALL.md](docs/INSTALL.md) | Installing, updating and rolling back: the full installer walkthrough, every flag, and flash-full troubleshooting |
 | [docs/API.md](docs/API.md) | The hub's HTTP API, and the activity rules the paired remote needs |
 | [docs/HOME_ASSISTANT.md](docs/HOME_ASSISTANT.md) | Home Assistant entities as hub devices, webhook rules, press and hold behaviour, and setup |
 | [docs/ANDROID_TV.md](docs/ANDROID_TV.md) | Android TV and Google TV sets over the network: pairing, commands, power, codex_androidtv |
@@ -1056,25 +513,22 @@ the binary with the official Zig 0.16.0, as described in
 
 ## Contributing, credits and license
 
-Contributions are welcome, and so are reports from owners of remotes other
-than the Harmony Touch. Keep changes small and scoped, and add a short test
-note. Never commit SSH keys, MQTT passwords, tokens, hub backups, firmware
-dumps or rooting tools. Read [CONTRIBUTING.md](CONTRIBUTING.md) and
+Contributions are welcome, and so are reports from owners of remotes other than the Harmony Touch.
+Keep changes small and scoped, and add a short test note. Never commit SSH keys, MQTT passwords,
+tokens, hub backups, firmware dumps or rooting tools. Read [CONTRIBUTING.md](CONTRIBUTING.md) and
 [docs/SECURITY.md](docs/SECURITY.md) first.
 
-- **Rooting the hub:**
-  [harmony-hub-root](https://github.com/Ripthulhu/harmony-hub-root), a
-  separate project.
+- **Rooting the hub:** [harmony-hub-root](https://github.com/Ripthulhu/harmony-hub-root), a separate
+  project.
 - **Home Assistant integration:**
   [schlambos/ha-melodious](https://github.com/schlambos/ha-melodious).
 - **Third-party code:**
-  - Material Icons (Apache-2.0), in
-    [`third_party/material-icons/`](third_party/material-icons/);
-  - Dropbear SSH, in [`third_party/dropbear-2025.89/`](third_party/dropbear-2025.89/),
-    with its licence.
+  - Material Icons (Apache-2.0), in [`third_party/material-icons/`](third_party/material-icons/);
+  - Dropbear SSH, in [`third_party/dropbear-2025.89/`](third_party/dropbear-2025.89/), with its
+    licence.
 
-**Contributors.** Thank you to everyone who has contributed code, pull
-requests, testing and issue reports so far:
+**Contributors.** Thank you to everyone who has contributed code, pull requests, testing and issue
+reports so far:
 [@Ripthulhu](https://github.com/Ripthulhu),
 [@s7thamon](https://github.com/s7thamon),
 [@danielvijge](https://github.com/danielvijge),
@@ -1088,7 +542,7 @@ requests, testing and issue reports so far:
 [@sumps71](https://github.com/sumps71) and
 [@boomfunks](https://github.com/boomfunks).
 
-**License**: see [LICENSE](LICENSE). Melodious code, meaning every change
-after this fork's upstream commit `d87ceba`, is under the MIT License. Code
-from the upstream project, Ripthulhu/harmony-hub-control, is all rights
-reserved by its authors. Third-party components keep their own licences.
+**License**: see [LICENSE](LICENSE). Melodious code, meaning every change after this fork's upstream
+commit `d87ceba`, is under the MIT License. Code from the upstream project,
+Ripthulhu/harmony-hub-control, is all rights reserved by its authors. Third-party components keep
+their own licences.

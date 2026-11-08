@@ -1,14 +1,25 @@
 # Home Assistant devices
 
-Home Assistant already controls the Hub through HA's built-in Harmony
-integration (WebSocket on 8088). This page covers the other direction:
-Home Assistant entities as ordinary Harmony devices on the Hub and the
-Harmony Touch—usable on their own Touch device screens, as activity
-members, or bound directly to any activity's hard keys, on-screen rows,
-and swipe gestures. A device may also be a **merged v2 device**: one
-Harmony device built from several entities of one Home Assistant device
-(see [API.md](API.md#home-assistant-devices)); the hub routes each
-command to its entity via the `<alias>:<action>` value.
+Melodious connects the hub and Home Assistant in both directions:
+
+| Direction | How |
+| --- | --- |
+| **Harmony controls Home Assistant** | The [Melodious integration](https://github.com/schlambos/ha-melodious) turns whole Home Assistant devices (merged) or single entities into ordinary devices on the hub (`TransportType: 64`). Activities, physical remote buttons, Touch screens and the apps drive them through a local webhook, and every command also fires a `melodious.command_received` event in Home Assistant, so a button can chain into any automation. |
+| **Home Assistant controls Harmony** | The Melodious integration also exposes the hub itself as a `remote` entity in Home Assistant: `turn_on` / `turn_off` start and stop activities, and `send_command` sends any command to any IR, Bluetooth or Home Assistant device on the hub. The optional MQTT bridge and Home Assistant's built-in Logitech Harmony integration also keep working over the hub's local connections. |
+| **Live state back to Harmony** | Home Assistant pushes live device state (power, input/source, current app, playing or paused, volume and mute, plus an LG webOS TV's HDMI port and ARC status) to the hub's RAM-only `/api/ha-state` channel, where the web and Android apps show it. |
+
+This page is the deep reference for all three: merged device profiles,
+the per-domain command table, the `remote` entity and event, live state,
+LG theater/ARC state and port links, redundant-command skipping, the
+MQTT topic table, and the hub-side rules each piece must follow.
+
+Home Assistant entities as ordinary Harmony devices are usable on their
+own Touch device screens, as activity members, or bound directly to any
+activity's hard keys, on-screen rows, and swipe gestures. A device may
+also be a **merged v2 device**: one Harmony device built from several
+entities of one Home Assistant device (see
+[API.md](API.md#home-assistant-devices)); the hub routes each command to
+its entity via the `<alias>:<action>` value.
 
 ## How a command reaches Home Assistant
 
@@ -177,30 +188,37 @@ repository of type **Integration**.
 
 ### Setup
 
-Settings → Devices & services → Add integration → Melodious asks for:
-- the Hub's address, its web port (`8080`), and its web UI login if the
-  web UI has a password;
-- the URL the Hub uses to reach Home Assistant. It must be plain
-  `http://` and reachable from the Hub, for example
-  `http://<server-ip>:8123`; a Docker-internal address won't do.
+1. In HACS, add `https://github.com/schlambos/ha-melodious` as a custom
+   repository of type **Integration**, then install Melodious.
+2. Settings → Devices & services → Add integration → Melodious asks for:
+   - the Hub's address, its web port (`8080`), and its web UI login if the
+     web UI has a password;
+   - the URL the Hub uses to reach Home Assistant. It must be plain
+     `http://`, because the hub's certificate bundle lacks the Let's
+     Encrypt root, and reachable from the Hub, for example
+     `http://<server-ip>:8123`; a Docker-internal address won't do.
+3. Open the integration's **Configure**, and pick whole devices and/or
+   single entities. The review step lists each merged device's entities
+   and commands; untick any entity or command you don't want on the hub.
 
 Setup sends the Hub an empty dry run, which saves nothing, to check that
-the Hub has the device writer. Then pick entities under the
-integration's **Configure**. Each one becomes a Hub device. Removing one
-takes its device off the Hub, unless an activity or button still uses
-it; the Hub refuses then, and Home Assistant shows a notification.
+the Hub has the device writer. Each pick becomes a Hub device. Removing
+one takes its device off the Hub, unless an activity or button still
+uses it; the Hub refuses then, and Home Assistant shows a notification.
 
 ### What each entity gets
 
-| Domain | Commands | Power |
+| Domain | Commands | Power and inputs |
 | --- | --- | --- |
-| `media_player` | `PowerOn`, `PowerOff`, `VolumeUp`, `VolumeDown`, `Mute`, `Play`, `Pause`, `PlayPause`, `Stop`, `SkipForward`, `SkipBack` (each when the player reports the feature); one `Input <source>` per source | on/off |
-| `light` | `PowerOn`, `PowerOff`, `PowerToggle`; `BrightnessUp` / `BrightnessDown` (±10 %) when dimmable | on/off |
-| `switch`, `input_boolean` | `PowerOn`, `PowerOff`, `PowerToggle` | on/off |
-| `fan` | as `switch`, plus `SpeedUp`, `SpeedDown` | on/off |
-| `cover` | `Open`, `Close`, `Stop` | none |
-| `script`, `scene` | `Run` / `Activate` | none |
-| `button`, `input_button` | `Press` | none |
+| `light` | `PowerOn`, `PowerOff`, `PowerToggle`, plus `BrightnessUp` and `BrightnessDown` (±10 %) when dimmable | On and off |
+| `media_player` | `PowerOn`, `PowerOff`, `VolumeUp`, `VolumeDown`, `Mute`, `Play`, `Pause`, `PlayPause`, `Stop`, `SkipForward`, `SkipBack`, each when the player supports it | On and off, plus one `Input <source>` per source |
+| `switch`, `input_boolean` | `PowerOn`, `PowerOff`, `PowerToggle` | On and off |
+| `fan` | As `switch`, plus `SpeedUp` and `SpeedDown` | On and off |
+| `cover` | `Open`, `Close`, `Stop` | None |
+| `script`, `scene` | `Run` / `Activate` | None |
+| `button`, `input_button` | `Press` | None |
+| `remote` | `DirectionUp`/`Down`/`Left`/`Right`, `Select`, `Back`, `Home`, `Menu`, digits and colour keys, where the platform's key table has them | — (merged with its `media_player`) |
+| `select` | One `Input <option>` per option (AVR source selectors), routed to `select.select_option` | — |
 
 - Command names match the activity wizard's key aliases, so its defaults
   map Volume, Mute, and the transport keys automatically.
@@ -208,6 +226,38 @@ it; the Hub refuses then, and Home Assistant shows a notification.
   Activities select them like any other input.
 - A source whose name the Hub can't carry safely (quotes, `%`, braces,
   or over 64 characters) is skipped.
+
+### Merged device profiles
+
+Picking a **whole Home Assistant device** merges all of its entities
+into one Harmony device under a profile for its platform. A duplicate
+Cast twin of the same hardware is suppressed automatically, so one
+physical player never appears twice.
+
+- **LG webOS TV (`webostv`).** Discrete `PowerOn`/`PowerOff` when
+  Wake-on-LAN is enabled in Home Assistant (`PowerToggle` otherwise),
+  `VolumeUp`/`VolumeDown`/`Mute`, transport, the full D-pad with `Back`,
+  `Home`, `Menu`, `Guide`, `Info` and `Exit`, digits `0`–`9`, colour keys
+  and channel up/down. Inputs are stable `Input HDMI 1` to
+  `Input HDMI 4` commands, switched by hardware port ID
+  (`tv/switchInput`), so a CEC label change never breaks an activity.
+  Apps get their own `App <name>` commands.
+- **Google TV / Android TV (`androidtv_remote`, and the older
+  `androidtv` ADB integration).** Discrete `PowerOn`/`PowerOff`, volume
+  and transport come from the `media_player`, merged with the D-pad,
+  `Select`, `Back`, `Home`, `Menu`, digits and colour keys from the
+  `remote`, plus `App <name>` commands when the box reports an app list.
+- **AVRs and other source selectors.** Each option of a `select` entity
+  becomes an `Input <option>` command, so an activity picks the AVR's
+  input like any other.
+- **Cast players, lights, switches, fans, covers, scripts, scenes and
+  buttons** keep the per-domain commands in the table above.
+
+Commands are never lost: a device keeps every command and input it has
+ever reported. A player that's off often stops reporting its sources,
+and merging instead of replacing keeps buttons bound to them working.
+When a player gains `SkipForward` and `SkipBack` once media plays, the
+update reaches the hub within 5 s.
 
 ### How it stays in step
 
@@ -247,6 +297,86 @@ it; the Hub refuses then, and Home Assistant shows a notification.
   don't send these fields.
 - **Deleting the integration** leaves the Hub's devices intact unless
   they are unticked in Configure first.
+- **From the apps.** Each Home Assistant device page in the web and
+  Android apps has its own remote, outside any activity.
+
+### Live state in the apps
+
+The web and Android apps show the pushed state as a state strip on the
+running activity's remote and on each device page (On/Off, input, app,
+Playing/Paused, volume and mute). Fix It uses it too, hinting *"already
+on · on HDMI 1"* and dimming commands the device doesn't need. If Home
+Assistant is unreachable for 90 s, the apps show **State unknown** —
+never **Off**.
+
+While an LG webOS TV is on, the integration also reads its external
+HDMI port list, which port is active, the CEC device names, each port's
+signal status, and the ARC soundbar's volume and mute. An LG HDMI port
+can be linked to any device on the hub (IR, Bluetooth or Home
+Assistant) so the apps can show which port it's on. A link is for
+display only: it never merges devices or changes what a button sends.
+
+### Redundant commands are skipped (smart startup)
+
+When Home Assistant reports a device is already on, a discrete
+`PowerOn` does nothing; when an LG TV is already on the wanted HDMI
+port — or a player or selector is already on that source — the input
+switch does nothing either. Activities start faster and don't disturb a
+TV that's already showing the right thing. The
+`melodious.command_received` event still fires, so automations chained
+to the button always run.
+
+### Controlling the hub from Home Assistant
+
+**The hub as a `remote` entity.** The Melodious integration adds one
+`remote` entity per hub. `remote.turn_on` starts an activity (by name
+or ID), `remote.turn_off` turns everything off, and
+`remote.send_command` sends any hub command by device and command name
+— IR, Bluetooth and Home Assistant devices alike — with `num_repeats`,
+`delay_secs` and `hold_secs`. It reports the running activity and the
+hub's devices, and shows unavailable (never off) when the hub can't be
+reached.
+
+**The `melodious.command_received` event.** Every command the hub sends
+to a Home Assistant device also fires this event in Home Assistant
+(hub, device, entity and command), so a Harmony button can trigger any
+automation — including when the underlying command was skipped as
+redundant (above).
+
+**Built-in Harmony integration.** Home Assistant's built-in Logitech
+Harmony integration keeps working locally over the hub's WebSocket
+(8088), alongside Melodious.
+
+**Repeated pushes are cheap.** Repeated identical `/api/ha-devices`
+(and `/api/androidtv/devices`) pushes are memoized in RAM on the hub,
+so an unchanged or refused device set never triggers a flash backup or
+reloads the engine.
+
+### The MQTT bridge
+
+The bridge uses `harmony/hub` as its base topic and `homeassistant` as
+its discovery prefix by default. You can change both. Set it up at
+install time (see [INSTALL.md](INSTALL.md)) or in Settings → MQTT.
+
+| Topic | Direction | Content |
+| --- | --- | --- |
+| `harmony/hub/status` | Published (retained) | `online` or `offline` |
+| `harmony/hub/state` | Published (retained) | The running activity, IP, firmware, and device and command counts, as JSON |
+| `harmony/hub/result` | Published | The result of each command |
+| `harmony/hub/activity/set` | Subscribed | An activity name or ID, or `off` |
+| `harmony/hub/command`, `harmony/hub/hbus` | Subscribed | An activity, a device command (`deviceId`, `command`), or a raw hub-engine command |
+
+Discovery creates:
+
+- an **Activity** selector;
+- sensors for the activity ID, IP address, firmware, and IR device and
+  command counts;
+- a **Power Off** button.
+
+MQTT is a control channel: anyone who can publish to these topics can
+start activities, send IR and run hub-engine commands. The bridge
+doesn't use TLS, so use a broker with authentication (see
+[SECURITY.md](SECURITY.md)).
 
 ## Command-line tool (`tools/ha_devices.mjs`)
 
