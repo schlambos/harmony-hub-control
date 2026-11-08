@@ -555,6 +555,7 @@ let simNextRfid = 3000000001;
 let simMultiRemote = false; // the multi-remote hal runs (bind-mounted)
 let simMultiEnabled = false; // multi_remote.conf says 1
 let simHalSupported = true; // /usr/bin/hal is the stock 4.15.600 build
+let simOffPendingUntil = 0; // like codex_webui's pending-restart guard: no pairing until then
 const SIM_RESTART_MS = 4000;
 const SIM_HAL_STOCK_MD5 = "a3fdd823440c43f36e235fe51c45f008";
 const SIM_HAL_MULTI_MD5 = "1d63db17f1471c703d699bb777f7a69d";
@@ -568,6 +569,7 @@ function resetSimRemotes() {
   simMultiRemote = process.env.SIM_MULTI_REMOTE === "1";
   simMultiEnabled = simMultiRemote;
   simHalSupported = true;
+  simOffPendingUntil = 0;
 }
 
 /* GET /api/multi-remote, like codex_webui's render_multi_remote_json(). */
@@ -592,6 +594,11 @@ function handleMultiRemoteSet(res, params) {
     sendJson(res, 409, { ok: false, error: state.reason, halMd5: state.halMd5 });
     return;
   }
+  if (!params.enabled && simPairing) {
+    // Like the hub: the slot table can't be vouched for while a window is open.
+    sendJson(res, 409, { ok: false, error: "A pairing window is open on the hub. Try again when it closes." });
+    return;
+  }
   if (!params.enabled) {
     const counts = {};
     for (const r of simRemotes) if (["16414", "16422", "16423"].includes(r.EquadID)) (counts[r.EquadID] ??= []).push(r.DeviceIndex);
@@ -603,6 +610,7 @@ function handleMultiRemoteSet(res, params) {
   }
   simMultiEnabled = params.enabled;
   const rebooting = simMultiRemote !== params.enabled;
+  if (rebooting && !params.enabled) simOffPendingUntil = Date.now() + SIM_RESTART_MS;
   if (rebooting) setTimeout(() => { simMultiRemote = simMultiEnabled; }, SIM_RESTART_MS);
   logEvent({ kind: "multi-remote", message: `Multiple remotes of one model ${params.enabled ? "on" : "off"}${rebooting ? " (restarting)" : ""}` });
   sendJson(res, 200, { ok: true, enabled: params.enabled, rebooting });
@@ -619,6 +627,10 @@ function simRfInfo() {
 async function handleRemotePair(res, params) {
   if (simPairing) {
     sendJson(res, 409, { ok: false, pairing: true, error: "A pairing window is already open on the hub." });
+    return;
+  }
+  if (Date.now() < simOffPendingUntil) {
+    sendJson(res, 409, { ok: false, restarting: true, error: "The hub is about to restart to turn off multiple remotes of one model. Pair the remote after it restarts." });
     return;
   }
   const seconds = Math.min(120, Math.max(10, Number(params.seconds) || 60));
@@ -1585,7 +1597,8 @@ async function handleApi(req, res, pathname, url) {
         : { ok: true, pairing: false, multiRemote: simMultiRemote, slots: SIM_RF_SLOTS, reply: simRfInfo() });
       return;
     case "POST /api/remote-unpair": {
-      const slot = Number(params.slot);
+      // Like codex_webui's json_strict_int(): a JSON integer, not "2", 1.5 or 1e1 read loosely.
+      const slot = typeof params.slot === "number" ? params.slot : NaN;
       if (!Number.isInteger(slot) || slot < 1 || slot > SIM_RF_SLOTS) {
         sendJson(res, 400, { ok: false, error: "Give the remote's slot, 1 to 6." });
         return;

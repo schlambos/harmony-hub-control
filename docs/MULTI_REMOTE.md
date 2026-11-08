@@ -129,7 +129,13 @@ paired stay paired; the stock rule applies again from the next pair.
 - **Unpair the extra remotes of a model first.** With two of one model in
   the radio's table, the stock `hal` hangs its radio: no remote works until
   the extra one is unpaired.
-- The switch refuses until they are unpaired. The installer doesn't check.
+- The switch and the installers refuse until they are unpaired. They also
+  refuse while a pairing window is open, or if the radio doesn't list its
+  remotes.
+- From the check until the reboot, pairing from the web app is blocked by a
+  guard file in RAM (`/var/run/codex-multi-remote-pending`), so no duplicate
+  can join in between. It lapses after 10 minutes if no reboot comes.
+  Pairing with the hub's own button isn't covered.
 
 Leaving the option out keeps the hub as it is, on or off.
 

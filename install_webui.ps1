@@ -129,8 +129,15 @@ $HalPath = "/usr/bin/hal"
 $HalMultiDest = "/data/codex/bin/hal_multiremote"
 $MultiRemoteConf = "/data/codex/multi_remote.conf"
 $HalPatchFile = "helpers/hal_multiremote_patch.json"
-# Deletes the copy unless it is bind-mounted (then rcS.local deletes it at boot).
-$MultiRemoteRemove = "if grep ' /usr/bin/hal ' /proc/mounts >/dev/null 2>&1; then echo bound; else rm -f /data/codex/bin/hal_multiremote && echo removed; fi"
+# Turning it off reboots into the stock hal, which hangs its radio on two
+# remotes of one model. So -MultiRemote off first checks the slot table on the
+# hub, while the multi-remote hal runs: it writes the pending-restart guard
+# (codex_webui's /api/remote-pair refuses while it's there; it lives in RAM and
+# lapses after 10 minutes), refuses during an open pairing window, then reads
+# rf.info. The copy itself is left to rcS.local, which deletes it at the next
+# boot when the setting isn't 1.
+$MultiRemotePending = "/var/run/codex-multi-remote-pending"
+$NoScreenEquads = @("16414", "16422", "16423")
 
 $HandoffRequiredPaths = @(
     "/etc/init.d/rcS.local",
@@ -554,6 +561,58 @@ function Add-Candidate($Cand) {
 
 function Test-MqttExplicit() {
     return $script:MqttExplicitSupplied
+}
+
+function Get-MultiRemoteOffCheckCommand([bool]$Guard) {
+    $touch = if ($Guard) { "touch $MultiRemotePending; " } else { "" }
+    return "if ! grep ' $HalPath ' /proc/mounts >/dev/null 2>&1; then echo inactive; " +
+        "else ${touch}if ps | grep '[r]f.pairing' >/dev/null 2>&1; then echo pairing; " +
+        "else /data/codex/bin/codex_hal_ltcp rf.info '{}' 8 2>&1; fi; fi"
+}
+
+# Models without a screen paired more than once in hal's rf.info answer, as
+# "16414 (slots 1, 2)"; "" when none; $null when it isn't a valid answer.
+function Get-RfDuplicateModels([string]$Reply) {
+    $start = $Reply.IndexOf("{")
+    if ($start -lt 0) { return $null }
+    try { $doc = $Reply.Substring($start) | ConvertFrom-Json } catch { return $null }
+    if ($null -eq $doc -or $doc.code -ne 200 -or $null -eq $doc.data) { return $null }
+    $slots = [ordered]@{}
+    foreach ($dev in @($doc.data.Devices)) {
+        if ($null -eq $dev) { continue }
+        $id = [string]$dev.EquadID
+        if ($NoScreenEquads -contains $id) {
+            if (-not $slots.Contains($id)) { $slots[$id] = New-Object System.Collections.ArrayList }
+            [void]$slots[$id].Add([string]$dev.DeviceIndex)
+        }
+    }
+    $dups = @($slots.Keys | Where-Object { $slots[$_].Count -gt 1 } | ForEach-Object { "$_ (slots $($slots[$_] -join ', '))" })
+    return ($dups -join "; ")
+}
+
+# -MultiRemote off while the multi-remote hal runs: refuse unless the slot
+# table holds no two remotes of one model.
+function Test-MultiRemoteOff() {
+    if ($MultiRemote -ne "off") { return }
+    $guard = -not $PreflightOnly
+    $out = (Invoke-Remote (Get-MultiRemoteOffCheckCommand $guard) $null 60000).Trim()
+    if ($out -eq "inactive") { KV "multi_remote_off_check=inactive"; return }
+    $problem = ""
+    if ($out -eq "pairing") {
+        $problem = "a pairing window is open on the hub; try again when it closes"
+    } else {
+        $dups = Get-RfDuplicateModels $out
+        if ($null -eq $dups) {
+            $problem = "the hub's radio didn't list its paired remotes"
+        } elseif ($dups) {
+            $problem = "more than one remote of the same model is paired (EquadID $dups); the stock hal can't run two of one model, so unpair the extra ones first (Settings -> Remotes)"
+        }
+    }
+    if ($problem) {
+        if ($guard) { Invoke-Remote "rm -f $MultiRemotePending" $null 30000 | Out-Null }
+        throw "-MultiRemote off refused: $problem"
+    }
+    KV "multi_remote_off_check=ok"
 }
 
 function Build-Inventory() {
@@ -1492,16 +1551,6 @@ function Invoke-PostWiring() {
         "chmod 600 /data/codexmqtt/config.json 2>/dev/null || true; " +
         "/bin/busybox sync 2>/dev/null || true"
     Invoke-Remote $post $null 60000 | Out-Null
-    Remove-MultiRemoteCopy
-}
-
-# -MultiRemote off: delete the patched hal once nothing boots it.
-# While it is bind-mounted over /usr/bin/hal, deleting it would leave that path
-# a stale handle; rcS.local deletes it at the next boot instead.
-function Remove-MultiRemoteCopy() {
-    if ($MultiRemote -ne "off" -or $Probe[$HalMultiDest]["kind"] -ne "regular") { return }
-    $out = (Invoke-Remote $MultiRemoteRemove $null 30000).Trim()
-    if ($out -eq "removed") { KV "removed=$HalMultiDest" } else { KV "kept_until_reboot=$HalMultiDest" }
 }
 
 function Start-Services() {
@@ -1583,6 +1632,7 @@ Write-Host $identity.Trim()
 
 Step "Resolving hub id"
 Resolve-HubIdentity
+Test-MultiRemoteOff
 
 Step "Building candidate inventory"
 Build-Inventory
@@ -1645,7 +1695,6 @@ if ($RemoveRootToolLeftovers -and ($RootToolStages.Count -gt 0 -or (Test-RootToo
 }
 
 if ((Get-ActiveCandidates).Count -eq 0) {
-    Remove-MultiRemoteCopy
     Remove-StagingTree
     Step "Done"
     Info "The hub already matches this payload; nothing was installed or restarted."

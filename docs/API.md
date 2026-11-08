@@ -945,7 +945,9 @@ Invoke-RestMethod "http://<hub-ip>:8080/api/remote-pair" -Method Post `
   slot: hal answers `200` with no `data`, and `before` and `after` are the
   same (seen on hardware, 2026-10-31). A window nobody used also leaves
   them the same, with `500`.
-- One window at a time: a second request gets `409`. If the "before" read
+- One window at a time: a second request gets `409`. `409` with
+  `"restarting": true` while the hub is about to restart to turn multiple
+  remotes of one model off (below). If the "before" read
   fails the window doesn't open (`502`).
 - `multiRemote` is reported as in `/api/remotes`.
 - After a pair the engine tries to report it to Logitech
@@ -962,7 +964,7 @@ Invoke-RestMethod "http://<hub-ip>:8080/api/remote-unpair" -Method Post `
  "before":"<rf.info text>","after":"<rf.info text>"}
 ```
 
-- Unpairs the remote in radio slot `slot` (1–6) with `rf.unpair`
+- Unpairs the remote in radio slot `slot` (a JSON integer, 1–6) with `rf.unpair`
   (`{"deviceIdx":<slot>}`). The remote stops controlling the hub until it is
   paired again.
 - `400` for a slot outside 1–6, `404` when no remote is paired there,
@@ -1006,7 +1008,11 @@ Invoke-RestMethod "http://<hub-ip>:8080/api/multi-remote" -Method Post `
   3. Writes the setting.
   4. Answers, then reboots the hub about 3 seconds later (`rebooting`), since
      `hal` starts once at boot.
-- **Off:** writes `0` and reboots if the copy was running. `rcS.local`
+- **Off:** writes `0` and reboots if the copy was running. Under the pairing
+  lock, after checking the slot table, it also writes the pending-restart
+  guard `/var/run/codex-multi-remote-pending`. `/api/remote-pair` refuses
+  while that's there, so no duplicate can join before the stock `hal` starts.
+  It lives in RAM, so the reboot clears it, and it lapses after 10 minutes. `rcS.local`
   deletes the copy at that boot; a copy that isn't running is deleted at once.
   It's refused with `409` (and `duplicates`, e.g. `"16414 (slots 1, 2)"`)
   while two remotes of one model are paired: the stock `hal` hangs its radio

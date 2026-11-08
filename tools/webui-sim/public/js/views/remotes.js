@@ -281,7 +281,7 @@ export function createRemotesView(section) {
       remotesBusy = false;
     } catch (error) {
       // 409 and 502 come before the window opens; anything else may come after.
-      const message = error.status === 409 ? "A pairing window is already open on the hub. Wait for it to close."
+      const message = error.status === 409 ? error.message || "A pairing window is already open on the hub. Wait for it to close."
         : error.status === 502 ? error.message
         : `No answer about the pairing window — ${error.message || "hub error"}. The list below shows what's paired now.`;
       snackbar(message, { error: true });

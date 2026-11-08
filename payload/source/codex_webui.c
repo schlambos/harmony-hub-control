@@ -2,6 +2,7 @@
 #include <ctype.h>
 #include <dirent.h>
 #include <errno.h>
+#include <limits.h>
 #include <fcntl.h>
 #include <netdb.h>
 #include <netinet/in.h>
@@ -225,6 +226,7 @@ static int load_bt_link_key(const char *bdaddr);
 static int bt_native_code(const char *reply);
 static int run_hal_json(const char *cmd_name, const char *params_json, int timeout, char *out, size_t outlen);
 static int file_md5(const char *path, char *out, size_t outlen);
+static int multi_remote_off_pending(void);
 static int run_bt_saved_script(const char *type, const char *bdaddr, const char *script, int gap_ms, char *out, size_t outlen);
 
 static void chomp(char *s) {
@@ -1075,6 +1077,30 @@ static int json_int(const char *json, const char *key, int def) {
     p++;
     while (*p && isspace((unsigned char)*p)) p++;
     return atoi(p);
+}
+
+/* A plain integer JSON value for key: def when missing, or when it has a
+ * fraction, an exponent or anything else after the digits. (json_int() uses
+ * atoi(), so 1e1 or 1.5 read as 1.) */
+static int json_strict_int(const char *json, const char *key, int def) {
+    char needle[64];
+    const char *p;
+    char *end;
+    long v;
+    snprintf(needle, sizeof(needle), "\"%s\"", key);
+    p = strstr(json, needle);
+    if (!p) return def;
+    p = strchr(p + strlen(needle), ':');
+    if (!p) return def;
+    p++;
+    while (*p && isspace((unsigned char)*p)) p++;
+    if (*p != '-' && !isdigit((unsigned char)*p)) return def;
+    errno = 0;
+    v = strtol(p, &end, 10);
+    if (end == p || errno != 0 || v < INT_MIN || v > INT_MAX) return def;
+    while (*end && isspace((unsigned char)*end)) end++;
+    if (*end != ',' && *end != '}') return def;
+    return (int)v;
 }
 
 static int json_bool(const char *json, const char *key, int def) {
@@ -8720,6 +8746,14 @@ static void render_remote_pair_json(int fd, const struct request *req) {
         send_rf_pair_lock_error(fd, lock);
         return;
     }
+    if (multi_remote_off_pending()) {
+        close(lock);
+        f = send_json_start(fd, "409 Conflict");
+        if (!f) return;
+        fputs("{\"ok\":false,\"restarting\":true,\"error\":\"The hub is about to restart to turn off multiple remotes of one model. Pair the remote after it restarts.\"}\n", f);
+        fclose(f);
+        return;
+    }
     if (read_rf_info(before, sizeof(before)) != 0) {
         close(lock);
         f = send_json_start(fd, "502 Bad Gateway");
@@ -8823,6 +8857,32 @@ static const struct hal_edit HAL_MULTI_EDITS[] = {
     {0x27cdc, {0x34, 0x06, 0x88, 0x0e}, {0x34, 0x06, 0x40, 0x21}},
     {0x27ce0, {0x10, 0x66, 0xff, 0xdb}, {0x14, 0x66, 0xff, 0xdb}},
 };
+
+/* Set under the RF pairing lock once turning multi-remote off has checked the
+ * slot table, until the reboot (it lives in RAM): /api/remote-pair refuses
+ * while it's there, so no remote of an already-paired model can join between
+ * the check and the stock hal starting. It lapses after 10 minutes in case
+ * the reboot never comes. The installers write it the same way. */
+#define MULTI_REMOTE_PENDING "/var/run/codex-multi-remote-pending"
+#define MULTI_REMOTE_PENDING_SECONDS 600
+
+static int multi_remote_off_pending(void) {
+    struct stat st;
+    long long age;
+    if (stat(MULTI_REMOTE_PENDING, &st) != 0) return 0;
+    age = (long long)time(NULL) - (long long)st.st_mtime;
+    return age < MULTI_REMOTE_PENDING_SECONDS;
+}
+
+static void mark_multi_remote_off_pending(void) {
+    int fd = open(MULTI_REMOTE_PENDING, O_WRONLY | O_CREAT | O_TRUNC, 0644);
+    if (fd >= 0) {
+        if (write(fd, "1\n", 2) < 0) {
+            /* best effort: the switch still refused duplicates a moment ago */
+        }
+        close(fd);
+    }
+}
 
 static int multi_remote_enabled(void) {
     char raw[16];
@@ -9028,16 +9088,20 @@ static void render_multi_remote_set_json(int fd, const struct request *req) {
             send_multi_remote_error(fd, "502 Bad Gateway", "The hub's radio didn't list its paired remotes, so the setting wasn't changed.", NULL, NULL);
             return;
         }
-        close(rf_lock);
         rf_duplicate_models(info, dups, sizeof(dups));
         if (dups[0]) {
+            close(rf_lock);
             close(lock_fd);
             snprintf(msg, sizeof(msg), "More than one remote of the same model is paired (EquadID %s). "
                 "The hub's stock software can't run two of one model, so unpair the extra ones first.", dups);
             send_multi_remote_error(fd, "409 Conflict", msg, "duplicates", dups);
             return;
         }
+        /* Still holding the pairing lock: block pairing until the reboot. */
+        if (multi_remote_active()) mark_multi_remote_off_pending();
+        close(rf_lock);
         if (write_file_atomic(MULTI_REMOTE_CONF, "0", 1) != 0) {
+            unlink(MULTI_REMOTE_PENDING);
             close(lock_fd);
             send_multi_remote_error(fd, "500 Internal Server Error", "The setting couldn't be saved.", NULL, NULL);
             return;
@@ -9065,7 +9129,7 @@ static void render_remote_unpair_json(int fd, const struct request *req) {
     char before[4096], after[4096], reply[1024], params[48];
     int lock, slot, code;
     FILE *f;
-    slot = req->body ? json_int(req->body, "slot", 0) : 0;
+    slot = req->body ? json_strict_int(req->body, "slot", 0) : 0;
     if (slot < 1 || slot > RF_SLOTS) {
         f = send_json_start(fd, "400 Bad Request");
         if (!f) return;

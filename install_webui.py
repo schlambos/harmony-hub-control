@@ -115,11 +115,41 @@ HAL_PATH = "/usr/bin/hal"
 HAL_MULTI_DEST = "/data/codex/bin/hal_multiremote"
 MULTI_REMOTE_CONF = "/data/codex/multi_remote.conf"
 HAL_PATCH_FILE = PAYLOAD / "helpers" / "hal_multiremote_patch.json"
-# Deletes the copy unless it is bind-mounted (then rcS.local deletes it at boot).
-MULTI_REMOTE_REMOVE = (
-    f"if grep ' {HAL_PATH} ' /proc/mounts >/dev/null 2>&1; then echo bound; "
-    f"else rm -f {HAL_MULTI_DEST} && echo removed; fi"
-)
+# Turning it off reboots into the stock hal, which hangs its radio on two
+# remotes of one model. So --multi-remote off first checks the slot table on
+# the hub, while the multi-remote hal runs: it writes the pending-restart guard
+# (codex_webui's /api/remote-pair refuses while it's there; it lives in RAM
+# and lapses after 10 minutes), refuses during an open pairing window, then
+# reads rf.info. The copy itself is left to rcS.local, which deletes it at the
+# next boot when the setting isn't 1.
+MULTI_REMOTE_PENDING = "/var/run/codex-multi-remote-pending"
+NO_SCREEN_EQUADS = ("16414", "16422", "16423")
+
+
+def multi_remote_off_check_command(guard: bool) -> str:
+    touch = f"touch {MULTI_REMOTE_PENDING}; " if guard else ""
+    return (
+        f"if ! grep ' {HAL_PATH} ' /proc/mounts >/dev/null 2>&1; then echo inactive; "
+        f"else {touch}if ps | grep '[r]f.pairing' >/dev/null 2>&1; then echo pairing; "
+        "else /data/codex/bin/codex_hal_ltcp rf.info '{}' 8 2>&1; fi; fi"
+    )
+
+
+def rf_duplicate_models(reply: str) -> str | None:
+    """Models without a screen paired more than once in hal's rf.info answer,
+    as "16414 (slots 1, 2)"; "" when none; None when it isn't a valid answer."""
+    start = reply.find("{")
+    try:
+        doc = json.loads(reply[start:]) if start >= 0 else None
+    except ValueError:
+        doc = None
+    if not isinstance(doc, dict) or doc.get("code") != 200 or not isinstance(doc.get("data"), dict):
+        return None
+    slots: dict[str, list[str]] = {}
+    for dev in doc["data"].get("Devices") or []:
+        if isinstance(dev, dict) and str(dev.get("EquadID")) in NO_SCREEN_EQUADS:
+            slots.setdefault(str(dev["EquadID"]), []).append(str(dev.get("DeviceIndex", "?")))
+    return "; ".join(f"{m} (slots {', '.join(v)})" for m, v in slots.items() if len(v) > 1)
 
 
 def load_hal_patch(path: Path = HAL_PATCH_FILE) -> tuple[str, str, list[tuple[int, bytes, bytes]]]:
@@ -1570,17 +1600,34 @@ class Installer:
             "/bin/busybox sync 2>/dev/null || true"
         )
         self.run_remote(post, timeout=60, quiet=True)
-        self.remove_multi_remote_copy()
 
-    def remove_multi_remote_copy(self) -> None:
-        """--multi-remote off: delete the patched hal once nothing boots it.
-
-        While it is bind-mounted over /usr/bin/hal, deleting it would leave that
-        path a stale handle; rcS.local deletes it at the next boot instead."""
-        if self.args.multi_remote != "off" or self.probe.get(HAL_MULTI_DEST, {}).get("kind") != "regular":
+    def check_multi_remote_off(self) -> None:
+        """--multi-remote off while the multi-remote hal runs: refuse unless the
+        slot table holds no two remotes of one model (see MULTI_REMOTE_PENDING)."""
+        if self.args.multi_remote != "off":
             return
-        out = self.run_remote(MULTI_REMOTE_REMOVE, timeout=30, quiet=True).strip()
-        kv(f"removed={HAL_MULTI_DEST}" if out == "removed" else f"kept_until_reboot={HAL_MULTI_DEST}")
+        guard = not self.args.preflight_only
+        out = self.run_remote(multi_remote_off_check_command(guard), timeout=60, quiet=True).strip()
+        if out == "inactive":
+            kv("multi_remote_off_check=inactive")
+            return
+        problem = ""
+        if out == "pairing":
+            problem = "a pairing window is open on the hub; try again when it closes"
+        else:
+            dups = rf_duplicate_models(out)
+            if dups is None:
+                problem = "the hub's radio didn't list its paired remotes"
+            elif dups:
+                problem = (
+                    f"more than one remote of the same model is paired (EquadID {dups}); the stock hal "
+                    "can't run two of one model, so unpair the extra ones first (Settings → Remotes)"
+                )
+        if problem:
+            if guard:
+                self.run_remote(f"rm -f {MULTI_REMOTE_PENDING}", timeout=30, quiet=True)
+            raise RuntimeError(f"--multi-remote off refused: {problem}")
+        kv("multi_remote_off_check=ok")
 
     def start_services(self) -> None:
         start = (
@@ -1628,6 +1675,7 @@ class Installer:
 
         step("Resolving hub id")
         self.resolve_hub_id()
+        self.check_multi_remote_off()
 
         step("Building candidate inventory")
         self.build_inventory()
@@ -1681,7 +1729,6 @@ class Installer:
                 return 2
 
         if not self.active_candidates():
-            self.remove_multi_remote_copy()
             self.cleanup_stage()
             step("Done")
             info("The hub already matches this payload; nothing was installed or restarted.")
