@@ -20,17 +20,21 @@ exact SHA-256 digests and sizes are:
 
 | Binary | Size | SHA-256 |
 | --- | --- | --- |
-| `codex_webui` | 1220676 | `8d566344f5a7da03e0eb8eb639b3473fea65bdaaa5960a9050fdcf62dcae4e3c` |
+| `codex_webui` | 1233220 | `d84480898010aa90f919322453d4566286ea1fd9d98c97231ff870be7f9d08e6` |
+| `codex_dhcpd` | 58328 | `e9db51f4691511f1ae10182143518e758fc7aca0a84994fe9be602be37957592` |
+| `codex_portal` | 76724 | `1596f6cac03dad4ce0254ac118de5527c41789f10c7bc95357860d0d96c61b5f` |
+| `dropbearmulti` | 577296 | `e2ea632aed8b31dc5ea56b9673cbd983ec83260a97d33f891a0cebf51d5c6c8d` |
 | `codex_hbus` | 74660 | `4be9e6ac2e09e7eb052f9c47e81480d1e32aee7190bedb6ef7f932cf07aab8f9` |
 | `codex_androidtv` | 266916 | `fbf0e953b47b10f29fb30a41a4d339f5a034e1cc7a26c12d79f4d3711161bba2` |
 
-The remaining six binaries (`codex_bt_pair_agent`, `codex_bthid_keyboard`,
-`codex_dhcpd`, `codex_hal_ltcp`, `codex_portal`, `dropbearmulti`) are pinned by
-their MD5 digests in `payload/bin/MANIFEST.txt`.
+The remaining binaries (`codex_bt_pair_agent`, `codex_bthid_keyboard`,
+`codex_hal_ltcp`) are pinned by their MD5 digests in
+`payload/bin/MANIFEST.txt` and by the `*_EXPECT_SHA256` fail-closed checks
+in `build/build_harmony_tools_kali.sh`, which also pins every binary above.
 
 ## Toolchain — official Zig 0.16.0
 
-All six Zig-built binaries use the official Zig 0.16.0 tarball (clang/LLD
+All eight Zig-built binaries use the official Zig 0.16.0 tarball (clang/LLD
 21.1.0, executable SHA-256
 `e6cd688d25664983833aae272f501d4bceeae304875b8f1741209d15fd13a4ec`). The build
 script keeps separate `WEBUI_ZIG` and `OFFICIAL_ZIG` variables; both carry
@@ -47,7 +51,7 @@ Verified 2026-10-27 on macOS (aarch64):
   `e6cd688d25664983833aae272f501d4bceeae304875b8f1741209d15fd13a4ec`,
   `zig version` 0.16.0, `zig cc --version` `clang version 21.1.0`
 
-With it, all six Zig-built binaries rebuild byte-for-byte, and a repeat
+With it, all eight Zig-built binaries rebuild byte-for-byte, and a repeat
 `codex_webui` build is identical.
 
 Use this toolchain, not whatever `zig` is on `PATH`. The `codex_webui` built
@@ -70,8 +74,8 @@ Both regenerators reproduce the committed headers byte-for-byte.
 
 Pinned source blobs:
 
-- `payload/source/codex_webui.c` — `cab523828c683145eb8ec3bd60338f3a7ccaf9ef`
-- `payload/source/harmony_shell_assets.h` — `fefc5612989a498e73e54781599f53c97dda7fe8`
+- `payload/source/codex_webui.c` — `46e98e830466eb8e9e32386dc2c90718b733a766`
+- `payload/source/harmony_shell_assets.h` — `46ac887f86a125c1cc4e6cac1e19c4a390ffbf6b`
 - `payload/source/activity_ui_assets.h` — `f68a2bce58e71242b2480b2d483f405484c036da`
 - `payload/source/remote_skin_jpg.h` — `419611c5ff0713f1f5de2dd684d699f6d77238d5`
 
@@ -83,8 +87,8 @@ Pinned source blobs:
 ```
 
 Result must be `ELF 32-bit MSB executable, MIPS, MIPS32 rel2, statically
-linked, stripped`, size 1220676, SHA-256
-`8d566344f5a7da03e0eb8eb639b3473fea65bdaaa5960a9050fdcf62dcae4e3c`.
+linked, stripped`, size 1233220, SHA-256
+`d84480898010aa90f919322453d4566286ea1fd9d98c97231ff870be7f9d08e6`.
 
 To compare against a Homebrew-built box binary, strip the compiler stamp from
 both first:
@@ -159,12 +163,27 @@ Result must be `ELF 32-bit MSB executable, MIPS, MIPS32`, statically linked,
 stripped, size 54424, SHA-256
 `82f398eff425562494dc9153b9aff2b903ad7af29d791b7f1efde70fa8e06379`.
 
-### dhcpd / portal (Bootlin mips32-uclibc)
+### dhcpd / portal (Official Zig)
 
-`codex_dhcpd` and `codex_portal` reproduce with the pinned Bootlin
-`mips32--uclibc--stable-2017.05` toolchain; see
-`build/build_harmony_tools_kali.sh`. The script downloads that tarball and the
-Dropbear source without checking their SHA-256.
+Since issue #88, `codex_dhcpd` and `codex_portal` build with the same pinned
+Official Zig 0.16.0 as the other first-party binaries (previously unpinned
+Bootlin GCC builds). The build script verifies them fail-closed against
+`DHCPD_EXPECT_SHA256` / `PORTAL_EXPECT_SHA256` (see the table above):
+
+```sh
+"$OFFICIAL_ZIG" cc -target mips-linux-musleabi -Os -static -s \
+  -o build/output/codex_dhcpd payload/source/codex_dhcpd.c
+"$OFFICIAL_ZIG" cc -target mips-linux-musleabi -Os -static -s \
+  -o build/output/codex_portal payload/source/codex_portal.c
+```
+
+The Bootlin toolchain is still downloaded by the script, but now only for
+the Dropbear build. The Dropbear source tarball is verified against
+`DROPBEAR_TARBALL_SHA256`
+(`0d1f7ca711cfc336dc8a85e672cab9cfd8223a02fe2da0a4a7aeb58c9e113634` for
+`dropbear-2025.89.tar.bz2`, 2374006 bytes) before extraction, and the built
+`dropbearmulti` must reproduce the committed binary
+(`DROPBEAR_EXPECT_SHA256`, see the table above) or the script fails.
 
 ## Per-binary build status (all 9)
 
@@ -176,8 +195,8 @@ Dropbear source without checking their SHA-256.
 | `codex_bthid_keyboard` | EXACT_SOURCE_REPRODUCIBLE (Official Zig 0.16.0) |
 | `codex_hal_ltcp` | EXACT_SOURCE_REPRODUCIBLE (Official Zig 0.16.0) |
 | `codex_androidtv` | EXACT_SOURCE_REPRODUCIBLE (Official Zig 0.16.0, BearSSL 0.6 tarball pinned by SHA-256) |
-| `codex_dhcpd` | EXACT_SOURCE_REPRODUCIBLE (Bootlin mips32-uclibc) |
-| `codex_portal` | EXACT_SOURCE_REPRODUCIBLE (Bootlin mips32-uclibc) |
+| `codex_dhcpd` | EXACT_SOURCE_REPRODUCIBLE (Official Zig 0.16.0) |
+| `codex_portal` | EXACT_SOURCE_REPRODUCIBLE (Official Zig 0.16.0) |
 | `dropbearmulti` | **UNVERIFIED_THIRD_PARTY** (version/license verified, build unverified) |
 
 `dropbearmulti` is the **only** UNVERIFIED_THIRD_PARTY artifact. Its

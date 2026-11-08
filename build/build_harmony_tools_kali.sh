@@ -27,18 +27,16 @@ export PATH="$TOOLCHAIN_DIR/bin:$PATH"
 CC=mips-buildroot-linux-uclibc-gcc
 STRIP=mips-buildroot-linux-uclibc-strip
 
-# ---------------------------------------------------------------------------
-# GCC-built helpers (Bootlin mips32 uClibc 2017.05).  Unchanged: dhcpd and
-# portal are built exactly as before with the Bootlin GCC 5.4 toolchain.
-# ---------------------------------------------------------------------------
-"$CC" -Os -static -s -o "$OUT/codex_dhcpd" "$SRC/codex_dhcpd.c"
-"$CC" -Os -static -s -o "$OUT/codex_portal" "$SRC/codex_portal.c"
+# The Bootlin GCC toolchain above is now used only for the Dropbear build
+# below.  codex_dhcpd and codex_portal moved to the pinned Official Zig
+# 0.16.0 build (issue #88) so every first-party binary is verifiable the
+# same way; they were previously unpinned Bootlin GCC builds.
 
 # ---------------------------------------------------------------------------
 # Zig-built binaries.  Official Zig 0.16.0 (clang/LLD 21.1.0), fail-closed
 # pinned by executable SHA-256, version, and clang/LLD fingerprint, builds
-# all five: WEBUI_ZIG (codex_webui) and OFFICIAL_ZIG (pair-agent, bthid,
-# HAL, HBus) are separate variables but carry the same pin.
+# all seven: WEBUI_ZIG (codex_webui) and OFFICIAL_ZIG (pair-agent, bthid,
+# HAL, HBus, dhcpd, portal) are separate variables but carry the same pin.
 #
 #   executable SHA-256
 #   e6cd688d25664983833aae272f501d4bceeae304875b8f1741209d15fd13a4ec
@@ -58,8 +56,8 @@ STRIP=mips-buildroot-linux-uclibc-strip
 # ---------------------------------------------------------------------------
 
 #: expected output digests (fail closed on any mismatch)
-WEBUI_EXPECT_SHA256=9e3ecb9689a1f7cbf42700d2b9c91d53bcacecf61da69353ce733d4c9a4fe1dc
-WEBUI_EXPECT_SIZE=1228196
+WEBUI_EXPECT_SHA256=d84480898010aa90f919322453d4566286ea1fd9d98c97231ff870be7f9d08e6
+WEBUI_EXPECT_SIZE=1233220
 PAIR_EXPECT_SHA256=ab89be44f8d1db48e95a12ec3673145edfb8eb761f5e8db03f4e61acb8b01d72
 PAIR_EXPECT_SIZE=112708
 BTHID_EXPECT_SHA256=099b8a1428c2f34fe0b3428d280f65402cc6a5fd1e8e5723c56b462cc8ec2a86
@@ -68,6 +66,14 @@ HAL_EXPECT_SHA256=a0b29bf8b72418ad3f99355889d2a07a7fd031395e1871f4e114fbab721592
 HAL_EXPECT_SIZE=81636
 HBUS_EXPECT_SHA256=4be9e6ac2e09e7eb052f9c47e81480d1e32aee7190bedb6ef7f932cf07aab8f9
 HBUS_EXPECT_SIZE=74660
+DHCPD_EXPECT_SHA256=e9db51f4691511f1ae10182143518e758fc7aca0a84994fe9be602be37957592
+DHCPD_EXPECT_SIZE=58328
+PORTAL_EXPECT_SHA256=1596f6cac03dad4ce0254ac118de5527c41789f10c7bc95357860d0d96c61b5f
+PORTAL_EXPECT_SIZE=76724
+#: committed dropbearmulti identity and its pinned upstream source tarball
+DROPBEAR_EXPECT_SHA256=e2ea632aed8b31dc5ea56b9673cbd983ec83260a97d33f891a0cebf51d5c6c8d
+DROPBEAR_EXPECT_SIZE=577296
+DROPBEAR_TARBALL_SHA256=0d1f7ca711cfc336dc8a85e672cab9cfd8223a02fe2da0a4a7aeb58c9e113634
 
 #: pinned executable SHA-256 for each Zig distribution
 WEBUI_ZIG_SHA256=e6cd688d25664983833aae272f501d4bceeae304875b8f1741209d15fd13a4ec
@@ -141,8 +147,8 @@ if [ "$WEBUI_SHA256" != "$WEBUI_EXPECT_SHA256" ] || [ "$WEBUI_SIZE" != "$WEBUI_E
 fi
 
 # ---------------------------------------------------------------------------
-# pair-agent / bthid / HAL / HBus — Official Zig 0.16.0 (clang/LLD 21.1.0).
-# HBus additionally requires -mcpu=mips32 (mips32 r1 target).
+# pair-agent / bthid / HAL / HBus / dhcpd / portal — Official Zig 0.16.0
+# (clang/LLD 21.1.0).  HBus additionally requires -mcpu=mips32 (mips32 r1).
 # ---------------------------------------------------------------------------
 OFFICIAL_ZIG=${OFFICIAL_ZIG:-}
 check_zig "OFFICIAL_ZIG" "$OFFICIAL_ZIG" "$OFFICIAL_ZIG_SHA256" "$OFFICIAL_ZIG_FINGERPRINT"
@@ -161,6 +167,12 @@ check_zig "OFFICIAL_ZIG" "$OFFICIAL_ZIG" "$OFFICIAL_ZIG_SHA256" "$OFFICIAL_ZIG_F
   "$OFFICIAL_ZIG" cc -target mips-linux-musleabi -mcpu=mips32 -Os -static -s \
     -o build/output/codex_hbus \
     payload/source/codex_hbus.c
+  "$OFFICIAL_ZIG" cc -target mips-linux-musleabi -Os -static -s \
+    -o build/output/codex_dhcpd \
+    payload/source/codex_dhcpd.c
+  "$OFFICIAL_ZIG" cc -target mips-linux-musleabi -Os -static -s \
+    -o build/output/codex_portal \
+    payload/source/codex_portal.c
 )
 
 PAIR_SHA256=$(sha256_of "$OUT/codex_bt_pair_agent")
@@ -187,6 +199,18 @@ if [ "$HBUS_SHA256" != "$HBUS_EXPECT_SHA256" ] || [ "$HBUS_SIZE" != "$HBUS_EXPEC
   echo "error: codex_hbus build is not exact (size $HBUS_SIZE, sha256 $HBUS_SHA256; expected size $HBUS_EXPECT_SIZE, sha256 $HBUS_EXPECT_SHA256)" >&2
   exit 1
 fi
+DHCPD_SHA256=$(sha256_of "$OUT/codex_dhcpd")
+DHCPD_SIZE=$(wc -c < "$OUT/codex_dhcpd" | tr -d ' ')
+if [ "$DHCPD_SHA256" != "$DHCPD_EXPECT_SHA256" ] || [ "$DHCPD_SIZE" != "$DHCPD_EXPECT_SIZE" ]; then
+  echo "error: codex_dhcpd build is not exact (size $DHCPD_SIZE, sha256 $DHCPD_SHA256; expected size $DHCPD_EXPECT_SIZE, sha256 $DHCPD_EXPECT_SHA256)" >&2
+  exit 1
+fi
+PORTAL_SHA256=$(sha256_of "$OUT/codex_portal")
+PORTAL_SIZE=$(wc -c < "$OUT/codex_portal" | tr -d ' ')
+if [ "$PORTAL_SHA256" != "$PORTAL_EXPECT_SHA256" ] || [ "$PORTAL_SIZE" != "$PORTAL_EXPECT_SIZE" ]; then
+  echo "error: codex_portal build is not exact (size $PORTAL_SIZE, sha256 $PORTAL_SHA256; expected size $PORTAL_EXPECT_SIZE, sha256 $PORTAL_EXPECT_SHA256)" >&2
+  exit 1
+fi
 
 DROPBEAR_VERSION=2025.89
 DROPBEAR_TARBALL="$BUILD/dropbear-$DROPBEAR_VERSION.tar.bz2"
@@ -194,6 +218,13 @@ DROPBEAR_URL="https://matt.ucc.asn.au/dropbear/releases/dropbear-$DROPBEAR_VERSI
 
 if [ ! -f "$DROPBEAR_TARBALL" ]; then
   wget -O "$DROPBEAR_TARBALL" "$DROPBEAR_URL"
+fi
+
+#: fail closed on a tarball that is not the pinned upstream release
+DROPBEAR_TARBALL_SHA256_FOUND=$(sha256_of "$DROPBEAR_TARBALL")
+if [ "$DROPBEAR_TARBALL_SHA256_FOUND" != "$DROPBEAR_TARBALL_SHA256" ]; then
+  echo "error: Dropbear tarball SHA-256 mismatch (found $DROPBEAR_TARBALL_SHA256_FOUND, expected $DROPBEAR_TARBALL_SHA256)" >&2
+  exit 1
 fi
 
 rm -rf "$BUILD/dropbear-$DROPBEAR_VERSION"
@@ -219,6 +250,14 @@ cd "$BUILD/dropbear-$DROPBEAR_VERSION"
 make -j"$(nproc)" MULTI=1 PROGRAMS="dropbear dropbearkey dbclient scp" dropbearmulti
 "$STRIP" dropbearmulti || true
 cp dropbearmulti "$OUT/dropbearmulti"
+
+#: fail closed unless the rebuild reproduces the committed binary exactly
+DROPBEAR_SHA256=$(sha256_of "$OUT/dropbearmulti")
+DROPBEAR_SIZE=$(wc -c < "$OUT/dropbearmulti" | tr -d ' ')
+if [ "$DROPBEAR_SHA256" != "$DROPBEAR_EXPECT_SHA256" ] || [ "$DROPBEAR_SIZE" != "$DROPBEAR_EXPECT_SIZE" ]; then
+  echo "error: dropbearmulti build is not exact (size $DROPBEAR_SIZE, sha256 $DROPBEAR_SHA256; expected size $DROPBEAR_EXPECT_SIZE, sha256 $DROPBEAR_EXPECT_SHA256)" >&2
+  exit 1
+fi
 
 cd "$OUT"
 ln -sf dropbearmulti dropbear

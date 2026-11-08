@@ -7,6 +7,7 @@
 #include <string.h>
 #include <sys/socket.h>
 #include <sys/stat.h>
+#include <sys/time.h>
 #include <sys/types.h>
 #include <unistd.h>
 
@@ -79,6 +80,13 @@ static void form_value(const char *body, const char *name, char *out, size_t out
 static void write_quoted(FILE *f, const char *s) {
     fputc('"', f);
     while (*s) {
+        unsigned char c = (unsigned char)*s;
+        /* Never let a control character (incl. \n / \r) break out of the
+           quoted wpa_supplicant value and inject a new config line. */
+        if (c < 0x20 || c == 0x7f) {
+            s++;
+            continue;
+        }
         if (*s == '"' || *s == '\\') {
             fputc('\\', f);
         }
@@ -86,6 +94,35 @@ static void write_quoted(FILE *f, const char *s) {
         s++;
     }
     fputc('"', f);
+}
+
+static int valid_ssid(const char *s) {
+    size_t n = strlen(s);
+    size_t i;
+    if (n < 1 || n > 32) return 0;
+    for (i = 0; i < n; i++) {
+        unsigned char c = (unsigned char)s[i];
+        if (c < 0x20 || c == 0x7f) return 0;
+    }
+    return 1;
+}
+
+static int valid_password(const char *s) {
+    size_t n = strlen(s);
+    size_t i;
+    if (n == 0) return 1; /* open network */
+    if (n == 64) {
+        for (i = 0; i < n; i++) {
+            if (!isxdigit((unsigned char)s[i])) break;
+        }
+        if (i == n) return 1; /* raw 64-hex PSK */
+    }
+    if (n < 8 || n > 63) return 0;
+    for (i = 0; i < n; i++) {
+        unsigned char c = (unsigned char)s[i];
+        if (c < 0x20 || c > 0x7e) return 0;
+    }
+    return 1;
 }
 
 static int save_wifi(const char *ssid, const char *password, int hidden) {
@@ -187,6 +224,14 @@ static void handle_client(int client) {
             send_text(client, "400 Bad Request", "missing ssid\n");
             return;
         }
+        if (!valid_ssid(ssid)) {
+            send_text(client, "400 Bad Request", "invalid ssid: 1-32 bytes, no control characters\n");
+            return;
+        }
+        if (!valid_password(password)) {
+            send_text(client, "400 Bad Request", "invalid password: 8-63 printable ASCII characters or 64 hex digits\n");
+            return;
+        }
         if (save_wifi(ssid, password, hidden[0] != 0) == 0) {
             send_text(client, "200 OK", "saved; rebooting\n");
             system("/sbin/reboot");
@@ -198,6 +243,9 @@ static void handle_client(int client) {
 
 int main(int argc, char **argv) {
     int port = argc > 1 ? atoi(argv[1]) : 80;
+    /* Bind only to the recovery AP address (AP_IP in recovery_ap.sh), never
+       INADDR_ANY: the portal must not be reachable from any other interface. */
+    const char *bind_ip = argc > 2 ? argv[2] : "192.168.76.1";
     int fd;
     int one = 1;
     struct sockaddr_in addr;
@@ -210,7 +258,11 @@ int main(int argc, char **argv) {
     memset(&addr, 0, sizeof(addr));
     addr.sin_family = AF_INET;
     addr.sin_port = htons((unsigned short)port);
-    addr.sin_addr.s_addr = htonl(INADDR_ANY);
+    addr.sin_addr.s_addr = inet_addr(bind_ip);
+    if (addr.sin_addr.s_addr == INADDR_NONE) {
+        fprintf(stderr, "invalid bind address: %s\n", bind_ip);
+        return 1;
+    }
     if (bind(fd, (struct sockaddr *)&addr, sizeof(addr)) != 0) {
         perror("bind");
         return 1;
@@ -219,10 +271,17 @@ int main(int argc, char **argv) {
         perror("listen");
         return 1;
     }
-    fprintf(stderr, "codex_portal listening on %d\n", port);
+    fprintf(stderr, "codex_portal listening on %s:%d\n", bind_ip, port);
     while (1) {
         int client = accept(fd, NULL, NULL);
+        struct timeval tv;
         if (client < 0) continue;
+        /* A stalled or silent client must not block this single-threaded
+           portal forever. */
+        tv.tv_sec = 5;
+        tv.tv_usec = 0;
+        setsockopt(client, SOL_SOCKET, SO_RCVTIMEO, &tv, sizeof(tv));
+        setsockopt(client, SOL_SOCKET, SO_SNDTIMEO, &tv, sizeof(tv));
         handle_client(client);
         close(client);
     }

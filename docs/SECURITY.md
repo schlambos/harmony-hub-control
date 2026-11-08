@@ -5,9 +5,28 @@ trusted-LAN equipment.
 
 ## Current Policy
 
-- HTTP authentication is disabled.
+- Web UI sign-in (HTTP Basic Auth over the whole `:8080` surface) is optional
+  and off by default; enable it under Settings → System → Sign-in.
 - The web UI should only be reachable from a trusted local network.
-- SSH access is managed by the already-rooted hub state.
+- **Exports redact secrets while sign-in is off.** `GET /export/wifi`,
+  `/export/mqtt`, and `/export/bundle` serve the Wi-Fi PSK and MQTT password
+  as `__REDACTED__` whenever web UI sign-in is disabled, so another device on
+  an IoT VLAN cannot scrape them. With sign-in enabled the caller has
+  authenticated, and exports include the real passwords for full backups.
+  Restoring a redacted export keeps the password already stored on the hub
+  instead of overwriting it with the placeholder.
+- **SSH password login stays enabled on purpose.** The payload's Dropbear
+  runs without `-s -g`, so root accepts password logins alongside key auth.
+  That is a deliberate lockout-recovery path: with key-only SSH, a dead
+  laptop or lost SSH key would brick administrative access to the hub. If
+  your hub sits on an IoT VLAN you don't fully trust, set a strong root
+  password over SSH (`passwd`) after install.
+- **The Wi-Fi recovery portal needs physical access.** `recovery_ap.sh` only
+  starts `codex_portal` after the hub's reset button is held for 5 seconds
+  (station mode is torn down first). The portal binds only to the recovery
+  AP address (`192.168.76.1`), times idle clients out after 5 seconds, and
+  validates SSID/password before writing `wpa_supplicant.conf` (control
+  characters are stripped, so a submitted value cannot inject config lines).
 - MQTT credentials are provided at install time or from the web UI and must not
   be committed.
 - The hub installs software only through the installer, over SSH. Hub 1.2.0
