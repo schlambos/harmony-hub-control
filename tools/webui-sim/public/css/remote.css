@@ -248,6 +248,13 @@
   min-width: 0;
 }
 
+.ha-state-detail {
+  flex-basis: 100%;
+  font-size: 12px;
+  line-height: 1.5;
+  opacity: 0.75;
+}
+
 .ha-state-name {
   color: var(--on-surface);
   font-size: var(--fs-caption);

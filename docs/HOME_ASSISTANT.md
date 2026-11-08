@@ -234,6 +234,16 @@ it; the Hub refuses then, and Home Assistant shows a notification.
   (never flash) and marks it stale after 90 s without a push so the web and
   Android apps show "State unknown", never "Off", when Home Assistant is
   unreachable.
+- **LG theater state (Phase 6):** an LG snapshot may also carry `theater`
+  (active HDMI port, per-port connected/signal/CEC name, and the TV-reported
+  sound output with volume and mute) and `theater_links` (explicit,
+  display-only HDMI-port -> hub-device links from the integration's
+  options). The hub stores both without parsing them; the web app shows the
+  live/connected ports and "Sound: <bar> (ARC) · Vol <n>" on the LG's device
+  and remote screens, and the same observations on a linked device's screen.
+  A link never implies the linked device's power: connection, video signal
+  and ARC are observations, not measured power. Older integrations simply
+  don't send these fields.
 - **Deleting the integration** leaves the Hub's devices intact unless
   they are unticked in Configure first.
 

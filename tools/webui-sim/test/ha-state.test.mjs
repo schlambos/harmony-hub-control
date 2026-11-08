@@ -7,11 +7,14 @@ import os from "node:os";
 import { fileURLToPath } from "node:url";
 import {
   describeHaDeviceState,
+  describeTheaterLink,
   fixItDevices,
   haDeviceKey,
   isHaCommandRedundant,
   isHaDevice,
+  theaterPortLabel,
 } from "../public/js/views/remote-model.js";
+import { haStateStripMarkup } from "../public/js/views/remote-pad.js";
 
 const ROOT = path.join(path.dirname(fileURLToPath(import.meta.url)), "../../..");
 
@@ -159,6 +162,104 @@ describe("describeHaDeviceState", () => {
       info.chips.map((c) => c.label),
       ["On", "YouTube", "Paused", "Muted (20%)"],
     );
+  });
+});
+
+
+const THEATER = {
+  active_input: { id: "HDMI_1", label: "Living Room TV" },
+  ports: [
+    { id: "HDMI_1", label: "Living Room TV", connected: true, signal: true, cec_name: "Living Room TV", cec_type: 8, cec_vendor: 1877008 },
+    { id: "HDMI_2", label: "Nakamichi Sound Bar", connected: true, signal: false, cec_name: "NAKAMICHI", cec_type: 5, cec_vendor: 9681 },
+    { id: "HDMI_3", label: "Switch2 Game Console", connected: false, signal: false, cec_name: null, cec_type: null, cec_vendor: null },
+    { id: "HDMI_4", label: "HDMI 4", connected: false, signal: false, cec_name: null, cec_type: null, cec_vendor: null },
+  ],
+  sound: { output: "external_arc", label: "Nakamichi Sound Bar", port: "HDMI_2", volume: 14, muted: false, external_control: true },
+  foreground_app: "com.webos.app.hdmi1",
+};
+const theaterEnv = (extra = {}) => ({
+  version: 20, stale: false,
+  states: [{ key: "media_player.living_room_tv", available: true, power: "on",
+    source: "Living Room TV", volume: 0.14, muted: false, theater: THEATER, ...extra }],
+});
+
+describe("LG theater state", () => {
+  const tv = makeHaDevice();
+
+  it("shows the live port, connected ports and TV-reported ARC volume (not %)", () => {
+    const info = describeHaDeviceState(tv, theaterEnv());
+    assert.equal(info.activeInputId, "HDMI 1");
+    assert.equal(theaterPortLabel("HDMI_2"), "HDMI 2");
+    const labels = info.chips.map((c) => c.label);
+    assert.ok(labels.includes("Sound: Nakamichi Sound Bar (ARC) \u00b7 Vol 14"), labels.join("|"));
+    assert.ok(!labels.some((l) => l.includes("%")), labels.join("|"));
+    assert.ok(info.theater.portsText.includes("HDMI 1 Living Room TV (live)"));
+    assert.ok(info.theater.portsText.includes("HDMI 2 Nakamichi Sound Bar (connected)"));
+    assert.ok(info.theater.portsText.includes("HDMI 3 Switch2 Game Console (not connected)"));
+  });
+
+  it("marks Input HDMI 1 redundant from the port id, not the CEC label", () => {
+    const info = describeHaDeviceState(tv, theaterEnv());
+    assert.equal(isHaCommandRedundant("Input HDMI 1", info), true);
+    assert.equal(isHaCommandRedundant("Input HDMI 4", info), false);
+  });
+
+  it("never invents theater state when stale, off or unavailable", () => {
+    for (const env of [
+      { version: 1, stale: true, states: theaterEnv().states },
+      theaterEnv({ available: false }),
+      theaterEnv({ theater: null }),
+    ]) {
+      const info = describeHaDeviceState(tv, env);
+      assert.equal(info.theater, null);
+      assert.equal(info.activeInputId, null);
+    }
+  });
+
+  it("renders ports detail in the strip", () => {
+    const html = haStateStripMarkup([tv], theaterEnv());
+    assert.ok(html.includes("HDMI 2 Nakamichi Sound Bar (connected)"));
+    assert.ok(html.includes("Sound: Nakamichi Sound Bar (ARC)"));
+  });
+});
+
+describe("describeTheaterLink (display-only CEC links)", () => {
+  const amp = { id: "81897247", name: "Nakamichi Amp", transport: 1, isHa: false, entry: { Device: { Transport: 1 } }, commands: [] };
+  const box = { id: "91684097", name: "Living Room TV box", transport: 1, isHa: false, entry: { Device: { Transport: 1 } }, commands: [] };
+  const linkedEnv = (extra = {}) => ({
+    version: 21, stale: false,
+    states: [{ key: "media_player.living_room_tv", available: true, power: "on", theater: THEATER,
+      theater_links: [{ port: "HDMI_2", device_id: "81897247" }, { port: "HDMI_1", device_id: "91684097" }], ...extra }],
+  });
+
+  it("shows ARC and TV-reported volume for the soundbar link, never power", () => {
+    const info = describeTheaterLink(amp, linkedEnv());
+    assert.equal(info.known, true);
+    assert.equal(info.power, "unknown");
+    const labels = info.chips.map((c) => c.label);
+    assert.ok(labels.some((l) => l.startsWith("On ARC")), labels.join("|"));
+    assert.ok(labels.some((l) => l.includes("Vol 14")), labels.join("|"));
+    assert.ok(!labels.some((l) => /^(On|Off)$/.test(l)), labels.join("|"));
+  });
+
+  it("shows live + signal for a linked playback device", () => {
+    const info = describeTheaterLink(box, linkedEnv());
+    const labels = info.chips.map((c) => c.label);
+    assert.ok(labels.includes("HDMI 1 \u00b7 live on the TV"), labels.join("|"));
+    assert.ok(labels.includes("Signal present"), labels.join("|"));
+  });
+
+  it("is unknown when stale/off-theater, and null when unlinked", () => {
+    assert.equal(describeTheaterLink(amp, { version: 1, stale: true, states: linkedEnv().states }).known, false);
+    assert.equal(describeTheaterLink(amp, linkedEnv({ theater: null })).known, false);
+    assert.equal(describeTheaterLink({ id: "1", name: "Other", commands: [] }, linkedEnv()), null);
+    assert.equal(describeTheaterLink(amp, null), null, "no envelope yet: link not known, nothing invented");
+  });
+
+  it("renders a linked IR device in the strip", () => {
+    const html = haStateStripMarkup([amp], linkedEnv());
+    assert.ok(html.includes("Nakamichi Amp"));
+    assert.ok(html.includes("On ARC"));
   });
 });
 

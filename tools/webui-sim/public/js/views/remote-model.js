@@ -87,6 +87,52 @@ export function haDeviceKey(device) {
   return value || null;
 }
 
+
+/** "HDMI_1" -> "HDMI 1" (the stable hub input name). */
+export function theaterPortLabel(portId) {
+  return String(portId ?? "").replace("_", " ");
+}
+
+function parseTheater(snap, stale) {
+  if (stale || !snap || typeof snap.theater !== "object" || snap.theater === null) return null;
+  const raw = snap.theater;
+  const ports = (Array.isArray(raw.ports) ? raw.ports : [])
+    .filter((port) => port && typeof port === "object" && typeof port.id === "string")
+    .map((port) => ({
+      id: port.id,
+      label: typeof port.label === "string" && port.label.trim() ? port.label.trim() : theaterPortLabel(port.id),
+      connected: typeof port.connected === "boolean" ? port.connected : null,
+      signal: typeof port.signal === "boolean" ? port.signal : null,
+      cecName: typeof port.cec_name === "string" && port.cec_name.trim() ? port.cec_name.trim() : null,
+      cecType: typeof port.cec_type === "number" ? port.cec_type : null,
+    }));
+  const active = raw.active_input && typeof raw.active_input === "object" && typeof raw.active_input.id === "string"
+    ? { id: raw.active_input.id, label: typeof raw.active_input.label === "string" && raw.active_input.label.trim() ? raw.active_input.label.trim() : theaterPortLabel(raw.active_input.id) }
+    : null;
+  let sound = null;
+  if (raw.sound && typeof raw.sound === "object") {
+    const s = raw.sound;
+    const output = typeof s.output === "string" && s.output.trim() ? s.output.trim() : null;
+    const label = typeof s.label === "string" && s.label.trim() ? s.label.trim() : null;
+    const volume = typeof s.volume === "number" && Number.isFinite(s.volume) ? s.volume : null;
+    const muted = typeof s.muted === "boolean" ? s.muted : null;
+    const dest = output === "external_arc" ? (label ? `${label} (ARC)` : "ARC") : (label || output);
+    if (dest) {
+      const bits = [`Sound: ${dest}`];
+      if (volume != null) bits.push(`Vol ${volume}`);
+      if (muted === true) bits.push("Muted");
+      sound = { output, label, port: typeof s.port === "string" ? s.port : null, volume, muted, text: bits.join(" \u00b7 ") };
+    }
+  }
+  const portsText = ports.map((port) => {
+    const live = active && port.id === active.id;
+    const state = live ? "live" : port.connected === true ? "connected" : port.connected === false ? "not connected" : "unknown";
+    const sig = port.signal === true && !live ? ", signal" : "";
+    return `${theaterPortLabel(port.id)} ${port.label} (${state}${sig})`;
+  }).join(" \u00b7 ");
+  return { activeInput: active, ports, sound, portsText };
+}
+
 /**
  * Normalize one Home Assistant device's live state against the hub's haState
  * envelope. Never invents "off" when stale, missing or unavailable: returns
@@ -110,6 +156,7 @@ export function describeHaDeviceState(device, haState) {
   const muted = !stale && typeof snap?.muted === "boolean" ? snap.muted : null;
   const rawPlaying = !stale && typeof snap?.playing === "string" ? snap.playing.toLowerCase() : null;
   const playing = rawPlaying && ["playing", "paused", "idle"].includes(rawPlaying) ? rawPlaying : null;
+  const theater = parseTheater(snap, stale);
 
   const chips = [];
   if (!known) {
@@ -123,7 +170,10 @@ export function describeHaDeviceState(device, haState) {
     if (playing && (playing === "playing" || playing === "paused")) {
       chips.push({ kind: "playing", label: playing === "playing" ? "Playing" : "Paused" });
     }
-    if (muted === true) {
+    if (theater?.sound) {
+      // TV-reported level on a 0-100 scale, not a percentage of HA volume.
+      chips.push({ kind: "sound", label: theater.sound.text });
+    } else if (muted === true) {
       chips.push({ kind: "muted", label: volume != null ? `Muted (${volume}%)` : "Muted" });
     } else if (volume != null) {
       chips.push({ kind: "volume", label: `Vol ${volume}%` });
@@ -143,7 +193,55 @@ export function describeHaDeviceState(device, haState) {
     badge: !known ? "State unknown" : power === "on" ? "On" : "Off",
     chips,
     summary,
+    theater,
+    activeInputId: theater?.activeInput ? theaterPortLabel(theater.activeInput.id) : null,
   };
+}
+
+/**
+ * Display-only link from a hub device to one LG HDMI port (integration
+ * options -> snapshot theater_links). The linked device's own power is never
+ * inferred: connection, video signal and ARC are observations, not power.
+ * Returns null when this device has no link in the snapshot.
+ */
+export function describeTheaterLink(device, haState) {
+  if (!device) return null;
+  const envelope = haState && typeof haState === "object" ? haState : null;
+  const list = Array.isArray(envelope?.states) ? envelope.states : [];
+  const deviceId = String(device.id ?? "");
+  let snap = null;
+  let link = null;
+  for (const state of list) {
+    if (!state || typeof state !== "object" || !Array.isArray(state.theater_links)) continue;
+    const found = state.theater_links.find((l) => l && String(l.device_id ?? "") === deviceId && typeof l.port === "string");
+    if (found) { snap = state; link = found; break; }
+  }
+  if (!link) return null;
+  const stale = Boolean(!envelope || envelope.stale || snap.available === false);
+  const theater = parseTheater(snap, stale);
+  if (!theater) {
+    return { key: snap.key ?? null, known: false, stale: true, power: "unknown", badge: "State unknown",
+      chips: [{ kind: "unknown", label: "State unknown" }], summary: "State unknown", theater: null,
+      theaterLink: { port: link.port }, activeInputId: null };
+  }
+  const port = theater.ports.find((p) => p.id === link.port) ?? null;
+  const live = Boolean(theater.activeInput && theater.activeInput.id === link.port);
+  const chips = [];
+  if (live) chips.push({ kind: "on", label: `${theaterPortLabel(link.port)} \u00b7 live on the TV` });
+  else if (port?.connected === true) chips.push({ kind: "source", label: `${theaterPortLabel(link.port)} \u00b7 connected to the TV` });
+  else if (port?.connected === false) chips.push({ kind: "unknown", label: `${theaterPortLabel(link.port)} \u00b7 not connected` });
+  else chips.push({ kind: "unknown", label: theaterPortLabel(link.port) });
+  if (port?.signal === true && theater.sound?.port !== link.port) {
+    chips.push({ kind: "playing", label: "Signal present" });
+  }
+  if (theater.sound?.port === link.port) {
+    // ARC destination: TV-reported level only. Power stays unknown.
+    chips.push({ kind: "sound", label: theater.sound.text.replace(/^Sound: /, "On ARC \u00b7 ") });
+  }
+  return { key: snap.key ?? null, known: true, stale: false, power: "unknown", badge: "Linked",
+    chips, summary: chips.map((c) => c.label).join(" \u00b7 "), theater,
+    theaterLink: { port: link.port, live, connected: port?.connected ?? null, signal: port?.signal ?? null },
+    activeInputId: theater.activeInput ? theaterPortLabel(theater.activeInput.id) : null };
 }
 
 /**
@@ -160,6 +258,10 @@ export function isHaCommandRedundant(commandName, haInfo) {
   if (haInfo.power === "off" && (key === "poweroff" || key === "off")) return true;
   if (haInfo.playing === "playing" && key === "play") return true;
   if (haInfo.playing === "paused" && key === "pause") return true;
+  if (haInfo.activeInputId) {
+    const activeKey = commandKey(haInfo.activeInputId);
+    if (activeKey && key === `input${activeKey}`) return true;
+  }
   if (haInfo.source) {
     const srcKey = commandKey(haInfo.source);
     if (srcKey && (key === `input${srcKey}` || (commandName.toLowerCase().startsWith("input ") && key === srcKey))) {
