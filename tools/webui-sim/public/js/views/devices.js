@@ -189,6 +189,9 @@ export function createDevicesView(section) {
   function commandRows() {
     const q = commandQuery.trim().toLowerCase();
     const haInfo = device.isHa ? describeHaDeviceState(device, hub.state.haState) : null;
+    // A network TV's commands are the writer's fixed set: no per-command
+    // Edit or Delete (those go through the IR endpoints).
+    const editable = !isAndroidTvDevice(device);
     const list = device.commands
       .map((c, i) => ({ c, i }))
       .filter(({ c }) => !q || c.name.toLowerCase().includes(q));
@@ -205,7 +208,7 @@ export function createDevicesView(section) {
           <button type="button" class="cmd-row" data-cmd-device="${escapeHtml(device.id)}" data-cmd="${i}">
             <span class="cmd-name">${escapeHtml(c.name)}</span>${tag}
           </button>
-          <button type="button" class="icon-btn cmd-more" data-cmd-menu="${i}" aria-haspopup="menu" aria-label="More for ${escapeHtml(c.name)}">${icon("more_vert")}</button>
+          ${editable ? `<button type="button" class="icon-btn cmd-more" data-cmd-menu="${i}" aria-haspopup="menu" aria-label="More for ${escapeHtml(c.name)}">${icon("more_vert")}</button>` : ""}
         </div>`;
       })
       .join("")}</div>`;
@@ -590,6 +593,7 @@ export function createDevicesView(section) {
     }
     const menuBtn = event.target.closest("[data-cmd-menu]");
     if (menuBtn) {
+      if (isAndroidTvDevice(device)) return;
       const c = device.commands[Number(menuBtn.dataset.cmdMenu)];
       if (c) openCommandMenu(menuBtn, c);
       return;

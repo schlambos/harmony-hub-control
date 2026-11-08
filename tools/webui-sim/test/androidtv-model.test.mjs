@@ -11,6 +11,7 @@ import {
   nameProblem,
   normalizeCode,
   normalizeHost,
+  pairingToUndo,
   pairStateText,
   tvStatusText,
 } from "../public/js/views/androidtv-model.js";
@@ -143,5 +144,22 @@ describe("words on screen", () => {
     assert.match(pairStateText("preparing"), /first time/);
     assert.match(pairStateText("connecting", "Den TV"), /Den TV/);
     assert.equal(pairStateText("code"), "");
+  });
+});
+
+describe("closing the Add a TV sheet", () => {
+  const onHub = new Set(["androidtv1a2b3c4d"]);
+  it("undoes a new pairing that never became a device", () => {
+    assert.equal(pairingToUndo("androidtv99887766", { devicesByTv: onHub }), "androidtv99887766");
+  });
+  it("keeps the pairing of a TV already on the hub (paired again from a typed address)", () => {
+    assert.equal(pairingToUndo("androidtv1a2b3c4d", { devicesByTv: onHub }), "");
+  });
+  it("keeps the pairing once the save went through, even before the device list refreshes", () => {
+    assert.equal(pairingToUndo("androidtv99887766", { committed: true, devicesByTv: onHub }), "");
+  });
+  it("has nothing to undo without a paired TV", () => {
+    assert.equal(pairingToUndo("", { devicesByTv: onHub }), "");
+    assert.equal(pairingToUndo(undefined), "");
   });
 });

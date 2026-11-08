@@ -689,7 +689,8 @@ function handleAndroidTvDevices(res, params) {
   for (const d of devices) {
     let entry = owned.get(d.entity);
     if (!entry) {
-      const id = nextId(entries.map((e) => e.Device?.["Id-"]), 39000000);
+      // Count the TVs this request already added, so two new TVs never share an id.
+      const id = nextId([...entries, ...kept].map((e) => e.Device?.["Id-"]), 39000000);
       entry = {
         Device: {
           "Id-": id, Name: d.name, Manufacturer: d.manufacturer || "Android TV", Model: d.model || "Android TV",
@@ -1498,10 +1499,14 @@ async function handleApi(req, res, pathname, url) {
       sendJson(res, 200, simAndroidTvPairState());
       return;
     }
-    case "POST /api/androidtv/pair-cancel":
+    case "POST /api/androidtv/pair-cancel": {
+      // Like codex_androidtv: a pairing that has finished stays, and the answer
+      // names its TV so the caller can tidy up.
+      const done = simAndroidTvPairState();
       simAndroidTv.pair.state = "idle";
-      sendJson(res, 200, simAndroidTvPairState());
+      sendJson(res, 200, { ...done, state: "idle" });
       return;
+    }
     case "POST /api/androidtv/forget":
       simAndroidTv.tvs.delete(String(params.id ?? ""));
       sendJson(res, 200, { ok: true });

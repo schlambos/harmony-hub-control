@@ -410,7 +410,7 @@ See [ANDROID_TV.md](ANDROID_TV.md).
 | POST | `/api/androidtv/pair-start` | `{"host":"192.168.1.40","name":"Den TV"}` | The pairing state (below). The TV shows a code once the state is `code` |
 | GET | `/api/androidtv/pair-status` | | `state`: `idle`, `preparing` (the hub is making its key, first time only), `connecting`, `code`, `checking`, `paired` (with `tvId`) or `failed` (with `error`) |
 | POST | `/api/androidtv/pair-finish` | `{"code":"A1B2C3"}` | The state, now `checking`; or a refusal when the code doesn't match. The hub checks the code against the TV's key first, so a typo never reaches the TV and can be corrected |
-| POST | `/api/androidtv/pair-cancel` | `{}` | Stops a pairing |
+| POST | `/api/androidtv/pair-cancel` | `{}` | Stops a pairing. The answer is the pairing state; its `tvId` names the TV when the pairing had already finished, so a caller can tidy up a pairing it no longer wants |
 | POST | `/api/androidtv/forget` | `{"id":"androidtv1a2b3c4d"}` | Unpairs a TV (its pinned certificate is deleted). Remove its device first |
 | POST | `/api/androidtv/devices` | `{"devices":[{"entity":"androidtv1a2b3c4d","name":"Den TV","manufacturer":"Sony","model":"XR-65A80L"}],"dryRun":false}` | Replaces the hub's whole set of network TV devices, like `/api/ha-devices` (same writer, `CommitAndroidTvDevices`, same reply). `entity` is the TV's id from pairing; `manufacturer` and `model` are optional. The commands, power and HDMI inputs are fixed |
 

@@ -119,6 +119,17 @@ export function foundList(found, devicesByTv) {
     .sort((a, b) => Number(a.added) - Number(b.added) || a.name.localeCompare(b.name));
 }
 
+/**
+ * The pairing to undo when the Add a TV sheet closes, or "". Only a pairing
+ * no hub device uses: not one whose device was saved (`committed`), and not
+ * one for a TV that already has a device (paired again from a typed address).
+ */
+export function pairingToUndo(tvId, { committed = false, devicesByTv = new Set() } = {}) {
+  const id = String(tvId ?? "");
+  if (!id || committed || devicesByTv?.has?.(id)) return "";
+  return id;
+}
+
 /** What the wait step says for codex_androidtv's pairing state. */
 export function pairStateText(state, name) {
   switch (state) {
