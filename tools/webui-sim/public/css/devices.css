@@ -724,8 +724,8 @@ input.m-switch {
     animation-duration: 4s;
   }
 
-  .m-switch,
-  .m-switch::before,
+  input.m-switch,
+  input.m-switch::before,
   .sw-meter span {
     transition: none;
   }

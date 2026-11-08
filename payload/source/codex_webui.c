@@ -9177,7 +9177,12 @@ static void render_multi_remote_set_json(int fd, const struct request *req) {
         fprintf(f, "{\"ok\":true,\"enabled\":%s,\"rebooting\":%s}\n", want ? "true" : "false", reboot ? "true" : "false");
         fclose(f);
     }
-    if (reboot) multi_remote_reboot_soon();
+    if (reboot) {
+        /* End the response now: the reboot job inherits this socket and would
+           otherwise hold the close-delimited reply open until the hub goes down. */
+        shutdown(fd, SHUT_WR);
+        multi_remote_reboot_soon();
+    }
 }
 
 /* Unpair the remote in one radio slot (rf.unpair). Refused while a pairing

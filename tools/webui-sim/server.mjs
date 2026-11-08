@@ -147,6 +147,8 @@ async function parseParams(req, url) {
       if (type === "application/json") {
         try {
           const parsed = JSON.parse(raw);
+          // The raw body, for routes that check JSON tokens the way codex_webui does.
+          Object.defineProperty(params, "__raw", { value: raw, enumerable: false });
           if (parsed && typeof parsed === "object" && !Array.isArray(parsed)) {
             Object.assign(params, parsed);
           } else {
@@ -572,6 +574,33 @@ function resetSimRemotes() {
   simOffPendingUntil = 0;
 }
 
+/* The raw text of a top-level JSON member's value, like codex_webui's
+   json_top_member(): the first top-level match, ignoring keys nested in
+   objects or arrays and anything inside strings; null when absent. */
+function jsonTopToken(raw, key) {
+  const text = String(raw ?? "");
+  let depth = 0;
+  let i = text.search(/\S/);
+  if (i < 0 || text[i] !== "{") return null;
+  for (; i < text.length; i++) {
+    const ch = text[i];
+    if (ch === '"') {
+      const start = ++i;
+      while (i < text.length && text[i] !== '"') i += text[i] === "\\" ? 2 : 1;
+      if (i >= text.length) return null;
+      if (depth === 1 && text.slice(start, i) === key) {
+        const rest = text.slice(i + 1).match(/^\s*:\s*([^,}\]]*)/);
+        if (rest) return rest[1].trim();
+      }
+    } else if (ch === "{" || ch === "[") {
+      depth++;
+    } else if (ch === "}" || ch === "]") {
+      if (--depth === 0) return null;
+    }
+  }
+  return null;
+}
+
 /* GET /api/multi-remote, like codex_webui's render_multi_remote_json(). */
 function simMultiRemoteState() {
   const halMd5 = simMultiRemote ? SIM_HAL_MULTI_MD5 : simHalSupported ? SIM_HAL_STOCK_MD5 : "0123456789abcdef0123456789abcdef";
@@ -585,10 +614,12 @@ function simMultiRemoteState() {
 
 /* POST /api/multi-remote: the sim "restarts" for a few seconds, then runs the new hal. */
 function handleMultiRemoteSet(res, params) {
-  if (typeof params.enabled !== "boolean") {
+  const token = jsonTopToken(params.__raw, "enabled");
+  if (token !== "true" && token !== "false") {
     sendJson(res, 400, { ok: false, error: 'Send {"enabled": true} or {"enabled": false}.' });
     return;
   }
+  params = { ...params, enabled: token === "true" };
   const state = simMultiRemoteState();
   if (params.enabled && !state.supported) {
     sendJson(res, 409, { ok: false, error: state.reason, halMd5: state.halMd5 });
@@ -1597,8 +1628,10 @@ async function handleApi(req, res, pathname, url) {
         : { ok: true, pairing: false, multiRemote: simMultiRemote, slots: SIM_RF_SLOTS, reply: simRfInfo() });
       return;
     case "POST /api/remote-unpair": {
-      // Like codex_webui's json_strict_int(): a JSON integer, not "2", 1.5 or 1e1 read loosely.
-      const slot = typeof params.slot === "number" ? params.slot : NaN;
+      // Like codex_webui's json_top_int(): the top-level token must be a plain
+      // integer, so "2", 1.5, 1e1, 2e0 and 2.0 are all refused.
+      const token = jsonTopToken(params.__raw, "slot");
+      const slot = token !== null && /^-?\d+$/.test(token) ? Number(token) : NaN;
       if (!Number.isInteger(slot) || slot < 1 || slot > SIM_RF_SLOTS) {
         sendJson(res, 400, { ok: false, error: "Give the remote's slot, 1 to 6." });
         return;

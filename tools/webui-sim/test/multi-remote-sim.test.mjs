@@ -54,12 +54,26 @@ describe("simulator multiple remotes", () => {
     assert.match(reply.error, /about to restart/);
   });
 
-  it("unpairs only a JSON integer slot", async () => {
-    for (const slot of ["2", 1.5, 10, 0]) {
-      const res = await post("/api/remote-unpair", { slot });
-      assert.equal(res.status, 400, `slot ${JSON.stringify(slot)}`);
+  // Raw bodies: JSON.stringify would turn 2e0 into 2 and hide what the hub refuses.
+  const postRaw = (path, raw) => fetch(`${BASE}${path}`, { method: "POST", headers: { "Content-Type": "application/json" }, body: raw });
+
+  it("unpairs only a plain-integer top-level slot, like json_top_int()", async () => {
+    for (const raw of ['{"slot":"2"}', '{"slot":1.5}', '{"slot":2e0}', '{"slot":2.0}', '{"slot":10}', '{"slot":0}', '{"metadata":{"slot":2}}']) {
+      const res = await postRaw("/api/remote-unpair", raw);
+      assert.equal(res.status, 400, raw);
     }
-    const ok = await post("/api/remote-unpair", { slot: 2 });
-    assert.equal(ok.status, 200);
+    const nested = await postRaw("/api/remote-unpair", '{"metadata":{"slot":9},"slot":2}');
+    assert.equal(nested.status, 200);
+    assert.equal((await nested.json()).slot, 2);
+  });
+
+  it("reads enabled as a top-level true/false token, like json_top_bool()", async () => {
+    for (const raw of ['{"enabled":"true"}', '{"enabled":1}', '{"metadata":{"enabled":true}}']) {
+      const res = await postRaw("/api/multi-remote", raw);
+      assert.equal(res.status, 400, raw);
+    }
+    // The nested true never wins: this is "off" (nothing to restart on a stock sim hub).
+    const off = await (await postRaw("/api/multi-remote", '{"metadata":{"enabled":true},"enabled":false}')).json();
+    assert.equal(off.enabled, false);
   });
 });
