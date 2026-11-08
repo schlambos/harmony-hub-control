@@ -1534,10 +1534,12 @@ class MelodiousViewModel(application: Application) : AndroidViewModel(applicatio
         val devices = _uiState.value.devices
         val defaultRoles = buildList {
             devices.firstOrNull { it.type.contains("Television", ignoreCase = true) }?.let {
-                add(WizardRoleDraft("DisplayActivityRole", it.id, it.inputs.firstOrNull()))
+                add(WizardRoleDraft("DisplayActivityRole", it.id, it.inputs.firstOrNull(),
+                    ActivityGraphBuilder.defaultPowerDelay("DisplayActivityRole")))
             }
             devices.firstOrNull { it.type.contains("Amplifier", ignoreCase = true) }?.let {
-                add(WizardRoleDraft("VolumeActivityRole", it.id, it.inputs.firstOrNull()))
+                add(WizardRoleDraft("VolumeActivityRole", it.id, it.inputs.firstOrNull(),
+                    ActivityGraphBuilder.defaultPowerDelay("VolumeActivityRole")))
             }
         }
         _uiState.update {
@@ -1637,9 +1639,14 @@ class MelodiousViewModel(application: Application) : AndroidViewModel(applicatio
     fun updateWizardRoles(newRoles: List<WizardRoleDraft>) {
         _uiState.update { state ->
             val isNew = state.wizardDraft.editActivityId.isNullOrBlank()
+            // A job first assigned in a new activity starts with its default
+            // power-on wait (§6.3); editing never defaults an unset wait.
+            val roles = if (isNew) newRoles.map {
+                if (it.powerDelay == null) it.copy(powerDelay = ActivityGraphBuilder.defaultPowerDelay(it.roleType)) else it
+            } else newRoles
             state.copy(
                 wizardDraft = state.wizardDraft.copy(
-                    roles = newRoles,
+                    roles = roles,
                     buttons = ActivityGraphBuilder.reconcileWizardButtons(
                         buttons = state.wizardDraft.buttons,
                         roles = newRoles,

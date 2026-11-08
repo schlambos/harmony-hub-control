@@ -9,6 +9,7 @@ import {
   ACTIVITY_TYPES,
   BUTTON_SOURCE,
   ROLE_TYPES,
+  defaultPowerDelay,
   draftButtonsFromMap,
   inputOptions,
   mappingSourceLabel,
@@ -83,7 +84,7 @@ function seededRoles(devices) {
     ["VolumeActivityRole", first(/amplifier|receiver|sound|speaker/i)],
   ]
     .filter(([, device]) => device)
-    .map(([roleType, device]) => ({ roleType, deviceId: device.id, input: "", powerDelay: "" }));
+    .map(([roleType, device]) => ({ roleType, deviceId: device.id, input: "", powerDelay: defaultPowerDelay(roleType) }));
 }
 
 /* Roles in power-on order. Saving numbers the devices by their first role,
@@ -100,9 +101,16 @@ function rolesOf(activity) {
     }));
 }
 
-/* Devices in power-on order, each once. */
-function deviceOrder(roles) {
-  return [...new Set(roles.map((r) => r.deviceId).filter(Boolean))];
+/* Devices in power-on order, each once. A new activity orders by job
+   priority (JOB_RANK, §6.3); an existing one keeps the hub's saved order,
+   which rolesOf loads as draft order. */
+function deviceOrder(roles, byRank = false) {
+  const ids = [...new Set(roles.map((r) => r.deviceId).filter(Boolean))];
+  if (!byRank) return ids;
+  const rankOf = (id) => Math.min(
+    ...roles.filter((r) => r.deviceId === id).map((r) => JOB_RANK.get(r.roleType) ?? 99),
+  );
+  return ids.sort((a, b) => rankOf(a) - rankOf(b) || ids.indexOf(a) - ids.indexOf(b));
 }
 
 /* A device's input is shared by all its jobs: the first one set wins. */
@@ -161,7 +169,7 @@ export function createWizardView(section) {
 
   function roleDevices() {
     const byId = devicesById();
-    return deviceOrder(draft.roles).map((id) => byId.get(id)).filter(Boolean);
+    return deviceOrder(draft.roles, !editId).map((id) => byId.get(id)).filter(Boolean);
   }
 
   function sortedJobs() {
@@ -214,12 +222,12 @@ export function createWizardView(section) {
     const others = draft.roles.filter((_, i) => i !== index);
     const sibling = others.find((r) => r.deviceId === deviceId);
     // The device's input and power-on wait come along from its other jobs;
-    // a device new to the activity starts without either.
+    // a device new to the activity starts with the job's default wait (§6.3).
     const role = {
       roleType,
       deviceId,
       input: sibling ? inputIn(others, deviceId) : "",
-      powerDelay: sibling ? sibling.powerDelay : "",
+      powerDelay: sibling ? sibling.powerDelay : defaultPowerDelay(roleType),
     };
     if (prev) draft.roles[index] = role;
     else draft.roles.push(role);
@@ -236,7 +244,8 @@ export function createWizardView(section) {
     const next = direction > 0
       ? Math.min(DELAY_MAX, Math.floor(ms / DELAY_STEP) * DELAY_STEP + DELAY_STEP)
       : Math.max(0, Math.ceil(ms / DELAY_STEP) * DELAY_STEP - DELAY_STEP);
-    setForDevice(deviceId, "powerDelay", next || "");
+    // 0 is a value the user chose, not "never set": keep it distinct from "".
+    setForDevice(deviceId, "powerDelay", next);
     changed();
     // At either end the pressed button turns off; keep focus on the stepper.
     const pressed = root.querySelector(`[data-delay="${CSS.escape(deviceId)}"][data-delay-step="${direction}"]`);
@@ -371,7 +380,7 @@ export function createWizardView(section) {
   }
 
   function powerMarkup(byId) {
-    const ids = deviceOrder(draft.roles);
+    const ids = deviceOrder(draft.roles, !editId);
     if (ids.length < 2) return "";
     return `${sectionLabel("Turning on")}
       <p class="wiz-hint">Devices turn on in this order. Give a slow one time to wake up before the next one turns on.</p>
@@ -422,7 +431,7 @@ export function createWizardView(section) {
     const byId = devicesById();
     const cards = [];
     const none = [];
-    for (const id of deviceOrder(draft.roles)) {
+    for (const id of deviceOrder(draft.roles, !editId)) {
       const device = byId.get(id);
       if (!device) continue;
       const current = inputIn(draft.roles, id);
@@ -486,7 +495,7 @@ export function createWizardView(section) {
     const name = draft.name.trim();
     const kind = ACTIVITY_TYPES.find((t) => t.value === Number(draft.type))?.label ?? "Activity";
     const jobs = sortedJobs().map(({ role }) => `${roleLabel(role.roleType)}: ${deviceLabel(byId, role.deviceId)}`);
-    const order = deviceOrder(draft.roles);
+    const order = deviceOrder(draft.roles, !editId);
     const waits = order.slice(0, -1).filter((id) => delayOf(id))
       .map((id) => `waits ${seconds(delayOf(id))} after ${deviceLabel(byId, id)}`);
     const inputs = order.filter((id) => inputIn(draft.roles, id))

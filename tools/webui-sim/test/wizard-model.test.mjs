@@ -924,6 +924,68 @@ describe("Companion hard buttons", () => {
   });
 });
 
+describe("power order and delays (§6.3)", () => {
+  const role = (deviceId, roleType, powerDelay = "") => ({ deviceId, roleType, input: "", powerDelay });
+  const byDevice = (graph) => {
+    const activity = graph.activityList.Activities.find((a) => String(a["Id-"]) === String(graph.activityId));
+    return new Map(activity.Roles.map((r) => [String(r["DeviceId-"]), r]));
+  };
+
+  it("a new activity powers on display, volume, player with default waits, whatever order jobs were added", () => {
+    const draft = {
+      name: "Reverse order",
+      type: 2,
+      roles: [
+        role("66690268", "PlayMovieActivityRole"),
+        role("78760839", "VolumeActivityRole"),
+        role("74521691", "DisplayActivityRole"),
+      ],
+      buttons: {},
+    };
+    const saved = byDevice(buildActivityGraph({ config: FIXTURE, draft, editId: null }));
+    assert.equal(saved.get("74521691").PowerOnOrder, 1, "display first");
+    assert.equal(saved.get("78760839").PowerOnOrder, 2, "volume second");
+    assert.equal(saved.get("66690268").PowerOnOrder, 3, "player third");
+    assert.deepEqual([...saved.values()].map((r) => r.PowerOffOrder).sort(), [1, 2, 3]);
+    assert.equal(saved.get("74521691").NextDevicePowerOnDelay, 2500);
+    assert.equal(saved.get("78760839").NextDevicePowerOnDelay, 1500);
+    assert.equal(saved.get("66690268").NextDevicePowerOnDelay, 1000);
+  });
+
+  it("a wait the user stepped down to 0 on a new activity stays 0", () => {
+    const draft = {
+      name: "No waits",
+      type: 1,
+      roles: [role("74521691", "DisplayActivityRole", 0), role("66690268", "PlayMovieActivityRole", 500)],
+      buttons: {},
+    };
+    const saved = byDevice(buildActivityGraph({ config: FIXTURE, draft, editId: null }));
+    assert.equal(saved.get("74521691").NextDevicePowerOnDelay, 0);
+    assert.equal(saved.get("66690268").NextDevicePowerOnDelay, 500);
+  });
+
+  it("opening an existing activity and saving untouched keeps its custom order and waits, 0 and null included", () => {
+    const config = structuredClone(FIXTURE);
+    const activity = config.activityList.Activities[0];
+    const id = String(activity["Id-"]);
+    // Deliberately not role order: player first, display second, volume last.
+    activity.Roles = [
+      { "DeviceId-": 66690268, __type: "PlayMovieActivityRole", SelectedInput: null, PowerOnOrder: 1, PowerOffOrder: 1, NextDevicePowerOnDelay: 0, "Id-": 910001 },
+      { "DeviceId-": 74521691, __type: "DisplayActivityRole", SelectedInput: null, PowerOnOrder: 2, PowerOffOrder: 2, NextDevicePowerOnDelay: null, "Id-": 910002 },
+      { "DeviceId-": 78760839, __type: "VolumeActivityRole", SelectedInput: null, PowerOnOrder: 3, PowerOffOrder: 3, NextDevicePowerOnDelay: 7000, "Id-": 910003 },
+    ];
+    const graph = buildActivityGraph({ config, draft: draftFromActivity(config, id), editId: id });
+    const saved = byDevice({ ...graph, activityId: id });
+    assert.equal(saved.get("66690268").PowerOnOrder, 1);
+    assert.equal(saved.get("74521691").PowerOnOrder, 2);
+    assert.equal(saved.get("78760839").PowerOnOrder, 3);
+    assert.equal(saved.get("66690268").NextDevicePowerOnDelay, 0);
+    assert.equal(saved.get("74521691").NextDevicePowerOnDelay, null);
+    assert.equal(saved.get("78760839").NextDevicePowerOnDelay, 7000);
+    assert.deepEqual([...saved.values()].map((r) => r["Id-"]).sort(), [910001, 910002, 910003], "role identities reused");
+  });
+});
+
 describe("inputOptions", () => {
   const entry = (id) => FIXTURE.deviceList.DevicesWithFeatures.find((e) => String(e.Device["Id-"]) === id);
 

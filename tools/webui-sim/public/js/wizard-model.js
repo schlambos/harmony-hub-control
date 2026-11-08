@@ -77,6 +77,18 @@ export function roleLabel(type) {
   return ROLE_TYPES.find((r) => r.type === type)?.label ?? type;
 }
 
+/* Power-on priority (§6.3): ROLE_TYPES is already in power-on order — display
+   first so it can accept input changes, then volume, players, channel/keyboard. */
+export const ROLE_RANK = new Map(ROLE_TYPES.map((r, i) => [r.type, i]));
+
+/* Default wait before the next device turns on, for a device first assigned
+   in a new activity (§6.3). A draft value of ""/null means "never set". */
+export function defaultPowerDelay(roleType) {
+  if (roleType === "DisplayActivityRole") return 2500;
+  if (roleType === "VolumeActivityRole") return 1500;
+  return 1000;
+}
+
 /* ---- Button defaults (step 3 arrival state) -----------------------------
    Mirrors activity-ui preferredButtonDeviceId role routing, then resolves
    each remote key against real device commands via remote-layout aliases.
@@ -327,9 +339,52 @@ function commandAction(deviceId, command, eventType) {
   };
 }
 
-function composeRoles(draft, alloc, existingRoles) {
+function composeRoles(draft, alloc, existingRoles, isNew = false) {
   const orderByDevice = new Map();
   let nextOrder = 1;
+  /* New activities power on by role priority (§6.3); an existing activity
+     keeps the hub's saved order, which rolesOf loads as draft order. */
+  if (isNew) {
+    const firstSeen = new Map();
+    const rankByDevice = new Map();
+    draft.roles.forEach((role, i) => {
+      if (!firstSeen.has(role.deviceId)) firstSeen.set(role.deviceId, i);
+      const rank = ROLE_RANK.get(role.roleType) ?? 99;
+      rankByDevice.set(role.deviceId, Math.min(rankByDevice.get(role.deviceId) ?? 99, rank));
+    });
+    const ordered = [...firstSeen.keys()].sort(
+      (a, b) => rankByDevice.get(a) - rankByDevice.get(b) || firstSeen.get(a) - firstSeen.get(b),
+    );
+    for (const deviceId of ordered) {
+      orderByDevice.set(deviceId, nextOrder);
+      nextOrder += 1;
+    }
+  }
+  /* A device's wait is shared by its jobs. On a new activity an unset wait
+     (""/null) takes the default of the device's highest-priority job; a value
+     the user set — including 0 — is kept. On edit nothing is defaulted. */
+  const unsetDelay = (v) => v === "" || v == null;
+  const delayByDevice = new Map();
+  if (isNew) {
+    for (const role of draft.roles) {
+      if (!unsetDelay(role.powerDelay) && !delayByDevice.has(role.deviceId)) {
+        delayByDevice.set(role.deviceId, Number(role.powerDelay));
+      }
+    }
+    for (const role of draft.roles) {
+      if (!delayByDevice.has(role.deviceId)) {
+        const types = draft.roles.filter((r) => r.deviceId === role.deviceId).map((r) => r.roleType);
+        const best = types.sort((a, b) => (ROLE_RANK.get(a) ?? 99) - (ROLE_RANK.get(b) ?? 99))[0];
+        delayByDevice.set(role.deviceId, defaultPowerDelay(best));
+      }
+    }
+  }
+  const delayOf = (role) => {
+    if (isNew) return delayByDevice.get(role.deviceId) ?? null;
+    if (unsetDelay(role.powerDelay)) return null;
+    const n = Number(role.powerDelay);
+    return Number.isFinite(n) ? n : null;
+  };
   // Reuse role and SelectedInput IDs by (device, type, input) so an unchanged
   // save is byte-identical apart from intended fields (P06 #8).
   const existingByKey = new Map();
@@ -366,7 +421,7 @@ function composeRoles(draft, alloc, existingRoles) {
       PowerOffOrder: order,
       __type: role.roleType,
       PowerOnOrder: order,
-      NextDevicePowerOnDelay: role.powerDelay ? Number(role.powerDelay) : null,
+      NextDevicePowerOnDelay: delayOf(role),
       "Id-": reuse?.["Id-"] ?? alloc.id(),
     };
   });
@@ -851,7 +906,7 @@ export function buildActivityGraph({ config, draft, editId }) {
   activity.Type = Number(draft.type);
   activity.DateModified = harmonyDate();
   const existingRoles = Array.isArray(activity.Roles) ? activity.Roles : [];
-  activity.Roles = composeRoles(draft, alloc, existingRoles);
+  activity.Roles = composeRoles(draft, alloc, existingRoles, !editId);
 
   const activityId = activity["Id-"];
   const existingWizardMap = buttonMaps.find((m) => isWizardOwnedActivityMap(m, activityId));
