@@ -102,6 +102,7 @@ static const char *UPDATE_FILES[] = {
     "codex_webui",
     "codex_bthid_keyboard",
     "codex_bt_pair_agent",
+    "codex_androidtv",
     "codex_hal_ltcp",
     "codex_hbus",
     "codex_portal",
@@ -2868,7 +2869,10 @@ out:
    codexactivity validates it, reconciles the devices it owns, saves DeviceList
    and ProtocolList with new etags, reloads the engine and publishes, so the
    Touch pulls the change. Its JSON reply is the response body. */
-static void render_ha_devices_json(int fd, const struct request *req) {
+/* A whole device set for one of codexactivity's IP device families:
+   CommitHaDevices (Home Assistant entities) or CommitAndroidTvDevices (network
+   Android/Google TVs driven by codex_androidtv). */
+static void render_device_set_json(int fd, const struct request *req, const char *op, const char *label) {
     const char *start = req->body, *end = NULL, *trail;
     char request_id[96], msg[768];
     char *request = NULL, *reply = NULL;
@@ -2887,7 +2891,7 @@ static void render_ha_devices_json(int fd, const struct request *req) {
     if (!end || set_len > MAX_HA_DEVICE_SET) {
         f = send_json_start(fd, "400 Bad Request");
         if (f) {
-            fputs("{\"ok\":false,\"error\":\"body must be one JSON object with a webhook and a devices list\"}\n", f);
+            fputs("{\"ok\":false,\"error\":\"body must be one JSON object with a devices list\"}\n", f);
             fclose(f);
         }
         return;
@@ -2901,14 +2905,14 @@ static void render_ha_devices_json(int fd, const struct request *req) {
     if (!request || !reply) {
         f = send_json_start(fd, "503 Service Unavailable");
         if (f) {
-            fputs("{\"ok\":false,\"error\":\"not enough memory for the Home Assistant devices\"}\n", f);
+            fputs("{\"ok\":false,\"error\":\"not enough memory for the device set\"}\n", f);
             fclose(f);
         }
         goto out;
     }
     written = snprintf(request, request_len,
-        "{\"id\":\"%s\",\"op\":\"CommitHaDevices\",\"dryRun\":%s,\"set\":%.*s}",
-        request_id, dry_run ? "true" : "false", (int)set_len, start);
+        "{\"id\":\"%s\",\"op\":\"%s\",\"dryRun\":%s,\"set\":%.*s}",
+        request_id, op, dry_run ? "true" : "false", (int)set_len, start);
     if (!dry_run) backup_resources();
     reply[0] = 0;
     msg[0] = 0;
@@ -2925,7 +2929,9 @@ static void render_ha_devices_json(int fd, const struct request *req) {
         f = send_json_start(fd, "503 Service Unavailable");
         if (f) {
             fputs("{\"ok\":false,\"localOnly\":true,\"error\":", f);
-            json_write_string(f, msg[0] ? msg : "The Home Assistant devices were not saved.");
+            char fallback[96];
+            snprintf(fallback, sizeof(fallback), "The %s devices were not saved.", label);
+            json_write_string(f, msg[0] ? msg : fallback);
             fputs("}\n", f);
             fclose(f);
         }
@@ -2933,6 +2939,74 @@ static void render_ha_devices_json(int fd, const struct request *req) {
 out:
     free(request);
     free(reply);
+}
+
+static void render_ha_devices_json(int fd, const struct request *req) {
+    render_device_set_json(fd, req, "CommitHaDevices", "Home Assistant");
+}
+
+static void render_androidtv_devices_json(int fd, const struct request *req) {
+    render_device_set_json(fd, req, "CommitAndroidTvDevices", "network TV");
+}
+
+/* codex_androidtv: the network TV daemon, on 127.0.0.1 only. The web app's
+   /api/androidtv/... routes are relayed to it as they are; it answers JSON with
+   HTTP 200, errors as {"ok":false,"error":...}. */
+#define ANDROIDTV_DAEMON_PORT 8095
+#define ANDROIDTV_REPLY_MAX 8192
+
+static void render_androidtv_proxy(int fd, const struct request *req, const char *method, const char *path) {
+    struct sockaddr_in addr;
+    struct timeval tv = {4, 0};
+    char head[256], *reply = NULL, *body;
+    size_t got = 0, body_len = req->body ? req->body_len : 0;
+    int sock = -1, n;
+    FILE *f;
+    if (body_len > 4096) body_len = 4096;
+    reply = (char *)malloc(ANDROIDTV_REPLY_MAX + 1);
+    if (!reply) goto unavailable;
+    sock = socket(AF_INET, SOCK_STREAM, 0);
+    if (sock < 0) goto unavailable;
+    setsockopt(sock, SOL_SOCKET, SO_RCVTIMEO, &tv, sizeof(tv));
+    setsockopt(sock, SOL_SOCKET, SO_SNDTIMEO, &tv, sizeof(tv));
+    memset(&addr, 0, sizeof(addr));
+    addr.sin_family = AF_INET;
+    addr.sin_port = htons(ANDROIDTV_DAEMON_PORT);
+    addr.sin_addr.s_addr = htonl(INADDR_LOOPBACK);
+    if (connect(sock, (struct sockaddr *)&addr, sizeof(addr)) != 0) goto unavailable;
+    n = snprintf(head, sizeof(head),
+        "%s %s HTTP/1.0\r\nHost: 127.0.0.1\r\nContent-Type: application/json\r\n"
+        "Content-Length: %u\r\n\r\n", method, path, (unsigned)body_len);
+    if (send(sock, head, (size_t)n, MSG_NOSIGNAL) != n) goto unavailable;
+    if (body_len && send(sock, req->body, body_len, MSG_NOSIGNAL) != (ssize_t)body_len) goto unavailable;
+    for (;;) {
+        ssize_t r = recv(sock, reply + got, ANDROIDTV_REPLY_MAX - got, 0);
+        if (r < 0 && errno == EINTR) continue;
+        if (r <= 0) break;
+        got += (size_t)r;
+        if (got >= ANDROIDTV_REPLY_MAX) break;
+    }
+    reply[got] = 0;
+    body = strstr(reply, "\r\n\r\n");
+    if (!body || body[4] != '{') goto unavailable;
+    f = send_json_start(fd, "200 OK");
+    if (f) {
+        fputs(body + 4, f);
+        fputc('\n', f);
+        fclose(f);
+    }
+    close(sock);
+    free(reply);
+    return;
+unavailable:
+    if (sock >= 0) close(sock);
+    free(reply);
+    f = send_json_start(fd, "503 Service Unavailable");
+    if (f) {
+        fputs("{\"ok\":false,\"error\":\"The hub's network TV service (codex_androidtv) isn't answering. "
+            "Restart the hub; if it keeps happening, reinstall Melodious.\"}\n", f);
+        fclose(f);
+    }
 }
 
 /* One device's Touch screen: {"deviceId":..,"remove":bool,"dryRun":bool}.
@@ -9417,6 +9491,7 @@ static void render_version_json(int fd) {
     static const char *features[] = {
         "activity-save",
         "activity-sync",
+        "androidtv-devices",
         "catalog-import",
         "device-commands",
         "device-screen",
@@ -10254,6 +10329,24 @@ static void handle_client(int client) {
         strncmp(req.path, "/api/ha-state", 13) == 0 &&
         (req.path[13] == 0 || req.path[13] == '?')) {
         render_ha_state_get_json(client, &req);
+    } else if (strcmp(req.method, "POST") == 0 && strcmp(req.path, "/api/androidtv/devices") == 0) {
+        render_androidtv_devices_json(client, &req);
+    } else if (strcmp(req.method, "GET") == 0 && strcmp(req.path, "/api/androidtv/status") == 0) {
+        render_androidtv_proxy(client, &req, "GET", "/status");
+    } else if (strcmp(req.method, "GET") == 0 && strcmp(req.path, "/api/androidtv/discover") == 0) {
+        render_androidtv_proxy(client, &req, "GET", "/discover");
+    } else if (strcmp(req.method, "POST") == 0 && strcmp(req.path, "/api/androidtv/pair-start") == 0) {
+        render_androidtv_proxy(client, &req, "POST", "/pair/start");
+    } else if (strcmp(req.method, "GET") == 0 && strcmp(req.path, "/api/androidtv/pair-status") == 0) {
+        render_androidtv_proxy(client, &req, "GET", "/pair/status");
+    } else if (strcmp(req.method, "POST") == 0 && strcmp(req.path, "/api/androidtv/pair-finish") == 0) {
+        render_androidtv_proxy(client, &req, "POST", "/pair/finish");
+    } else if (strcmp(req.method, "POST") == 0 && strcmp(req.path, "/api/androidtv/pair-cancel") == 0) {
+        render_androidtv_proxy(client, &req, "POST", "/pair/cancel");
+    } else if (strcmp(req.method, "POST") == 0 && strcmp(req.path, "/api/androidtv/forget") == 0) {
+        render_androidtv_proxy(client, &req, "POST", "/forget");
+    } else if (strcmp(req.method, "POST") == 0 && strcmp(req.path, "/api/androidtv/rename") == 0) {
+        render_androidtv_proxy(client, &req, "POST", "/rename");
     } else if (strcmp(req.method, "POST") == 0 && strcmp(req.path, "/api/device-screen") == 0) {
         render_device_screen_json(client, &req);
     } else if (strcmp(req.method, "POST") == 0 && strcmp(req.path, "/api/activity-sync") == 0) {

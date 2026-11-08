@@ -485,6 +485,7 @@ function Build-Inventory() {
     Add-Candidate (New-Candidate "/data/codex/init.sh" "755" "runtime" -Local (Join-Path $Payload "scripts/init.sh"))
     Add-Candidate (New-Candidate "/data/codex/offline_egress_guard.sh" "755" "runtime" -Local (Join-Path $Payload "scripts/offline_egress_guard.sh"))
     Add-Candidate (New-Candidate "/data/codex/recovery_ap.sh" "755" "runtime" -Local (Join-Path $Payload "scripts/recovery_ap.sh"))
+    Add-Candidate (New-Candidate "/data/codex/androidtv_service.sh" "755" "runtime" -Local (Join-Path $Payload "scripts/androidtv_service.sh"))
     Add-Candidate (New-Candidate "/etc/init.d/rcS.local" "755" "runtime" -Local (Join-Path $Payload "scripts/rcS.local"))
     if (-not $SkipCloudSuppression) {
         Add-Candidate (New-Candidate "/opt/luaworks/tasks/connectserver/netservicestarter.lua" "644" "runtime" -Local (Join-Path $Payload "scripts/netservicestarter.lua"))
@@ -1390,7 +1391,7 @@ function Invoke-PostWiring() {
         "ln -sf dropbearmulti /data/codex/bin/dropbear; " +
         "ln -sf dropbearmulti /data/codex/bin/dropbearkey; " +
         "chmod 755 $binChmod /data/codex/init.sh /data/codex/offline_egress_guard.sh " +
-        "/data/codex/recovery_ap.sh /usr/sbin/dropbear " +
+        "/data/codex/recovery_ap.sh /data/codex/androidtv_service.sh /usr/sbin/dropbear " +
         "/usr/sbin/dropbearkey /etc/init.d/rcS.local; " +
         "chmod 600 /data/codexmqtt/config.json 2>/dev/null || true; " +
         "/bin/busybox sync 2>/dev/null || true"
@@ -1405,10 +1406,13 @@ function Start-Services() {
         "mkdir -p /cache/bin; ln -sf /data/codex/bin/codex_bthid_keyboard /cache/bin/bthid_keyboard; " +
         "/data/codex/bin/codex_webui 8080 >> /cache/codex-init.log 2>&1 & " +
         "/data/codex/bin/codex_bthid_keyboard >> /cache/codex-init.log 2>&1 & " +
+        "killall codex_androidtv 2>/dev/null || true; " +
+        "if [ -x /data/codex/androidtv_service.sh ]; then /data/codex/androidtv_service.sh >/dev/null 2>&1 & fi; " +
         "sleep 1; " +
         "/data/codex/bin/codex_hbus $(Remote-Quote $ResolvedHubId) harmony.automation?discover '{""gatewayType"":""codexactivity""}' >> /cache/codex-init.log 2>&1 || true; " +
         "/data/codex/bin/codex_hbus $(Remote-Quote $ResolvedHubId) harmony.automation?discover '{""gatewayType"":""codexmqtt""}' >> /cache/codex-init.log 2>&1 || true; " +
-        "ps | grep '[c]odex_webui' || true; ps | grep '[c]odex_bthid_keyboard' || true; ps | grep '[d]ropbear' || true"
+        "ps | grep '[c]odex_webui' || true; ps | grep '[c]odex_bthid_keyboard' || true; ps | grep '[d]ropbear' || true; " +
+        "ps | grep '[a]tv_service.sh' || true"
     Write-Host (Invoke-Remote $start $null 90000).Trim()
 }
 

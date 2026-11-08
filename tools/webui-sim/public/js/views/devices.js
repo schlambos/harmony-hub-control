@@ -9,7 +9,7 @@
    command's ⋮ edits or deletes it. The remote sends straight to the device,
    outside any activity. */
 
-import { getConfig, postHubForm, saveActivity, saveDeviceScreen } from "../api.js";
+import { forgetTv, getAndroidTvStatus, getConfig, postHubForm, saveActivity, saveAndroidTvDevices, saveDeviceScreen } from "../api.js";
 import * as hub from "../state.js";
 import {
   confirmDialog,
@@ -31,6 +31,7 @@ import { createDeviceSettings } from "./device-settings.js";
 import { changeNote, hubChange, openCommandSheet, openDeviceSheet, openLearnSheet, storedCommand } from "./device-sheets.js";
 import { createDeviceSweep } from "./device-sweep.js";
 import { createIrLab, labNote } from "./ir-lab.js";
+import { androidTvDeviceSet, androidTvIdOf, isAndroidTvDevice, tvStatusText } from "./androidtv-model.js";
 import { LIMITS, deviceUsage, touchScreenState, withoutDeviceMaps } from "./ir-model.js";
 import { describeHaDeviceState, deviceIconName, deviceKeys, isHaCommandRedundant } from "./remote-model.js";
 import {
@@ -112,8 +113,8 @@ export function createDevicesView(section) {
               d.model || d.manufacturer,
               `${d.commands.length} command${d.commands.length === 1 ? "" : "s"}`,
             ].filter(Boolean).join(" · ");
-        const badgeCls = d.isHa ? " badge-ha" : d.isBluetooth ? " badge-bluetooth" : "";
-        const badgeLabel = d.isHa ? "Home Assistant" : d.isBluetooth ? "Bluetooth" : "IR";
+        const badgeCls = d.isAndroidTv ? " badge-network" : d.isHa ? " badge-ha" : d.isBluetooth ? " badge-bluetooth" : "";
+        const badgeLabel = d.isAndroidTv ? "Network" : d.isHa ? "Home Assistant" : d.isBluetooth ? "Bluetooth" : "IR";
         const badge = `<span class="badge${badgeCls}">${badgeLabel}</span>`;
         return listRow({
           title: d.name,
@@ -244,11 +245,14 @@ export function createDevicesView(section) {
         <button type="button" role="tab" class="seg-tab" data-tab="commands" aria-selected="${tab === "commands"}">Commands (${device.commands.length})</button>
       </div>`;
     const haStrip = device.isHa ? haStateStripMarkup([device], hub.state.haState, { single: true }) : "";
+    const androidtv = isAndroidTvDevice(device);
+    const androidTvLine = androidtv ? `<p class="list-note androidtv-status" data-androidtv-status>Network TV · checking the connection…</p>` : "";
     const body = tab === "remote"
       ? `<div class="remote">
           <div class="remote-main">
             ${haStrip}
             <p class="remote-status" id="deviceStatus" role="status" aria-live="polite"></p>
+            ${androidTvLine}
             ${tabs}
             <div class="remote-surface">${padMarkup(keys)}</div>
           </div>
@@ -257,11 +261,12 @@ export function createDevicesView(section) {
       : `<div class="page">
           ${haStrip}
           <p class="remote-status" id="deviceStatus" role="status" aria-live="polite"></p>
+          ${androidTvLine}
           ${tabs}
-          <div class="cmd-tools">
+          ${androidtv ? `<p class="list-note">A network TV's commands come with it; the hub sends them over the network.</p>` : `<div class="cmd-tools">
             <button type="button" class="btn btn-outlined" data-act="learn" aria-haspopup="dialog">${icon("settings_remote_outlined", { size: 18 })}Learn a button</button>
             <button type="button" class="btn btn-outlined" data-act="import" aria-haspopup="dialog">${icon("content_paste_outlined", { size: 18 })}Import codes</button>
-          </div>
+          </div>`}
           ${labNote(device)}
           <label class="search-field">${icon("search", { size: 22 })}<input type="search" id="commandSearch" value="${escapeHtml(commandQuery)}" placeholder="Search ${device.commands.length} commands" aria-label="Search ${device.commands.length} commands"></label>
           <div class="cmd-head">
@@ -271,8 +276,22 @@ export function createDevicesView(section) {
           <div id="commandRows">${commandRows()}</div>
         </div>`;
     root.innerHTML = body;
+    if (androidtv) showAndroidTvStatus(device);
     const side = root.querySelector(".remote-side");
     if (side) wireMoreKeys(side, { source: panelSource, send: sendAction, keyEvents: false });
+  }
+
+  /* A network TV's connection, from codex_androidtv, under its name. */
+  async function showAndroidTvStatus(d) {
+    const line = root.querySelector("[data-androidtv-status]");
+    let text;
+    try {
+      const st = await getAndroidTvStatus();
+      text = tvStatusText((st.tvs ?? []).find((tv) => tv.id === androidTvIdOf(d)));
+    } catch (error) {
+      text = error.message || "The hub's network TV service didn't answer.";
+    }
+    if (line?.isConnected) line.textContent = `Network TV · ${text}`;
   }
 
   /* What a page shows of the setup: a redraw only when it changes, so a
@@ -413,7 +432,13 @@ export function createDevicesView(section) {
         });
       }
       try {
-        await postHubForm("/ir/delete-device", { deviceId: d.id });
+        if (isAndroidTvDevice(d)) {
+          // The writer owns network TVs: save the set without it, then unpair.
+          await saveAndroidTvDevices(androidTvDeviceSet(config, { remove: androidTvIdOf(d) }));
+          await forgetTv({ id: androidTvIdOf(d) }).catch(() => {});
+        } else {
+          await postHubForm("/ir/delete-device", { deviceId: d.id });
+        }
       } catch (error) {
         // The device stays: give it back the remote screens taken off it.
         if (saved) {

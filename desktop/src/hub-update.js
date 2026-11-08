@@ -29,6 +29,7 @@ const HUB_FILES = {
   "payload/bin/codex_hal_ltcp": ["/data/codex/bin/codex_hal_ltcp", "755", 0],
   "payload/bin/codex_bthid_keyboard": ["/data/codex/bin/codex_bthid_keyboard", "755", 0],
   "payload/bin/codex_bt_pair_agent": ["/data/codex/bin/codex_bt_pair_agent", "755", 0],
+  "payload/bin/codex_androidtv": ["/data/codex/bin/codex_androidtv", "755", 0],
   "payload/activity/codexactivity.lua": ["/pkg/codexactivity/codexactivity.lua", "644", 1],
   "payload/mqtt/codexmqtt.lua": ["/pkg/codexmqtt/codexmqtt.lua", "644", 1],
   "payload/bin/codex_portal": ["/data/codex/bin/codex_portal", "755", 0],
@@ -39,6 +40,7 @@ const HUB_FILES = {
   "payload/scripts/init.sh": ["/data/codex/init.sh", "755", 1],
   "payload/scripts/offline_egress_guard.sh": ["/data/codex/offline_egress_guard.sh", "755", 1],
   "payload/scripts/recovery_ap.sh": ["/data/codex/recovery_ap.sh", "755", 1],
+  "payload/scripts/androidtv_service.sh": ["/data/codex/androidtv_service.sh", "755", 1],
   "payload/scripts/rcS.local": ["/etc/init.d/rcS.local", "755", 1],
   "payload/scripts/netservicestarter.lua": ["/opt/luaworks/tasks/connectserver/netservicestarter.lua", "644", 1],
 };
