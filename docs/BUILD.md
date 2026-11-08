@@ -20,8 +20,9 @@ exact SHA-256 digests and sizes are:
 
 | Binary | Size | SHA-256 |
 | --- | --- | --- |
-| `codex_webui` | 1191540 | `9a6ed1f9068fc6867f9a7c5f8b174e7ba01d70770a09ceb5b0273e83d76dd22b` |
+| `codex_webui` | 1220676 | `8d566344f5a7da03e0eb8eb639b3473fea65bdaaa5960a9050fdcf62dcae4e3c` |
 | `codex_hbus` | 74660 | `4be9e6ac2e09e7eb052f9c47e81480d1e32aee7190bedb6ef7f932cf07aab8f9` |
+| `codex_androidtv` | 266916 | `fbf0e953b47b10f29fb30a41a4d339f5a034e1cc7a26c12d79f4d3711161bba2` |
 
 The remaining six binaries (`codex_bt_pair_agent`, `codex_bthid_keyboard`,
 `codex_dhcpd`, `codex_hal_ltcp`, `codex_portal`, `dropbearmulti`) are pinned by
@@ -29,7 +30,7 @@ their MD5 digests in `payload/bin/MANIFEST.txt`.
 
 ## Toolchain — official Zig 0.16.0
 
-All five Zig-built binaries use the official Zig 0.16.0 tarball (clang/LLD
+All six Zig-built binaries use the official Zig 0.16.0 tarball (clang/LLD
 21.1.0, executable SHA-256
 `e6cd688d25664983833aae272f501d4bceeae304875b8f1741209d15fd13a4ec`). The build
 script keeps separate `WEBUI_ZIG` and `OFFICIAL_ZIG` variables; both carry
@@ -46,7 +47,7 @@ Verified 2026-10-27 on macOS (aarch64):
   `e6cd688d25664983833aae272f501d4bceeae304875b8f1741209d15fd13a4ec`,
   `zig version` 0.16.0, `zig cc --version` `clang version 21.1.0`
 
-With it, all five Zig-built binaries rebuild byte-for-byte, and a repeat
+With it, all six Zig-built binaries rebuild byte-for-byte, and a repeat
 `codex_webui` build is identical.
 
 Use this toolchain, not whatever `zig` is on `PATH`. The `codex_webui` built
@@ -69,8 +70,8 @@ Both regenerators reproduce the committed headers byte-for-byte.
 
 Pinned source blobs:
 
-- `payload/source/codex_webui.c` — `9183f4386520ec7c8394bdead5f754daf4fb8396`
-- `payload/source/harmony_shell_assets.h` — `3abf9e5e1664bd03cbc70f5dd0072bda21fbd975`
+- `payload/source/codex_webui.c` — `cab523828c683145eb8ec3bd60338f3a7ccaf9ef`
+- `payload/source/harmony_shell_assets.h` — `fefc5612989a498e73e54781599f53c97dda7fe8`
 - `payload/source/activity_ui_assets.h` — `f68a2bce58e71242b2480b2d483f405484c036da`
 - `payload/source/remote_skin_jpg.h` — `419611c5ff0713f1f5de2dd684d699f6d77238d5`
 
@@ -82,8 +83,8 @@ Pinned source blobs:
 ```
 
 Result must be `ELF 32-bit MSB executable, MIPS, MIPS32 rel2, statically
-linked, stripped`, size 1191540, SHA-256
-`9a6ed1f9068fc6867f9a7c5f8b174e7ba01d70770a09ceb5b0273e83d76dd22b`.
+linked, stripped`, size 1220676, SHA-256
+`8d566344f5a7da03e0eb8eb639b3473fea65bdaaa5960a9050fdcf62dcae4e3c`.
 
 To compare against a Homebrew-built box binary, strip the compiler stamp from
 both first:
@@ -115,6 +116,33 @@ Result must be size 74660, SHA-256
   -o build/output/codex_hal_ltcp payload/source/codex_hal_ltcp.c
 ```
 
+### codex_androidtv (Official Zig, BearSSL 0.6)
+
+Network control for Android and Google TVs ([ANDROID_TV.md](ANDROID_TV.md)).
+TLS is BearSSL 0.6. Its source isn't in the repository: download
+`https://www.bearssl.org/bearssl-0.6.tar.gz` (SHA-256
+`6705bba1714961b41a728dfc5debbe348d2966c117649392f8c8139efc83ff14`; bearssl.org
+publishes no checksum, this is the tarball as downloaded on 2026-11-07) and
+unpack it in `build/tmp/`. Build from there, so BearSSL's paths are relative,
+with the file list sorted (the link order, and so the output, depends on it):
+
+```sh
+cd build/tmp
+"$OFFICIAL_ZIG" cc -target mips-linux-musleabi -Os -static -s \
+  -ffunction-sections -fdata-sections -Wl,--gc-sections \
+  -Ibearssl-0.6/inc -Ibearssl-0.6/src \
+  -o ../../payload/bin/codex_androidtv ../../payload/source/codex_androidtv.c \
+  $(find bearssl-0.6/src -name '*.c' | LC_ALL=C sort)
+```
+
+Result must be `ELF 32-bit MSB executable, MIPS, MIPS32 rel2`, statically
+linked, stripped, size 266916, SHA-256
+`fbf0e953b47b10f29fb30a41a4d339f5a034e1cc7a26c12d79f4d3711161bba2`
+(`payload/source/codex_androidtv.c` blob `21bde5a7e0b4a75d1cd305dc5b59dad611876a34`).
+The output doesn't depend on where the tree or BearSSL is unpacked. For the
+fake-TV smoke test, build the same way with `-target x86_64-linux-musl` (or
+your host) into `build/output/codex_androidtv-native`.
+
 ### codex_flash_free (installer helper, Official Zig, `-mcpu=mips32`)
 
 The installers copy this probe into their RAM staging folder, run it to read
@@ -138,7 +166,7 @@ stripped, size 54424, SHA-256
 `build/build_harmony_tools_kali.sh`. The script downloads that tarball and the
 Dropbear source without checking their SHA-256.
 
-## Per-binary build status (all 8)
+## Per-binary build status (all 9)
 
 | Binary | Build status |
 | --- | --- |
@@ -147,6 +175,7 @@ Dropbear source without checking their SHA-256.
 | `codex_bt_pair_agent` | EXACT_SOURCE_REPRODUCIBLE (Official Zig 0.16.0) |
 | `codex_bthid_keyboard` | EXACT_SOURCE_REPRODUCIBLE (Official Zig 0.16.0) |
 | `codex_hal_ltcp` | EXACT_SOURCE_REPRODUCIBLE (Official Zig 0.16.0) |
+| `codex_androidtv` | EXACT_SOURCE_REPRODUCIBLE (Official Zig 0.16.0, BearSSL 0.6 tarball pinned by SHA-256) |
 | `codex_dhcpd` | EXACT_SOURCE_REPRODUCIBLE (Bootlin mips32-uclibc) |
 | `codex_portal` | EXACT_SOURCE_REPRODUCIBLE (Bootlin mips32-uclibc) |
 | `dropbearmulti` | **UNVERIFIED_THIRD_PARTY** (version/license verified, build unverified) |

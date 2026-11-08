@@ -674,6 +674,9 @@ class Installer:
                 Candidate(
                     "/data/codex/recovery_ap.sh", "755", "runtime", local=PAYLOAD / "scripts" / "recovery_ap.sh"
                 ),
+                Candidate(
+                    "/data/codex/androidtv_service.sh", "755", "runtime", local=PAYLOAD / "scripts" / "androidtv_service.sh"
+                ),
                 Candidate("/etc/init.d/rcS.local", "755", "runtime", local=PAYLOAD / "scripts" / "rcS.local"),
             ]
         )
@@ -1474,7 +1477,7 @@ class Installer:
             "ln -sf dropbearmulti /data/codex/bin/dropbear; "
             "ln -sf dropbearmulti /data/codex/bin/dropbearkey; "
             f"chmod 755 {bin_chmod} /data/codex/init.sh /data/codex/offline_egress_guard.sh "
-            "/data/codex/recovery_ap.sh /usr/sbin/dropbear "
+            "/data/codex/recovery_ap.sh /data/codex/androidtv_service.sh /usr/sbin/dropbear "
             "/usr/sbin/dropbearkey /etc/init.d/rcS.local; "
             "chmod 600 /data/codexmqtt/config.json 2>/dev/null || true; "
             "/bin/busybox sync 2>/dev/null || true"
@@ -1490,12 +1493,16 @@ class Installer:
             "mkdir -p /cache/bin; ln -sf /data/codex/bin/codex_bthid_keyboard /cache/bin/bthid_keyboard; "
             "/data/codex/bin/codex_webui 8080 >> /cache/codex-init.log 2>&1 & "
             "/data/codex/bin/codex_bthid_keyboard >> /cache/codex-init.log 2>&1 & "
+            # codex_androidtv: kill the running copy; its service loop starts the new one.
+            "killall codex_androidtv 2>/dev/null || true; "
+            "if [ -x /data/codex/androidtv_service.sh ]; then /data/codex/androidtv_service.sh >/dev/null 2>&1 & fi; "
             "sleep 1; "
             f"/data/codex/bin/codex_hbus {remote_quote(self.hub_id)} harmony.automation?discover "
             f"{remote_quote('{\"gatewayType\":\"codexactivity\"}')} >> /cache/codex-init.log 2>&1 || true; "
             f"/data/codex/bin/codex_hbus {remote_quote(self.hub_id)} harmony.automation?discover "
             f"{remote_quote('{\"gatewayType\":\"codexmqtt\"}')} >> /cache/codex-init.log 2>&1 || true; "
-            "ps | grep '[c]odex_webui' || true; ps | grep '[c]odex_bthid_keyboard' || true; ps | grep '[d]ropbear' || true"
+            "ps | grep '[c]odex_webui' || true; ps | grep '[c]odex_bthid_keyboard' || true; ps | grep '[d]ropbear' || true; "
+            "ps | grep '[a]tv_service.sh' || true"
         )
         print(self.run_remote(start, timeout=90).strip())
 

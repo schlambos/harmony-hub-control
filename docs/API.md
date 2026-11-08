@@ -395,6 +395,29 @@ GET /api/ha-state?since=<version>
 - `GET /api/activity-config` also includes `haStateVersion` and `haState`
   (`version`, `stale`, `states`).
 
+## Network TVs
+
+Android TV and Google TV sets the hub controls over the network. codex_androidtv
+(127.0.0.1:8095) keeps the TV connections; codex_webui relays these routes to
+it unchanged (`render_androidtv_proxy()`). Every answer is HTTP 200 with JSON, a
+refusal as `{"ok":false,"error":...}`; `503` means codex_androidtv isn't running.
+See [ANDROID_TV.md](ANDROID_TV.md).
+
+| Method | Path | Body | Answer |
+| --- | --- | --- | --- |
+| GET | `/api/androidtv/status` | | `identity` (`ready`, `preparing` or `none`) and `tvs`: each `id`, `name`, `host`, `mac`, `connected`, `on`, `volume`, `volumeMax`, `muted`, `keysSent`, `connects`, `error` |
+| GET | `/api/androidtv/discover` | | Starts a 2.5 s mDNS search and answers what has been found so far: `found`, each `name`, `host` and `paired` (the TV's id when the hub already has it). Ask again to see more |
+| POST | `/api/androidtv/pair-start` | `{"host":"192.168.1.40","name":"Den TV"}` | The pairing state (below). The TV shows a code once the state is `code` |
+| GET | `/api/androidtv/pair-status` | | `state`: `idle`, `preparing` (the hub is making its key, first time only), `connecting`, `code`, `checking`, `paired` (with `tvId`) or `failed` (with `error`) |
+| POST | `/api/androidtv/pair-finish` | `{"code":"A1B2C3"}` | The state, now `checking`; or a refusal when the code doesn't match. The hub checks the code against the TV's key first, so a typo never reaches the TV and can be corrected |
+| POST | `/api/androidtv/pair-cancel` | `{}` | Stops a pairing. The answer is the pairing state; its `tvId` names the TV when the pairing had already finished, so a caller can tidy up a pairing it no longer wants |
+| POST | `/api/androidtv/forget` | `{"id":"androidtv1a2b3c4d"}` | Unpairs a TV (its pinned certificate is deleted). Remove its device first |
+| POST | `/api/androidtv/devices` | `{"devices":[{"entity":"androidtv1a2b3c4d","name":"Den TV","manufacturer":"Sony","model":"XR-65A80L"}],"dryRun":false}` | Replaces the hub's whole set of network TV devices, like `/api/ha-devices` (same writer, `CommitAndroidTvDevices`, same reply). `entity` is the TV's id from pairing; `manufacturer` and `model` are optional. The commands, power and HDMI inputs are fixed |
+
+Network TV devices carry `AutoDetectedDevice.Id` `melodious-androidtv-<deviceId>`
+and the `{d}` token of their TV id. When one runs, the engine posts
+`{"device":"<tv id>","command":"<Name>"}` to `http://127.0.0.1:8095/cmd`.
+
 ## Touch device screens
 
 On the Harmony Touch, Devices then a device opens that device's screen.
@@ -1019,7 +1042,7 @@ Invoke-RestMethod "http://<hub-ip>:8080/api/version"
 
 ```json
 {"ok":true,"product":"melodious","version":"1.3.0","api":1,"update":{"protocol":0},
- "features":["activity-save","activity-sync","catalog-import","device-commands",
+ "features":["activity-save","activity-sync","androidtv-devices","catalog-import","device-commands",
              "device-screen","device-settings","ha-devices","ha-devices-v2",
              "ha-state","irdb-import","remote-pair"]}
 ```
@@ -1040,7 +1063,7 @@ Invoke-RestMethod "http://<hub-ip>:8080/api/update-status"
 
 The response carries `version` and lists each binary with `present`, `size`
 and `md5`: `codex_webui`, `codex_bthid_keyboard`, `codex_bt_pair_agent`,
-`codex_hal_ltcp`, `codex_hbus`, `codex_portal` and `codex_dhcpd`.
+`codex_androidtv`, `codex_hal_ltcp`, `codex_hbus`, `codex_portal` and `codex_dhcpd`.
 
 The hub installs software only through the installer (`install_webui.py` or
 `install_webui.ps1`, over SSH). Until 1.2.0 it also had
@@ -1107,6 +1130,9 @@ carries.
 | POST | `/api/device-settings` | `render_device_settings_json()` |
 | POST | `/api/ha-devices` | `render_ha_devices_json()` |
 | GET, POST | `/api/ha-state` | `render_ha_state_get_json()`, `render_ha_state_post_json()` |
+| POST | `/api/androidtv/devices` | `render_androidtv_devices_json()` |
+| GET | `/api/androidtv/status`, `/api/androidtv/discover`, `/api/androidtv/pair-status` | `render_androidtv_proxy()` |
+| POST | `/api/androidtv/pair-start`, `/api/androidtv/pair-finish`, `/api/androidtv/pair-cancel`, `/api/androidtv/forget`, `/api/androidtv/rename` | `render_androidtv_proxy()` |
 | POST | `/api/device-screen` | `render_device_screen_json()` |
 | POST | `/api/activity-sync` | `render_activity_sync_json()` |
 | GET | `/api/inventory` | `render_inventory_json()` |

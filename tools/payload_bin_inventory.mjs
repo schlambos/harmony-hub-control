@@ -28,6 +28,7 @@ const INSTALL_ONLY = new Set(["dropbearmulti"]);
 
 /** Daemons init.sh launches; an update must restart them. */
 const RESTART_SET = [
+  "codex_androidtv",
   "codex_bt_pair_agent",
   "codex_bthid_keyboard",
   "codex_webui",

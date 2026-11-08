@@ -625,6 +625,103 @@ function formFields(params) {
   return out;
 }
 
+/* Network Android/Google TVs (codex_androidtv). A pretend TV is on the network;
+   pairing walks preparing → connecting → code, and the code is SIM_ANDROIDTV_CODE
+   (logged as a sim event, since there is no TV screen to read it from). */
+const SIM_ANDROIDTV_CODE = "A1B2C3";
+const SIM_ANDROIDTV_FOUND = [{ name: "Living Room TV", host: "192.168.0.60" }];
+const SIM_ANDROIDTV_COMMANDS = [
+  "PowerOn", "PowerOff", "PowerToggle", "DirectionUp", "DirectionDown", "DirectionLeft",
+  "DirectionRight", "Select", "Back", "Home", "Menu", "Settings", "Info", "Guide",
+  "VolumeUp", "VolumeDown", "Mute", "ChannelUp", "ChannelDown", "PrevChannel", "Play",
+  "Pause", "PlayPause", "Stop", "FastForward", "Rewind", "SkipForward", "SkipBack",
+  "Record", "Captions", "Search", "Assistant", "InputHdmi1", "InputHdmi2", "InputHdmi3",
+  "InputHdmi4", "InputNext", "Red", "Green", "Yellow", "Blue", "Number0", "Number1",
+  "Number2", "Number3", "Number4", "Number5", "Number6", "Number7", "Number8", "Number9"
+];
+const simAndroidTv = { tvs: new Map(), pair: { state: "idle", host: "", name: "", error: "", tvId: "", at: 0 } };
+
+function simAndroidTvPairState() {
+  const p = simAndroidTv.pair;
+  const age = Date.now() - p.at;
+  if (p.state === "preparing" && age > 1200) { p.state = "connecting"; p.at = Date.now(); }
+  if (p.state === "connecting" && age > 600) {
+    p.state = "code";
+    logEvent({ type: "androidtv-pair-code", host: p.host, code: SIM_ANDROIDTV_CODE });
+  }
+  if (p.state === "checking" && age > 500) {
+    p.state = "paired";
+    p.tvId = "androidtv" + Buffer.from(p.host).toString("hex").slice(-8).padStart(8, "0");
+    simAndroidTv.tvs.set(p.tvId, { id: p.tvId, name: p.name || "Android TV", host: p.host, on: false });
+  }
+  return { ok: true, state: p.state, host: p.host, name: p.name, error: p.error, tvId: p.tvId };
+}
+
+function simAndroidTvTag(entry) {
+  return String(entry?.Device?.AutoDetectedDevice?.Id ?? "").startsWith("melodious-androidtv-");
+}
+
+function simAndroidTvTokenOf(entry) {
+  return (entry?.Device?.Tokens?.Parameters ?? []).find((t) => t?.Key === "{d}")?.Value ?? "";
+}
+
+function handleAndroidTvDevices(res, params) {
+  const devices = Array.isArray(params.devices) ? params.devices : null;
+  if (!devices) {
+    sendError(res, 400, "body must be one JSON object with a devices list");
+    return;
+  }
+  const entries = deviceEntries();
+  const owned = new Map(entries.filter(simAndroidTvTag).map((e) => [simAndroidTvTokenOf(e), e]));
+  const others = entries.filter((e) => !simAndroidTvTag(e));
+  for (const d of devices) {
+    if (!/^androidtv[0-9a-f]+$/.test(String(d.entity ?? ""))) {
+      sendJson(res, 422, { ok: false, error: `device needs a paired TV id such as androidtv1a2b3c4d` });
+      return;
+    }
+    if (others.some((e) => String(e.Device?.Name ?? "").toLowerCase() === String(d.name ?? "").toLowerCase())) {
+      sendJson(res, 422, { ok: false, error: `another device is already named ${d.name}` });
+      return;
+    }
+  }
+  const result = { ok: true, localOnly: true, added: [], updated: [], removed: [], unchanged: [], devices: [] };
+  const kept = [...others];
+  for (const d of devices) {
+    let entry = owned.get(d.entity);
+    if (!entry) {
+      // Count the TVs this request already added, so two new TVs never share an id.
+      const id = nextId([...entries, ...kept].map((e) => e.Device?.["Id-"]), 39000000);
+      entry = {
+        Device: {
+          "Id-": id, Name: d.name, Manufacturer: d.manufacturer || "Android TV", Model: d.model || "Android TV",
+          DeviceTypeDisplayName: "Television", DeviceType: 1, Transport: 64, Icon: 1,
+          Tokens: { Parameters: [{ Key: "{d}", Value: d.entity }] },
+          AutoDetectedDevice: { Id: `melodious-androidtv-${id}` }
+        },
+        Commands: SIM_ANDROIDTV_COMMANDS.map((name, i) => ({
+          Name: name, "Id-": id * 100 + i, TransportType: 64, KeyCode: "", Raw: null,
+          Parameters: [{ Key: "{c}", Value: name }], IsLearned: false
+        })),
+        DeviceFeatures: []
+      };
+      result.added.push(d.name);
+    } else {
+      entry.Device.Name = d.name;
+      result.updated.push(d.name);
+    }
+    kept.push(entry);
+    result.devices.push({ entity: d.entity, deviceId: String(entry.Device["Id-"]), name: d.name });
+  }
+  for (const [token, entry] of owned) {
+    if (!devices.some((d) => d.entity === token)) result.removed.push(entry.Device.Name);
+  }
+  state.deviceList.DevicesWithFeatures = kept;
+  state.revision = newRevision();
+  result.changed = true;
+  logEvent({ type: "androidtv-devices", ...result });
+  sendJson(res, 200, result);
+}
+
 // DevicesWithFeatures as the array the hub appends to.
 function deviceEntries() {
   if (!Array.isArray(state.deviceList.DevicesWithFeatures)) state.deviceList.DevicesWithFeatures = [];
@@ -1357,6 +1454,69 @@ async function handleApi(req, res, pathname, url) {
       }
       return;
     }
+    case "GET /api/androidtv/status":
+      sendJson(res, 200, {
+        ok: true, version: "sim", identity: "ready",
+        tvs: [...simAndroidTv.tvs.values()].map((tv) => ({
+          id: tv.id, name: tv.name, host: tv.host, mac: "02:00:00:00:00:60", connected: true,
+          on: tv.on, volume: 12, volumeMax: 100, muted: false, keysSent: 0, connects: 1, error: ""
+        }))
+      });
+      return;
+    case "GET /api/androidtv/discover":
+      sendJson(res, 200, {
+        ok: true, searching: false,
+        found: SIM_ANDROIDTV_FOUND.map((f) => ({
+          ...f, paired: [...simAndroidTv.tvs.values()].find((tv) => tv.host === f.host)?.id ?? ""
+        }))
+      });
+      return;
+    case "POST /api/androidtv/pair-start": {
+      const host = String(params.host ?? "");
+      if (!/^\d{1,3}(\.\d{1,3}){3}$/.test(host)) {
+        sendJson(res, 200, { ok: false, error: "Enter the TV's IPv4 address, such as 192.168.1.40." });
+        return;
+      }
+      simAndroidTv.pair = { state: "preparing", host, name: String(params.name ?? ""), error: "", tvId: "", at: Date.now() };
+      sendJson(res, 200, simAndroidTvPairState());
+      return;
+    }
+    case "GET /api/androidtv/pair-status":
+      sendJson(res, 200, simAndroidTvPairState());
+      return;
+    case "POST /api/androidtv/pair-finish": {
+      const code = String(params.code ?? "").toUpperCase();
+      if (simAndroidTvPairState().state !== "code") {
+        sendJson(res, 200, { ok: false, error: "The TV isn't waiting for a code. Start again." });
+        return;
+      }
+      if (code !== SIM_ANDROIDTV_CODE) {
+        sendJson(res, 200, { ok: false, error: "That code doesn't match. Check the code on the TV and try again." });
+        return;
+      }
+      simAndroidTv.pair.state = "checking";
+      simAndroidTv.pair.at = Date.now();
+      sendJson(res, 200, simAndroidTvPairState());
+      return;
+    }
+    case "POST /api/androidtv/pair-cancel": {
+      // Like codex_androidtv: a pairing that has finished stays, and the answer
+      // names its TV so the caller can tidy up.
+      const done = simAndroidTvPairState();
+      simAndroidTv.pair.state = "idle";
+      sendJson(res, 200, { ...done, state: "idle" });
+      return;
+    }
+    case "POST /api/androidtv/forget":
+      simAndroidTv.tvs.delete(String(params.id ?? ""));
+      sendJson(res, 200, { ok: true });
+      return;
+    case "POST /api/androidtv/rename":
+      sendJson(res, 200, { ok: true });
+      return;
+    case "POST /api/androidtv/devices":
+      handleAndroidTvDevices(res, params);
+      return;
     case "GET /api/remotes":
       sendJson(res, 200, simPairing ? { ok: true, pairing: true } : { ok: true, pairing: false, reply: simRfInfo() });
       return;
@@ -1432,7 +1592,7 @@ async function handleApi(req, res, pathname, url) {
         update: { protocol: 0 },
         features: [
           "activity-save", "activity-sync", "catalog-import", "device-commands",
-          "device-screen", "device-settings", "ha-devices", "ha-devices-v2",
+          "androidtv-devices", "device-screen", "device-settings", "ha-devices", "ha-devices-v2",
           "ha-state", "irdb-import", "remote-pair"
         ]
       });

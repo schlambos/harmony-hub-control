@@ -9,8 +9,9 @@
 
 import { postApiForm, postHubForm } from "../api.js";
 import * as hub from "../state.js";
-import { escapeHtml, icon, openSheet, snackbar, spinner } from "../ui/shell.js";
+import { escapeHtml, icon, iconTile, listRow, openSheet, snackbar, spinner } from "../ui/shell.js";
 import { LIMITS, analyzeCapture, deviceTypeOptions, isSafeLabel, normalizeSignal } from "./ir-model.js";
+import { openAndroidTvSheet } from "./androidtv-sheet.js";
 
 /* -- the hub's /ir/* forms --------------------------------------------------- */
 
@@ -110,7 +111,14 @@ export function openDeviceSheet({ device = null, onDone } = {}) {
     render: (content, close) => {
       content.innerHTML = `<form class="m-form" novalidate>
           <h2 class="sheet-title">${editing ? "Edit details" : "Add a device"}</h2>
-          ${editing ? "" : `<p class="sheet-text">For a device you control by IR. Then learn its buttons from its own remote, or import codes for it.</p>`}
+          ${editing ? "" : `<div class="m-list androidtv-entry">${listRow({
+            title: "Android or Google TV on the network",
+            subtitle: "Paired over the network: power, every key and inputs, no IR",
+            leading: iconTile("tv", { size: 40 }),
+            chevron: true,
+            attrs: 'data-act="androidtv"',
+          })}</div>
+          <p class="sheet-text">Or a device you control by IR. Then learn its buttons from its own remote, or import codes for it.</p>`}
           ${textField({ id: ids.name, label: "Name", value: stored.Name ?? "", placeholder: "Living room TV", maxlength: LIMITS.name })}
           <fieldset class="m-fieldset">
             <legend>Type</legend>
@@ -139,6 +147,11 @@ export function openDeviceSheet({ device = null, onDone } = {}) {
       };
 
       form.addEventListener("click", (event) => {
+        if (event.target.closest("[data-act='androidtv']")) {
+          close();
+          openAndroidTvSheet({ onDone });
+          return;
+        }
         const chip = event.target.closest("[data-type]");
         if (!chip) return;
         type = chip.dataset.type;

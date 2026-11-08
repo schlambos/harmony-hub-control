@@ -59,6 +59,8 @@ These keep their own licences:
   third_party/dropbear-2025.89/LICENSE.
 - Material Icons, whose glyphs are embedded in the web app:
   Apache License 2.0, third_party/material-icons/LICENSE.
+- BearSSL 0.6, built into payload/bin/codex_androidtv: MIT License,
+  third_party/bearssl-0.6/LICENSE.
 - The libraries the Android app is built with (AndroidX and Jetpack Compose,
   Kotlin, kotlinx, OkHttp, JSch), declared in
   Android/gradle/libs.versions.toml: each under its own licence.

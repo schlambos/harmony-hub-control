@@ -67,6 +67,8 @@ function normCmd(name) {
  *  HA detection: Transport 64, or Home Assistant manufacturer/protocol. */
 export function isHaDevice(device) {
   if (!device) return false;
+  // Network Android/Google TVs are IP devices too, but not Home Assistant's.
+  if (String((device.entry ?? device)?.Device?.AutoDetectedDevice?.Id ?? "").startsWith("melodious-androidtv-")) return false;
   if (device.isHa === true) return true;
   const transport = Number(device.transport ?? device.Transport ?? device.entry?.Device?.Transport ?? 1);
   if (transport === 64) return true;
@@ -275,6 +277,7 @@ export function deviceDomainLabel(device) {
   const name = String(device?.name ?? "").toLowerCase();
   const commands = (device?.commands ?? []).map((c) => String(c?.name ?? c).toLowerCase());
   const has = (...names) => names.some((n) => commands.includes(n));
+  if (String(device?.entry?.Device?.AutoDetectedDevice?.Id ?? "").startsWith("melodious-androidtv-")) return "Network TV";
   if (has("brightnessup", "brightnessdown") || name.includes("light")) return "Light";
   if (has("play", "pause", "playpause") || has("volumeup")) {
     if (commands.includes("run") || commands.includes("activate")) return "Scene / Script";
