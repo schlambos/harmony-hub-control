@@ -69,6 +69,9 @@ export function isHaDevice(device) {
   if (!device) return false;
   // Network Android/Google TVs are IP devices too, but not Home Assistant's.
   if (String((device.entry ?? device)?.Device?.AutoDetectedDevice?.Id ?? "").startsWith("melodious-androidtv-")) return false;
+  // So are the hub's own Bluetooth keyboard targets.
+  if (device.isMelodiousBt === true ||
+      String((device.entry ?? device)?.Device?.AutoDetectedDevice?.Id ?? "").startsWith("melodious-bt-")) return false;
   if (device.isHa === true) return true;
   const transport = Number(device.transport ?? device.Transport ?? device.entry?.Device?.Transport ?? 1);
   if (transport === 64) return true;

@@ -392,7 +392,8 @@ export function deviceUsage(config, deviceId) {
      "none"     the hub has a Touch and the device has no screen yet
      "made"     made on this hub, so it can be rebuilt or removed
      "logitech" Logitech's own, never touched
-     "managed"  a Home Assistant or network TV device; its screen follows the device set
+     "managed"  a Home Assistant, network TV or hub Bluetooth keyboard
+                device; its screen follows the device set
      "no-touch" the hub has no Touch screens to copy
    Logitech issued every map ID at or below the floor (codexactivity.lua). */
 const TOUCH_SCREEN_MAP_FLOOR = 52944089;
@@ -403,7 +404,7 @@ export function touchScreenState(config, deviceId) {
   const entry = (config?.deviceList?.DevicesWithFeatures ?? []).find((d) => String(d?.Device?.["Id-"]) === id);
   const screen = maps.find((m) => m?.ButtonMapIdentifier === `16417Device${id}`);
   if (screen && !(Number(screen["ButtonMapId-"]) > TOUCH_SCREEN_MAP_FLOOR)) return "logitech";
-  if (/^melodious-(ha|androidtv)-/.test(String(entry?.Device?.AutoDetectedDevice?.Id ?? ""))) return "managed";
+  if (/^melodious-(ha|androidtv|bt)-/.test(String(entry?.Device?.AutoDetectedDevice?.Id ?? ""))) return "managed";
   if (screen) return "made";
   const hasTouch = maps.some((m) => /^16417/.test(String(m?.ButtonMapIdentifier ?? "")) &&
     m?.["SurfaceId-"] != null && m?.["RemoteId-"] != null);

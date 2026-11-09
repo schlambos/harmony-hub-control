@@ -207,6 +207,7 @@ struct bt_saved_device {
     char name[128];
     char type[40];
     char bdaddr[32];
+    int harmony;    /* published as a Harmony device (CommitBtDevices) */
     int command_count;
     struct bt_saved_command commands[MAX_BT_COMMANDS];
 };
@@ -233,6 +234,9 @@ static int run_hal_json(const char *cmd_name, const char *params_json, int timeo
 static int file_md5(const char *path, char *out, size_t outlen);
 static int multi_remote_off_pending(void);
 static int run_bt_saved_script(const char *type, const char *bdaddr, const char *script, int gap_ms, char *out, size_t outlen);
+struct bt_inventory;
+static int bt_harmony_commit(const struct bt_inventory *inv, int dry_run, char *reply, size_t reply_len, char *msg, size_t msg_len);
+#define BT_HARMONY_REPLY 16384
 
 static void chomp(char *s) {
     size_t n = strlen(s);
@@ -5766,21 +5770,29 @@ static int find_ir_bluetooth_target(const char *device_id, char *address, size_t
     return 0;
 }
 
-static int ensure_ir_bluetooth_connection(const char *device_id, char *detail, size_t detail_len) {
-    char address[32], profile[40], params[160], reply[2048], connection[2048], command[160];
+/* Connects the hub's HID profile to one target unless it already has an
+   authenticated link: reload the link key, drop a stale unauthenticated
+   ACL, ask HAL to connect, then wait for a stable link. profile NULL uses
+   the saved profile. 0 = already connected, 1 = connected now, -1 = failed.
+   label names the device in messages. */
+static int ensure_bt_address_connection(const char *label, const char *address, const char *profile_in, char *detail, size_t detail_len) {
+    char profile[40], params[160], reply[2048], connection[2048], command[160];
     int command_rc, native_code;
     if (detail && detail_len) detail[0] = 0;
-    if (!find_ir_bluetooth_target(device_id, address, sizeof(address))) return 0;
     if (!safe_bt_addr(address) || strcmp(address, "00:00:00:00:00:00") == 0) {
         if (detail && detail_len) {
             snprintf(detail, detail_len,
-                "Bluetooth device %s has no valid target address.", device_id);
+                "Bluetooth device %s has no valid target address.", label);
         }
         return -1;
     }
     if (bt_connection_authenticated(address, connection, sizeof(connection))) return 0;
 
-    read_bthid_profile(profile, sizeof(profile));
+    if (profile_in && bt_type_allowed(profile_in)) {
+        copy_text(profile, sizeof(profile), profile_in);
+    } else {
+        read_bthid_profile(profile, sizeof(profile));
+    }
     ensure_bt_hid_control_runtime();
     load_bt_link_key(address);
     if (bt_connection_active(address, connection, sizeof(connection))) {
@@ -5797,7 +5809,7 @@ static int ensure_ir_bluetooth_connection(const char *device_id, char *detail, s
         if (detail && detail_len) {
             snprintf(detail, detail_len,
                 "Could not connect Bluetooth device %s at %s (native code %d).",
-                device_id, address, native_code);
+                label, address, native_code);
         }
         return -1;
     }
@@ -5805,7 +5817,7 @@ static int ensure_ir_bluetooth_connection(const char *device_id, char *detail, s
         if (detail && detail_len) {
             snprintf(detail, detail_len,
                 "Bluetooth device %s at %s did not establish a stable link.",
-                device_id, address);
+                label, address);
         }
         return -1;
     }
@@ -5814,9 +5826,16 @@ static int ensure_ir_bluetooth_connection(const char *device_id, char *detail, s
     if (detail && detail_len) {
         snprintf(detail, detail_len,
             "Connected Bluetooth device %s at %s before sending the command.",
-            device_id, address);
+            label, address);
     }
     return 1;
+}
+
+static int ensure_ir_bluetooth_connection(const char *device_id, char *detail, size_t detail_len) {
+    char address[32];
+    if (detail && detail_len) detail[0] = 0;
+    if (!find_ir_bluetooth_target(device_id, address, sizeof(address))) return 0;
+    return ensure_bt_address_connection(device_id, address, NULL, detail, detail_len);
 }
 
 /* The holdaction "action" value: an IRCommand, as a JSON string inside the
@@ -7566,6 +7585,7 @@ static int load_bt_inventory(struct bt_inventory *inv) {
         json_string_range(dpos, dev_end, "name", dev->name, sizeof(dev->name));
         json_string_range(dpos, dev_end, "type", dev->type, sizeof(dev->type));
         json_string_range(dpos, dev_end, "bdaddr", dev->bdaddr, sizeof(dev->bdaddr));
+        dev->harmony = json_bool_range(dpos, dev_end, "harmony", 0);
         if (!dev->id[0] || !dev->name[0]) {
             dpos = dev_end + 1;
             continue;
@@ -7611,6 +7631,7 @@ static int save_bt_inventory(const struct bt_inventory *inv) {
         fputs(",\"name\":", f); json_write_string(f, dev->name);
         fputs(",\"type\":", f); json_write_string(f, dev->type);
         fputs(",\"bdaddr\":", f); json_write_string(f, dev->bdaddr);
+        if (dev->harmony) fputs(",\"harmony\":true", f);
         fputs(",\"commands\":[", f);
         for (j = 0; j < dev->command_count; j++) {
             const struct bt_saved_command *cmd = &dev->commands[j];
@@ -7679,6 +7700,12 @@ static int upsert_bt_device(const char *device_id, const char *name, const char 
         memset(&inv.devices[idx], 0, sizeof(inv.devices[idx]));
         make_bt_device_id(inv.devices[idx].id, sizeof(inv.devices[idx].id));
     }
+    if (inv.devices[idx].harmony && strcmp(type, "btkeyboard") != 0) {
+        snprintf(msg, msglen,
+            "Bluetooth device %s is a Harmony device; remove it from Harmony before changing its keyboard type.",
+            inv.devices[idx].name);
+        return -1;
+    }
     copy_text(inv.devices[idx].name, sizeof(inv.devices[idx].name), name);
     copy_text(inv.devices[idx].type, sizeof(inv.devices[idx].type), type);
     copy_text(inv.devices[idx].bdaddr, sizeof(inv.devices[idx].bdaddr), bdaddr);
@@ -7690,6 +7717,18 @@ static int upsert_bt_device(const char *device_id, const char *name, const char 
     save_bthid_target(type, bdaddr);
     save_bthid_profile(type);
     snprintf(msg, msglen, "Saved Bluetooth device %s.", name);
+    if (inv.devices[idx].harmony) {
+        /* Keep the Harmony device's name in step. */
+        char *reply = (char *)malloc(BT_HARMONY_REPLY);
+        char note[512];
+        int rc = reply ? bt_harmony_commit(&inv, 0, reply, BT_HARMONY_REPLY, note, sizeof(note)) : -1;
+        if (rc != 0) {
+            size_t used = strlen(msg);
+            snprintf(msg + used, msglen - used,
+                " The Harmony device was not updated; save it again or remove it from Harmony.");
+        }
+        free(reply);
+    }
     return 0;
 }
 
@@ -7704,6 +7743,12 @@ static int delete_bt_device(const char *device_id, char *msg, size_t msglen) {
     idx = find_bt_device_index(&inv, device_id);
     if (idx < 0) {
         snprintf(msg, msglen, "Bluetooth device %s was not found.", device_id);
+        return -1;
+    }
+    if (inv.devices[idx].harmony) {
+        snprintf(msg, msglen,
+            "Bluetooth device %s is a Harmony device; remove it from Harmony first.",
+            inv.devices[idx].name);
         return -1;
     }
     for (i = idx; i + 1 < inv.device_count; i++) inv.devices[i] = inv.devices[i + 1];
@@ -9958,23 +10003,62 @@ static int bt_key_usage(const char *key) {
     if (strcmp(key, "directiondown") == 0 || strcmp(key, "down") == 0) return 0x51;
     if (strcmp(key, "directionup") == 0 || strcmp(key, "up") == 0) return 0x52;
     if (strcmp(key, "menu") == 0 || strcmp(key, "application") == 0) return 0x65;
-    /*
-     * Consumer page (0x0C) remote keys.  The stock btkeyboard HID report
-     * descriptor already declares report ID 3 as a Consumer Control
-     * collection with two 16-bit usages, so these need no re-pairing.
-     * 0x223/0x224 are the usages the Chromecast with Google TV remote sends;
-     * the rest are standard HID usages (see docs/API.md for the host map).
-     */
-    if (strcmp(key, "achome") == 0) return 0x223;      /* AC Home */
-    if (strcmp(key, "acback") == 0) return 0x224;      /* AC Back */
-    if (strcmp(key, "acmenu") == 0) return 0x040;      /* Menu */
-    if (strcmp(key, "acsearch") == 0) return 0x221;    /* AC Search */
-    if (strcmp(key, "acguide") == 0) return 0x08d;     /* Media Select Program Guide */
-    if (strcmp(key, "acinfo") == 0) return 0x1bd;      /* AL OEM Features/Tips/Tutorial Browser */
-    if (strcmp(key, "acsettings") == 0) return 0x096;  /* Media Select Tape (Google TV SETTINGS) */
-    if (strcmp(key, "acexit") == 0) return 0x204;      /* AC Exit */
-    if (strcmp(key, "acvoice") == 0) return 0x0cf;     /* Voice Command */
-    if (strcmp(key, "acpanel") == 0) return 0x2a2;     /* AC Desktop Show All Applications */
+    return -1;
+}
+
+/* Consumer page (0x0C) keys. The stock btkeyboard HID report descriptor
+   declares report ID 3 as a Consumer Control collection with two 16-bit
+   usages, 0x001-0x2FF, so these need no re-pairing. Every name here goes out
+   in report 3, whatever its usage number; the keyboard-page names in
+   bt_key_usage() (home, menu, escape, ...) keep their keyboard reports.
+   achome/acback are what the Chromecast with Google TV remote sends; the
+   rest are standard usages that Android's Generic.kl maps, so a host
+   without its own key layout (the hub's keyboard is vendor 0xFFFF) still
+   gets Home, Back, OK and the media keys. The tv* names are the ones the
+   hub's Bluetooth Harmony devices send (see BT_HARMONY_COMMANDS). "consumer"
+   plus a hex usage sends any other one. */
+static int bt_consumer_usage(const char *key) {
+    static const struct { const char *name; int usage; } keys[] = {
+        {"achome", 0x223},      /* AC Home */
+        {"tvhome", 0x223}, {"homepage", 0x223},
+        {"acback", 0x224},      /* AC Back */
+        {"tvback", 0x224},
+        {"acmenu", 0x040},      /* Menu */
+        {"tvmenu", 0x040},
+        {"acsearch", 0x221},    /* AC Search */
+        {"acguide", 0x08d},     /* Media Select Program Guide */
+        {"acinfo", 0x1bd},      /* AL OEM Features/Tips/Tutorial Browser */
+        {"acsettings", 0x096},  /* Media Select Tape (Google TV SETTINGS) */
+        {"acexit", 0x204},      /* AC Exit */
+        {"acvoice", 0x0cf},     /* Voice Command */
+        {"acpanel", 0x2a2},     /* AC Desktop Show All Applications */
+        {"select", 0x041}, {"ok", 0x041},   /* Menu Pick: DPAD_CENTER */
+        {"playpause", 0x0cd},
+        {"stop", 0x0b7}, {"mediastop", 0x0b7},
+        {"nexttrack", 0x0b5}, {"next", 0x0b5},
+        {"previoustrack", 0x0b6}, {"previous", 0x0b6},
+        {"fastforward", 0x0b3},
+        {"rewind", 0x0b4},
+        {"channelup", 0x09c},
+        {"channeldown", 0x09d},
+        {"mute", 0x0e2},
+        {"volumeup", 0x0e9},
+        {"volumedown", 0x0ea},
+    };
+    size_t i;
+    if (!key || !key[0]) return -1;
+    for (i = 0; i < sizeof(keys) / sizeof(keys[0]); i++) {
+        if (strcmp(key, keys[i].name) == 0) return keys[i].usage;
+    }
+    if (strncmp(key, "consumer", 8) == 0) {
+        const char *hex = key + 8;
+        char *end = NULL;
+        long usage;
+        if (hex[0] == '0' && hex[1] == 'x') hex += 2;
+        if (!hex[0] || strlen(hex) > 3) return -1;
+        usage = strtol(hex, &end, 16);
+        if (end && !*end && usage >= 0x001 && usage <= 0x2ff) return (int)usage;
+    }
     return -1;
 }
 
@@ -10028,26 +10112,33 @@ static int bt_keyboard_report_hex(const char *input, char *press, size_t pressle
             break;
         }
     }
+    usage = bt_consumer_usage(key);
+    if (usage > 0) {
+        if (mod) {
+            snprintf(err, errlen, "TV and media keys take no modifiers: %s", input);
+            return -1;
+        }
+        /*
+         * Consumer Control report ID 3: A1 (HID DATA input) + 03 + two
+         * 16-bit usages = 6 bytes.  The descriptor's second usage field is
+         * zero (one key at a time).  Do not add padding: the report is
+         * exactly 4 payload bytes after the report ID.  The usage decides
+         * nothing here: Menu (0x040) is a Consumer key as much as Home
+         * (0x223) is.
+         */
+        snprintf(press, presslen, "A103%02X%02X0000",
+            usage & 0xff, (usage >> 8) & 0xff);
+        snprintf(release, releaselen, "A10300000000");
+        return 0;
+    }
     usage = bt_key_usage(key);
     if (usage < 0) {
         snprintf(err, errlen, "unsupported Bluetooth keyboard command: %s", input);
         return -1;
     }
-    if (usage >= 0x200) {
-        /*
-         * Consumer Control report ID 3: A1 (HID DATA input) + 03 + two
-         * 16-bit usages = 6 bytes.  The descriptor's second usage field is
-         * zero (one key at a time).  Do not add padding: the report is
-         * exactly 4 payload bytes after the report ID.
-         */
-        snprintf(press, presslen, "A103%02X%02X0000",
-            usage & 0xff, (usage >> 8) & 0xff);
-        snprintf(release, releaselen, "A10300000000");
-    } else {
-        /* Keyboard report ID 1: A1 + 01 + modifier + reserved + 6 keys. */
-        snprintf(press, presslen, "A101%02X00%02X0000000000", mod & 0xff, usage & 0xff);
-        snprintf(release, releaselen, "A1010000000000000000");
-    }
+    /* Keyboard report ID 1: A1 + 01 + modifier + reserved + 6 keys. */
+    snprintf(press, presslen, "A101%02X00%02X0000000000", mod & 0xff, usage & 0xff);
+    snprintf(release, releaselen, "A1010000000000000000");
     return 0;
 }
 
@@ -11290,6 +11381,266 @@ static void send_payload_too_large(int fd, const struct request *req) {
     send_text(fd, "413 Payload Too Large", "request body is too large for this hub\n");
 }
 
+/* The saved Bluetooth devices marked "harmony" become Harmony devices: IP
+   devices whose protocol posts to /api/bt-webhook on this hub, so a
+   Harmony remote, the Touch and activities can use them like any other
+   device. codexactivity (CommitBtDevices) owns them, separately from the
+   Home Assistant devices. Each gets this fixed Android TV command set; the
+   value is the key name bt_keyboard_report_hex() understands. Play and
+   Pause both send Play/Pause, as Logitech's own Android TV devices do. */
+static const struct {
+    const char *name;
+    const char *key;
+} BT_HARMONY_COMMANDS[] = {
+    {"DirectionUp", "directionup"}, {"DirectionDown", "directiondown"},
+    {"DirectionLeft", "directionleft"}, {"DirectionRight", "directionright"},
+    {"Select", "select"}, {"Back", "tvback"}, {"Home", "tvhome"}, {"Menu", "tvmenu"},
+    {"PlayPause", "playpause"}, {"Play", "playpause"}, {"Pause", "playpause"},
+    {"Stop", "stop"}, {"NextTrack", "nexttrack"}, {"PreviousTrack", "previoustrack"},
+    {"FastForward", "fastforward"}, {"Rewind", "rewind"},
+    {"ChannelUp", "channelup"}, {"ChannelDown", "channeldown"},
+    {"Mute", "mute"}, {"VolumeUp", "volumeup"}, {"VolumeDown", "volumedown"},
+    {"0", "number0"}, {"1", "number1"}, {"2", "number2"}, {"3", "number3"},
+    {"4", "number4"}, {"5", "number5"}, {"6", "number6"}, {"7", "number7"},
+    {"8", "number8"}, {"9", "number9"},
+};
+#define BT_HARMONY_MODEL "Android TV keyboard"
+
+/* {"devices":[...]} for every saved btkeyboard device marked harmony. */
+static char *bt_harmony_set_json(const struct bt_inventory *inv) {
+    char *out;
+    size_t cap = 512, used = 0;
+    int i, first = 1;
+    size_t j;
+    for (i = 0; i < inv->device_count; i++) {
+        /* escaped id and name (<= 6 bytes per char) plus the commands */
+        cap += 2048 + sizeof(BT_HARMONY_COMMANDS) / sizeof(BT_HARMONY_COMMANDS[0]) * 64;
+    }
+    out = (char *)malloc(cap);
+    if (!out) return NULL;
+    used += (size_t)snprintf(out + used, cap - used, "{\"devices\":[");
+    for (i = 0; i < inv->device_count; i++) {
+        const struct bt_saved_device *dev = &inv->devices[i];
+        char *name, *id;
+        if (!dev->harmony || strcmp(dev->type, "btkeyboard") != 0) continue;
+        name = json_escape_alloc(dev->name);
+        id = json_escape_alloc(dev->id);
+        if (!name || !id) {
+            free(name);
+            free(id);
+            free(out);
+            return NULL;
+        }
+        used += (size_t)snprintf(out + used, cap - used,
+            "%s{\"entity\":%s,\"name\":%s,\"model\":\"" BT_HARMONY_MODEL "\",\"commands\":[",
+            first ? "" : ",", id, name);
+        free(name);
+        free(id);
+        for (j = 0; j < sizeof(BT_HARMONY_COMMANDS) / sizeof(BT_HARMONY_COMMANDS[0]); j++) {
+            used += (size_t)snprintf(out + used, cap - used,
+                "%s{\"name\":\"%s\",\"value\":\"%s\"}", j ? "," : "",
+                BT_HARMONY_COMMANDS[j].name, BT_HARMONY_COMMANDS[j].key);
+        }
+        used += (size_t)snprintf(out + used, cap - used, "]}");
+        first = 0;
+    }
+    snprintf(out + used, cap - used, "]}");
+    return out;
+}
+
+/* Ask codexactivity to make the Bluetooth Harmony devices match inv.
+   0 = the writer answered ok; reply holds its JSON answer either way. */
+static int bt_harmony_commit(const struct bt_inventory *inv, int dry_run, char *reply, size_t reply_len, char *msg, size_t msg_len) {
+    char request_id[96];
+    char *set, *request;
+    size_t request_len;
+    int written, rc;
+    reply[0] = 0;
+    msg[0] = 0;
+    set = bt_harmony_set_json(inv);
+    if (!set) {
+        snprintf(msg, msg_len, "not enough memory for the Bluetooth Harmony devices");
+        return -1;
+    }
+    snprintf(request_id, sizeof(request_id), "%ld-%ld-%08x",
+        (long)getpid(), (long)time(NULL), resource_hash(set, strlen(set)));
+    request_len = strlen(set) + strlen(request_id) + 128;
+    request = (char *)malloc(request_len);
+    if (!request) {
+        free(set);
+        snprintf(msg, msg_len, "not enough memory for the Bluetooth Harmony devices");
+        return -1;
+    }
+    written = snprintf(request, request_len,
+        "{\"id\":\"%s\",\"op\":\"CommitBtDevices\",\"dryRun\":%s,\"set\":%s}",
+        request_id, dry_run ? "true" : "false", set);
+    if (!dry_run) backup_resources();
+    rc = offline_writer_request(request, (size_t)written, request_id,
+        reply, reply_len, msg, msg_len);
+    free(request);
+    free(set);
+    return rc;
+}
+
+/* POST /api/bt-harmony-device  deviceId, publish=1|0, dryRun=1|0
+   Shows a saved Bluetooth device on the Harmony side (or removes it). */
+static void render_bt_harmony_device_json(int fd, const struct request *req) {
+    char device_id[48], publish_text[8], dry_text[8], msg[768];
+    char *reply = NULL;
+    struct bt_inventory *inv = NULL;
+    struct bt_saved_device *dev;
+    int idx, publish, dry_run, previous, rc;
+    FILE *f;
+    const char *status = "200 OK";
+    form_value(req->body, "deviceId", device_id, sizeof(device_id));
+    form_value(req->body, "publish", publish_text, sizeof(publish_text));
+    form_value(req->body, "dryRun", dry_text, sizeof(dry_text));
+    publish = strcmp(publish_text, "1") == 0 || strcmp(publish_text, "true") == 0;
+    dry_run = strcmp(dry_text, "1") == 0 || strcmp(dry_text, "true") == 0;
+    msg[0] = 0;
+    inv = (struct bt_inventory *)malloc(sizeof(*inv));
+    reply = (char *)malloc(BT_HARMONY_REPLY);
+    if (!inv || !reply) {
+        status = "503 Service Unavailable";
+        snprintf(msg, sizeof(msg), "not enough memory");
+        goto fail;
+    }
+    if (!safe_bt_store_id(device_id)) {
+        status = "400 Bad Request";
+        snprintf(msg, sizeof(msg), "Invalid Bluetooth device id.");
+        goto fail;
+    }
+    load_bt_inventory(inv);
+    idx = find_bt_device_index(inv, device_id);
+    if (idx < 0) {
+        status = "404 Not Found";
+        snprintf(msg, sizeof(msg), "Bluetooth device %s was not found.", device_id);
+        goto fail;
+    }
+    dev = &inv->devices[idx];
+    if (publish && strcmp(dev->type, "btkeyboard") != 0) {
+        status = "400 Bad Request";
+        snprintf(msg, sizeof(msg),
+            "Only the Standard keyboard (Android TV / SHIELD) profile can be a Harmony device.");
+        goto fail;
+    }
+    previous = dev->harmony;
+    dev->harmony = publish;
+    rc = bt_harmony_commit(inv, dry_run, reply, BT_HARMONY_REPLY, msg, sizeof(msg));
+    if (reply[0] != '{') {
+        status = "503 Service Unavailable";
+        if (!msg[0]) snprintf(msg, sizeof(msg), "The Harmony device was not saved.");
+        goto fail;
+    }
+    if (rc == 0 && !dry_run && previous != publish) {
+        backup_settings();
+        if (save_bt_inventory(inv) != 0) {
+            status = "500 Internal Server Error";
+            snprintf(msg, sizeof(msg),
+                "The Harmony device changed, but the saved Bluetooth device could not be updated.");
+            goto fail;
+        }
+    }
+    f = send_json_start(fd, rc == 0 ? "200 OK" : "422 Unprocessable Entity");
+    if (f) {
+        fputs(reply, f);
+        fputc('\n', f);
+        fclose(f);
+    }
+    free(inv);
+    free(reply);
+    return;
+fail:
+    f = send_json_start(fd, status);
+    if (f) {
+        fputs("{\"ok\":false,\"error\":", f);
+        json_write_string(f, msg);
+        fputs("}\n", f);
+        fclose(f);
+    }
+    free(inv);
+    free(reply);
+}
+
+/* POST /api/bt-webhook  {"device":"bt_...","command":"tvhome"}
+   Called by the Harmony engine for the Bluetooth Harmony devices (their
+   protocol, see codexactivity). It answers at once, so the engine's 2 s
+   timeout never fires, then connects if needed and sends the key. Calls
+   are serialized so quick presses keep their order. */
+static void render_bt_webhook_json(int fd, const struct request *req) {
+    char device_id[48], key[48], press[96], release[32], err[256], detail[512], reply[4096];
+    struct bt_inventory *inv = NULL;
+    const struct bt_saved_device *dev = NULL;
+    const char *problem = NULL;
+    const char *status = "200 OK";
+    int idx, lock_fd, rc;
+    size_t i;
+    FILE *f;
+    device_id[0] = 0;
+    key[0] = 0;
+    if (req->body) {
+        json_string(req->body, "device", device_id, sizeof(device_id));
+        json_string(req->body, "command", key, sizeof(key));
+    }
+    inv = (struct bt_inventory *)malloc(sizeof(*inv));
+    /* Key names only: letters and digits (bt_keyboard_report_hex). */
+    for (i = 0; key[i]; i++) {
+        if (!isalnum((unsigned char)key[i])) {
+            key[0] = 0;
+            break;
+        }
+    }
+    if (!inv) {
+        status = "503 Service Unavailable";
+        problem = "not enough memory";
+    } else if (!safe_bt_store_id(device_id) || !key[0]) {
+        status = "400 Bad Request";
+        problem = "body must name a saved Bluetooth device and a key";
+    } else {
+        load_bt_inventory(inv);
+        idx = find_bt_device_index(inv, device_id);
+        if (idx < 0 || !inv->devices[idx].harmony) {
+            status = "404 Not Found";
+            problem = "no Harmony device for this saved Bluetooth device";
+        } else if (bt_keyboard_report_hex(key, press, sizeof(press), release,
+                       sizeof(release), err, sizeof(err)) != 0) {
+            status = "400 Bad Request";
+            problem = err;
+        } else {
+            dev = &inv->devices[idx];
+        }
+    }
+    f = send_json_start(fd, status);
+    if (f) {
+        if (problem) {
+            fputs("{\"ok\":false,\"error\":", f);
+            json_write_string(f, problem);
+            fputs("}\n", f);
+        } else {
+            fputs("{\"ok\":true,\"queued\":true}\n", f);
+        }
+        fclose(f);
+    }
+    if (!dev) {
+        free(inv);
+        return;
+    }
+    shutdown(fd, SHUT_RDWR);
+    lock_fd = open("/var/run/codex-bt-webhook.lock", O_RDWR | O_CREAT, 0600);
+    if (lock_fd >= 0) flock(lock_fd, LOCK_EX);
+    detail[0] = 0;
+    reply[0] = 0;
+    rc = ensure_bt_address_connection(dev->name, dev->bdaddr, dev->type, detail, sizeof(detail));
+    if (rc >= 0) {
+        rc = run_bt_saved_script(dev->type, dev->bdaddr, key, 35, reply, sizeof(reply));
+    }
+    fprintf(stderr, "bt-webhook device=%s command=%s result=%s %s%s\n",
+        dev->id, key, rc >= 0 ? "sent" : "failed", detail,
+        rc < 0 && reply[0] ? reply : "");
+    if (lock_fd >= 0) close(lock_fd);
+    free(inv);
+}
+
 static void handle_client(int client) {
     struct request req;
     if (read_request(client, &req) != 0) {
@@ -11326,6 +11677,10 @@ static void handle_client(int client) {
         render_activity_save_json(client, &req);
     } else if (strcmp(req.method, "POST") == 0 && strcmp(req.path, "/api/device-settings") == 0) {
         render_device_settings_json(client, &req);
+    } else if (strcmp(req.method, "POST") == 0 && strcmp(req.path, "/api/bt-webhook") == 0) {
+        render_bt_webhook_json(client, &req);
+    } else if (strcmp(req.method, "POST") == 0 && strcmp(req.path, "/api/bt-harmony-device") == 0) {
+        render_bt_harmony_device_json(client, &req);
     } else if (strcmp(req.method, "POST") == 0 && strcmp(req.path, "/api/ha-devices") == 0) {
         render_ha_devices_json(client, &req);
     } else if (strcmp(req.method, "POST") == 0 && strcmp(req.path, "/api/ha-state") == 0) {

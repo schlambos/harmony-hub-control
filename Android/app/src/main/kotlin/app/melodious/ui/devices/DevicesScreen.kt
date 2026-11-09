@@ -156,7 +156,7 @@ private fun DeviceRow(device: HubDevice, subtitle: String, onClick: () -> Unit) 
 
 @Composable
 private fun TransportBadge(device: HubDevice) {
-    val bt = device.isBluetoothHid
+    val bt = device.isBluetoothHid || device.isHubBluetooth
     Text(
         when {
             bt -> "Bluetooth"
