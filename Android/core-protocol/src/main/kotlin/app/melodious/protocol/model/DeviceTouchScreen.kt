@@ -40,10 +40,13 @@ object DeviceTouchScreens {
         }
         val device = DeviceSettingsModel.deviceEntry(snapshot, deviceId)?.get("Device") as? JsonObject
         val detected = (device?.get("AutoDetectedDevice") as? JsonObject)?.text("Id")
+        // The hub's IP devices (Home Assistant, network TVs, Switch 2 wake and
+        // Bluetooth keyboard targets): their writer builds the screen with the device.
         if (detected?.startsWith("melodious-ha-") == true ||
             detected?.startsWith("melodious-androidtv-") == true ||
             detected?.startsWith("melodious-webos-") == true ||
-            detected?.startsWith("melodious-switch2-") == true) return DeviceTouchScreen.MANAGED
+            detected?.startsWith("melodious-switch2-") == true ||
+            detected?.startsWith("melodious-bt-") == true) return DeviceTouchScreen.MANAGED
         if (screen != null) return DeviceTouchScreen.MADE
         val hasTouch = maps.any {
             it.text("ButtonMapIdentifier")?.startsWith("16417") == true && it.present("SurfaceId-") && it.present("RemoteId-")

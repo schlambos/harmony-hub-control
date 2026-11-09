@@ -9,7 +9,7 @@
    command's ⋮ edits or deletes it. The remote sends straight to the device,
    outside any activity. */
 
-import { forgetTv, forgetWebOsTv, getAndroidTvStatus, getConfig, getWebOsStatus, postHubForm, refreshWebOsTv, saveActivity, saveAndroidTvDevices, saveDeviceScreen, saveSwitch2Devices, saveWebOsDevices } from "../api.js";
+import { forgetTv, forgetWebOsTv, getAndroidTvStatus, getConfig, getWebOsStatus, postApiForm, postHubForm, refreshWebOsTv, saveActivity, saveAndroidTvDevices, saveDeviceScreen, saveSwitch2Devices, saveWebOsDevices } from "../api.js";
 import * as hub from "../state.js";
 import {
   confirmDialog,
@@ -37,6 +37,7 @@ import { openSwitch2Sheet } from "./switch2-sheet.js";
 import { isWebOsDevice, webOsAppsFromTv, webOsConfigOf, webOsDeviceSet, webOsIdOf, webOsInputsFromTv, webOsStatusText } from "./webos-model.js";
 import { openWebOsSheet } from "./webos-sheet.js";
 import { tvInputsHint } from "./androidtv-inputs-model.js";
+import { hubBtIdOf, isHubBtEntry } from "./bluetooth-model.js";
 import { LIMITS, deviceUsage, touchScreenState, withoutDeviceMaps } from "./ir-model.js";
 import { describeHaDeviceState, describeTheaterLink, deviceIconName, deviceKeys, isHaCommandRedundant } from "./remote-model.js";
 import {
@@ -245,9 +246,11 @@ export function createDevicesView(section) {
   function commandRows() {
     const q = commandQuery.trim().toLowerCase();
     const haInfo = describeHaDeviceState(device, hub.state.haState) ?? describeTheaterLink(device, hub.state.haState);
-    // Network TV and Switch 2 wake commands are owned by their writers: no
-    // per-command Edit or Delete (those go through the IR endpoints).
-    const editable = !isAndroidTvDevice(device) && !isSwitch2Device(device) && !isWebOsDevice(device);
+    // Network TV, Switch 2 wake and hub Bluetooth keyboard commands are owned
+    // by their writers: no per-command Edit or Delete (those go through the IR
+    // endpoints).
+    const editable = !isAndroidTvDevice(device) && !isSwitch2Device(device) && !isWebOsDevice(device) &&
+      !isHubBtEntry(device.entry);
     const list = device.commands
       .map((c, i) => ({ c, i }))
       .filter(({ c }) => !q || c.name.toLowerCase().includes(q));
@@ -318,6 +321,8 @@ export function createDevicesView(section) {
           : "";
     const cmdTools = androidtv
       ? `<p class="list-note">A network TV's commands come with it; the hub sends them over the network.</p>`
+      : isHubBtEntry(device.entry)
+        ? `<p class="list-note">These commands come with the Bluetooth keyboard target; the hub sends them as Bluetooth keys. Manage it on the Bluetooth page.</p>`
       : webos
         ? `<p class="list-note">Commands are sent directly to your LG webOS TV over the LAN (Power On uses Wake-on-LAN when a MAC is configured).</p>`
         : switch2
@@ -601,6 +606,9 @@ export function createDevicesView(section) {
           await saveWebOsDevices(webOsDeviceSet(config, { remove: webOsIdOf(d) }));
         } else if (isSwitch2Device(d)) {
           await saveSwitch2Devices(switch2DeviceSet(config, { remove: switch2IdOf(d) }));
+        } else if (isHubBtEntry(d.entry)) {
+          // The writer owns it too; the saved Bluetooth target stays.
+          await postApiForm("/api/bt-harmony-device", { deviceId: hubBtIdOf(d), publish: "0" });
         } else {
           await postHubForm("/ir/delete-device", { deviceId: d.id });
         }
@@ -780,7 +788,7 @@ export function createDevicesView(section) {
     }
     const menuBtn = event.target.closest("[data-cmd-menu]");
     if (menuBtn) {
-      if (isAndroidTvDevice(device) || isSwitch2Device(device) || isWebOsDevice(device)) return;
+      if (isAndroidTvDevice(device) || isSwitch2Device(device) || isWebOsDevice(device) || isHubBtEntry(device.entry)) return;
       const c = device.commands[Number(menuBtn.dataset.cmdMenu)];
       if (c) openCommandMenu(menuBtn, c);
       return;

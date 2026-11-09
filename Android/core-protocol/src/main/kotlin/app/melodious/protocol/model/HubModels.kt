@@ -80,7 +80,7 @@ data class HubDevice(
     val inputCommands: Map<String, String> = emptyMap(),
     /** The Home Assistant device key (the `{d}` token), or null for other devices. */
     val haKey: String? = null,
-    /** `AutoDetectedDevice.Id`: `melodious-ha-…`, `melodious-androidtv-…`, `melodious-webos-…`, or `melodious-switch2-…` for the hub's IP devices. */
+    /** `AutoDetectedDevice.Id`: `melodious-ha-…`, `melodious-androidtv-…`, `melodious-webos-…`, `melodious-switch2-…` or `melodious-bt-…` for the hub's IP devices. */
     val autoDetectedId: String = "",
 ) {
     val isBluetoothHid: Boolean get() = transport == 32
@@ -94,9 +94,13 @@ data class HubDevice(
     /** A Nintendo Switch 2 BLE wake device (Option C; Power Off is a documented no-op). */
     val isSwitch2Wake: Boolean get() = autoDetectedId.startsWith("melodious-switch2-")
 
+    /** A saved Bluetooth keyboard target the hub publishes as an IP device (its keys go out over Bluetooth). */
+    val isHubBluetooth: Boolean get() = autoDetectedId.startsWith("melodious-bt-")
+
     /** Transport 64 or a Home Assistant manufacturer, as the web app decides it. */
     val isHomeAssistant: Boolean
-        get() = !isNetworkTv && !isWebOsTv && !isSwitch2Wake && (transport == 64 || manufacturer.contains("home assistant", ignoreCase = true))
+        get() = !isNetworkTv && !isWebOsTv && !isSwitch2Wake && !isHubBluetooth &&
+            (transport == 64 || manufacturer.contains("home assistant", ignoreCase = true))
 }
 
 @Serializable

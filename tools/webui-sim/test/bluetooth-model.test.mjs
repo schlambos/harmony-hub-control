@@ -1,8 +1,11 @@
 import { describe, it } from "node:test";
 import assert from "node:assert/strict";
+import { readFileSync } from "node:fs";
 import {
   BT_TYPES,
   QUICK_KEYS,
+  TV_KEYS,
+  canBeHarmonyDevice,
   btTypeLabel,
   isAllowedBtType,
   isValidBtAddr,
@@ -170,6 +173,15 @@ describe("parseBtInventory", () => {
     assert.equal(inv[0].commands[0].delayMs, 40);
   });
 
+  it("reads the Harmony device flag strictly", () => {
+    const inv = parseBtInventory(JSON.stringify({ devices: [
+      { id: "bt_1_2", name: "Box", type: "btkeyboard", harmony: true },
+      { id: "bt_1_3", name: "Other", type: "btkeyboard", harmony: "yes" },
+      { id: "bt_1_4", name: "Old" },
+    ] }));
+    assert.deepEqual(inv.map((d) => d.harmony), [true, false, false]);
+  });
+
   it("returns [] for the seeded-empty store and for garbage", () => {
     assert.deepEqual(parseBtInventory('{"version":1,"devices":[]}'), []);
     assert.deepEqual(parseBtInventory("not json"), []);
@@ -251,6 +263,40 @@ describe("QUICK_KEYS", () => {
     for (const k of QUICK_KEYS) {
       assert.ok(known.has(k.code), `unexpected key code: ${k.code}`);
       assert.ok(k.label.length > 0);
+    }
+  });
+});
+
+describe("TV_KEYS", () => {
+  it("uses exactly the consumer key names the hub knows", () => {
+    // bt_consumer_usage() in codex_webui.c is the source of truth.
+    const source = readFileSync(new URL("../../../payload/source/codex_webui.c", import.meta.url), "utf8");
+    const body = source.slice(source.indexOf("static int bt_consumer_usage("));
+    const table = body.slice(0, body.indexOf("};"));
+    const hubNames = new Set([...table.matchAll(/\{"([a-z]+)", 0x[0-9a-f]+\}/g)].map((m) => m[1]));
+    assert.ok(hubNames.size >= 15, "parsed the hub's consumer key table");
+    const codes = TV_KEYS.map((k) => k.code);
+    assert.equal(new Set(codes).size, codes.length, "no duplicate keys");
+    for (const k of TV_KEYS) {
+      assert.ok(hubNames.has(k.code), `hub does not know ${k.code}`);
+      assert.ok(k.label.length > 0);
+    }
+    for (const required of ["select", "playpause", "volumeup", "volumedown", "mute", "channelup"]) {
+      assert.ok(codes.includes(required), `missing ${required}`);
+    }
+  });
+
+  it("does not shadow a keyboard key code", () => {
+    const quick = new Set(QUICK_KEYS.map((k) => k.code));
+    for (const k of TV_KEYS) assert.ok(!quick.has(k.code), `${k.code} is also a keyboard key`);
+  });
+});
+
+describe("canBeHarmonyDevice", () => {
+  it("allows only the Standard keyboard profile", () => {
+    assert.equal(canBeHarmonyDevice({ type: "btkeyboard" }), true);
+    for (const type of ["btkeyboard-nexus", "fire", "ps3", "wii", "", undefined]) {
+      assert.equal(canBeHarmonyDevice({ type }), false, String(type));
     }
   });
 });
