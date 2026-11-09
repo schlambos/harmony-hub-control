@@ -324,10 +324,15 @@ Devices, Settings (bottom bar on phones, rail ≥840 px, bookmarkable `#…` add
 
 <table>
 <tr><td align="center"><img src="docs/screenshots/web/devices.png" alt="The Devices tab" width="200"><br><sub>Devices</sub></td><td align="center"><img src="docs/screenshots/web/device-commands.png" alt="A device's Commands tab" width="200"><br><sub>Commands</sub></td><td align="center"><img src="docs/screenshots/web/import-find.png" alt="The Import codes sheet" width="200"><br><sub>Import codes</sub></td><td align="center"><img src="docs/screenshots/web/device-settings.png" alt="A device's settings" width="200"><br><sub>Device settings</sub></td></tr>
+<tr><td align="center"><img src="docs/screenshots/web/devices-ha.png" alt="Devices with Home Assistant, Network, Bluetooth and IR badges" width="200"><br><sub>Devices (HA)</sub></td><td align="center"><img src="docs/screenshots/web/add-device-androidtv.png" alt="Add a device: Android TV network pairing" width="200"><br><sub>Add: Android TV</sub></td><td align="center"><img src="docs/screenshots/web/device-live-state.png" alt="A device with live power, input, and volume state from Home Assistant" width="200"><br><sub>Live state</sub></td><td align="center"><img src="docs/screenshots/web/remote-fix-it-state.png" alt="Fix it sheet showing live device state" width="200"><br><sub>Fix it (live)</sub></td></tr>
 </table>
 
 - **Settings:** hub status, **Remotes** (cloud-free pairing, one of each kind, shared button
   editing), Bluetooth, MQTT, Wi-Fi, Backup, System.
+
+<table>
+<tr><td align="center"><img src="docs/screenshots/web/remotes-pairing.png" alt="Remotes page with paired Smart Control and Touch, showing the pairing UI" width="200"><br><sub>Remotes</sub></td><td align="center"><img src="docs/screenshots/web/onscreen-buttons.png" alt="The on-screen buttons editor for Touch" width="200"><br><sub>On-screen buttons</sub></td><td align="center"><img src="docs/screenshots/web/hold-command-picker.png" alt="The hold-command picker with device chips and command search" width="200"><br><sub>Hold command</sub></td><td></td></tr>
+</table>
 
 Tab-by-tab detail: **[docs/MELODIOUS_WEB_UI.md](docs/MELODIOUS_WEB_UI.md)**.
 
