@@ -27,6 +27,7 @@
 #include <arpa/inet.h>
 #include <errno.h>
 #include <fcntl.h>
+#include <ifaddrs.h>
 #include <net/if.h>
 #include <netinet/in.h>
 #include <netinet/tcp.h>
@@ -848,6 +849,24 @@ static void arp_lookup(const char *host, char *mac, size_t cap) {
 	fclose(f);
 }
 
+/* Wake-on-LAN goes to each interface's own broadcast address (e.g. 192.168.1.255) as well
+ * as 255.255.255.255. The limited broadcast needs a route: with the cloud blocker on, the
+ * egress guard deletes the default route, and sending to 255.255.255.255 then fails with
+ * ENETUNREACH. The subnet's broadcast address always has its connected route. */
+static int wol_sendto(int fd, const unsigned char *pkt, size_t len, struct in_addr dst) {
+	struct sockaddr_in sa;
+	memset(&sa, 0, sizeof sa);
+	sa.sin_family = AF_INET;
+	sa.sin_addr = dst;
+	int sent = 0;
+	for (int port = 7; port <= 9; port += 2) {
+		sa.sin_port = htons((uint16_t)port);
+		for (int k = 0; k < 2; k++)
+			if (sendto(fd, pkt, len, 0, (struct sockaddr *)&sa, sizeof sa) == (ssize_t)len) sent = 1;
+	}
+	return sent;
+}
+
 static void send_wol(const char *mac) {
 	unsigned m[6];
 	if (sscanf(mac, "%x:%x:%x:%x:%x:%x", &m[0], &m[1], &m[2], &m[3], &m[4], &m[5]) != 6) return;
@@ -858,16 +877,28 @@ static void send_wol(const char *mac) {
 	if (fd < 0) return;
 	int one = 1;
 	setsockopt(fd, SOL_SOCKET, SO_BROADCAST, &one, sizeof one);
-	struct sockaddr_in sa;
-	memset(&sa, 0, sizeof sa);
-	sa.sin_family = AF_INET;
-	sa.sin_addr.s_addr = htonl(INADDR_BROADCAST);
-	for (int port = 7; port <= 9; port += 2) {
-		sa.sin_port = htons((uint16_t)port);
-		for (int k = 0; k < 2; k++) sendto(fd, pkt, sizeof pkt, 0, (struct sockaddr *)&sa, sizeof sa);
+	char via[160] = "";
+	size_t used = 0;
+	struct ifaddrs *ifs = NULL;
+	if (getifaddrs(&ifs) == 0) {
+		for (struct ifaddrs *a = ifs; a; a = a->ifa_next) {
+			if (!a->ifa_addr || a->ifa_addr->sa_family != AF_INET || !a->ifa_broadaddr) continue;
+			if (!(a->ifa_flags & IFF_UP) || !(a->ifa_flags & IFF_BROADCAST) || (a->ifa_flags & IFF_LOOPBACK)) continue;
+			struct in_addr b = ((struct sockaddr_in *)a->ifa_broadaddr)->sin_addr;
+			if (b.s_addr == htonl(INADDR_BROADCAST) || b.s_addr == 0) continue;
+			if (wol_sendto(fd, pkt, sizeof pkt, b) && used + 20 < sizeof via)
+				used += (size_t)snprintf(via + used, sizeof via - used, "%s%s", used ? ", " : "", inet_ntoa(b));
+		}
+		freeifaddrs(ifs);
 	}
+	struct in_addr all = { htonl(INADDR_BROADCAST) };
+	int global = wol_sendto(fd, pkt, sizeof pkt, all);
+	int err = errno;
 	close(fd);
-	logmsg("sent Wake-on-LAN to %s", mac);
+	if (used || global)
+		logmsg("sent Wake-on-LAN to %s via %s%s%s", mac, via, used && global ? ", " : "", global ? "255.255.255.255" : "");
+	else
+		logmsg("Wake-on-LAN to %s failed: %s", mac, strerror(err));
 }
 
 static void tv_lost(struct tv *t, const char *why) {

@@ -25,7 +25,7 @@ exact SHA-256 digests and sizes are:
 | `codex_portal` | 76724 | `1596f6cac03dad4ce0254ac118de5527c41789f10c7bc95357860d0d96c61b5f` |
 | `dropbearmulti` | 577296 | `e2ea632aed8b31dc5ea56b9673cbd983ec83260a97d33f891a0cebf51d5c6c8d` |
 | `codex_hbus` | 74660 | `4be9e6ac2e09e7eb052f9c47e81480d1e32aee7190bedb6ef7f932cf07aab8f9` |
-| `codex_androidtv` | 266916 | `fbf0e953b47b10f29fb30a41a4d339f5a034e1cc7a26c12d79f4d3711161bba2` |
+| `codex_androidtv` | 270324 | `581aac3133080aa6a57f76ad5f6cb23e52408a57313c5d75ce5853c06f06eb04` |
 
 The remaining binaries (`codex_bt_pair_agent`, `codex_bthid_keyboard`,
 `codex_hal_ltcp`) are pinned by their MD5 digests in
@@ -140,9 +140,9 @@ cd build/tmp
 ```
 
 Result must be `ELF 32-bit MSB executable, MIPS, MIPS32 rel2`, statically
-linked, stripped, size 266916, SHA-256
-`fbf0e953b47b10f29fb30a41a4d339f5a034e1cc7a26c12d79f4d3711161bba2`
-(`payload/source/codex_androidtv.c` blob `21bde5a7e0b4a75d1cd305dc5b59dad611876a34`).
+linked, stripped, size 270324, SHA-256
+`581aac3133080aa6a57f76ad5f6cb23e52408a57313c5d75ce5853c06f06eb04`
+(`payload/source/codex_androidtv.c` blob `cd3590bd93c4bd6fb13c7672b219ff5e273932f2`).
 The output doesn't depend on where the tree or BearSSL is unpacked. For the
 fake-TV smoke test, build the same way with `-target x86_64-linux-musl` (or
 your host) into `build/output/codex_androidtv-native`.
