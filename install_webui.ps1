@@ -67,7 +67,10 @@ param(
     # -RemoveRootToolLeftovers: delete harmony-hub-root's leftover staging folders (and its spare Dropbear once SSH runs ours) before installing
     [switch]$RemoveRootToolLeftovers,
     # -SkipFlashCheck: install even when the measured free flash looks too small; phase 1 still stops safely if flash fills up
-    [switch]$SkipFlashCheck
+    [switch]$SkipFlashCheck,
+    # -MultiRemote on|off|force-off: let the hub keep several remotes without a screen of the same model (they share one button setup); off restores the stock rule; force-off does that without asking the radio first (for a radio that stopped answering); omitted leaves it unchanged (docs/MULTI_REMOTE.md)
+    [ValidateSet("on", "off", "force-off")]
+    [string]$MultiRemote
 )
 
 $ErrorActionPreference = "Stop"
@@ -114,6 +117,33 @@ class CapacityAbort : System.Exception { CapacityAbort([string]$m) : base($m) {}
 # Failure after persistent changes began; requires rollback.
 class InstallFailure : System.Exception { InstallFailure([string]$m) : base($m) {} }
 
+# Multiple remotes of one model (docs/MULTI_REMOTE.md). Stock hal keeps one
+# remote per model: it unpairs an older one after every pair, and its key
+# threads keep per-model state, so two remotes of one model hang its radio
+# dispatcher. -MultiRemote on makes a copy of the hub's own /usr/bin/hal with
+# those made per slot and the same-model unpair kept only for remotes with a
+# screen and the keyboard; rcS.local bind-mounts it over /usr/bin/hal at boot. The copy is built
+# here from the hub's file with the edits in
+# payload/helpers/hal_multiremote_patch.json; hal itself is never shipped.
+$HalPath = "/usr/bin/hal"
+$HalMultiDest = "/data/codex/bin/hal_multiremote"
+$MultiRemoteConf = "/data/codex/multi_remote.conf"
+$HalPatchFile = "helpers/hal_multiremote_patch.json"
+# Turning it off reboots into the stock hal, which hangs its radio on two
+# remotes of one model. So -MultiRemote off first checks the slot table on the
+# hub, while the multi-remote hal runs: it writes the pending-restart guard
+# (codex_webui's /api/remote-pair refuses while it's there; it lives in RAM and
+# lapses after 10 minutes), refuses during an open pairing window, then reads
+# rf.info. The copy itself is left to rcS.local, which deletes it at the next
+# boot when the setting isn't 1.
+$MultiRemotePending = "/var/run/codex-multi-remote-pending"
+# force-off is off without the radio check (Test-MultiRemoteOff).
+$MultiRemoteForce = $MultiRemote -eq "force-off"
+if ($MultiRemoteForce) { $MultiRemote = "off" }
+# Whether the multi-remote hal runs now; $null until checked (-MultiRemote only).
+$script:HalBound = $null
+$NoScreenEquads = @("16414", "16422", "16423")
+
 $HandoffRequiredPaths = @(
     "/etc/init.d/rcS.local",
     "/opt/luaworks/tasks/connectserver/netservicestarter.lua",
@@ -131,6 +161,7 @@ $HandoffRequiredPaths = @(
 $UpgradeProtectedPaths = @(
     "/data/codex/hub_id",
     "/data/codex/cloud_blocker.conf",
+    "/data/codex/multi_remote.conf",
     "/data/codexmqtt/config.json",
     "/data/codex/resource-backups",
     "/data/codex-backups",
@@ -296,6 +327,67 @@ function Invoke-Remote([string]$Command, [byte[]]$InputBytes = $null, [int]$Time
     return $r.Out
 }
 
+# Like Invoke-RemoteRc, with stdout kept as bytes (for reading a binary).
+function Get-RemoteBytes([string]$Path, [int]$TimeoutMs = 120000) {
+    $psi = [System.Diagnostics.ProcessStartInfo]::new()
+    $psi.FileName = "ssh"
+    $allArgs = @((Get-SshArgs)) + @("cat $(Remote-Quote $Path)")
+    $psi.Arguments = (($allArgs | ForEach-Object { Quote-ProcessArg ([string]$_) }) -join " ")
+    $psi.RedirectStandardInput = $true
+    $psi.RedirectStandardOutput = $true
+    $psi.RedirectStandardError = $true
+    $psi.UseShellExecute = $false
+    $proc = [System.Diagnostics.Process]::new()
+    $proc.StartInfo = $psi
+    $proc.Start() | Out-Null
+    $proc.StandardInput.Close()
+    $buffer = [IO.MemoryStream]::new()
+    $copyTask = $proc.StandardOutput.BaseStream.CopyToAsync($buffer)
+    $stderrTask = $proc.StandardError.ReadToEndAsync()
+    if (-not $proc.WaitForExit($TimeoutMs)) {
+        try { $proc.Kill() } catch {}
+        throw "ssh timed out after $TimeoutMs ms reading $Path"
+    }
+    $copyTask.GetAwaiter().GetResult()
+    $stderr = $stderrTask.GetAwaiter().GetResult()
+    if ($proc.ExitCode -ne 0) { throw "could not read $Path from the hub (exit $($proc.ExitCode)): $($stderr.Trim())" }
+    return ,$buffer.ToArray()
+}
+
+function Get-BytesMd5([byte[]]$Data) {
+    $md5 = [Security.Cryptography.MD5]::Create()
+    return ([BitConverter]::ToString($md5.ComputeHash($Data)) -replace "-", "").ToLowerInvariant()
+}
+
+# Hex to bytes by hand: Windows PowerShell 5.1 (.NET Framework) has no built-in for it.
+function ConvertFrom-Hex([string]$Hex) {
+    $bytes = New-Object byte[] ($Hex.Length / 2)
+    for ($i = 0; $i -lt $bytes.Length; $i++) { $bytes[$i] = [Convert]::ToByte($Hex.Substring(2 * $i, 2), 16) }
+    return ,$bytes
+}
+
+# The multi-remote hal from the hub's own /usr/bin/hal; fails closed.
+function Get-PatchedHal([byte[]]$Data) {
+    $patch = Get-Content -Raw -Encoding UTF8 (Join-Path $Payload $HalPatchFile) | ConvertFrom-Json
+    $digest = Get-BytesMd5 $Data
+    if ($digest -eq $patch.patched_md5) { return ,$Data }  # already the patched build (read while bind-mounted)
+    if ($digest -ne $patch.stock_md5) {
+        throw "$HalPath on this hub is not the hal build multi-remote supports (md5 $digest, expected $($patch.stock_md5) from firmware 4.15.600)"
+    }
+    $out = [byte[]]$Data.Clone()
+    foreach ($edit in $patch.edits) {
+        $offset = [Convert]::ToInt32($edit.offset.Substring(2), 16)
+        $old = ConvertFrom-Hex $edit.stock
+        $new = ConvertFrom-Hex $edit.patched
+        for ($i = 0; $i -lt $old.Length; $i++) {
+            if ($out[$offset + $i] -ne $old[$i]) { throw ("{0}: unexpected bytes at 0x{1:x}" -f $HalPath, $offset) }
+        }
+        [Array]::Copy($new, 0, $out, $offset, $new.Length)
+    }
+    if ((Get-BytesMd5 $out) -ne $patch.patched_md5) { throw "the patched hal does not match its expected md5" }
+    return ,$out
+}
+
 function Test-TcpPort([string]$TargetHost, [int]$TargetPort, [int]$TimeoutMs = 1200) {
     $client = [System.Net.Sockets.TcpClient]::new()
     try {
@@ -408,13 +500,15 @@ $MqttExplicitSupplied = ($PSBoundParameters.ContainsKey("MqttBroker") -or
 
 function New-Candidate([string]$Dest, [string]$Mode, [string]$Kind,
     [string]$Local = $null, [string]$Text = $null,
-    [switch]$Sensitive, [string]$Condition = "always") {
+    [switch]$Sensitive, [string]$Condition = "always", [byte[]]$Blob = $null) {
     return [PSCustomObject]@{
         Dest = $Dest
         Mode = $Mode
         Kind = $Kind
         Local = $Local
         Text = $Text
+        # bytes built at install time (the multi-remote hal)
+        Blob = $Blob
         Sensitive = [bool]$Sensitive
         Condition = $Condition
         Bytes = 0
@@ -428,6 +522,7 @@ function New-Candidate([string]$Dest, [string]$Mode, [string]$Kind,
 }
 
 function Get-CandidateData($Cand) {
+    if ($null -ne $Cand.Blob) { return ,$Cand.Blob }
     if ($Cand.Local) { return [IO.File]::ReadAllBytes($Cand.Local) }
     return [Text.Encoding]::UTF8.GetBytes([string]$Cand.Text)
 }
@@ -473,6 +568,98 @@ function Test-MqttExplicit() {
     return $script:MqttExplicitSupplied
 }
 
+# A guard that can't be written stops the check (guard-failed): without it,
+# nothing blocks a pair between the check and the reboot.
+function Get-MultiRemoteOffCheckCommand([bool]$Guard) {
+    $touch = if ($Guard) { "elif ! touch $MultiRemotePending; then echo guard-failed; " } else { "" }
+    return "if ! grep ' $HalPath ' /proc/mounts >/dev/null 2>&1; then echo inactive; " +
+        "${touch}elif ps | grep '[r]f.pairing' >/dev/null 2>&1; then echo pairing; " +
+        "else /data/codex/bin/codex_hal_ltcp rf.info '{}' 8 2>&1; fi"
+}
+
+# Models without a screen paired more than once in hal's rf.info answer, as
+# "16414 (slots 1, 2)"; "" when none; $null when it isn't a valid answer.
+function Get-RfDuplicateModels([string]$Reply) {
+    $start = $Reply.IndexOf("{")
+    if ($start -lt 0) { return $null }
+    try { $doc = $Reply.Substring($start) | ConvertFrom-Json } catch { return $null }
+    if ($null -eq $doc -or $doc.code -ne 200 -or $null -eq $doc.data) { return $null }
+    $slots = [ordered]@{}
+    foreach ($dev in @($doc.data.Devices)) {
+        if ($null -eq $dev) { continue }
+        $id = [string]$dev.EquadID
+        if ($NoScreenEquads -contains $id) {
+            if (-not $slots.Contains($id)) { $slots[$id] = New-Object System.Collections.ArrayList }
+            [void]$slots[$id].Add([string]$dev.DeviceIndex)
+        }
+    }
+    $dups = @($slots.Keys | Where-Object { $slots[$_].Count -gt 1 } | ForEach-Object { "$_ (slots $($slots[$_] -join ', '))" })
+    return ($dups -join "; ")
+}
+
+function Get-HalBoundCommand() {
+    return "if grep ' $HalPath ' /proc/mounts >/dev/null 2>&1; then echo bound; else echo stock; fi"
+}
+
+function Test-HalBound() {
+    $out = (Invoke-Remote (Get-HalBoundCommand) $null 30000).Trim()
+    if ($out -ne "bound" -and $out -ne "stock") { throw "couldn't tell whether the multi-remote hal runs: $out" }
+    return ($out -eq "bound")
+}
+
+# -MultiRemote off while the multi-remote hal runs: refuse unless the slot
+# table holds no two remotes of one model. Also records whether the copy runs
+# now ($script:HalBound), which decides the reboot as much as the files do.
+function Test-MultiRemoteOff() {
+    if ($MultiRemote -eq "on") {
+        $script:HalBound = Test-HalBound
+        KV ("multi_remote_active=" + $(if ($script:HalBound) { "yes" } else { "no" }))
+    }
+    if ($MultiRemote -ne "off") { return }
+    if ($MultiRemoteForce) {
+        # force-off: for a radio that stopped answering, check nothing that
+        # needs hal. The guard is best effort; the reboot follows at once.
+        $script:HalBound = Test-HalBound
+        KV ("multi_remote_active=" + $(if ($script:HalBound) { "yes" } else { "no" }))
+        if ($script:HalBound -and $NoApplyCloudRestart) {
+            throw "-MultiRemote force-off refused: the multi-remote hal is running, and -NoApplyCloudRestart would keep it running; leave out -NoApplyCloudRestart"
+        }
+        if ($script:HalBound -and -not $PreflightOnly) {
+            Invoke-Remote "touch $MultiRemotePending 2>/dev/null; true" $null 30000 | Out-Null
+        }
+        KV "multi_remote_off_check=forced"
+        Info "WARNING: force-off skips the radio check: if two remotes of one model are still paired, the stock hal hangs on them too. Turn it back on (-MultiRemote on), unpair the extra remote, then turn it off."
+        return
+    }
+    # Without the reboot the multi-remote hal keeps running on setting 0, and
+    # once the guard lapses a pair could add a duplicate that the stock hal
+    # hangs on at the next boot: refuse that before writing anything.
+    $guard = (-not $PreflightOnly) -and (-not $NoApplyCloudRestart)
+    $out = (Invoke-Remote (Get-MultiRemoteOffCheckCommand $guard) $null 60000).Trim()
+    $script:HalBound = ($out -ne "inactive")
+    if ($out -eq "inactive") { KV "multi_remote_off_check=inactive"; return }
+    $problem = ""
+    if ($NoApplyCloudRestart) {
+        $problem = "the multi-remote hal is running, and -NoApplyCloudRestart would keep it running after the setting is saved, with nothing to stop a second remote of one model being paired before the stock hal starts; leave out -NoApplyCloudRestart so the hub restarts"
+    } elseif ($out -eq "guard-failed") {
+        $problem = "the hub couldn't write $MultiRemotePending, which blocks new pairings until it restarts"
+    } elseif ($out -eq "pairing") {
+        $problem = "a pairing window is open on the hub; try again when it closes"
+    } else {
+        $dups = Get-RfDuplicateModels $out
+        if ($null -eq $dups) {
+            $problem = "the hub's radio didn't list its paired remotes"
+        } elseif ($dups) {
+            $problem = "more than one remote of the same model is paired (EquadID $dups); the stock hal can't run two of one model, so unpair the extra ones first (Settings -> Remotes)"
+        }
+    }
+    if ($problem) {
+        if ($guard) { Invoke-Remote "rm -f $MultiRemotePending" $null 30000 | Out-Null }
+        throw "-MultiRemote off refused: $problem"
+    }
+    KV "multi_remote_off_check=ok"
+}
+
 function Build-Inventory() {
     $binNames = Get-BinManifestNames
     foreach ($name in $binNames) {
@@ -510,6 +697,15 @@ function Build-Inventory() {
     Add-Candidate (New-Candidate "/etc/tdeenable" "644" "config" -Text "1`n" -Condition "if-missing")
     Add-Candidate (New-Candidate "/pkg/codexactivity/manifest.json" "644" "config" -Text ('{"plugin":"codexactivity"}' + "`n") -Condition "if-missing")
     Add-Candidate (New-Candidate "/pkg/codexmqtt/manifest.json" "644" "config" -Text ('{"plugin":"codexmqtt"}' + "`n") -Condition "if-missing")
+    # Multiple remotes of one model: only when asked, either way.
+    if ($MultiRemote -eq "on") {
+        $hal = Get-PatchedHal (Get-RemoteBytes $HalPath)
+        Add-Candidate (New-Candidate $HalMultiDest "755" "binary" -Blob $hal)
+        Add-Candidate (New-Candidate $MultiRemoteConf "644" "config" -Text "1`n")
+    } elseif ($MultiRemote -eq "off") {
+        # The copy itself goes after a successful install (Invoke-PostWiring).
+        Add-Candidate (New-Candidate $MultiRemoteConf "644" "config" -Text "0`n")
+    }
     if ($CleanInstall -or (Test-MqttExplicit)) {
         Add-Candidate (New-Candidate "/data/codexmqtt/config.json" "600" "config" -Text (Build-MqttConfig) -Sensitive)
     }
@@ -714,7 +910,7 @@ function Get-FileStatus([string[]]$Paths) {
 function Invoke-DestinationProbe() {
     Step "Probing destination state (BusyBox ls -l / md5sum)"
     $dests = @($Candidates | ForEach-Object { $_.Dest })
-    foreach ($p in ($HandoffRequiredPaths + @($RootToolDropbear))) { if ($dests -notcontains $p) { $dests += $p } }
+    foreach ($p in ($HandoffRequiredPaths + @($RootToolDropbear, $HalMultiDest))) { if ($dests -notcontains $p) { $dests += $p } }
     $script:Probe = Get-FileStatus $dests
     foreach ($cand in $Candidates) {
         $kind = $Probe[$cand.Dest]["kind"]
@@ -985,6 +1181,10 @@ function Show-PreflightReport() {
     $mode = "upgrade"
     if ($CleanInstall) { $mode = "clean" }
     KV "preflight_mode=$mode"
+    if ($MultiRemoteForce) { KV "multi_remote=force-off" } elseif ($MultiRemote) { KV "multi_remote=$MultiRemote" } else { KV "multi_remote=unchanged" }
+    if ($MultiRemote -eq "on") {
+        Info "Multiple remotes of one model: $HalMultiDest is the hub's own hal with per-slot remote threads and the one-remote-per-model rule lifted for remotes without a screen; rcS.local runs it from the next boot."
+    }
     KV "candidate_count=$($Candidates.Count)"
     KV "changed_count=$((Get-ActiveCandidates).Count)"
     Info "Candidate destinations and nonsensitive expected MD5 hashes (sensitive values redacted):"
@@ -1430,6 +1630,34 @@ function Test-CloudBlockerChanged() {
     return [bool](Get-ActiveCandidates | Where-Object { $cloud -contains $_.Dest })
 }
 
+# hal starts once at boot (rcS), so only a reboot swaps it.
+# hal starts once at boot (rcS), so only a reboot swaps it: needed when the
+# files change, or when the running hal isn't the one asked for.
+function Test-MultiRemoteChanged() {
+    $files = [bool](Get-ActiveCandidates | Where-Object { @($HalMultiDest, $MultiRemoteConf) -contains $_.Dest })
+    if (($MultiRemote -ne "on" -and $MultiRemote -ne "off") -or $null -eq $script:HalBound) { return $files }
+    return ($files -or ($script:HalBound -ne ($MultiRemote -eq "on")))
+}
+
+function Get-WantedHal() {
+    if ($MultiRemote -eq "on") { return "multi-remote" } else { return "stock" }
+}
+
+function Restart-HubAndWait() {
+    Invoke-Remote "(/bin/sleep 2; /sbin/reboot || reboot) >/dev/null 2>&1 & echo rebooting" $null 30000 | Out-Null
+    Start-Sleep -Seconds 8
+    Wait-TcpPort $HubHost $Port 180 "SSH"
+    Wait-TcpPort $HubHost 8080 180 "Web UI"
+    if ($MultiRemote -eq "on" -or $MultiRemote -eq "off") {
+        $bound = Test-HalBound
+        KV ("multi_remote_active=" + $(if ($bound) { "yes" } else { "no" }))
+        if ($bound -ne ($MultiRemote -eq "on")) {
+            $other = if ($MultiRemote -eq "on") { "stock" } else { "multi-remote" }
+            Info "WARNING: the hub restarted but still runs the $other hal; see /cache/codex-init.log on the hub"
+        }
+    }
+}
+
 # The engine loads /pkg plugins once at start; only a reboot restarts it.
 function Test-PluginsChanged() {
     return [bool](Get-ActiveCandidates | Where-Object { $_.Kind -eq "plugin" })
@@ -1472,6 +1700,7 @@ Write-Host $identity.Trim()
 
 Step "Resolving hub id"
 Resolve-HubIdentity
+Test-MultiRemoteOff
 
 Step "Building candidate inventory"
 Build-Inventory
@@ -1535,6 +1764,15 @@ if ($RemoveRootToolLeftovers -and ($RootToolStages.Count -gt 0 -or (Test-RootToo
 
 if ((Get-ActiveCandidates).Count -eq 0) {
     Remove-StagingTree
+    if ((Test-MultiRemoteChanged) -and -not $NoApplyCloudRestart) {
+        # The files match, but the running hal isn't the one asked for.
+        Step "Restarting the hub"
+        Info "The files already match; rebooting the hub so it starts the $(Get-WantedHal) hal."
+        Restart-HubAndWait
+        Step "Done"
+        Info "The hub already matched this payload; it was restarted to apply the multi-remote setting."
+        exit 0
+    }
     Step "Done"
     Info "The hub already matches this payload; nothing was installed or restarted."
     exit 0
@@ -1605,17 +1843,17 @@ Remove-StagingTree
 
 $cloudChanged = Test-CloudBlockerChanged
 $pluginsChanged = Test-PluginsChanged
-if (($cloudChanged -or $pluginsChanged) -and -not $NoApplyCloudRestart) {
+$multiRemoteChanged = Test-MultiRemoteChanged
+if (($cloudChanged -or $pluginsChanged -or $multiRemoteChanged) -and -not $NoApplyCloudRestart) {
     Step "Restarting the hub"
     if ($cloudChanged) {
         Info "Rebooting the hub so Logitech cloud services restart in blocked mode."
-    } else {
+    } elseif ($pluginsChanged) {
         Info "Rebooting the hub so its engine loads the updated plugins."
+    } else {
+        Info "Rebooting the hub so it starts the $(Get-WantedHal) hal."
     }
-    Invoke-Remote "(/bin/sleep 2; /sbin/reboot || reboot) >/dev/null 2>&1 & echo rebooting" $null 30000 | Out-Null
-    Start-Sleep -Seconds 8
-    Wait-TcpPort $HubHost $Port 180 "SSH"
-    Wait-TcpPort $HubHost 8080 180 "Web UI"
+    Restart-HubAndWait
 }
 
 Step "Done"
@@ -1631,5 +1869,9 @@ Info "Web UI: http://$HubHost`:8080/"
 Info "Web UI authentication: disabled"
 if (-not $SkipCloudSuppression) {
     if ($cloudChanged) { Info "Cloud blocker: enabled and applied" } else { Info "Cloud blocker: enabled (unchanged)" }
+}
+if ($MultiRemote) {
+    $state = if ($MultiRemote -eq "on") { "on (remotes without a screen)" } else { "off" }
+    if ($multiRemoteChanged) { Info "Multiple remotes of one model: $state and applied" } else { Info "Multiple remotes of one model: $state (unchanged)" }
 }
 Info "If IR commands do not work, update /data/codex/hub_id with the correct hub id and restart codex_webui."

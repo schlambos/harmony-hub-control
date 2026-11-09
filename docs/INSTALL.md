@@ -69,7 +69,8 @@ Each run:
      and verifies them.
 5. Restarts the web app and the Bluetooth keyboard service, registers
    the hub plugins, and waits for the web app to answer.
-6. Reboots the hub only if the cloud-blocker files changed.
+6. Reboots the hub only if the cloud-blocker files, an engine plugin or the
+   multi-remote setting changed.
 
 ## Installer options
 
@@ -84,6 +85,7 @@ Each run:
 | `--skip-cloud-suppression` | `-SkipCloudSuppression` | Leaves the hub's `netservicestarter.lua` as it is. With a clean install, it also writes the cloud blocker as off. |
 | `--remove-root-tool-leftovers` | `-RemoveRootToolLeftovers` | Deletes what harmony-hub-root left behind before installing (see below). |
 | `--skip-flash-check` | `-SkipFlashCheck` | Installs even when the measured free flash looks too small. If flash really runs out, the install still stops with nothing in use changed. |
+| `--multi-remote on` / `off` / `force-off` | `-MultiRemote on` / `off` / `force-off` | Lets the hub keep more than one remote without a screen of the same model, such as two Smart Controls; they share one button setup. `off` restores the stock one-per-model rule. It's refused while two remotes of one model are paired (unpair the extra ones first), and together with `--no-apply-cloud-restart` while the multi-remote `hal` runs. `force-off` (`-MultiRemote force-off`) turns it off without asking the radio, for a radio that stopped answering. The installer reboots when the files change or the running `hal` isn't the one asked for, then checks it. The web app's Settings → Experimental switch does the same. Without it, an upgrade leaves the setting as it is. See [MULTI_REMOTE.md](MULTI_REMOTE.md). |
 
 `python3 install_webui.py --help` lists every option.
 

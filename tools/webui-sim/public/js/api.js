@@ -115,6 +115,21 @@ export function pairRemote({ seconds }) {
   return request("/api/remote-pair", { method: "POST", body: { seconds } });
 }
 
+// Unpair the remote in one radio slot (1–6).
+export function unpairRemote({ slot }) {
+  return request("/api/remote-unpair", { method: "POST", body: { slot } });
+}
+
+// Multiple remotes of one model (experimental): state, and switching it (the hub reboots).
+export function getMultiRemote() {
+  return request("/api/multi-remote");
+}
+
+// `force` (off only) skips the hub's check of the radio's slot table, for a radio that stopped answering.
+export function setMultiRemote({ enabled, force = false }) {
+  return request("/api/multi-remote", { method: "POST", body: force ? { enabled, force: true } : { enabled } });
+}
+
 export function importCatalog({ deviceId, commands }) {
   return request("/api/catalog-import", {
     method: "POST",

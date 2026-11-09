@@ -157,8 +157,9 @@ label.m-row:hover {
   }
 }
 
-/* Switch (a checkbox with role="switch"), the app's SwitchRow control */
-.m-switch {
+/* Switch (a checkbox with role="switch"), the app's SwitchRow control.
+   input.m-switch outranks app.css's input[type="checkbox"] sizing. */
+input.m-switch {
   flex: none;
   position: relative;
   width: 52px;
@@ -723,8 +724,8 @@ label.m-row:hover {
     animation-duration: 4s;
   }
 
-  .m-switch,
-  .m-switch::before,
+  input.m-switch,
+  input.m-switch::before,
   .sw-meter span {
     transition: none;
   }

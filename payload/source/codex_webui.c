@@ -2,6 +2,7 @@
 #include <ctype.h>
 #include <dirent.h>
 #include <errno.h>
+#include <limits.h>
 #include <fcntl.h>
 #include <netdb.h>
 #include <netinet/in.h>
@@ -17,6 +18,7 @@
 #include <sys/select.h>
 #include <sys/socket.h>
 #include <sys/stat.h>
+#include <sys/statvfs.h>
 #include <sys/time.h>
 #include <sys/types.h>
 #include <sys/wait.h>
@@ -123,6 +125,11 @@ struct request {
     char method[8];
     char path[256];
     char auth[512];
+    /* Content-Type's media type, Origin and Host, for request_same_origin_json(). */
+    char content_type[64];
+    char origin[256];
+    char host[256];
+    int has_origin;
     int body_truncated;
     char *body;
     size_t body_len;
@@ -223,6 +230,8 @@ static void ensure_bt_hid_control_runtime(void);
 static int load_bt_link_key(const char *bdaddr);
 static int bt_native_code(const char *reply);
 static int run_hal_json(const char *cmd_name, const char *params_json, int timeout, char *out, size_t outlen);
+static int file_md5(const char *path, char *out, size_t outlen);
+static int multi_remote_off_pending(void);
 static int run_bt_saved_script(const char *type, const char *bdaddr, const char *script, int gap_ms, char *out, size_t outlen);
 
 static void chomp(char *s) {
@@ -1073,6 +1082,72 @@ static int json_int(const char *json, const char *key, int def) {
     p++;
     while (*p && isspace((unsigned char)*p)) p++;
     return atoi(p);
+}
+
+/* The value of a top-level member of a JSON object, or NULL: walks the text
+ * with string and nesting awareness, so a key of the same name inside a nested
+ * object or array, or inside a string, never matches. */
+static const char *json_top_member(const char *json, const char *key) {
+    const char *p = json;
+    size_t klen = strlen(key);
+    int depth = 0;
+    while (*p && isspace((unsigned char)*p)) p++;
+    if (*p != '{') return NULL;
+    for (; *p; p++) {
+        if (*p == '"') {
+            const char *start = ++p;
+            while (*p && *p != '"') {
+                if (*p == '\\' && p[1]) p++;
+                p++;
+            }
+            if (!*p) return NULL;
+            if (depth == 1 && (size_t)(p - start) == klen && strncmp(start, key, klen) == 0) {
+                const char *q = p + 1;
+                while (*q && isspace((unsigned char)*q)) q++;
+                if (*q == ':') {
+                    q++;
+                    while (*q && isspace((unsigned char)*q)) q++;
+                    return q;
+                }
+            }
+        } else if (*p == '{' || *p == '[') {
+            depth++;
+        } else if (*p == '}' || *p == ']') {
+            if (--depth == 0) return NULL;
+        }
+    }
+    return NULL;
+}
+
+/* A top-level boolean member: 1, 0, or def when missing or not true/false. */
+static int json_top_bool(const char *json, const char *key, int def) {
+    const char *v = json_top_member(json, key);
+    const char *end;
+    if (!v) return def;
+    if (strncmp(v, "true", 4) == 0) end = v + 4;
+    else if (strncmp(v, "false", 5) == 0) end = v + 5;
+    else return def;
+    while (*end && isspace((unsigned char)*end)) end++;
+    if (*end != ',' && *end != '}') return def;
+    return *v == 't';
+}
+
+/* A top-level plain-integer member: def when missing, or when it has a
+ * fraction, an exponent or anything else after the digits. (json_int() uses
+ * atoi() and matches the key anywhere, so 1e1 or 1.5 read as 1, and a nested
+ * "slot" could win.) */
+static int json_top_int(const char *json, const char *key, int def) {
+    const char *p = json_top_member(json, key);
+    char *end;
+    long v;
+    if (!p) return def;
+    if (*p != '-' && !isdigit((unsigned char)*p)) return def;
+    errno = 0;
+    v = strtol(p, &end, 10);
+    if (end == p || errno != 0 || v < INT_MIN || v > INT_MAX) return def;
+    while (*end && isspace((unsigned char)*end)) end++;
+    if (*end != ',' && *end != '}') return def;
+    return (int)v;
 }
 
 static int json_bool(const char *json, const char *key, int def) {
@@ -8611,14 +8686,18 @@ static void render_led_json(int fd, const struct request *req) {
 }
 
 /* Harmony RF remotes (Smart Control, Touch, Companion, Smart Keyboard). hal
- * pairs them on the hub with no cloud: rf.info lists the radio's pairing
- * slots and rf.pairing opens its pairing window. After a pair hal unpairs any
- * older remote of the same kind (it keeps one per EquadID), so the pair reply
- * carries the slot table from before and after the window for the page to
- * compare. While a window is open nothing here reads rf.info: hal reads the
- * same slot registers to decide what to unpair, and two readers can take
- * each other's answers. The lock is inherited by codex_hal_ltcp, so it holds
- * until the window closes even if this child dies first. */
+ * pairs them on the hub with no cloud: rf.info lists the radio's 6 pairing
+ * slots, rf.pairing opens its pairing window and rf.unpair frees a slot.
+ * After a pair stock hal unpairs any older remote of the same kind (it keeps
+ * one per EquadID); with multi-remote on (docs/MULTI_REMOTE.md) rcS.local has
+ * bind-mounted a hal that keeps that rule only for remotes with a screen and
+ * the keyboard.
+ * Either way the pair reply carries the slot table from before and after the
+ * window for the page to compare. While a window is open nothing here reads
+ * rf.info: hal reads the same slot registers to decide what to unpair, and
+ * two readers can take each other's answers. The lock is inherited by
+ * codex_hal_ltcp, so it holds until the window closes even if this child dies
+ * first. */
 #define RF_PAIR_LOCK "/var/run/codex-rf-pair.lock"
 #define RF_PAIR_DEFAULT_SECONDS 60
 #define RF_PAIR_MIN_SECONDS 10
@@ -8649,6 +8728,30 @@ static int read_rf_info(char *out, size_t outlen) {
     return rc == 0 && json_int(out, "code", -1) == 200 ? 0 : -1;
 }
 
+#define RF_SLOTS 6
+
+/* 1 when the multi-remote hal runs: rcS.local bind-mounts it over
+ * /usr/bin/hal, which shows in /proc/mounts as a mount on that path. */
+static int multi_remote_active(void) {
+    char line[512];
+    int found = 0;
+    FILE *f = fopen("/proc/mounts", "r");
+    if (!f) return 0;
+    while (!found && fgets(line, sizeof(line), f)) {
+        char *first = strchr(line, ' ');
+        if (first && strncmp(first + 1, "/usr/bin/hal ", 13) == 0) found = 1;
+    }
+    fclose(f);
+    return found;
+}
+
+/* 1 when rf.info's reply lists a remote in this slot. */
+static int rf_slot_used(const char *info, int slot) {
+    char want[32];
+    snprintf(want, sizeof(want), "\"DeviceIndex\":\"%d\"", slot);
+    return strstr(info, want) != NULL;
+}
+
 static void render_remotes_json(int fd) {
     char reply[4096];
     int lock, ok;
@@ -8669,7 +8772,8 @@ static void render_remotes_json(int fd) {
     close(lock);
     f = send_json_start(fd, ok ? "200 OK" : "502 Bad Gateway");
     if (!f) return;
-    fprintf(f, "{\"ok\":%s,\"pairing\":false", ok ? "true" : "false");
+    fprintf(f, "{\"ok\":%s,\"pairing\":false,\"multiRemote\":%s,\"slots\":%d",
+        ok ? "true" : "false", multi_remote_active() ? "true" : "false", RF_SLOTS);
     if (!ok) fputs(",\"error\":\"The hub's radio didn't list its paired remotes.\"", f);
     fputs(",\"reply\":", f);
     json_write_string(f, reply[0] ? reply : "no response");
@@ -8688,6 +8792,14 @@ static void render_remote_pair_json(int fd, const struct request *req) {
     lock = rf_pair_lock();
     if (lock < 0) {
         send_rf_pair_lock_error(fd, lock);
+        return;
+    }
+    if (multi_remote_off_pending()) {
+        close(lock);
+        f = send_json_start(fd, "409 Conflict");
+        if (!f) return;
+        fputs("{\"ok\":false,\"restarting\":true,\"error\":\"The hub is about to restart to turn off multiple remotes of one model. Pair the remote after it restarts.\"}\n", f);
+        fclose(f);
         return;
     }
     if (read_rf_info(before, sizeof(before)) != 0) {
@@ -8716,9 +8828,448 @@ static void render_remote_pair_json(int fd, const struct request *req) {
     close(lock);
     f = send_json_start(fd, "200 OK");
     if (!f) return;
-    fprintf(f, "{\"ok\":true,\"seconds\":%d,\"elapsedMs\":%lld,\"pairCode\":%d,\"pair\":",
-        seconds, elapsed, json_int(pair, "code", -1));
+    fprintf(f, "{\"ok\":true,\"seconds\":%d,\"elapsedMs\":%lld,\"pairCode\":%d,\"multiRemote\":%s,\"pair\":",
+        seconds, elapsed, json_int(pair, "code", -1), multi_remote_active() ? "true" : "false");
     json_write_string(f, pair[0] ? pair : "no response");
+    fputs(",\"before\":", f);
+    json_write_string(f, before);
+    fputs(",\"after\":", f);
+    json_write_string(f, after[0] ? after : "no response");
+    fputs("}\n", f);
+    fclose(f);
+}
+
+/* Multiple remotes of one model (docs/MULTI_REMOTE.md), switched on and off
+ * from Settings. Stock hal keeps one remote per model: it unpairs an older one
+ * after every pair, and its key threads keep per-model state, so two remotes
+ * of one model hang its radio dispatcher. The multi-remote hal is the hub's
+ * own /usr/bin/hal with the edits below (payload/helpers/
+ * hal_multiremote_patch.json; a test keeps the two identical). It is built
+ * here, on the hub, only for the exact stock build and only if the result has
+ * the exact expected md5; rcS.local bind-mounts it over /usr/bin/hal at boot
+ * while multi_remote.conf says 1. hal starts once at boot, so a change reboots
+ * the hub. Turning it off is refused while two remotes of one model are
+ * paired: the stock hal would hang its radio on them. */
+#define HAL_PATH "/usr/bin/hal"
+#define HAL_MULTI_PATH "/data/codex/bin/hal_multiremote"
+#define MULTI_REMOTE_CONF "/data/codex/multi_remote.conf"
+#define MULTI_REMOTE_LOCK "/var/run/codex-multi-remote.lock"
+#define HAL_SIZE 363640
+#define HAL_STOCK_MD5 "a3fdd823440c43f36e235fe51c45f008"
+#define HAL_MULTI_MD5 "cafdd7930309c7d74a6a41a87642f0c1"
+/* Free flash the copy needs: its size plus a margin (jffs2 compresses it to about half). */
+#define HAL_MULTI_FLASH_NEED (HAL_SIZE + 128 * 1024)
+
+struct hal_edit { unsigned int offset; unsigned char stock[4], patched[4]; };
+static const struct hal_edit HAL_MULTI_EDITS[] = {
+    {0x07b04, {0x8c, 0x92, 0x00, 0x00}, {0x00, 0x80, 0x90, 0x21}},
+    {0x07b60, {0x24, 0x02, 0x40, 0x1e}, {0x8f, 0xbc, 0x00, 0x18}},
+    {0x07b64, {0x12, 0x42, 0x01, 0x8b}, {0x8f, 0x99, 0x85, 0xf0}},
+    {0x07b68, {0x8f, 0xbc, 0x00, 0x18}, {0x03, 0x20, 0xf8, 0x09}},
+    {0x07b6c, {0x24, 0x03, 0x40, 0x27}, {0x24, 0x04, 0x00, 0x5c}},
+    {0x07b70, {0x12, 0x43, 0x01, 0x8b}, {0x8f, 0xbc, 0x00, 0x18}},
+    {0x07b74, {0x3c, 0x06, 0x00, 0x46}, {0x00, 0x40, 0x88, 0x21}},
+    {0x07b78, {0x24, 0x04, 0x40, 0x26}, {0x00, 0x10, 0x40, 0x80}},
+    {0x07b7c, {0x12, 0x44, 0x01, 0x8a}, {0x3c, 0x09, 0x00, 0x46}},
+    {0x07b80, {0x3c, 0x07, 0x00, 0x46}, {0x01, 0x28, 0x48, 0x21}},
+    {0x07b84, {0x00, 0x00, 0x88, 0x21}, {0xad, 0x22, 0x3e, 0x00}},
+    {0x08194, {0x3c, 0x11, 0x00, 0x46}, {0x00, 0x10, 0x40, 0x80}},
+    {0x08198, {0x08, 0x10, 0x1e, 0xe2}, {0x3c, 0x09, 0x00, 0x46}},
+    {0x0819c, {0x26, 0x31, 0x3d, 0xcc}, {0x01, 0x28, 0x48, 0x21}},
+    {0x081a0, {0x08, 0x10, 0x1e, 0xe2}, {0x8d, 0x24, 0x3e, 0x00}},
+    {0x081a4, {0x24, 0xd1, 0x3e, 0x28}, {0x14, 0x80, 0x03, 0x45}},
+    {0x081a8, {0x08, 0x10, 0x1e, 0xe2}, {0xad, 0x20, 0x3e, 0x00}},
+    {0x081ac, {0x24, 0xf1, 0x3e, 0x84}, {0x08, 0x10, 0x22, 0xde}},
+    {0x08be0, {0x27, 0xde, 0x3e, 0xe8}, {0x27, 0xde, 0x3d, 0xcc}},
+    {0x08ca0, {0x00, 0x00, 0xa0, 0x21}, {0x01, 0x40, 0xa0, 0x21}},
+    {0x08cdc, {0x24, 0xe7, 0x3e, 0xe0}, {0x8c, 0xe7, 0x3e, 0xe0}},
+    {0x08d50, {0x24, 0x14, 0x00, 0x01}, {0x03, 0x00, 0xa0, 0x21}},
+    {0x08d6c, {0x24, 0x14, 0x00, 0x02}, {0x01, 0x40, 0xa0, 0x21}},
+    {0x08e54, {0x00, 0x00, 0x80, 0x21}, {0x02, 0xa0, 0x80, 0x21}},
+    {0x08e70, {0x24, 0xa3, 0x3e, 0xe8}, {0x24, 0xa3, 0x3d, 0xcc}},
+    {0x08e9c, {0x26, 0xc7, 0x3e, 0xe0}, {0x8e, 0xc7, 0x3e, 0xe0}},
+    {0x08eb0, {0x3c, 0x1e, 0x00, 0x46}, {0x08, 0x10, 0x20, 0x65}},
+    {0x08eb4, {0x27, 0xc4, 0x3d, 0xcc}, {0x8c, 0xf0, 0x00, 0x14}},
+    {0x08eb8, {0x00, 0x00, 0x80, 0x21}, {0x00, 0x00, 0x00, 0x00}},
+    {0x08ee0, {0x25, 0x8b, 0x3e, 0xe8}, {0x25, 0x8b, 0x3d, 0xcc}},
+    {0x08f30, {0x24, 0x10, 0x00, 0x01}, {0x02, 0x40, 0x80, 0x21}},
+    {0x08f34, {0x3c, 0x04, 0x00, 0x46}, {0x08, 0x10, 0x20, 0x65}},
+    {0x08f38, {0x24, 0x84, 0x3e, 0x84}, {0x8c, 0xf0, 0x00, 0x14}},
+    {0x08f3c, {0x08, 0x10, 0x23, 0xaf}, {0x00, 0x00, 0x00, 0x00}},
+    {0x08f40, {0x24, 0x10, 0x00, 0x01}, {0x00, 0x00, 0x00, 0x00}},
+    {0x08f5c, {0x24, 0x10, 0x00, 0x02}, {0x01, 0xa0, 0x80, 0x21}},
+    {0x08fa0, {0x3c, 0x17, 0x00, 0x46}, {0x08, 0x10, 0x20, 0x65}},
+    {0x08fa4, {0x26, 0xe4, 0x3e, 0x28}, {0x8c, 0xf0, 0x00, 0x14}},
+    {0x08fa8, {0x08, 0x10, 0x23, 0xaf}, {0x00, 0x00, 0x00, 0x00}},
+    {0x08fac, {0x24, 0x10, 0x00, 0x02}, {0x00, 0x00, 0x00, 0x00}},
+    {0x27cdc, {0x34, 0x06, 0x88, 0x0e}, {0x24, 0x66, 0xbf, 0xdf}},
+    {0x27ce0, {0x10, 0x66, 0xff, 0xdb}, {0x2c, 0xc6, 0x00, 0x04}},
+    {0x27ce4, {0x24, 0x42, 0x00, 0x18}, {0x10, 0xc0, 0xff, 0xd9}},
+    {0x27ce8, {0x24, 0x02, 0x40, 0x21}, {0x30, 0x66, 0x00, 0x01}},
+    {0x27cec, {0x14, 0x62, 0x00, 0x04}, {0x10, 0xc0, 0x00, 0x04}},
+};
+
+/* Set under the RF pairing lock once turning multi-remote off has checked the
+ * slot table, until the reboot (it lives in RAM): /api/remote-pair refuses
+ * while it's there, so no remote of an already-paired model can join between
+ * the check and the stock hal starting. It lapses after 10 minutes in case
+ * the reboot never comes. The installers write it the same way. */
+#define MULTI_REMOTE_PENDING "/var/run/codex-multi-remote-pending"
+#define MULTI_REMOTE_PENDING_SECONDS 600
+
+static int multi_remote_off_pending(void) {
+    struct stat st;
+    long long age;
+    if (stat(MULTI_REMOTE_PENDING, &st) != 0) return 0;
+    age = (long long)time(NULL) - (long long)st.st_mtime;
+    return age < MULTI_REMOTE_PENDING_SECONDS;
+}
+
+/* 0 once the guard is written and reads as active; -1 otherwise. */
+static int mark_multi_remote_off_pending(void) {
+    int fd = open(MULTI_REMOTE_PENDING, O_WRONLY | O_CREAT | O_TRUNC, 0644);
+    int ok;
+    if (fd < 0) return -1;
+    ok = write(fd, "1\n", 2) == 2;
+    if (close(fd) != 0) ok = 0;
+    return ok && multi_remote_off_pending() ? 0 : -1;
+}
+
+static int multi_remote_enabled(void) {
+    char raw[16];
+    if (read_text(MULTI_REMOTE_CONF, raw, sizeof(raw)) <= 0) return 0;
+    return raw[0] == '1';
+}
+
+/* Free bytes on the /data flash, or -1. */
+static long long data_flash_free(void) {
+    struct statvfs st;
+    if (statvfs("/data", &st) != 0) return -1;
+    return (long long)st.f_bavail * (long long)st.f_frsize;
+}
+
+/* Can this hub run the multi-remote hal? 1 = yes; 0 = no, with the reason. */
+static int multi_remote_supported(char *hal_md5, size_t md5len, char *reason, size_t reasonlen) {
+    hal_md5[0] = 0;
+    reason[0] = 0;
+    if (file_md5(HAL_PATH, hal_md5, md5len) != 0) {
+        snprintf(reason, reasonlen, "The hub's hal (" HAL_PATH ") couldn't be read.");
+        return 0;
+    }
+    if (strcmp(hal_md5, HAL_STOCK_MD5) == 0) return 1;
+    if (strcmp(hal_md5, HAL_MULTI_MD5) == 0) return 1; /* already the multi-remote hal (bind-mounted) */
+    snprintf(reason, reasonlen,
+        "This hub's hal is not the build the multi-remote change was made for, so it can't be "
+        "turned on safely. Its MD5 is %s; the change needs the Harmony Hub firmware 4.15.600 hal, "
+        "MD5 " HAL_STOCK_MD5 ".", hal_md5);
+    return 0;
+}
+
+/* Build HAL_MULTI_PATH from the hub's own hal; 0 on success, else -1 with the reason. */
+static int build_multi_remote_hal(char *reason, size_t reasonlen) {
+    char md5[40] = "", tmp[96];
+    unsigned char *buf;
+    size_t len = 0, i, k;
+    FILE *f;
+    long long avail;
+    if (file_md5(HAL_MULTI_PATH, md5, sizeof(md5)) == 0 && strcmp(md5, HAL_MULTI_MD5) == 0) return 0;
+    md5[0] = 0;
+    avail = data_flash_free();
+    if (avail >= 0 && avail < HAL_MULTI_FLASH_NEED) {
+        snprintf(reason, reasonlen, "The hub's flash has %lld KB free; the multi-remote hal needs about %d KB.",
+            avail / 1024, HAL_MULTI_FLASH_NEED / 1024);
+        return -1;
+    }
+    buf = (unsigned char *)read_file_alloc(HAL_PATH, HAL_SIZE + 16, &len);
+    if (!buf || len != HAL_SIZE) {
+        free(buf);
+        snprintf(reason, reasonlen, "The hub's hal couldn't be read whole.");
+        return -1;
+    }
+    md5[0] = 0;
+    if (file_md5(HAL_PATH, md5, sizeof(md5)) != 0) {
+        free(buf);
+        snprintf(reason, reasonlen, "The hub's hal's MD5 couldn't be read.");
+        return -1;
+    }
+    if (strcmp(md5, HAL_STOCK_MD5) != 0) {
+        /* Bind-mounted already: HAL_PATH is the multi-remote hal itself; copy it as is. */
+        if (strcmp(md5, HAL_MULTI_MD5) != 0) {
+            free(buf);
+            snprintf(reason, reasonlen, "The hub's hal changed while it was being read.");
+            return -1;
+        }
+    } else {
+        for (i = 0; i < sizeof(HAL_MULTI_EDITS) / sizeof(HAL_MULTI_EDITS[0]); i++) {
+            const struct hal_edit *e = &HAL_MULTI_EDITS[i];
+            if (e->offset + 4 > len || memcmp(buf + e->offset, e->stock, 4) != 0) {
+                free(buf);
+                snprintf(reason, reasonlen, "The hub's hal has unexpected bytes at 0x%x.", e->offset);
+                return -1;
+            }
+            for (k = 0; k < 4; k++) buf[e->offset + k] = e->patched[k];
+        }
+    }
+    snprintf(tmp, sizeof(tmp), "%s.codex-new", HAL_MULTI_PATH);
+    f = fopen(tmp, "wb");
+    if (!f || fwrite(buf, 1, len, f) != len) {
+        if (f) fclose(f);
+        unlink(tmp);
+        free(buf);
+        snprintf(reason, reasonlen, "The multi-remote hal couldn't be written to flash.");
+        return -1;
+    }
+    free(buf);
+    if (fclose(f) != 0 || chmod(tmp, 0755) != 0) {
+        unlink(tmp);
+        snprintf(reason, reasonlen, "The multi-remote hal couldn't be written to flash.");
+        return -1;
+    }
+    sync();
+    md5[0] = 0;
+    if (file_md5(tmp, md5, sizeof(md5)) != 0 || strcmp(md5, HAL_MULTI_MD5) != 0) {
+        unlink(tmp);
+        snprintf(reason, reasonlen, "The built multi-remote hal doesn't match its expected MD5 (%s), so it was discarded.",
+            md5[0] ? md5 : "unreadable");
+        return -1;
+    }
+    if (rename(tmp, HAL_MULTI_PATH) != 0) {
+        unlink(tmp);
+        snprintf(reason, reasonlen, "The multi-remote hal couldn't be put in place.");
+        return -1;
+    }
+    sync();
+    return 0;
+}
+
+/* Models without a screen paired more than once, as "16414 (slots 1, 2)" text; "" when none. */
+static void rf_duplicate_models(const char *info, char *out, size_t outlen) {
+    static const char *models[] = {"16414", "16422", "16423"};
+    size_t m, used = 0;
+    out[0] = 0;
+    for (m = 0; m < sizeof(models) / sizeof(models[0]); m++) {
+        char want[48], slots[32] = "";
+        const char *p = info;
+        int count = 0;
+        snprintf(want, sizeof(want), "\"EquadID\":\"%s\"", models[m]);
+        while ((p = strstr(p, want)) != NULL) {
+            const char *obj = p, *end = strchr(p, '}'), *idx;
+            while (obj > info && *obj != '{') obj--;
+            idx = strstr(obj, "\"DeviceIndex\":\"");
+            if (idx && end && idx < end) {
+                size_t sl = strlen(slots);
+                snprintf(slots + sl, sizeof(slots) - sl, "%s%c", count ? ", " : "", idx[15]);
+            }
+            count++;
+            p += strlen(want);
+        }
+        if (count > 1 && used < outlen) {
+            used += (size_t)snprintf(out + used, outlen - used, "%s%s (slots %s)", used ? "; " : "", models[m], slots);
+        }
+    }
+}
+
+static void multi_remote_reboot_soon(void) {
+    system("(sleep 3; /sbin/reboot) >/dev/null 2>&1 &");
+}
+
+static void render_multi_remote_json(int fd) {
+    char md5[40], reason[512];
+    int supported = multi_remote_supported(md5, sizeof(md5), reason, sizeof(reason));
+    FILE *f = send_json_start(fd, "200 OK");
+    if (!f) return;
+    fprintf(f, "{\"ok\":true,\"enabled\":%s,\"active\":%s,\"supported\":%s,\"halMd5\":",
+        multi_remote_enabled() ? "true" : "false", multi_remote_active() ? "true" : "false",
+        supported ? "true" : "false");
+    json_write_string(f, md5);
+    fputs(",\"stockMd5\":\"" HAL_STOCK_MD5 "\",\"patchedMd5\":\"" HAL_MULTI_MD5 "\",\"reason\":", f);
+    json_write_string(f, reason);
+    fputs("}\n", f);
+    fclose(f);
+}
+
+static void send_multi_remote_error(int fd, const char *status, const char *error, const char *field, const char *value) {
+    FILE *f = send_json_start(fd, status);
+    if (!f) return;
+    fputs("{\"ok\":false,\"error\":", f);
+    json_write_string(f, error);
+    if (field) {
+        fprintf(f, ",\"%s\":", field);
+        json_write_string(f, value ? value : "");
+    }
+    fputs("}\n", f);
+    fclose(f);
+}
+
+static void render_multi_remote_set_json(int fd, const struct request *req) {
+    char md5[40], reason[512], info[4096], dups[160], msg[384];
+    int want, force, lock_fd, rf_lock, reboot;
+    FILE *f;
+    want = req->body ? json_top_bool(req->body, "enabled", -1) : -1;
+    /* "force" (off only): for a radio that has stopped answering, skip the slot
+       table check and the pairing lock, and just write 0 and restart. */
+    force = req->body ? json_top_bool(req->body, "force", -1) : -1;
+    if (want < 0 || (force < 0 && req->body && json_top_member(req->body, "force"))) {
+        send_multi_remote_error(fd, "400 Bad Request",
+            "Send {\"enabled\": true} or {\"enabled\": false} (and optionally \"force\": true to turn it off).", NULL, NULL);
+        return;
+    }
+    force = force == 1 && !want;
+    lock_fd = open(MULTI_REMOTE_LOCK, O_RDWR | O_CREAT, 0600);
+    if (lock_fd < 0 || flock(lock_fd, LOCK_EX | LOCK_NB) != 0) {
+        if (lock_fd >= 0) close(lock_fd);
+        send_multi_remote_error(fd, "409 Conflict", "The hub is already changing this setting.", NULL, NULL);
+        return;
+    }
+    if (want) {
+        if (!multi_remote_supported(md5, sizeof(md5), reason, sizeof(reason))) {
+            close(lock_fd);
+            send_multi_remote_error(fd, "409 Conflict", reason, "halMd5", md5);
+            return;
+        }
+        if (build_multi_remote_hal(reason, sizeof(reason)) != 0) {
+            close(lock_fd);
+            send_multi_remote_error(fd, "500 Internal Server Error", reason, NULL, NULL);
+            return;
+        }
+        if (write_file_atomic(MULTI_REMOTE_CONF, "1", 1) != 0) {
+            close(lock_fd);
+            send_multi_remote_error(fd, "500 Internal Server Error", "The setting couldn't be saved.", NULL, NULL);
+            return;
+        }
+        reboot = !multi_remote_active();
+    } else if (force) {
+        /* The radio may be hung, so nothing here asks hal anything, and a pair
+           stuck behind it may hold the pairing lock. The guard is best effort.
+           If two remotes of one model are still paired the stock hal hangs too;
+           turning this back on (which doesn't need the radio) recovers. */
+        rf_lock = rf_pair_lock();
+        if (multi_remote_active()) mark_multi_remote_off_pending();
+        if (rf_lock >= 0) close(rf_lock);
+        if (write_file_atomic(MULTI_REMOTE_CONF, "0", 1) != 0) {
+            unlink(MULTI_REMOTE_PENDING);
+            close(lock_fd);
+            send_multi_remote_error(fd, "500 Internal Server Error", "The setting couldn't be saved.", NULL, NULL);
+            return;
+        }
+        reboot = multi_remote_active();
+        if (!reboot) {
+            unlink(HAL_MULTI_PATH);
+            sync();
+        }
+    } else {
+        /* Stock hal hangs its radio on two remotes of one model: refuse until they're unpaired. */
+        rf_lock = rf_pair_lock();
+        if (rf_lock < 0) {
+            close(lock_fd);
+            send_multi_remote_error(fd, "409 Conflict", "A pairing window is open on the hub. Try again when it closes.", NULL, NULL);
+            return;
+        }
+        if (read_rf_info(info, sizeof(info)) != 0) {
+            close(rf_lock);
+            close(lock_fd);
+            send_multi_remote_error(fd, "502 Bad Gateway", "The hub's radio didn't list its paired remotes, so the setting wasn't changed.", NULL, NULL);
+            return;
+        }
+        rf_duplicate_models(info, dups, sizeof(dups));
+        if (dups[0]) {
+            close(rf_lock);
+            close(lock_fd);
+            snprintf(msg, sizeof(msg), "More than one remote of the same model is paired (EquadID %s). "
+                "The hub's stock software can't run two of one model, so unpair the extra ones first.", dups);
+            send_multi_remote_error(fd, "409 Conflict", msg, "duplicates", dups);
+            return;
+        }
+        /* Still holding the pairing lock: block pairing until the reboot, or don't go on. */
+        if (multi_remote_active() && mark_multi_remote_off_pending() != 0) {
+            unlink(MULTI_REMOTE_PENDING);
+            close(rf_lock);
+            close(lock_fd);
+            send_multi_remote_error(fd, "500 Internal Server Error",
+                "The hub couldn't block new pairings until it restarts, so the setting wasn't changed.", NULL, NULL);
+            return;
+        }
+        close(rf_lock);
+        if (write_file_atomic(MULTI_REMOTE_CONF, "0", 1) != 0) {
+            unlink(MULTI_REMOTE_PENDING);
+            close(lock_fd);
+            send_multi_remote_error(fd, "500 Internal Server Error", "The setting couldn't be saved.", NULL, NULL);
+            return;
+        }
+        /* While the copy is bind-mounted, deleting it leaves /usr/bin/hal a stale
+           handle: rcS.local deletes it at the next boot instead, before hal starts. */
+        reboot = multi_remote_active();
+        if (!reboot) {
+            unlink(HAL_MULTI_PATH);
+            sync();
+        }
+    }
+    close(lock_fd);
+    f = send_json_start(fd, "200 OK");
+    if (f) {
+        fprintf(f, "{\"ok\":true,\"enabled\":%s,\"rebooting\":%s%s}\n", want ? "true" : "false", reboot ? "true" : "false",
+            force ? ",\"forced\":true" : "");
+        fclose(f);
+    }
+    if (reboot) {
+        /* End the response now: the reboot job inherits this socket and would
+           otherwise hold the close-delimited reply open until the hub goes down. */
+        shutdown(fd, SHUT_WR);
+        multi_remote_reboot_soon();
+    }
+}
+
+/* Unpair the remote in one radio slot (rf.unpair). Refused while a pairing
+ * window is open, for an empty slot, and outside 1..6 (hal's own range). */
+static void render_remote_unpair_json(int fd, const struct request *req) {
+    char before[4096], after[4096], reply[1024], params[48];
+    int lock, slot, code;
+    FILE *f;
+    slot = req->body ? json_top_int(req->body, "slot", 0) : 0;
+    if (slot < 1 || slot > RF_SLOTS) {
+        f = send_json_start(fd, "400 Bad Request");
+        if (!f) return;
+        fputs("{\"ok\":false,\"error\":\"Give the remote's slot, 1 to 6.\"}\n", f);
+        fclose(f);
+        return;
+    }
+    lock = rf_pair_lock();
+    if (lock < 0) {
+        send_rf_pair_lock_error(fd, lock);
+        return;
+    }
+    if (read_rf_info(before, sizeof(before)) != 0) {
+        close(lock);
+        f = send_json_start(fd, "502 Bad Gateway");
+        if (!f) return;
+        fputs("{\"ok\":false,\"error\":\"The hub's radio didn't list its paired remotes, so nothing was unpaired.\"}\n", f);
+        fclose(f);
+        return;
+    }
+    if (!rf_slot_used(before, slot)) {
+        close(lock);
+        f = send_json_start(fd, "404 Not Found");
+        if (!f) return;
+        fprintf(f, "{\"ok\":false,\"error\":\"No remote is paired in slot %d.\",\"before\":", slot);
+        json_write_string(f, before);
+        fputs("}\n", f);
+        fclose(f);
+        return;
+    }
+    snprintf(params, sizeof(params), "{\"deviceIdx\":%d}", slot);
+    run_hal_json("rf.unpair", params, 10, reply, sizeof(reply));
+    code = json_int(reply, "code", -1);
+    if (read_rf_info(after, sizeof(after)) != 0) {
+        sleep(1);
+        read_rf_info(after, sizeof(after));
+    }
+    close(lock);
+    f = send_json_start(fd, code == 200 ? "200 OK" : "502 Bad Gateway");
+    if (!f) return;
+    fprintf(f, "{\"ok\":%s,\"slot\":%d,\"code\":%d", code == 200 ? "true" : "false", slot, code);
+    if (code != 200) fputs(",\"error\":\"The hub's radio didn't unpair that remote.\"", f);
+    fputs(",\"reply\":", f);
+    json_write_string(f, reply[0] ? reply : "no response");
     fputs(",\"before\":", f);
     json_write_string(f, before);
     fputs(",\"after\":", f);
@@ -10612,6 +11163,45 @@ static void free_request(struct request *req) {
     req->body_len = 0;
 }
 
+/* A header's value without surrounding blanks; a value too long for dst is
+ * stored as "\x01", which matches nothing. */
+static void request_header_copy(char *dst, size_t size, const char *v, const char *end) {
+    while (v < end && (*v == ' ' || *v == '\t')) v++;
+    while (end > v && (end[-1] == ' ' || end[-1] == '\t')) end--;
+    if ((size_t)(end - v) >= size) {
+        snprintf(dst, size, "\x01");
+        return;
+    }
+    memcpy(dst, v, (size_t)(end - v));
+    dst[end - v] = 0;
+}
+
+/* Routes that change the hub's radio or reboot it take only a JSON request
+ * from the hub's own pages: a Content-Type of application/json can't be sent
+ * cross-site without a CORS preflight, which this server never approves, and
+ * a browser's Origin, when present, must be this host. Clients that aren't
+ * browsers send no Origin. Without this, any web page open on the LAN could
+ * post a text/plain body here while sign-in is off. */
+static int request_same_origin_json(const struct request *req) {
+    const char *ct = req->content_type, *o = req->origin;
+    size_t n = strlen("application/json");
+    if (strncasecmp(ct, "application/json", n) != 0 ||
+        (ct[n] != 0 && ct[n] != ';' && ct[n] != ' ' && ct[n] != '\t')) return 0;
+    if (!req->has_origin) return 1;
+    if (strncasecmp(o, "http://", 7) == 0) o += 7;
+    else if (strncasecmp(o, "https://", 8) == 0) o += 8;
+    else return 0;
+    return req->host[0] && strcasecmp(o, req->host) == 0;
+}
+
+static void send_cross_site_refused(int fd) {
+    FILE *f = send_json_start(fd, "403 Forbidden");
+    if (!f) return;
+    fputs("{\"ok\":false,\"error\":\"This change takes a JSON request (Content-Type: application/json) "
+        "from the hub's own web app.\"}\n", f);
+    fclose(f);
+}
+
 static int read_request(int fd, struct request *req) {
     char *buf;
     char *header_end, *line_end, *p;
@@ -10655,6 +11245,13 @@ static int read_request(int fd, struct request *req) {
                     char *v = p + 14;
                     while (*v == ' ' || *v == '\t') v++;
                     snprintf(req->auth, sizeof(req->auth), "%.*s", (int)(e - v), v);
+                } else if (strncasecmp(p, "Content-Type:", 13) == 0) {
+                    request_header_copy(req->content_type, sizeof(req->content_type), p + 13, e);
+                } else if (strncasecmp(p, "Origin:", 7) == 0) {
+                    req->has_origin = 1;
+                    request_header_copy(req->origin, sizeof(req->origin), p + 7, e);
+                } else if (strncasecmp(p, "Host:", 5) == 0) {
+                    request_header_copy(req->host, sizeof(req->host), p + 5, e);
                 }
                 p = e + 2;
             }
@@ -10785,6 +11382,14 @@ static void handle_client(int client) {
         render_remotes_json(client);
     } else if (strcmp(req.method, "POST") == 0 && strcmp(req.path, "/api/remote-pair") == 0) {
         render_remote_pair_json(client, &req);
+    } else if (strcmp(req.method, "POST") == 0 && strcmp(req.path, "/api/remote-unpair") == 0) {
+        if (request_same_origin_json(&req)) render_remote_unpair_json(client, &req);
+        else send_cross_site_refused(client);
+    } else if (strcmp(req.method, "GET") == 0 && strcmp(req.path, "/api/multi-remote") == 0) {
+        render_multi_remote_json(client);
+    } else if (strcmp(req.method, "POST") == 0 && strcmp(req.path, "/api/multi-remote") == 0) {
+        if (request_same_origin_json(&req)) render_multi_remote_set_json(client, &req);
+        else send_cross_site_refused(client);
     } else if (strcmp(req.method, "POST") == 0 && strcmp(req.path, "/api/ir-test-learned") == 0) {
         render_ir_test_learned_json(client, &req);
     } else if (strcmp(req.method, "POST") == 0 && strcmp(req.path, "/api/ir-batch-send") == 0) {

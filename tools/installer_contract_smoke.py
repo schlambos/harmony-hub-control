@@ -49,6 +49,7 @@ from __future__ import annotations
 
 import contextlib
 import hashlib
+import json
 import importlib.util
 import io
 import os
@@ -86,6 +87,7 @@ def load_installer_module():
 
 
 INST = load_installer_module()
+INST_SOURCE = INSTALLER_PY.read_text(encoding="utf-8")
 
 
 def md5_bytes(data: bytes) -> str:
@@ -139,6 +141,15 @@ class FakeHub:
         # Wiring/service exceptions after destinations were replaced.
         self.fail_wiring = False
         self.fail_service_start_times = 0
+        # /usr/bin/hal has the multi-remote copy bind-mounted over it.
+        self.hal_bound = False
+        # The next reboot leaves hal as it was (rcS.local didn't bind the copy).
+        self.reboot_keeps_hal = False
+        # A pairing window is open, and hal's rf.info answer.
+        self.rf_pairing = False
+        self.rf_info = RF_INFO_ONE_SMART
+        # The pending-restart guard can't be written.
+        self.guard_fail = False
         # Short md5sum responses: these paths emit no output line.
         self.md5sum_drop_paths: set[str] = set()
 
@@ -280,6 +291,18 @@ class FakeHub:
                 self.available_bytes += self.root_stages.pop(target)[0] * 2 // 3
             return 0, "", ""
 
+        if c in (INST.multi_remote_off_check_command(True), INST.multi_remote_off_check_command(False)):
+            # --multi-remote off's check: guard, pairing window, rf.info.
+            if not self.hal_bound:
+                return 0, "inactive\n", ""
+            if c == INST.multi_remote_off_check_command(True):
+                if self.guard_fail:
+                    return 0, "guard-failed\n", ""
+                self.events.append(("guard", INST.MULTI_REMOTE_PENDING))
+            if self.rf_pairing:
+                return 0, "pairing\n", ""
+            return 0, self.rf_info + "\n", ""
+
         if c.startswith("rm -f "):
             target = shlex.split(c)[2]
             self.remove_file(target)
@@ -318,7 +341,17 @@ class FakeHub:
 
         if c.startswith("(/bin/sleep 2;"):
             self.events.append(("service", "reboot"))
+            # Like rcS.local at the next boot: bind the copy when the setting is 1.
+            conf = self.fs.get(INST.MULTI_REMOTE_CONF, {}).get("data")
+            self.hal_bound = conf == b"1\n" and INST.HAL_MULTI_DEST in self.fs and not self.reboot_keeps_hal
             return 0, "rebooting\n", ""
+
+        if c == INST.hal_bound_command():
+            return 0, ("bound\n" if self.hal_bound else "stock\n"), ""
+
+        if c == f"touch {INST.MULTI_REMOTE_PENDING} 2>/dev/null; true":
+            self.events.append(("guard", INST.MULTI_REMOTE_PENDING))
+            return 0, "", ""
 
         raise AssertionError(f"fake hub received unexpected command: {c!r}")
 
@@ -507,9 +540,10 @@ def prime_current_hub(hub: FakeHub) -> None:
 class InstallerHarness:
     """Runs the real installer main() against a FakeHub.
 
-    Patches exactly four seams on the imported module: the ssh transport
-    (Installer.run_remote_rc), wait_for_port, time.sleep, and the random
-    staging suffix. Everything else is real installer code.
+    Patches exactly five seams on the imported module: the ssh transport
+    (Installer.run_remote_rc, and Installer.run_remote_raw for binary reads),
+    wait_for_port, time.sleep, and the random staging suffix. Everything else
+    is real installer code.
     """
 
     def __init__(self, hub: FakeHub) -> None:
@@ -537,16 +571,27 @@ class InstallerHarness:
         def fake_run_remote_rc(self_installer, command, input_bytes=None, timeout=90):
             return hub.dispatch(command, input_bytes)
 
+        def fake_run_remote_raw(self_installer, command, timeout=90):
+            # Binary reads (the multi-remote hal): `cat '<path>'` only.
+            match = re.match(r"^cat '?([^' ]+)'?$", command.strip())
+            if not match:
+                raise AssertionError(f"fake hub: unexpected raw command {command!r}")
+            hub.events.append(("raw_read", match.group(1)))
+            entry = hub.fs.get(match.group(1))
+            return (0, entry["data"], "") if entry else (1, b"", f"cat: {match.group(1)}: No such file or directory")
+
         def fake_wait_for_port(host, port, seconds, label):
             hub.events.append(("port_wait", port, label))
             if hub.smoke_fail and port == 8080:
                 raise RuntimeError("simulated service validation failure (fake port 8080)")
 
         old_rrc = INST.Installer.run_remote_rc
+        old_raw = INST.Installer.run_remote_raw
         old_wait = INST.wait_for_port
         old_sleep = INST.time.sleep
         old_suffix = INST.stage_suffix
         INST.Installer.run_remote_rc = fake_run_remote_rc
+        INST.Installer.run_remote_raw = fake_run_remote_raw
         INST.wait_for_port = fake_wait_for_port
         INST.time.sleep = lambda _seconds: None
         INST.stage_suffix = lambda: FAKE_STAGE[len(INST.STAGE_PREFIX):]
@@ -559,10 +604,16 @@ class InstallerHarness:
                     code = int(exc.code or 0)
         finally:
             INST.Installer.run_remote_rc = old_rrc
+            INST.Installer.run_remote_raw = old_raw
             INST.wait_for_port = old_wait
             INST.time.sleep = old_sleep
             INST.stage_suffix = old_suffix
         return code, stdout_buf.getvalue(), stderr_buf.getvalue()
+
+
+def kv_values(stdout: str, key: str) -> list[str]:
+    prefix = key + "="
+    return [line[len(prefix):] for line in stdout.splitlines() if line.startswith(prefix)]
 
 
 def kv_value(stdout: str, key: str) -> str | None:
@@ -1547,6 +1598,337 @@ class PythonInstallerFileStatus(unittest.TestCase):
             INST.perm_to_mode("drwxr-xr-x")
 
 
+RF_INFO_ONE_SMART = '{"id":1,"data":{"EquadID":"34827","Devices":[{"EquadID":"16414","SkinId":"","DeviceIndex":"1","RFID":"1"}],"DeviceCount":1},"code":200}'
+RF_INFO_TWO_SMART = '{"id":1,"data":{"EquadID":"34827","Devices":[{"EquadID":"16414","SkinId":"","DeviceIndex":"1","RFID":"1"},{"EquadID":"16414","SkinId":"","DeviceIndex":"2","RFID":"2"}],"DeviceCount":2},"code":200}'
+
+
+def fake_stock_hal() -> bytes:
+    """A stand-in for the hub's /usr/bin/hal: filler bytes carrying the real
+    stock instructions at the real patch offsets (hal itself is never in
+    the repo). Tests point HAL_STOCK_MD5/HAL_MULTI_MD5 at it."""
+    data = bytearray(b"fake-hal-image-" * 12000)
+    for offset, old, _new in INST.HAL_MULTI_PATCH:
+        data[offset : offset + len(old)] = old
+    return bytes(data)
+
+
+def fake_patched_hal() -> bytes:
+    data = bytearray(fake_stock_hal())
+    for offset, _old, new in INST.HAL_MULTI_PATCH:
+        data[offset : offset + len(new)] = new
+    return bytes(data)
+
+
+class PythonInstallerMultiRemote(unittest.TestCase):
+    """[PYTHON BEHAVIORAL] --multi-remote on|off: the patched hal is built from
+    the hub's own file and fails closed on any other build, the setting
+    reboots the hub only when it changes, off removes the copy, and leaving
+    the flag out touches nothing."""
+
+    def setUp(self):
+        saved = (INST.HAL_STOCK_MD5, INST.HAL_MULTI_MD5)
+        INST.HAL_STOCK_MD5 = md5_bytes(fake_stock_hal())
+        INST.HAL_MULTI_MD5 = md5_bytes(fake_patched_hal())
+
+        def restore():
+            INST.HAL_STOCK_MD5, INST.HAL_MULTI_MD5 = saved
+
+        self.addCleanup(restore)
+
+    def current_hub(self, conf: bytes | None = None, copy: bool = False) -> FakeHub:
+        """A hub that already runs this payload, with the stock hal."""
+        hub = FakeHub()
+        prime_current_hub(hub)
+        hub.fs[INST.HAL_PATH] = {"data": fake_stock_hal(), "mode": "755"}
+        if conf is not None:
+            hub.fs[INST.MULTI_REMOTE_CONF] = {"data": conf, "mode": "644"}
+        if copy:
+            hub.fs[INST.HAL_MULTI_DEST] = {"data": fake_patched_hal(), "mode": "755"}
+        return hub
+
+    def run_on(self, hub: FakeHub, *extra: str, restart: bool = True) -> tuple[int, str, str]:
+        harness = InstallerHarness(hub)
+        self.addCleanup(harness.close)
+        argv = harness.base_argv(*extra)
+        if restart:
+            argv = [a for a in argv if a != "--no-apply-cloud-restart"]
+        elif "--no-apply-cloud-restart" not in argv:
+            argv.append("--no-apply-cloud-restart")
+        return harness.run(argv)
+
+    def writes(self, hub: FakeHub) -> list[str]:
+        return [e[1] for e in hub.events if e[0] == "persistent_write"]
+
+    def test_patch_changes_only_the_two_instructions(self):
+        """[PYTHON BEHAVIORAL] the patch rewrites exactly the table's bytes,
+        accepts an already-patched copy as is, and refuses anything else."""
+        stock, patched = fake_stock_hal(), INST.patched_hal(fake_stock_hal())
+        self.assertEqual(patched, fake_patched_hal())
+        diff = [i for i in range(len(stock)) if stock[i] != patched[i]]
+        allowed = {o + k for o, old, _ in INST.HAL_MULTI_PATCH for k in range(len(old))}
+        self.assertTrue(diff and set(diff) <= allowed, diff)
+        self.assertEqual(INST.patched_hal(patched), patched)
+        with self.assertRaisesRegex(RuntimeError, "not the hal build"):
+            INST.patched_hal(stock + b"x")
+        wrong = bytearray(stock)
+        wrong[INST.HAL_MULTI_PATCH[0][0]] ^= 0xFF
+        INST.HAL_STOCK_MD5 = md5_bytes(bytes(wrong))
+        with self.assertRaisesRegex(RuntimeError, "unexpected bytes"):
+            INST.patched_hal(bytes(wrong))
+
+    def test_real_patch_matches_rcs_local(self):
+        """[PYTHON BEHAVIORAL] the patch file is well formed, the boot script
+        binds only the builds it describes, and it carries both parts: the
+        same-model unpair kept for 16417 and 16420 only, and the per-slot key
+        threads."""
+        doc = json.loads(INST.HAL_PATCH_FILE.read_text(encoding="utf-8"))
+        self.assertEqual(doc["stock_md5"], "a3fdd823440c43f36e235fe51c45f008")
+        self.assertEqual(doc["size"], 363640)
+        rcs = (INST.PAYLOAD / "scripts" / "rcS.local").read_text(encoding="utf-8")
+        for value in (doc["stock_md5"], doc["patched_md5"], INST.HAL_MULTI_DEST, INST.MULTI_REMOTE_CONF, INST.HAL_PATH):
+            self.assertIn(value, rcs)
+        offsets = [o for o, _, _ in INST.HAL_MULTI_PATCH]
+        self.assertEqual(offsets, sorted(set(offsets)))  # sorted, no overlap
+        for offset, old, new in INST.HAL_MULTI_PATCH:
+            self.assertEqual((len(old), len(new)), (4, 4))
+            self.assertNotEqual(old, new)
+            self.assertLess(offset + 4, doc["size"])
+        table = {o: (old, new) for o, old, new in INST.HAL_MULTI_PATCH}
+        # Same-model unpair: skip unless 16417..16420 (only 16417 and 16420
+        # reach it); odd (16417) keeps the stock flag check, even unpairs.
+        self.assertEqual(table[0x27CDC], (bytes.fromhex("3406880e"), bytes.fromhex("2466bfdf")))  # addiu a2, v1, -16417
+        self.assertEqual(table[0x27CE0][1], bytes.fromhex("2cc60004"))  # sltiu a2, a2, 4
+        self.assertEqual(table[0x27CE4][1], bytes.fromhex("10c0ffd9"))  # beqz a2, 0x427c4c (skip)
+        self.assertEqual(table[0x27CE8][1], bytes.fromhex("30660001"))  # andi a2, v1, 1
+        self.assertEqual(table[0x27CEC][1], bytes.fromhex("10c00004"))  # beqz a2, 0x427d00 (unpair)
+        self.assertEqual(table[0x07B04], (bytes.fromhex("8c920000"), bytes.fromhex("00809021")))  # arg by value
+        self.assertIn(0x07B64, table)  # the key thread's malloc'd subscriber
+
+    def test_preflight_on_writes_nothing(self):
+        """[PYTHON BEHAVIORAL] --preflight-only --multi-remote on reads hal and
+        stages the copy in RAM only."""
+        hub = self.current_hub()
+        code, stdout, stderr = self.run_on(hub, "--preflight-only", "--multi-remote", "on")
+        self.assertEqual(code, 0, stderr or stdout)
+        self.assertEqual(kv_value(stdout, "multi_remote"), "on")
+        self.assertIn(("raw_read", INST.HAL_PATH), hub.events)
+        self.assertEqual(self.writes(hub), [])
+        self.assertNotIn(INST.HAL_MULTI_DEST, hub.fs)
+
+    def test_on_installs_the_patched_copy_and_reboots(self):
+        """[PYTHON BEHAVIORAL] on: the patched copy and conf=1 go in, nothing
+        else changes, and the hub reboots so rcS.local binds it."""
+        hub = self.current_hub()
+        code, stdout, stderr = self.run_on(hub, "--multi-remote", "on")
+        self.assertEqual(code, 0, stderr or stdout)
+        self.assertEqual(hub.fs[INST.HAL_MULTI_DEST]["data"], fake_patched_hal())
+        self.assertEqual(hub.fs[INST.HAL_MULTI_DEST]["mode"], "755")
+        self.assertEqual(hub.fs[INST.MULTI_REMOTE_CONF]["data"], b"1\n")
+        self.assertEqual(hub.fs[INST.HAL_PATH]["data"], fake_stock_hal())
+        self.assertEqual(set(install_file_dests(hub, rollback=False)), {INST.HAL_MULTI_DEST, INST.MULTI_REMOTE_CONF})
+        self.assertIn(("service", "reboot"), hub.events)
+        self.assertIn("starts the multi-remote hal", stdout)
+
+        # Run again: nothing changes, no reboot.
+        hub.events.clear()
+        code, stdout, stderr = self.run_on(hub, "--multi-remote", "on")
+        self.assertEqual(code, 0, stderr or stdout)
+        self.assertEqual(self.writes(hub), [])
+        self.assertNotIn(("service", "reboot"), hub.events)
+
+    def test_on_while_bound_reads_the_patched_copy(self):
+        """[PYTHON BEHAVIORAL] with the copy bind-mounted, /usr/bin/hal reads
+        as the patched build; that is accepted as is."""
+        hub = self.current_hub(conf=b"1\n", copy=True)
+        hub.fs[INST.HAL_PATH] = {"data": fake_patched_hal(), "mode": "755"}
+        code, stdout, stderr = self.run_on(hub, "--multi-remote", "on")
+        self.assertEqual(code, 0, stderr or stdout)
+        self.assertEqual(self.writes(hub), [])
+
+    def test_on_refuses_another_hal_build(self):
+        """[PYTHON BEHAVIORAL] any other /usr/bin/hal stops the run before a
+        write: the patch is only right for the build it was made from."""
+        hub = self.current_hub()
+        hub.fs[INST.HAL_PATH]["data"] = b"a different firmware's hal\n" * 100
+        code, stdout, stderr = self.run_on(hub, "--multi-remote", "on")
+        self.assertNotEqual(code, 0)
+        self.assertIn("not the hal build", stdout + stderr)
+        self.assertEqual(self.writes(hub), [])
+
+    def test_off_restores_stock_and_leaves_the_copy_to_rcs_local(self):
+        """[PYTHON BEHAVIORAL] off while the multi-remote hal runs, one remote of
+        each model: the guard goes up, conf=0, the hub reboots into the stock
+        hal; the copy stays for rcS.local to delete at boot (deleting it while
+        bound would leave /usr/bin/hal a stale handle)."""
+        hub = self.current_hub(conf=b"1\n", copy=True)
+        hub.hal_bound = True
+        code, stdout, stderr = self.run_on(hub, "--multi-remote", "off")
+        self.assertEqual(code, 0, stderr or stdout)
+        self.assertEqual(kv_value(stdout, "multi_remote_off_check"), "ok")
+        self.assertIn(("guard", INST.MULTI_REMOTE_PENDING), hub.events)
+        self.assertEqual(hub.fs[INST.MULTI_REMOTE_CONF]["data"], b"0\n")
+        self.assertIn(INST.HAL_MULTI_DEST, hub.fs)
+        self.assertFalse([e for e in hub.events if e[0] == "rm"])
+        self.assertNotIn(("raw_read", INST.HAL_PATH), hub.events)
+        self.assertIn(("service", "reboot"), hub.events)
+        self.assertIn("starts the stock hal", stdout)
+        rcs = (INST.PAYLOAD / "scripts" / "rcS.local").read_text(encoding="utf-8")
+        self.assertIn("rm -f /data/codex/bin/hal_multiremote", rcs)
+
+    def test_off_refused_with_two_remotes_of_one_model(self):
+        """[PYTHON BEHAVIORAL] off with two Smart Controls paired would boot the
+        stock hal onto them and hang its radio: refused before any write, and
+        the guard comes down again."""
+        hub = self.current_hub(conf=b"1\n", copy=True)
+        hub.hal_bound = True
+        hub.rf_info = RF_INFO_TWO_SMART
+        code, stdout, stderr = self.run_on(hub, "--multi-remote", "off")
+        self.assertNotEqual(code, 0)
+        self.assertIn("16414 (slots 1, 2)", stdout + stderr)
+        self.assertEqual(self.writes(hub), [])
+        self.assertIn(("rm", INST.MULTI_REMOTE_PENDING), hub.events)
+        self.assertNotIn(("service", "reboot"), hub.events)
+
+    def test_off_refused_during_pairing_or_without_a_slot_table(self):
+        """[PYTHON BEHAVIORAL] an open pairing window, an rf.info answer that
+        can't be read, or a guard that can't be written refuses off too: the
+        check can't vouch for the table until the reboot."""
+        expected = {"pairing": "pairing window is open", "garbage": "didn't list its paired remotes",
+                    "guard": "couldn't write /var/run/codex-multi-remote-pending"}
+        for setup in ("pairing", "garbage", "guard"):
+            hub = self.current_hub(conf=b"1\n", copy=True)
+            hub.hal_bound = True
+            if setup == "pairing":
+                hub.rf_pairing = True
+            elif setup == "guard":
+                hub.guard_fail = True
+            else:
+                hub.rf_info = "decode_ltcp_payload failed (raw_len=0)"
+            code, stdout, stderr = self.run_on(hub, "--multi-remote", "off")
+            self.assertNotEqual(code, 0, setup)
+            self.assertIn(expected[setup], stdout + stderr)
+            self.assertEqual(self.writes(hub), [], setup)
+
+    def test_off_without_restart_refused_while_the_copy_runs(self):
+        """[PYTHON BEHAVIORAL] --multi-remote off --no-apply-cloud-restart would
+        save 0 and leave the multi-remote hal running, with nothing blocking a
+        duplicate pair once the guard lapses: refused before any write, with no
+        guard left behind. With the stock hal already running it's harmless."""
+        hub = self.current_hub(conf=b"1\n", copy=True)
+        hub.hal_bound = True
+        code, stdout, stderr = self.run_on(hub, "--multi-remote", "off", restart=False)
+        self.assertNotEqual(code, 0)
+        self.assertIn("leave out --no-apply-cloud-restart", stdout + stderr)
+        self.assertEqual(self.writes(hub), [])
+        self.assertNotIn(("guard", INST.MULTI_REMOTE_PENDING), hub.events)
+        self.assertNotIn(("service", "reboot"), hub.events)
+        hub = self.current_hub(conf=b"1\n", copy=True)
+        code, stdout, stderr = self.run_on(hub, "--multi-remote", "off", restart=False)
+        self.assertEqual(code, 0, stderr or stdout)
+        self.assertEqual(kv_value(stdout, "multi_remote_off_check"), "inactive")
+        self.assertEqual(hub.fs[INST.MULTI_REMOTE_CONF]["data"], b"0\n")
+        self.assertNotIn(("service", "reboot"), hub.events)
+
+    def test_reboots_when_the_running_hal_is_not_the_one_asked_for(self):
+        """[PYTHON BEHAVIORAL] the files can be right while the hal isn't (a
+        setting saved without a reboot): on with conf=1 and the copy in place
+        but the stock hal running reboots, and so does off with conf=0 while
+        the copy still runs. After the reboot the installer checks the mount
+        and warns when rcS.local didn't bind what was asked for."""
+        hub = self.current_hub(conf=b"1\n", copy=True)
+        code, stdout, stderr = self.run_on(hub, "--multi-remote", "on")
+        self.assertEqual(code, 0, stderr or stdout)
+        self.assertEqual(self.writes(hub), [])
+        self.assertIn(("service", "reboot"), hub.events)
+        self.assertEqual(kv_values(stdout, "multi_remote_active"), ["no", "yes"])  # before, after the reboot
+        self.assertNotIn("WARNING", stdout)
+
+        hub = self.current_hub(conf=b"0\n", copy=True)
+        hub.hal_bound = True
+        code, stdout, stderr = self.run_on(hub, "--multi-remote", "off")
+        self.assertEqual(code, 0, stderr or stdout)
+        self.assertEqual(self.writes(hub), [])
+        self.assertIn(("service", "reboot"), hub.events)
+        self.assertEqual(kv_values(stdout, "multi_remote_active"), ["no"])  # after the reboot
+
+        hub = self.current_hub(conf=b"1\n", copy=True)
+        hub.reboot_keeps_hal = True
+        code, stdout, stderr = self.run_on(hub, "--multi-remote", "on")
+        self.assertEqual(code, 0, stderr or stdout)
+        self.assertIn("WARNING: the hub restarted but still runs the stock hal", stdout)
+
+    def test_force_off_skips_the_radio(self):
+        """[PYTHON BEHAVIORAL] force-off is for a radio that stopped answering:
+        it asks hal nothing (an open window or an unreadable table doesn't stop
+        it), still puts the guard up, writes conf=0 and reboots; it warns that
+        duplicates would hang the stock hal too. With --no-apply-cloud-restart
+        it is refused while the copy runs."""
+        hub = self.current_hub(conf=b"1\n", copy=True)
+        hub.hal_bound = True
+        hub.rf_pairing = True
+        hub.rf_info = "decode_ltcp_payload failed (raw_len=0)"
+        code, stdout, stderr = self.run_on(hub, "--multi-remote", "force-off")
+        self.assertEqual(code, 0, stderr or stdout)
+        self.assertEqual(kv_value(stdout, "multi_remote"), "force-off")
+        self.assertEqual(kv_value(stdout, "multi_remote_off_check"), "forced")
+        self.assertIn("WARNING: force-off skips the radio check", stdout)
+        self.assertIn(("guard", INST.MULTI_REMOTE_PENDING), hub.events)
+        self.assertEqual(hub.fs[INST.MULTI_REMOTE_CONF]["data"], b"0\n")
+        self.assertIn(("service", "reboot"), hub.events)
+        self.assertFalse(hub.hal_bound)
+
+        hub = self.current_hub(conf=b"1\n", copy=True)
+        hub.hal_bound = True
+        code, stdout, stderr = self.run_on(hub, "--multi-remote", "force-off", restart=False)
+        self.assertNotEqual(code, 0)
+        self.assertIn("leave out --no-apply-cloud-restart", stdout + stderr)
+        self.assertEqual(self.writes(hub), [])
+        self.assertNotIn(("guard", INST.MULTI_REMOTE_PENDING), hub.events)
+
+    def test_off_preflight_checks_without_a_guard(self):
+        """[PYTHON BEHAVIORAL] --preflight-only --multi-remote off reports the
+        check but leaves no guard behind and writes nothing."""
+        hub = self.current_hub(conf=b"1\n", copy=True)
+        hub.hal_bound = True
+        code, stdout, stderr = self.run_on(hub, "--preflight-only", "--multi-remote", "off")
+        self.assertEqual(code, 0, stderr or stdout)
+        self.assertEqual(kv_value(stdout, "multi_remote_off_check"), "ok")
+        self.assertNotIn(("guard", INST.MULTI_REMOTE_PENDING), hub.events)
+        self.assertEqual(self.writes(hub), [])
+
+    def test_off_when_already_off_changes_nothing(self):
+        """[PYTHON BEHAVIORAL] conf already 0 and the stock hal running: the
+        check has nothing to do, nothing is written or rebooted, and a leftover
+        copy is left for rcS.local."""
+        hub = self.current_hub(conf=b"0\n", copy=True)
+        code, stdout, stderr = self.run_on(hub, "--multi-remote", "off")
+        self.assertEqual(code, 0, stderr or stdout)
+        self.assertEqual(kv_value(stdout, "multi_remote_off_check"), "inactive")
+        self.assertIn(INST.HAL_MULTI_DEST, hub.fs)
+        self.assertEqual(self.writes(hub), [])
+        self.assertNotIn(("service", "reboot"), hub.events)
+
+    def test_rf_duplicate_models(self):
+        """[PYTHON BEHAVIORAL] the duplicate finder reads hal's rf.info text."""
+        self.assertEqual(INST.rf_duplicate_models(RF_INFO_ONE_SMART), "")
+        self.assertEqual(INST.rf_duplicate_models(RF_INFO_TWO_SMART), "16414 (slots 1, 2)")
+        self.assertIsNone(INST.rf_duplicate_models("decode_ltcp_payload failed"))
+        self.assertIsNone(INST.rf_duplicate_models('{"id":1,"code":500}'))
+
+    def test_without_the_flag_nothing_changes(self):
+        """[PYTHON BEHAVIORAL] an upgrade without --multi-remote keeps the
+        setting and the copy exactly as they are, and never reads hal."""
+        hub = self.current_hub(conf=b"1\n", copy=True)
+        code, stdout, stderr = self.run_on(hub)
+        self.assertEqual(code, 0, stderr or stdout)
+        self.assertEqual(kv_value(stdout, "multi_remote"), "unchanged")
+        self.assertEqual(hub.fs[INST.MULTI_REMOTE_CONF]["data"], b"1\n")
+        self.assertIn(INST.HAL_MULTI_DEST, hub.fs)
+        self.assertEqual(self.writes(hub), [])
+        self.assertNotIn(("raw_read", INST.HAL_PATH), hub.events)
+        self.assertFalse([e for e in hub.events if e[0] == "rm"])
+
+
 class PowerShellStaticContract(unittest.TestCase):
     """[PS1 STATIC] structured assertions on install_webui.ps1 (no pwsh run).
 
@@ -1619,6 +2001,65 @@ class PowerShellStaticContract(unittest.TestCase):
         self.assertEqual(self.ps_scalar("VerdictConfigUncertain"),
                          INST.VERDICT_CONFIG_UNCERTAIN)
         self.assertEqual(self.ps_scalar("VerdictValidation"), INST.VERDICT_VALIDATION)
+
+    def test_multi_remote_parity(self):
+        """[PS1 STATIC] -MultiRemote on|off mirrors --multi-remote: same
+        paths, md5s and patch table, both inventory branches, the copy
+        removed after a good install (and on the nothing-to-install path),
+        and a reboot when the setting changes."""
+        self.assertEqual(self.ps_scalar("HalPath"), INST.HAL_PATH)
+        self.assertEqual(self.ps_scalar("HalMultiDest"), INST.HAL_MULTI_DEST)
+        self.assertEqual(self.ps_scalar("MultiRemoteConf"), INST.MULTI_REMOTE_CONF)
+        # Both installers apply the one patch file: no md5s or edits inline.
+        self.assertEqual(self.ps_scalar("HalPatchFile"), "helpers/hal_multiremote_patch.json")
+        self.assertEqual(INST.HAL_PATCH_FILE, INST.PAYLOAD / "helpers" / "hal_multiremote_patch.json")
+        getter = self.text.split("function Get-PatchedHal(", 1)[1].split("\nfunction ", 1)[0]
+        for needle in ("ConvertFrom-Json", "$patch.stock_md5", "$patch.patched_md5", "$patch.edits",
+                       "$edit.stock", "$edit.patched", "$edit.offset"):
+            self.assertIn(needle, getter)
+        doc = json.loads(INST.HAL_PATCH_FILE.read_text(encoding="utf-8"))
+        self.assertNotIn(doc["patched_md5"], self.text)
+        self.assertIn('Add-Candidate (New-Candidate $HalMultiDest "755" "binary" -Blob $hal)', self.inventory)
+        self.assertIn('Add-Candidate (New-Candidate $MultiRemoteConf "644" "config" -Text "1`n")', self.inventory)
+        self.assertIn('Add-Candidate (New-Candidate $MultiRemoteConf "644" "config" -Text "0`n")', self.inventory)
+        # Neither installer deletes the copy (rcS.local does, at boot); both check
+        # the slot table before turning it off.
+        self.assertNotIn("Remove-MultiRemoteCopy", self.text)
+        self.assertNotIn("rm -f /data/codex/bin/hal_multiremote", self.text)
+        self.assertEqual(self.ps_scalar("MultiRemotePending"), INST.MULTI_REMOTE_PENDING)
+        self.assertEqual(self.ps_array("NoScreenEquads"), list(INST.NO_SCREEN_EQUADS))
+        self.assertIn('Resolve-HubIdentity\nTest-MultiRemoteOff\n', self.main)
+        command = self.text.split("function Get-MultiRemoteOffCheckCommand(", 1)[1].split("\nfunction ", 1)[0]
+        python_command = INST.multi_remote_off_check_command(True)
+        for fragment in ("then echo inactive; ", "then echo guard-failed; ",
+                         "elif ps | grep '[r]f.pairing' >/dev/null 2>&1; then echo pairing; ",
+                         "else /data/codex/bin/codex_hal_ltcp rf.info '{}' 8 2>&1; fi"):
+            self.assertIn(fragment, python_command)
+            self.assertIn(fragment, command)
+        self.assertIn("-or $multiRemoteChanged) -and -not $NoApplyCloudRestart", self.main)
+        # force-off, the mount probe, and the reboot decided by the running hal too.
+        self.assertRegex(self.text, r'\[ValidateSet\("on", "off", "force-off"\)\]\s*\[string\]\$MultiRemote')
+        self.assertIn('$MultiRemoteForce = $MultiRemote -eq "force-off"', self.text)
+        bound = self.text.split("function Get-HalBoundCommand(", 1)[1].split("\nfunction ", 1)[0]
+        self.assertIn(INST.hal_bound_command().replace(INST.HAL_PATH, "$HalPath"), bound)
+        check = self.text.split("function Test-MultiRemoteOff(", 1)[1].split("\nfunction ", 1)[0]
+        self.assertIn('KV "multi_remote_off_check=forced"', check)
+        self.assertIn("WARNING: force-off skips the radio check", check)
+        self.assertIn('Invoke-Remote "touch $MultiRemotePending 2>/dev/null; true"', check)
+        self.assertLess(check.index("if ($MultiRemoteForce) {"), check.index("Get-MultiRemoteOffCheckCommand"))
+        changed = self.text.split("function Test-MultiRemoteChanged(", 1)[1].split("\nfunction ", 1)[0]
+        self.assertIn('($script:HalBound -ne ($MultiRemote -eq "on"))', changed)
+        restart = self.text.split("function Restart-HubAndWait(", 1)[1].split("\nfunction ", 1)[0]
+        self.assertIn("WARNING: the hub restarted but still runs the", restart)
+        early = self.main.split("if ((Get-ActiveCandidates).Count -eq 0) {", 1)[1].split("\n}\n", 1)[0]
+        self.assertIn("(Test-MultiRemoteChanged) -and -not $NoApplyCloudRestart", early)
+        self.assertIn("Restart-HubAndWait", early)
+        # Off without the restart is refused while the copy runs, before the guard.
+        check = self.text.split("function Test-MultiRemoteOff(", 1)[1].split("\nfunction ", 1)[0]
+        self.assertIn("$guard = (-not $PreflightOnly) -and (-not $NoApplyCloudRestart)", check)
+        self.assertLess(check.index('if ($out -eq "inactive")'), check.index("if ($NoApplyCloudRestart) {"))
+        self.assertLess(check.index("if ($NoApplyCloudRestart) {"), check.index('elseif ($out -eq "guard-failed")'))
+        self.assertNotIn("FromHexString", self.text)  # Windows PowerShell 5.1
 
     def test_path_arrays_match_python(self):
         """[PS1 STATIC] handoff-required and upgrade-protected paths match."""

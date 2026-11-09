@@ -102,6 +102,94 @@ ROOT_TOOL_DROPBEAR_REMOVE = (
     "rm -f " + " ".join(ROOT_TOOL_FILES) + " && echo removed; fi"
 )
 
+# Multiple remotes of one model (docs/MULTI_REMOTE.md). Stock hal keeps one
+# remote per model: it unpairs an older one after every pair, and its key
+# threads keep per-model state (one radio subscriber, one thread handle), so
+# two remotes of one model hang its radio dispatcher. --multi-remote on makes a
+# copy of the hub's own /usr/bin/hal with those made per slot and the
+# same-model unpair kept only for remotes with a screen and the keyboard
+# (whose thread state is per model too); rcS.local bind-mounts
+# it over /usr/bin/hal at boot. The copy is built here from the hub's file
+# with the edits in payload/helpers/hal_multiremote_patch.json; hal itself is
+# never shipped.
+HAL_PATH = "/usr/bin/hal"
+HAL_MULTI_DEST = "/data/codex/bin/hal_multiremote"
+MULTI_REMOTE_CONF = "/data/codex/multi_remote.conf"
+HAL_PATCH_FILE = PAYLOAD / "helpers" / "hal_multiremote_patch.json"
+# Turning it off reboots into the stock hal, which hangs its radio on two
+# remotes of one model. So --multi-remote off first checks the slot table on
+# the hub, while the multi-remote hal runs: it writes the pending-restart guard
+# (codex_webui's /api/remote-pair refuses while it's there; it lives in RAM
+# and lapses after 10 minutes), refuses during an open pairing window, then
+# reads rf.info. The copy itself is left to rcS.local, which deletes it at the
+# next boot when the setting isn't 1.
+MULTI_REMOTE_PENDING = "/var/run/codex-multi-remote-pending"
+NO_SCREEN_EQUADS = ("16414", "16422", "16423")
+
+
+def hal_bound_command() -> str:
+    """Whether rcS.local bind-mounted the multi-remote copy over /usr/bin/hal at boot."""
+    return f"if grep ' {HAL_PATH} ' /proc/mounts >/dev/null 2>&1; then echo bound; else echo stock; fi"
+
+
+def multi_remote_off_check_command(guard: bool) -> str:
+    # A guard that can't be written stops the check (guard-failed): without
+    # it, nothing blocks a pair between the check and the reboot.
+    touch = f"elif ! touch {MULTI_REMOTE_PENDING}; then echo guard-failed; " if guard else ""
+    return (
+        f"if ! grep ' {HAL_PATH} ' /proc/mounts >/dev/null 2>&1; then echo inactive; "
+        f"{touch}elif ps | grep '[r]f.pairing' >/dev/null 2>&1; then echo pairing; "
+        "else /data/codex/bin/codex_hal_ltcp rf.info '{}' 8 2>&1; fi"
+    )
+
+
+def rf_duplicate_models(reply: str) -> str | None:
+    """Models without a screen paired more than once in hal's rf.info answer,
+    as "16414 (slots 1, 2)"; "" when none; None when it isn't a valid answer."""
+    start = reply.find("{")
+    try:
+        doc = json.loads(reply[start:]) if start >= 0 else None
+    except ValueError:
+        doc = None
+    if not isinstance(doc, dict) or doc.get("code") != 200 or not isinstance(doc.get("data"), dict):
+        return None
+    slots: dict[str, list[str]] = {}
+    for dev in doc["data"].get("Devices") or []:
+        if isinstance(dev, dict) and str(dev.get("EquadID")) in NO_SCREEN_EQUADS:
+            slots.setdefault(str(dev["EquadID"]), []).append(str(dev.get("DeviceIndex", "?")))
+    return "; ".join(f"{m} (slots {', '.join(v)})" for m, v in slots.items() if len(v) > 1)
+
+
+def load_hal_patch(path: Path = HAL_PATCH_FILE) -> tuple[str, str, list[tuple[int, bytes, bytes]]]:
+    """(stock md5, patched md5, [(offset, stock bytes, patched bytes)])."""
+    doc = json.loads(path.read_text(encoding="utf-8"))
+    edits = [(int(e["offset"], 16), bytes.fromhex(e["stock"]), bytes.fromhex(e["patched"])) for e in doc["edits"]]
+    return doc["stock_md5"], doc["patched_md5"], edits
+
+
+HAL_STOCK_MD5, HAL_MULTI_MD5, HAL_MULTI_PATCH = load_hal_patch()
+
+
+def patched_hal(data: bytes) -> bytes:
+    """The multi-remote hal from the hub's own /usr/bin/hal; fails closed."""
+    digest = hashlib.md5(data).hexdigest()
+    if digest == HAL_MULTI_MD5:
+        return data  # already the patched build (read while it is bind-mounted)
+    if digest != HAL_STOCK_MD5:
+        raise RuntimeError(
+            f"{HAL_PATH} on this hub is not the hal build multi-remote supports "
+            f"(md5 {digest}, expected {HAL_STOCK_MD5} from firmware 4.15.600)"
+        )
+    out = bytearray(data)
+    for offset, old, new in HAL_MULTI_PATCH:
+        if bytes(out[offset : offset + len(old)]) != old:
+            raise RuntimeError(f"{HAL_PATH}: unexpected bytes at {offset:#x}")
+        out[offset : offset + len(new)] = new
+    if hashlib.md5(out).hexdigest() != HAL_MULTI_MD5:
+        raise RuntimeError("the patched hal does not match its expected md5")
+    return bytes(out)
+
+
 HANDOFF_REQUIRED_PATHS = [
     "/etc/init.d/rcS.local",
     "/opt/luaworks/tasks/connectserver/netservicestarter.lua",
@@ -119,6 +207,7 @@ HANDOFF_REQUIRED_PATHS = [
 UPGRADE_PROTECTED_PATHS = [
     "/data/codex/hub_id",
     "/data/codex/cloud_blocker.conf",
+    MULTI_REMOTE_CONF,
     "/data/codexmqtt/config.json",
     "/data/codex/resource-backups",
     "/data/codex-backups",
@@ -309,12 +398,14 @@ class Candidate:
         text: str | None = None,
         sensitive: bool = False,
         condition: str = "always",
+        blob: bytes | None = None,
     ) -> None:
         self.dest = dest
         self.mode = mode
         self.kind = kind  # binary | runtime | plugin | config
         self.local = local
         self.text = text
+        self.blob = blob  # bytes built at install time (the multi-remote hal)
         self.sensitive = sensitive
         self.condition = condition  # always | if-missing
         self.bytes = 0
@@ -326,6 +417,8 @@ class Candidate:
         self.link_source = ""
 
     def data(self) -> bytes:
+        if self.blob is not None:
+            return self.blob
         if self.local is not None:
             return self.local.read_bytes()
         return (self.text or "").encode("utf-8")
@@ -425,6 +518,8 @@ class Installer:
         self.stage = ""
         self.preserve_stage = False
         self.candidates: list[Candidate] = []
+        # Whether the multi-remote hal runs now; None until checked (--multi-remote only).
+        self.hal_bound: bool | None = None
         self.probe: dict[str, dict[str, str]] = {}
         self.handoff_estimate = 0
         self.forward_total = 0
@@ -470,6 +565,23 @@ class Installer:
             "StrictHostKeyChecking=accept-new",
             f"{self.args.ssh_user}@{self.args.hub_host}",
         ]
+
+    def run_remote_raw(self, command: str, timeout: int = 90) -> tuple[int, bytes, str]:
+        """Like run_remote_rc, with stdout left as bytes (for reading a binary)."""
+        proc = subprocess.run(
+            self.ssh_base_args() + [command],
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            timeout=timeout,
+            check=False,
+        )
+        return proc.returncode, proc.stdout, proc.stderr.decode("utf-8", "replace")
+
+    def read_remote_bytes(self, path: str, timeout: int = 120) -> bytes:
+        code, out, err = self.run_remote_raw(f"cat {remote_quote(path)}", timeout=timeout)
+        if code != 0:
+            raise RuntimeError(f"could not read {path} from the hub (exit {code}): {err.strip()}")
+        return out
 
     def run_remote_rc(
         self,
@@ -729,6 +841,14 @@ class Installer:
             ("/pkg/codexmqtt/manifest.json", '{"plugin":"codexmqtt"}\n'),
         ):
             candidates.append(Candidate(dest, "644", "config", text=text, condition="if-missing"))
+        # Multiple remotes of one model: only when asked, either way.
+        if self.args.multi_remote == "on":
+            hal = patched_hal(self.read_remote_bytes(HAL_PATH))
+            candidates.append(Candidate(HAL_MULTI_DEST, "755", "binary", blob=hal))
+            candidates.append(Candidate(MULTI_REMOTE_CONF, "644", "config", text="1\n"))
+        elif self.args.multi_remote == "off":
+            # The copy itself goes after a successful install (post_install_wiring).
+            candidates.append(Candidate(MULTI_REMOTE_CONF, "644", "config", text="0\n"))
         if clean or self.mqtt_explicit():
             candidates.append(
                 Candidate(
@@ -762,7 +882,7 @@ class Installer:
     def probe_destinations(self) -> None:
         step("Probing destination state (BusyBox ls -l / md5sum)")
         dests = [c.dest for c in self.candidates]
-        dests += [p for p in HANDOFF_REQUIRED_PATHS + [ROOT_TOOL_DROPBEAR] if p not in dests]
+        dests += [p for p in HANDOFF_REQUIRED_PATHS + [ROOT_TOOL_DROPBEAR, HAL_MULTI_DEST] if p not in dests]
         self.probe = self.file_status(dests)
         for cand in self.candidates:
             if self.probe[cand.dest]["kind"] in ("symlink", "other"):
@@ -1027,6 +1147,13 @@ class Installer:
                 "preserved unless a candidate explicitly replaces it."
             )
         kv(f"preflight_mode={'clean' if self.args.clean_install else 'upgrade'}")
+        kv(f"multi_remote={'force-off' if self.args.multi_remote_force else self.args.multi_remote or 'unchanged'}")
+        if self.args.multi_remote == "on":
+            info(
+                f"Multiple remotes of one model: {HAL_MULTI_DEST} is the hub's own hal "
+                f"(md5 {HAL_STOCK_MD5}) with per-slot remote threads and the one-remote-per-model "
+                "rule lifted for remotes without a screen; rcS.local runs it from the next boot."
+            )
         kv(f"candidate_count={len(self.candidates)}")
         kv(f"changed_count={len(self.active_candidates())}")
         info(
@@ -1484,6 +1611,77 @@ class Installer:
         )
         self.run_remote(post, timeout=60, quiet=True)
 
+    def probe_hal_bound(self) -> bool:
+        out = self.run_remote(hal_bound_command(), timeout=30, quiet=True).strip()
+        if out not in ("bound", "stock"):
+            raise RuntimeError(f"couldn't tell whether the multi-remote hal runs: {out!r}")
+        return out == "bound"
+
+    def check_multi_remote_off(self) -> None:
+        """--multi-remote off while the multi-remote hal runs: refuse unless the
+        slot table holds no two remotes of one model (see MULTI_REMOTE_PENDING).
+        Also records whether the copy runs now (self.hal_bound), which decides
+        the reboot as much as the files do: a setting saved without one (or a
+        copy rcS.local didn't bind) leaves the files right and the hal wrong."""
+        if self.args.multi_remote == "on":
+            self.hal_bound = self.probe_hal_bound()
+            kv(f"multi_remote_active={'yes' if self.hal_bound else 'no'}")
+        if self.args.multi_remote != "off":
+            return
+        if self.args.multi_remote_force:
+            # force-off: for a radio that stopped answering, check nothing that
+            # needs hal. The guard is best effort; the reboot follows at once.
+            self.hal_bound = self.probe_hal_bound()
+            kv(f"multi_remote_active={'yes' if self.hal_bound else 'no'}")
+            if self.hal_bound and self.args.no_apply_cloud_restart:
+                raise RuntimeError(
+                    "--multi-remote force-off refused: the multi-remote hal is running, and "
+                    "--no-apply-cloud-restart would keep it running; leave out --no-apply-cloud-restart"
+                )
+            if self.hal_bound and not self.args.preflight_only:
+                self.run_remote(f"touch {MULTI_REMOTE_PENDING} 2>/dev/null; true", timeout=30, quiet=True)
+            kv("multi_remote_off_check=forced")
+            info(
+                "WARNING: force-off skips the radio check: if two remotes of one model are still paired, the stock hal "
+                "hangs on them too. Turn it back on (--multi-remote on), unpair the extra remote, then turn it off."
+            )
+            return
+        # Without the reboot the multi-remote hal keeps running on setting 0, and
+        # once the guard lapses a pair could add a duplicate that the stock hal
+        # hangs on at the next boot: refuse that before writing anything.
+        no_restart = self.args.no_apply_cloud_restart
+        guard = not self.args.preflight_only and not no_restart
+        out = self.run_remote(multi_remote_off_check_command(guard), timeout=60, quiet=True).strip()
+        self.hal_bound = out != "inactive"
+        if out == "inactive":
+            kv("multi_remote_off_check=inactive")
+            return
+        problem = ""
+        if no_restart:
+            problem = (
+                "the multi-remote hal is running, and --no-apply-cloud-restart would keep it running after the "
+                "setting is saved, with nothing to stop a second remote of one model being paired before the "
+                "stock hal starts; leave out --no-apply-cloud-restart so the hub restarts"
+            )
+        elif out == "guard-failed":
+            problem = f"the hub couldn't write {MULTI_REMOTE_PENDING}, which blocks new pairings until it restarts"
+        elif out == "pairing":
+            problem = "a pairing window is open on the hub; try again when it closes"
+        else:
+            dups = rf_duplicate_models(out)
+            if dups is None:
+                problem = "the hub's radio didn't list its paired remotes"
+            elif dups:
+                problem = (
+                    f"more than one remote of the same model is paired (EquadID {dups}); the stock hal "
+                    "can't run two of one model, so unpair the extra ones first (Settings → Remotes)"
+                )
+        if problem:
+            if guard:
+                self.run_remote(f"rm -f {MULTI_REMOTE_PENDING}", timeout=30, quiet=True)
+            raise RuntimeError(f"--multi-remote off refused: {problem}")
+        kv("multi_remote_off_check=ok")
+
     def start_services(self) -> None:
         start = (
             "killall codex_webui 2>/dev/null || true; killall codex_bthid_keyboard 2>/dev/null || true; "
@@ -1515,6 +1713,36 @@ class Installer:
         cloud = {"/opt/luaworks/tasks/connectserver/netservicestarter.lua", "/data/codex/cloud_blocker.conf"}
         return any(c.dest in cloud for c in self.active_candidates())
 
+    def multi_remote_changed(self) -> bool:
+        # hal starts once at boot (rcS), so only a reboot swaps it: needed when
+        # the files change, or when the running hal isn't the one asked for.
+        files = any(c.dest in (HAL_MULTI_DEST, MULTI_REMOTE_CONF) for c in self.active_candidates())
+        if self.args.multi_remote not in ("on", "off") or self.hal_bound is None:
+            return files
+        return files or self.hal_bound != (self.args.multi_remote == "on")
+
+    def wanted_hal(self) -> str:
+        return "multi-remote" if self.args.multi_remote == "on" else "stock"
+
+    def reboot_and_wait(self) -> None:
+        self.run_remote("(/bin/sleep 2; /sbin/reboot || reboot) >/dev/null 2>&1 & echo rebooting", timeout=30, quiet=True)
+        time.sleep(8)
+        wait_for_port(self.args.hub_host, self.args.port, 180, "SSH")
+        wait_for_port(self.args.hub_host, 8080, 180, "Web UI")
+        self.verify_multi_remote_after_reboot()
+
+    def verify_multi_remote_after_reboot(self) -> None:
+        if self.args.multi_remote not in ("on", "off"):
+            return
+        want = self.args.multi_remote == "on"
+        bound = self.probe_hal_bound()
+        kv(f"multi_remote_active={'yes' if bound else 'no'}")
+        if bound != want:
+            info(
+                "WARNING: the hub restarted but still runs the " + ("stock" if want else "multi-remote")
+                + " hal; see /cache/codex-init.log on the hub"
+            )
+
     def plugins_changed(self) -> bool:
         # The engine loads /pkg plugins once at start; only a reboot restarts it.
         return any(c.kind == "plugin" for c in self.active_candidates())
@@ -1526,6 +1754,7 @@ class Installer:
 
         step("Resolving hub id")
         self.resolve_hub_id()
+        self.check_multi_remote_off()
 
         step("Building candidate inventory")
         self.build_inventory()
@@ -1580,6 +1809,14 @@ class Installer:
 
         if not self.active_candidates():
             self.cleanup_stage()
+            if self.multi_remote_changed() and not self.args.no_apply_cloud_restart:
+                # The files match, but the running hal isn't the one asked for.
+                step("Restarting the hub")
+                info("The files already match; rebooting the hub so it starts the " + self.wanted_hal() + " hal.")
+                self.reboot_and_wait()
+                step("Done")
+                info("The hub already matched this payload; it was restarted to apply the multi-remote setting.")
+                return 0
             step("Done")
             info("The hub already matches this payload; nothing was installed or restarted.")
             return 0
@@ -1645,16 +1882,17 @@ class Installer:
         self.report_flash_after_install()
         self.cleanup_stage()
 
-        if (self.cloud_blocker_changed() or self.plugins_changed()) and not self.args.no_apply_cloud_restart:
+        if (
+            self.cloud_blocker_changed() or self.plugins_changed() or self.multi_remote_changed()
+        ) and not self.args.no_apply_cloud_restart:
             step("Restarting the hub")
             if self.cloud_blocker_changed():
                 info("Rebooting the hub so Logitech cloud services restart in blocked mode.")
-            else:
+            elif self.plugins_changed():
                 info("Rebooting the hub so its engine loads the updated plugins.")
-            self.run_remote("(/bin/sleep 2; /sbin/reboot || reboot) >/dev/null 2>&1 & echo rebooting", timeout=30, quiet=True)
-            time.sleep(8)
-            wait_for_port(self.args.hub_host, self.args.port, 180, "SSH")
-            wait_for_port(self.args.hub_host, 8080, 180, "Web UI")
+            else:
+                info("Rebooting the hub so it starts the " + self.wanted_hal() + " hal.")
+            self.reboot_and_wait()
 
         step("Done")
         if self.first_install:
@@ -1668,6 +1906,12 @@ class Installer:
         info("Web UI authentication: disabled")
         if not self.args.skip_cloud_suppression:
             info("Cloud blocker: enabled" + (" and applied" if self.cloud_blocker_changed() else " (unchanged)"))
+        if self.args.multi_remote:
+            info(
+                "Multiple remotes of one model: "
+                + ("on (remotes without a screen)" if self.args.multi_remote == "on" else "off")
+                + (" and applied" if self.multi_remote_changed() else " (unchanged)")
+            )
         info("If IR commands do not work, update /data/codex/hub_id with the correct hub id and restart codex_webui.")
         return 0
 
@@ -1706,7 +1950,18 @@ def parse_args(argv: list[str]) -> argparse.Namespace:
     parser.add_argument("--mqtt-client-id", default=None, help="MQTT client ID")
     parser.add_argument("--mqtt-disabled", action="store_true", default=None, help="Install with MQTT disabled")
     parser.add_argument("--skip-cloud-suppression", action="store_true", help="Do not replace netservicestarter.lua")
-    parser.add_argument("--no-apply-cloud-restart", action="store_true", help="Do not reboot after the Logitech cloud blocker files or engine plugins change")
+    parser.add_argument("--no-apply-cloud-restart", action="store_true", help="Do not reboot after the Logitech cloud blocker files, engine plugins or multi-remote setting change")
+    parser.add_argument(
+        "--multi-remote",
+        choices=("on", "off", "force-off"),
+        default=None,
+        help=(
+            "Let the hub keep several remotes without a screen of the same model (they share one "
+            "button setup); 'off' restores the stock one-remote-per-model rule. 'force-off' does "
+            "that without asking the radio first, for a radio that stopped answering. Omitted: "
+            "unchanged. See docs/MULTI_REMOTE.md"
+        ),
+    )
     parser.add_argument("--no-prompt", action="store_true", help="Fail instead of asking for missing required values")
     parser.add_argument(
         "--remove-root-tool-leftovers",
@@ -1746,7 +2001,12 @@ def parse_args(argv: list[str]) -> argparse.Namespace:
             "existing configuration unless a candidate explicitly replaces it."
         ),
     )
-    return parser.parse_args(argv)
+    args = parser.parse_args(argv)
+    # force-off is off without the radio check (check_multi_remote_off()).
+    args.multi_remote_force = args.multi_remote == "force-off"
+    if args.multi_remote_force:
+        args.multi_remote = "off"
+    return args
 
 
 def main(argv: list[str]) -> int:

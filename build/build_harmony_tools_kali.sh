@@ -57,8 +57,8 @@ STRIP=mips-buildroot-linux-uclibc-strip
 # ---------------------------------------------------------------------------
 
 #: expected output digests (fail closed on any mismatch)
-WEBUI_EXPECT_SHA256=8da6f2a5846edc6487954c65d93fe4f22b36e42159e3ee5b8ec5bb179cd32d5c
-WEBUI_EXPECT_SIZE=1238388
+WEBUI_EXPECT_SHA256=b1bea946b1f5437d81ae515cf39ef772d53331755be9da86258f96367a74b7ec
+WEBUI_EXPECT_SIZE=1257364
 PAIR_EXPECT_SHA256=ab89be44f8d1db48e95a12ec3673145edfb8eb761f5e8db03f4e61acb8b01d72
 PAIR_EXPECT_SIZE=112708
 BTHID_EXPECT_SHA256=099b8a1428c2f34fe0b3428d280f65402cc6a5fd1e8e5723c56b462cc8ec2a86
