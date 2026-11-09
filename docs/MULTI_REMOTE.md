@@ -101,7 +101,10 @@ Nothing else changes:
 Tested on hardware (Harmony Hub, firmware 4.15.600, two Smart Controls):
 - boot with one remote, then pair a second;
 - keys from both reach the engine and do the same thing;
-- unpair the second (its thread exits), then pair it again.
+- unpair the second (its thread exits), then pair it again;
+- a reboot with both remotes already paired: the copy bound at boot,
+  `rf.info` answered in 0.05 s listing both slots, 19 key presses all
+  reached the engine, and the radio still answered five minutes later.
 
 The radio answered throughout. Each subscriber leaks 92 bytes of RAM when its
 remote is unpaired.
@@ -171,6 +174,9 @@ nothing: it writes `0` and reboots into the stock `hal`.
 If two remotes of one model are still paired, the stock `hal` hangs on them
 too. Turning it back on doesn't need the radio, so do that, unpair the extra
 remote, and turn it off again.
+
+The by-hand path needs SSH. The recovery AP (`codex_portal`) only handles
+Wi-Fi setup, so it cannot write the conf.
 
 ### Checking it
 
