@@ -80,7 +80,7 @@ data class HubDevice(
     val inputCommands: Map<String, String> = emptyMap(),
     /** The Home Assistant device key (the `{d}` token), or null for other devices. */
     val haKey: String? = null,
-    /** `AutoDetectedDevice.Id`: `melodious-ha-…` or `melodious-androidtv-…` for the hub's IP devices. */
+    /** `AutoDetectedDevice.Id`: `melodious-ha-…`, `melodious-androidtv-…` or `melodious-bt-…` for the hub's IP devices. */
     val autoDetectedId: String = "",
 ) {
     val isBluetoothHid: Boolean get() = transport == 32
@@ -88,9 +88,13 @@ data class HubDevice(
     /** A network Android/Google TV the hub drives itself (an IP device, but not Home Assistant's). */
     val isNetworkTv: Boolean get() = autoDetectedId.startsWith("melodious-androidtv-")
 
+    /** A saved Bluetooth keyboard target the hub publishes as an IP device (its keys go out over Bluetooth). */
+    val isHubBluetooth: Boolean get() = autoDetectedId.startsWith("melodious-bt-")
+
     /** Transport 64 or a Home Assistant manufacturer, as the web app decides it. */
     val isHomeAssistant: Boolean
-        get() = !isNetworkTv && (transport == 64 || manufacturer.contains("home assistant", ignoreCase = true))
+        get() = !isNetworkTv && !isHubBluetooth &&
+            (transport == 64 || manufacturer.contains("home assistant", ignoreCase = true))
 }
 
 @Serializable

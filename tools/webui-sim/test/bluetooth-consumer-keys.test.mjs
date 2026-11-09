@@ -75,6 +75,17 @@ function usageMap(source) {
   return map;
 }
 
+/* The Consumer keys: bt_consumer_usage()'s { "name", 0x... } table. Every
+   name in it goes out in report 3, whatever its usage number. */
+function consumerMap(source) {
+  const body = functionBody(source, "static int bt_consumer_usage");
+  const map = new Map();
+  for (const m of body.matchAll(/\{"([a-z0-9]+)", (0x[0-9a-fA-F]+)\}/g)) {
+    map.set(m[1], Number.parseInt(m[2], 16));
+  }
+  return map;
+}
+
 function hexBytes(hex) {
   return Buffer.from(hex, "hex");
 }
@@ -82,10 +93,13 @@ function hexBytes(hex) {
 describe("Bluetooth Consumer page keys (#89)", () => {
   const source = read(WEBUI_C);
   const usages = usageMap(source);
+  const consumer = consumerMap(source);
 
   it("maps every requested key name to the standard Consumer usage", () => {
     for (const [name, usage] of Object.entries(CONSUMER_KEYS)) {
-      assert.equal(usages.get(name), usage, `${name} usage`);
+      assert.equal(consumer.get(name), usage, `${name} usage`);
+      assert.equal(usages.has(name), false,
+        `${name} must not also be a keyboard-page name: below 0x100 it would go out as a keyboard key`);
       assert.ok(usage >= 0x001 && usage <= 0x2ff,
         `${name} 0x${usage.toString(16)} is inside the descriptor's 0x001..0x2ff range`);
     }

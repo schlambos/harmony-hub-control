@@ -1906,6 +1906,21 @@ local ANDROIDTV_FAMILY = {
   power = {on = "PowerOn", off = "PowerOff"}
 }
 
+-- Saved Bluetooth keyboard targets (codex_webui's bt-devices.json) as Harmony
+-- devices. Each press posts to codex_webui on the hub itself, which sends the
+-- key to the target over Bluetooth HID. {d} is the saved device's id, {c} a
+-- key name codex_webui understands (tvhome, select, volumeup, ...). Unlike
+-- the network TVs, codex_webui sends the command list, so a key's name and
+-- the key it sends can differ (Home -> tvhome).
+local BT_FAMILY = {
+  label = "Bluetooth keyboard", tag = "melodious-bt-", protocolName = "Melodious Bluetooth keyboard",
+  manufacturer = "Melodious Bluetooth", defaultModel = "Bluetooth keyboard target",
+  deviceType = 44, typeName = "Home Appliance", icon = 44,
+  idPattern = "^bt_[0-9]+_[0-9]+$", idHint = "a saved Bluetooth device ID such as bt_1730000000_42",
+  -- Only codex_webui on this hub; never a URL from the request.
+  webhook = "http://127.0.0.1:8080/api/bt-webhook"
+}
+
 -- The engine clears capodDeviceList[uid] after every answered IP command,
 -- and a device without AutoDetectedDevice.Id has no uid: that throws and
 -- kills the IP command task until the hub reboots. The tag is never a real
@@ -2430,17 +2445,26 @@ local function commitHaDevices(request, family)
     protocolList[key] = value
   end
   protocolList.Protocols = {}
-  local protocolId
+  -- The family's protocol keeps its place, so a commit for one family never
+  -- reorders (and so never re-saves) a list that holds another's too.
+  local protocolId, protocolSlot
   for _, protocol in ipairs(oldProtocols.resource.Protocols) do
     if isHaProtocol(protocol, family) then
-      protocolId = protocolId or protocol["Id-"]
+      if not protocolId then
+        protocolId = protocol["Id-"]
+        protocolSlot = #protocolList.Protocols + 1
+        protocolList.Protocols[protocolSlot] = false
+      end
     else
       protocolList.Protocols[#protocolList.Protocols + 1] = protocol
     end
   end
   if #set.devices > 0 then
     protocolId = protocolId or nextId()
-    protocolList.Protocols[#protocolList.Protocols + 1] = haProtocol(protocolId, set.webhook, family)
+    protocolSlot = protocolSlot or #protocolList.Protocols + 1
+    protocolList.Protocols[protocolSlot] = haProtocol(protocolId, set.webhook, family)
+  elseif protocolSlot then
+    table.remove(protocolList.Protocols, protocolSlot)
   end
 
   local now = "/Date(" .. tostring(os.time() or 0) .. "000+0000)/"
@@ -2719,6 +2743,8 @@ local function processRequest(raw)
     response = commitHaDevices(request, HA_FAMILY)
   elseif request.op == "CommitAndroidTvDevices" then
     response = commitHaDevices(request, ANDROIDTV_FAMILY)
+  elseif request.op == "CommitBtDevices" then
+    response = commitHaDevices(request, BT_FAMILY)
   elseif request.op == "CommitDeviceScreen" then
     response = commitDeviceScreen(request)
   elseif request.op == "Status" then

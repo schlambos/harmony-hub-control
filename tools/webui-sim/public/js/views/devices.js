@@ -9,7 +9,7 @@
    command's ⋮ edits or deletes it. The remote sends straight to the device,
    outside any activity. */
 
-import { forgetTv, getAndroidTvStatus, getConfig, postHubForm, saveActivity, saveAndroidTvDevices, saveDeviceScreen } from "../api.js";
+import { forgetTv, getAndroidTvStatus, getConfig, postApiForm, postHubForm, saveActivity, saveAndroidTvDevices, saveDeviceScreen } from "../api.js";
 import * as hub from "../state.js";
 import {
   confirmDialog,
@@ -32,6 +32,7 @@ import { changeNote, hubChange, openCommandSheet, openDeviceSheet, openLearnShee
 import { createDeviceSweep } from "./device-sweep.js";
 import { createIrLab, labNote } from "./ir-lab.js";
 import { androidTvDeviceSet, androidTvIdOf, isAndroidTvDevice, strandedTvs, tvStatusText } from "./androidtv-model.js";
+import { hubBtIdOf, isHubBtEntry } from "./bluetooth-model.js";
 import { LIMITS, deviceUsage, touchScreenState, withoutDeviceMaps } from "./ir-model.js";
 import { describeHaDeviceState, describeTheaterLink, deviceIconName, deviceKeys, isHaCommandRedundant } from "./remote-model.js";
 import {
@@ -240,9 +241,10 @@ export function createDevicesView(section) {
   function commandRows() {
     const q = commandQuery.trim().toLowerCase();
     const haInfo = describeHaDeviceState(device, hub.state.haState) ?? describeTheaterLink(device, hub.state.haState);
-    // A network TV's commands are the writer's fixed set: no per-command
-    // Edit or Delete (those go through the IR endpoints).
-    const editable = !isAndroidTvDevice(device);
+    // A network TV's commands are the writer's fixed set, and so are a hub
+    // Bluetooth keyboard device's: no per-command Edit or Delete (those go
+    // through the IR endpoints).
+    const editable = !isAndroidTvDevice(device) && !isHubBtEntry(device.entry);
     const list = device.commands
       .map((c, i) => ({ c, i }))
       .filter(({ c }) => !q || c.name.toLowerCase().includes(q));
@@ -317,7 +319,7 @@ export function createDevicesView(section) {
           <p class="remote-status" id="deviceStatus" role="status" aria-live="polite"></p>
           ${androidTvLine}
           ${tabs}
-          ${androidtv ? `<p class="list-note">A network TV's commands come with it; the hub sends them over the network.</p>` : `<div class="cmd-tools">
+          ${androidtv ? `<p class="list-note">A network TV's commands come with it; the hub sends them over the network.</p>` : isHubBtEntry(device.entry) ? `<p class="list-note">These commands come with the Bluetooth keyboard target; the hub sends them as Bluetooth keys. Manage it on the Bluetooth page.</p>` : `<div class="cmd-tools">
             <button type="button" class="btn btn-outlined" data-act="learn" aria-haspopup="dialog">${icon("settings_remote_outlined", { size: 18 })}Learn a button</button>
             <button type="button" class="btn btn-outlined" data-act="import" aria-haspopup="dialog">${icon("content_paste_outlined", { size: 18 })}Import codes</button>
           </div>`}
@@ -515,6 +517,9 @@ export function createDevicesView(section) {
           // The writer owns network TVs: save the set without it. Unpairing
           // comes after, outside this rollback: the device is gone by then.
           await saveAndroidTvDevices(androidTvDeviceSet(config, { remove: androidTvIdOf(d) }));
+        } else if (isHubBtEntry(d.entry)) {
+          // The writer owns it too; the saved Bluetooth target stays.
+          await postApiForm("/api/bt-harmony-device", { deviceId: hubBtIdOf(d), publish: "0" });
         } else {
           await postHubForm("/ir/delete-device", { deviceId: d.id });
         }
@@ -683,7 +688,7 @@ export function createDevicesView(section) {
     }
     const menuBtn = event.target.closest("[data-cmd-menu]");
     if (menuBtn) {
-      if (isAndroidTvDevice(device)) return;
+      if (isAndroidTvDevice(device) || isHubBtEntry(device.entry)) return;
       const c = device.commands[Number(menuBtn.dataset.cmdMenu)];
       if (c) openCommandMenu(menuBtn, c);
       return;

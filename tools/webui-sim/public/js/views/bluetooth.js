@@ -13,9 +13,12 @@
 
 import { el, clear, notice, viewHead, dangerGuard } from "../setup-kit.js";
 import { getJson, getText, postApiForm, postHubForm } from "../api.js";
+import * as hub from "../state.js";
 import {
   BT_TYPES,
   QUICK_KEYS,
+  TV_KEYS,
+  canBeHarmonyDevice,
   btTypeLabel,
   isValidBtAddr,
   normalizeBtAddr,
@@ -221,6 +224,17 @@ export function createBluetoothView(section) {
     const btn = e.target.closest("[data-code]");
     if (btn) sendKey(btn.dataset.code, btn);
   });
+  const tvKeysGrid = el("div", {
+    className: "setup-actions",
+    attrs: { style: "gap:var(--space-2)" },
+    children: TV_KEYS.map((k) =>
+      el("button", { type: "button", className: "btn btn-quiet btn-sm", text: k.label, attrs: { "data-code": k.code } }),
+    ),
+  });
+  tvKeysGrid.addEventListener("click", (e) => {
+    const btn = e.target.closest("[data-code]");
+    if (btn) sendKey(btn.dataset.code, btn);
+  });
 
   const textBlock = textArea("text-block", { placeholder: "Paste exact text to type on the target" });
   const sendTextBtn = el("button", { type: "button", className: "btn btn-quiet btn-sm", text: "Send text" });
@@ -231,6 +245,11 @@ export function createBluetoothView(section) {
       text: "Every send is triggered by you. Keys go over the low-level HID report path; text uses the exact-typing FIFO helper below.",
     }),
     keysGrid,
+    el("div", {
+      className: "setup-field-hint",
+      text: "OK and the media keys (Standard keyboard profile), sent like the (TV) keys above. An Android TV box without its own key layout needs these: there the keyboard's Home key only moves the cursor.",
+    }),
+    tvKeysGrid,
     el("div", {
       className: "row",
       children: [
@@ -556,6 +575,8 @@ export function createBluetoothView(section) {
       }),
     );
 
+    card.appendChild(harmonyRow(dev));
+
     const commands = el("div", { className: "setup-fields" });
     if (dev.commands.length) {
       for (const cmd of dev.commands) commands.appendChild(commandRow(dev, cmd));
@@ -565,6 +586,65 @@ export function createBluetoothView(section) {
     card.appendChild(commands);
     card.appendChild(commandEditor(dev));
     return card;
+  }
+
+  /* A saved Standard-keyboard target can be a Harmony device: an IP device
+     whose buttons the hub turns into these Bluetooth keys, so the Harmony
+     remote, the Touch and activities can use it like any other device. */
+  function harmonyRow(dev) {
+    const row = el("div", { className: "callout" });
+    if (!canBeHarmonyDevice(dev)) {
+      row.appendChild(el("p", {
+        className: "mini muted",
+        text: "Only the Standard keyboard (Android TV / SHIELD) profile can be a Harmony device.",
+      }));
+      return row;
+    }
+    if (dev.harmony) {
+      const removeBtn = el("button", { type: "button", className: "btn btn-danger btn-sm", text: "Remove from Harmony" });
+      dangerGuard(removeBtn, {
+        consequence: `Removes the Harmony device “${dev.name}”. The hub refuses while an activity or button still uses it.`,
+        confirmLabel: "Confirm remove",
+        onConfirm: () => setHarmony(dev, false, removeBtn),
+      });
+      row.append(
+        el("p", {
+          className: "mini",
+          text: `On the Harmony side as “${dev.name}” with Home, Back, OK, Menu, D-pad, media, channel, volume and number buttons. Map them in an activity or on the Devices page.`,
+        }),
+        el("div", { className: "setup-actions", children: [removeBtn] }),
+      );
+    } else {
+      const addBtn = el("button", { type: "button", className: "btn btn-secondary btn-sm", text: "Add to Harmony" });
+      addBtn.addEventListener("click", () => setHarmony(dev, true, addBtn));
+      row.append(
+        el("p", {
+          className: "mini muted",
+          text: "Add this target as a Harmony device, so its TV keys can be mapped to remote buttons and activities.",
+        }),
+        el("div", { className: "setup-actions", children: [addBtn] }),
+      );
+    }
+    return row;
+  }
+
+  async function setHarmony(dev, publish, btn) {
+    await withButton(btn, async () => {
+      try {
+        const res = await postApiForm("/api/bt-harmony-device", { deviceId: dev.id, publish: publish ? "1" : "0" });
+        const changed = res.changed !== false;
+        savedOut.show({
+          kind: "ok",
+          message: publish
+            ? `${dev.name} is a Harmony device${changed ? "" : " already"}. Map its buttons in an activity or on the Devices page.`
+            : `Removed the Harmony device ${dev.name}.`,
+        });
+        await hub.refreshConfig().catch(() => {});
+        await loadInventory();
+      } catch (err) {
+        savedOut.show({ kind: "error", message: errMsg(err) });
+      }
+    });
   }
 
   function commandRow(dev, cmd) {

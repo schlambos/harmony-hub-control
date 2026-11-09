@@ -20,7 +20,7 @@ exact SHA-256 digests and sizes are:
 
 | Binary | Size | SHA-256 |
 | --- | --- | --- |
-| `codex_webui` | 1238388 | `8da6f2a5846edc6487954c65d93fe4f22b36e42159e3ee5b8ec5bb179cd32d5c` |
+| `codex_webui` | 1246884 | `cfe10a6d79efdbc54fd16916d0f2c0612eb9d1a969320dccad53f1bc3dcd47ad` |
 | `codex_dhcpd` | 58328 | `e9db51f4691511f1ae10182143518e758fc7aca0a84994fe9be602be37957592` |
 | `codex_portal` | 76724 | `1596f6cac03dad4ce0254ac118de5527c41789f10c7bc95357860d0d96c61b5f` |
 | `dropbearmulti` | 577296 | `e2ea632aed8b31dc5ea56b9673cbd983ec83260a97d33f891a0cebf51d5c6c8d` |
@@ -74,8 +74,8 @@ Both regenerators reproduce the committed headers byte-for-byte.
 
 Pinned source blobs:
 
-- `payload/source/codex_webui.c` — `63cb96fd045fbb1e163260025ea933ea91553999`
-- `payload/source/harmony_shell_assets.h` — `5f19273ad4341ee96135b7f325e0100010a3ff83`
+- `payload/source/codex_webui.c` — `edd51100b35ada302a624eceee9ce77bf2f7e2f1`
+- `payload/source/harmony_shell_assets.h` — `ab93de6eba45b3795a366da82d3790f7429cfe26`
 - `payload/source/activity_ui_assets.h` — `f68a2bce58e71242b2480b2d483f405484c036da`
 - `payload/source/remote_skin_jpg.h` — `419611c5ff0713f1f5de2dd684d699f6d77238d5`
 
@@ -87,8 +87,8 @@ Pinned source blobs:
 ```
 
 Result must be `ELF 32-bit MSB executable, MIPS, MIPS32 rel2, statically
-linked, stripped`, size 1238388, SHA-256
-`8da6f2a5846edc6487954c65d93fe4f22b36e42159e3ee5b8ec5bb179cd32d5c`.
+linked, stripped`, size 1246884, SHA-256
+`cfe10a6d79efdbc54fd16916d0f2c0612eb9d1a969320dccad53f1bc3dcd47ad`.
 
 To compare against a Homebrew-built box binary, strip the compiler stamp from
 both first:
@@ -305,9 +305,11 @@ node tools/harmony_shell_smoke.mjs                # rebuilds the embedded web ap
 node tools/shipped_copy_hygiene.mjs               # no personal names or IDs in shipped files
 python3 tools/installer_contract_smoke.py         # the installers' contract, with a fake hub
 python3 -m unittest discover -s docker/tests      # the Docker manager
-for t in barrier device-screens ha-devices androidtv-devices touch-controls; do
+for t in barrier device-screens ha-devices androidtv-devices bt-devices touch-controls; do
   luajit tools/touch-validator/codexactivity-$t-test.lua
-done                                              # the hub's writer: barrier, screens, Home Assistant, network TVs, press modes
+done                                              # the hub's writer: barrier, screens, Home Assistant, network TVs, Bluetooth keyboards, press modes
+sh tools/bluetooth_hid_smoke.sh                   # Bluetooth HID guards, incl. the pair agent's SDP edits (fake sdpd)
+python3 tools/bt_harmony_webui_smoke.py           # Consumer key reports and the Bluetooth Harmony device set (codex_webui, host build)
 python3 tools/androidtv/androidtv_smoke.py --codex-androidtv build/output/codex_androidtv-native   # codex_androidtv against a fake TV
 luajit tools/touch-validator/codexactivity-validate-test.lua tools/webui-sim/fixtures/touch-maplist.json
 luajit tools/touch-validator/netservicestarter-guards-test.lua   # offline sync guards
