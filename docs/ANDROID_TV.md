@@ -151,7 +151,24 @@ python3 tools/androidtv/androidtv_smoke.py --codex-androidtv build/output/codex_
 
 Build the native binary with the codex_androidtv command in [BUILD.md](BUILD.md),
 using `-target x86_64-linux-musl` (or your host's target) instead of the MIPS
-one. The writer has its own Lua tests:
+one.
+
+`tools/androidtv/wol_test.sh` tests Wake-on-LAN without sending anything. It
+builds `tools/androidtv/wol_test.c`, which includes `codex_androidtv.c` with
+`getifaddrs()` and `sendto()` replaced by fakes, and checks that:
+
+- the magic packet goes to each interface's own broadcast address (e.g.
+  `192.168.1.255`) as well as to `255.255.255.255`;
+- it still goes when `255.255.255.255` has no route, as when the cloud blocker is on;
+- loopback, down, point-to-point and IPv6 interfaces are skipped;
+- PowerOn sends it only for a TV that isn't connected and has a known MAC, at
+  most once every 3 s.
+
+It needs BearSSL unpacked as for the build (or `BEARSSL=<dir>`):
+
+```bash
+sh tools/androidtv/wol_test.sh
+``` The writer has its own Lua tests:
 `luajit tools/touch-validator/codexactivity-androidtv-devices-test.lua`.
 
 Protocol references: the
