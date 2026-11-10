@@ -20,12 +20,13 @@ exact SHA-256 digests and sizes are:
 
 | Binary | Size | SHA-256 |
 | --- | --- | --- |
-| `codex_webui` | 1257364 | `b1bea946b1f5437d81ae515cf39ef772d53331755be9da86258f96367a74b7ec` |
+| `codex_webui` | 1265444 | `e073c8aa7e01c6f8fc3d47f075fc872e91422b312e580c17824dff8177d75ca7` |
 | `codex_dhcpd` | 58328 | `e9db51f4691511f1ae10182143518e758fc7aca0a84994fe9be602be37957592` |
 | `codex_portal` | 76724 | `1596f6cac03dad4ce0254ac118de5527c41789f10c7bc95357860d0d96c61b5f` |
 | `dropbearmulti` | 577296 | `e2ea632aed8b31dc5ea56b9673cbd983ec83260a97d33f891a0cebf51d5c6c8d` |
 | `codex_hbus` | 74660 | `4be9e6ac2e09e7eb052f9c47e81480d1e32aee7190bedb6ef7f932cf07aab8f9` |
 | `codex_androidtv` | 270324 | `581aac3133080aa6a57f76ad5f6cb23e52408a57313c5d75ce5853c06f06eb04` |
+| `codex_usbeth` | 85604 | `1a52b531e57eabf73a2017856cfc4d69a9676d38ca37bf5f8fa433942c4f5931` |
 
 The remaining binaries (`codex_bt_pair_agent`, `codex_bthid_keyboard`,
 `codex_hal_ltcp`) are pinned by their MD5 digests in
@@ -74,8 +75,8 @@ Both regenerators reproduce the committed headers byte-for-byte.
 
 Pinned source blobs:
 
-- `payload/source/codex_webui.c` — `e8eb28fce00731d9485e5452a51d78cce7794e95`
-- `payload/source/harmony_shell_assets.h` — `e7b4e71fd602a71177a820ba245edc4c5020d869`
+- `payload/source/codex_webui.c` — `b7632da65779bf69b6b4bb3d8da880ebbff85988`
+- `payload/source/harmony_shell_assets.h` — `a245737f6632e2f073c2e55b19b013a9fc254e51`
 - `payload/source/activity_ui_assets.h` — `f68a2bce58e71242b2480b2d483f405484c036da`
 - `payload/source/remote_skin_jpg.h` — `419611c5ff0713f1f5de2dd684d699f6d77238d5`
 
@@ -87,8 +88,8 @@ Pinned source blobs:
 ```
 
 Result must be `ELF 32-bit MSB executable, MIPS, MIPS32 rel2, statically
-linked, stripped`, size 1257364, SHA-256
-`b1bea946b1f5437d81ae515cf39ef772d53331755be9da86258f96367a74b7ec`.
+linked, stripped`, size 1262948, SHA-256
+`7a95f09180fe360f1946055f4a91ad3e224cdb14dddbde1ec92acd487d269b1a`.
 
 To compare against a Homebrew-built box binary, strip the compiler stamp from
 both first:
@@ -195,6 +196,7 @@ the Dropbear build. The Dropbear source tarball is verified against
 | `codex_bthid_keyboard` | EXACT_SOURCE_REPRODUCIBLE (Official Zig 0.16.0) |
 | `codex_hal_ltcp` | EXACT_SOURCE_REPRODUCIBLE (Official Zig 0.16.0) |
 | `codex_androidtv` | EXACT_SOURCE_REPRODUCIBLE (Official Zig 0.16.0, BearSSL 0.6 tarball pinned by SHA-256) |
+| `codex_usbeth` | EXACT_SOURCE_REPRODUCIBLE (Official Zig 0.16.0) |
 | `codex_dhcpd` | EXACT_SOURCE_REPRODUCIBLE (Official Zig 0.16.0) |
 | `codex_portal` | EXACT_SOURCE_REPRODUCIBLE (Official Zig 0.16.0) |
 | `dropbearmulti` | **UNVERIFIED_THIRD_PARTY** (version/license verified, build unverified) |

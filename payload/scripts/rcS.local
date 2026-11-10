@@ -91,6 +91,12 @@ elif [ "$(cat /data/codex/multi_remote.conf 2>/dev/null)" = "1" ] && [ -f /data/
 	unset codex_hal_md5 codex_hal_multi_md5
 fi
 
+# USB Ethernet over a self-powered OTG adapter (optional, see docs/USB_ETHERNET.md).
+if [ -x /data/codex/usb_eth_service.sh ] &&
+	grep '^ENABLED=1$' /data/codex/usb_eth.conf >/dev/null 2>&1; then
+	/data/codex/usb_eth_service.sh start &
+fi
+
 if [ -x /data/codex/init.sh ]; then
 	/data/codex/init.sh &
 fi

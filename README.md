@@ -50,6 +50,8 @@ This repository contains no rooting tools, exploits, private keys or personal ba
 - The hub can also act as a Bluetooth keyboard and remote for TVs and streaming boxes.
 - Android TV and Google TV sets pair over the network: power on and off from standby, every key and
   inputs, with no IR.
+- Optional wired Ethernet over a self-powered OTG micro-USB Realtek adapter
+  ([USB_ETHERNET.md](docs/USB_ETHERNET.md)).
 
 </td>
 <td valign="top">

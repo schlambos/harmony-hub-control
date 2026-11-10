@@ -508,9 +508,20 @@ def prime_upgrade_hub(hub: FakeHub, pre_modes: dict[str, str] | None = None) -> 
         "/data/codex/offline_egress_guard.sh",
         "/data/codex/recovery_ap.sh",
         "/data/codex/androidtv_service.sh",
+        "/data/codex/usb_eth_service.sh",
         "/etc/init.d/rcS.local",
     ):
         put(path, f"fake-original {path}\n".encode() * 3, pre_modes.get(path, "755"))
+    for path in (
+        "/data/codex/modules/usb-net/r8152.ko",
+        "/data/codex/modules/usb-net/usbnet.ko",
+        "/data/codex/modules/usb-net/asix.ko",
+        "/data/codex/modules/usb-net/cdc_ether.ko",
+        "/data/codex/modules/usb-net/cdc_ncm.ko",
+        "/data/codex/modules/usb-net/ax88179_178a.ko",
+        "/data/codex/modules/usb-net/README.md",
+    ):
+        put(path, f"fake-original {path}\n".encode() * 3, pre_modes.get(path, "644"))
     put("/opt/luaworks/tasks/connectserver/netservicestarter.lua",
         b"fake-original netservicestarter\n" * 3,
         pre_modes.get("/opt/luaworks/tasks/connectserver/netservicestarter.lua", "644"))
@@ -782,9 +793,11 @@ class PythonInstallerPreflight(unittest.TestCase):
         even though sensitive hashes are redacted from reports."""
         binary_count = len(INST.bin_manifest_names())
         # The fixed candidates after the binaries: dropbear, dropbearkey,
-        # init.sh, the egress guard, recovery_ap.sh, androidtv_service.sh, rcS.local,
+        # init.sh, the egress guard, recovery_ap.sh, androidtv_service.sh,
+        # usb_eth_service.sh, r8152.ko, usbnet.ko, asix.ko, cdc_ether.ko,
+        # cdc_ncm.ko, ax88179_178a.ko, modules README.md, rcS.local,
         # netservicestarter.lua, the two plugins, ... then config.json.
-        sensitive_index = binary_count + 14
+        sensitive_index = binary_count + 22
         self.hub.md5sum_drop_paths.add(
             f"{self.hub.stage}/{sensitive_index:02d}-config.json"
         )

@@ -130,6 +130,15 @@ export function setMultiRemote({ enabled, force = false }) {
   return request("/api/multi-remote", { method: "POST", body: force ? { enabled, force: true } : { enabled } });
 }
 
+// USB Ethernet over a self-powered OTG micro-USB Realtek adapter: status, and turning it on or off.
+export function getUsbEth() {
+  return request("/api/usb-eth");
+}
+
+export function setUsbEth({ enabled }) {
+  return request("/api/usb-eth", { method: "POST", body: { enabled } });
+}
+
 export function importCatalog({ deviceId, commands }) {
   return request("/api/catalog-import", {
     method: "POST",
