@@ -6,7 +6,9 @@
  * send, so the tests can check where the magic packet goes: each interface's own
  * subnet broadcast (e.g. 192.168.1.255) as well as 255.255.255.255, and the
  * subnet one still when 255.255.255.255 has no route (the cloud blocker's egress
- * guard deletes the default route). The last tests drive POST /cmd through
+ * guard deletes the default route). Each subnet broadcast must go bound to its
+ * own, running interface: with wired Ethernet and Wi-Fi switched off, both share
+ * one broadcast address and an unbound send could leave by the dead radio. The last tests drive POST /cmd through
  * http_handle() to check when PowerOn sends Wake-on-LAN at all.
  *
  * Build and run with tools/androidtv/wol_test.sh (it needs BearSSL 0.6, as the
@@ -66,6 +68,8 @@ static int fake_nsend_fail;
 
 struct sent {
 	int fd;
+	char dev[IFNAMSIZ];             /* the interface the socket was bound to ("": none) */
+	int broadcast;                  /* SO_BROADCAST was on */
 	char dst[INET_ADDRSTRLEN];
 	int port;
 	size_t len;
@@ -74,7 +78,10 @@ struct sent {
 };
 static struct sent sent[MAX_SENT];
 static int nsent;
-static int broadcast_fd = -1;       /* the socket SO_BROADCAST was turned on for */
+#define MAX_FD 1024
+static int fd_broadcast[MAX_FD];    /* per socket: SO_BROADCAST on */
+static char fd_dev[MAX_FD][IFNAMSIZ]; /* per socket: SO_BINDTODEVICE */
+static int fake_bind_errno;         /* nonzero: SO_BINDTODEVICE fails with it (not root) */
 
 struct fake_node {                  /* one allocation per entry; ifa first so it frees as one */
 	struct ifaddrs ifa;
@@ -127,12 +134,20 @@ void fake_freeifaddrs(struct ifaddrs *ifa) {
 int fake_socket(int domain, int type, int protocol) {
 	if (fake_socket_errno) { errno = fake_socket_errno; return -1; }
 	int fd = socket(domain, type, protocol);   /* the real one: never used to send */
-	if (fd >= 0) sockets_opened++;
+	if (fd >= 0) {
+		sockets_opened++;
+		if (fd < MAX_FD) { fd_broadcast[fd] = 0; fd_dev[fd][0] = 0; }
+	}
 	return fd;
 }
 
 int fake_setsockopt(int fd, int level, int name, const void *val, socklen_t len) {
-	if (level == SOL_SOCKET && name == SO_BROADCAST && len == sizeof(int) && *(const int *)val == 1) broadcast_fd = fd;
+	if (fd < 0 || fd >= MAX_FD) return 0;
+	if (level == SOL_SOCKET && name == SO_BROADCAST && len == sizeof(int) && *(const int *)val == 1) fd_broadcast[fd] = 1;
+	if (level == SOL_SOCKET && name == SO_BINDTODEVICE) {
+		if (fake_bind_errno) { errno = fake_bind_errno; return -1; }
+		snprintf(fd_dev[fd], sizeof fd_dev[fd], "%.*s", (int)len, (const char *)val);
+	}
 	return 0;
 }
 
@@ -142,6 +157,10 @@ ssize_t fake_sendto(int fd, const void *buf, size_t len, int flags, const struct
 	struct sent *s = &sent[nsent++];
 	memset(s, 0, sizeof *s);
 	s->fd = fd;
+	if (fd >= 0 && fd < MAX_FD) {
+		snprintf(s->dev, sizeof s->dev, "%s", fd_dev[fd]);
+		s->broadcast = fd_broadcast[fd];
+	}
 	if (!to || tolen < sizeof(struct sockaddr_in) || to->sa_family != AF_INET) {
 		snprintf(s->dst, sizeof s->dst, "?");
 	} else {
@@ -202,7 +221,7 @@ static void reset(void) {
 	ifaddrs_lists_live = 0;
 	sockets_opened = 0;
 	nsent = 0;
-	broadcast_fd = -1;
+	fake_bind_errno = 0;
 	memset(tvs, 0, sizeof tvs);
 	if (logfile) fclose(logfile);
 	logfile = tmpfile();
@@ -244,6 +263,13 @@ static int count_to(const char *dst, int port, int only_ok) {
 	return n;
 }
 
+/* Sends to dst on a socket bound to dev ("" for unbound). */
+static int count_on(const char *dst, const char *dev) {
+	int n = 0;
+	for (int i = 0; i < nsent; i++) n += !strcmp(sent[i].dst, dst) && !strcmp(sent[i].dev, dev);
+	return n;
+}
+
 static int count_ok(void) {
 	int n = 0;
 	for (int i = 0; i < nsent; i++) n += sent[i].ok;
@@ -267,10 +293,18 @@ static void check_full_set(const char *dst) {
 	CHECK(count_to(dst, -1, 0) == 4, "%s: %d sends, expected 4", dst, count_to(dst, -1, 0));
 }
 
+/* Every send had SO_BROADCAST; each subnet broadcast went bound to an interface
+ * (unless binding is refused) and 255.255.255.255 unbound; every socket is closed. */
 static void check_tidy(void) {
 	CHECK(ifaddrs_lists_live == 0, "getifaddrs() list not freed (%d live)", ifaddrs_lists_live);
-	for (int i = 0; i < nsent; i++)
-		CHECK(sent[i].fd == broadcast_fd, "send %d used fd %d, but SO_BROADCAST was set on fd %d", i, sent[i].fd, broadcast_fd);
+	for (int i = 0; i < nsent; i++) {
+		CHECK(sent[i].broadcast, "send %d (to %s) without SO_BROADCAST", i, sent[i].dst);
+		if (!strcmp(sent[i].dst, "255.255.255.255"))
+			CHECK(sent[i].dev[0] == 0, "255.255.255.255 went bound to %s", sent[i].dev);
+		else if (!fake_bind_errno)
+			CHECK(sent[i].dev[0] != 0, "send %d to %s wasn't bound to an interface", i, sent[i].dst);
+		CHECK(fcntl(sent[i].fd, F_GETFD) == -1, "socket %d left open", sent[i].fd);
+	}
 }
 
 #define MAC "aa:bb:cc:01:02:03"
@@ -288,8 +322,8 @@ static void test_subnet_broadcast_and_limited(void) {
 	CHECK(count_to("127.255.255.255", -1, 0) == 0 && count_to("127.0.0.1", -1, 0) == 0, "sent on loopback");
 	/* The subnet comes first: it's the one that works with the cloud blocker on. */
 	CHECK(nsent > 0 && !strcmp(sent[0].dst, "192.168.1.255"), "first send went to %s", nsent ? sent[0].dst : "nothing");
-	CHECK(broadcast_fd >= 0, "SO_BROADCAST was never turned on");
-	CHECK(strstr(log_text(), "sent Wake-on-LAN to " MAC " via 192.168.1.255, 255.255.255.255\n") != NULL, "log: %s", log_text());
+	CHECK(count_on("192.168.1.255", "ath0") == 4, "%d subnet sends bound to ath0, expected 4", count_on("192.168.1.255", "ath0"));
+	CHECK(strstr(log_text(), "sent Wake-on-LAN to " MAC " via 192.168.1.255 (ath0), 255.255.255.255\n") != NULL, "log: %s", log_text());
 	check_tidy();
 }
 
@@ -322,7 +356,7 @@ static void test_no_default_route(void) {
 	CHECK(count_to("192.168.1.255", -1, 1) == 4, "%d sends reached 192.168.1.255, expected 4", count_to("192.168.1.255", -1, 1));
 	CHECK(count_to("255.255.255.255", -1, 1) == 0, "255.255.255.255 should have failed");
 	const char *log = log_text();
-	CHECK(strstr(log, "sent Wake-on-LAN to " MAC " via 192.168.1.255\n") != NULL, "log: %s", log);
+	CHECK(strstr(log, "sent Wake-on-LAN to " MAC " via 192.168.1.255 (ath0)\n") != NULL, "log: %s", log);
 	CHECK(strstr(log, "failed") == NULL, "logged a failure although the subnet broadcast went: %s", log);
 	check_tidy();
 }
@@ -331,14 +365,14 @@ static void test_no_default_route(void) {
 static void test_other_prefix_lengths(void) {
 	current = "the interface's own broadcast address";
 	reset();
-	add_if("ath0", AF_INET, "172.16.5.9", "172.16.255.255", IFF_UP | IFF_BROADCAST);
-	add_if("eth1", AF_INET, "10.1.2.3", "10.1.2.7", IFF_UP | IFF_BROADCAST);   /* a /29 */
+	add_if("ath0", AF_INET, "172.16.5.9", "172.16.255.255", IFF_UP | IFF_BROADCAST | IFF_RUNNING);
+	add_if("eth1", AF_INET, "10.1.2.3", "10.1.2.7", IFF_UP | IFF_BROADCAST | IFF_RUNNING);   /* a /29 */
 	fail_send("255.255.255.255", ENETUNREACH);
 	send_wol(MAC);
 	check_full_set("172.16.255.255");
 	check_full_set("10.1.2.7");
 	CHECK(count_to("172.16.5.255", -1, 0) == 0 && count_to("10.1.2.255", -1, 0) == 0, "made up an x.x.x.255 address");
-	CHECK(strstr(log_text(), "via 172.16.255.255, 10.1.2.7\n") != NULL, "log: %s", log_text());
+	CHECK(strstr(log_text(), "via 172.16.255.255 (ath0), 10.1.2.7 (eth1)\n") != NULL, "log: %s", log_text());
 	check_tidy();
 }
 
@@ -353,7 +387,7 @@ static void test_two_interfaces(void) {
 	check_full_set("192.168.20.255");
 	check_full_set("255.255.255.255");
 	CHECK(nsent == 12, "%d sends, expected 12", nsent);
-	CHECK(strstr(log_text(), "via 192.168.1.255, 192.168.20.255, 255.255.255.255\n") != NULL, "log: %s", log_text());
+	CHECK(strstr(log_text(), "via 192.168.1.255 (ath0), 192.168.20.255 (eth1), 255.255.255.255\n") != NULL, "log: %s", log_text());
 	check_tidy();
 }
 
@@ -362,12 +396,54 @@ static void test_one_interface_fails(void) {
 	current = "one interface fails";
 	reset();
 	hub_on_wifi();
-	add_if("eth1", AF_INET, "192.168.20.7", "192.168.20.255", IFF_UP | IFF_BROADCAST);
+	add_if("eth1", AF_INET, "192.168.20.7", "192.168.20.255", IFF_UP | IFF_BROADCAST | IFF_RUNNING);
 	fail_send("192.168.1.255", ENETDOWN);
 	send_wol(MAC);
 	CHECK(count_to("192.168.20.255", -1, 1) == 4, "192.168.20.255 got %d, expected 4", count_to("192.168.20.255", -1, 1));
 	CHECK(count_to("255.255.255.255", -1, 1) == 4, "255.255.255.255 got %d, expected 4", count_to("255.255.255.255", -1, 1));
-	CHECK(strstr(log_text(), "via 192.168.20.255, 255.255.255.255\n") != NULL, "a failed interface is listed: %s", log_text());
+	CHECK(strstr(log_text(), "via 192.168.20.255 (eth1), 255.255.255.255\n") != NULL, "a failed interface is listed: %s", log_text());
+	check_tidy();
+}
+
+/* Wired Ethernet with Wi-Fi switched off: both on one subnet, so one broadcast
+ * address. Wi-Fi is up but not running; the packet must go out the adapter,
+ * bound to it (unbound, the kernel may pick Wi-Fi's broadcast route). */
+static void test_wifi_off_and_a_cable_on_the_same_subnet(void) {
+	current = "Wi-Fi off, cable on the same subnet";
+	reset();
+	add_if("lo", AF_INET, "127.0.0.1", NULL, IFF_UP | IFF_LOOPBACK | IFF_RUNNING);
+	add_if("ath0", AF_INET, "192.168.1.50", "192.168.1.255", IFF_UP | IFF_BROADCAST | IFF_MULTICAST);
+	add_if("eth2", AF_INET, "192.168.1.77", "192.168.1.255", IFF_UP | IFF_BROADCAST | IFF_RUNNING | IFF_MULTICAST);
+	fail_send("255.255.255.255", ENETUNREACH);
+	send_wol(MAC);
+	CHECK(count_on("192.168.1.255", "eth2") == 4, "%d sends bound to eth2, expected 4", count_on("192.168.1.255", "eth2"));
+	CHECK(count_on("192.168.1.255", "ath0") == 0, "sent on the disconnected Wi-Fi");
+	CHECK(count_on("192.168.1.255", "") == 0, "an unbound subnet broadcast (the kernel may pick Wi-Fi's route)");
+	CHECK(strstr(log_text(), "sent Wake-on-LAN to " MAC " via 192.168.1.255 (eth2)\n") != NULL, "log: %s", log_text());
+	check_tidy();
+}
+
+/* Both running on one subnet: one set through each. */
+static void test_wifi_and_a_cable_both_running(void) {
+	current = "Wi-Fi and cable both running";
+	reset();
+	hub_on_wifi();
+	add_if("eth2", AF_INET, "192.168.1.77", "192.168.1.255", IFF_UP | IFF_BROADCAST | IFF_RUNNING);
+	send_wol(MAC);
+	CHECK(count_on("192.168.1.255", "ath0") == 4 && count_on("192.168.1.255", "eth2") == 4,
+	      "ath0 %d, eth2 %d sends, expected 4 each", count_on("192.168.1.255", "ath0"), count_on("192.168.1.255", "eth2"));
+	CHECK(strstr(log_text(), "via 192.168.1.255 (ath0), 192.168.1.255 (eth2), 255.255.255.255\n") != NULL, "log: %s", log_text());
+	check_tidy();
+}
+
+/* Not root: binding is refused and the packet still goes, unbound. */
+static void test_binding_refused(void) {
+	current = "SO_BINDTODEVICE refused";
+	reset();
+	hub_on_wifi();
+	fake_bind_errno = EPERM;
+	send_wol(MAC);
+	CHECK(count_on("192.168.1.255", "") == 4, "%d unbound subnet sends, expected 4", count_on("192.168.1.255", ""));
 	check_tidy();
 }
 
@@ -375,21 +451,24 @@ static void test_one_interface_fails(void) {
 static void test_skips_unusable_interfaces(void) {
 	current = "unusable interfaces";
 	reset();
-	add_if("lo", AF_INET, "127.0.0.1", "127.255.255.255", IFF_UP | IFF_LOOPBACK | IFF_BROADCAST);  /* odd, but skip it */
-	add_if("eth0", AF_INET, "192.168.7.2", "192.168.7.255", IFF_BROADCAST);          /* down */
-	add_if("tun0", AF_INET, "10.8.0.2", "10.8.0.1", IFF_UP | IFF_POINTOPOINT);        /* a peer, not a broadcast */
-	add_if("ath0", AF_INET6, "fe80::1", "ff02::1", IFF_UP | IFF_BROADCAST);           /* IPv6 */
-	add_if("noaddr", AF_INET, NULL, "192.168.8.255", IFF_UP | IFF_BROADCAST);         /* no address */
-	add_if("nobrd", AF_INET, "192.168.9.2", NULL, IFF_UP | IFF_BROADCAST);           /* no broadcast address */
-	add_if("zero", AF_INET, "192.168.10.2", "0.0.0.0", IFF_UP | IFF_BROADCAST);       /* broadcast 0.0.0.0 */
-	add_if("all", AF_INET, "192.168.11.2", "255.255.255.255", IFF_UP | IFF_BROADCAST); /* not sent twice */
-	add_if("ath0", AF_INET, "192.168.1.50", "192.168.1.255", IFF_UP | IFF_BROADCAST);  /* the real one, last */
+	/* Each is running unless that's what it's about, so each is skipped for its own reason. */
+	const unsigned r = IFF_RUNNING;
+	add_if("lo", AF_INET, "127.0.0.1", "127.255.255.255", r | IFF_UP | IFF_LOOPBACK | IFF_BROADCAST);  /* odd, but skip it */
+	add_if("eth0", AF_INET, "192.168.7.2", "192.168.7.255", r | IFF_BROADCAST);          /* down */
+	add_if("ath1", AF_INET, "192.168.12.2", "192.168.12.255", IFF_UP | IFF_BROADCAST);  /* up, not running (Wi-Fi off) */
+	add_if("tun0", AF_INET, "10.8.0.2", "10.8.0.1", r | IFF_UP | IFF_POINTOPOINT);        /* a peer, not a broadcast */
+	add_if("ath0", AF_INET6, "fe80::1", "ff02::1", r | IFF_UP | IFF_BROADCAST);           /* IPv6 */
+	add_if("noaddr", AF_INET, NULL, "192.168.8.255", r | IFF_UP | IFF_BROADCAST);         /* no address */
+	add_if("nobrd", AF_INET, "192.168.9.2", NULL, r | IFF_UP | IFF_BROADCAST);           /* no broadcast address */
+	add_if("zero", AF_INET, "192.168.10.2", "0.0.0.0", r | IFF_UP | IFF_BROADCAST);       /* broadcast 0.0.0.0 */
+	add_if("all", AF_INET, "192.168.11.2", "255.255.255.255", r | IFF_UP | IFF_BROADCAST); /* not sent twice */
+	add_if("ath0", AF_INET, "192.168.1.50", "192.168.1.255", r | IFF_UP | IFF_BROADCAST);  /* the real one, last */
 	send_wol(MAC);
 	const char *expected[] = { "192.168.1.255", "255.255.255.255", NULL };
 	CHECK(only_sent_to(expected), "sent somewhere other than 192.168.1.255 and 255.255.255.255");
 	check_full_set("192.168.1.255");
 	check_full_set("255.255.255.255");
-	CHECK(strstr(log_text(), "via 192.168.1.255, 255.255.255.255\n") != NULL, "log: %s", log_text());
+	CHECK(strstr(log_text(), "via 192.168.1.255 (ath0), 255.255.255.255\n") != NULL, "log: %s", log_text());
 	check_tidy();
 }
 
@@ -466,7 +545,7 @@ static void test_many_interfaces(void) {
 		snprintf(names[i], sizeof names[i], "eth%d", i);
 		snprintf(addrs[i][0], sizeof addrs[i][0], "192.168.%d.2", 100 + i);
 		snprintf(addrs[i][1], sizeof addrs[i][1], "192.168.%d.255", 100 + i);
-		add_if(names[i], AF_INET, addrs[i][0], addrs[i][1], IFF_UP | IFF_BROADCAST);
+		add_if(names[i], AF_INET, addrs[i][0], addrs[i][1], IFF_UP | IFF_BROADCAST | IFF_RUNNING);
 	}
 	fail_send("255.255.255.255", ENETUNREACH);
 	send_wol(MAC);
@@ -477,7 +556,7 @@ static void test_many_interfaces(void) {
 	if (line) {
 		const char *end = strchr(line, '\n');
 		const char *via = strstr(line, " via ");
-		CHECK(via && end && end - (via + 5) < 160, "the via list overran its buffer: %s", line);
+		CHECK(via && end && end - (via + 5) < 200, "the via list overran its buffer: %s", line);
 	}
 	check_tidy();
 }
@@ -587,6 +666,9 @@ int main(void) {
 	test_other_prefix_lengths();
 	test_two_interfaces();
 	test_one_interface_fails();
+	test_wifi_off_and_a_cable_on_the_same_subnet();
+	test_wifi_and_a_cable_both_running();
+	test_binding_refused();
 	test_skips_unusable_interfaces();
 	test_getifaddrs_fails();
 	test_nowhere_to_send();

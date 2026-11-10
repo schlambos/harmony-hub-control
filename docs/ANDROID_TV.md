@@ -74,8 +74,13 @@ How a TV turns on from standby depends on how it sleeps:
   still needed.
   The packet goes to the hub's own subnet broadcast address (for example
   `192.168.1.255`) as well as `255.255.255.255`. With the cloud blocker on, the hub
-  has no default route, so only the subnet address can be sent. The log line
-  `sent Wake-on-LAN to <mac> via <addresses>` names what went out.
+  has no default route, so only the subnet address can be sent.
+  - Each interface that's up and running gets its own copy, sent bound to it. With
+    [wired Ethernet](USB_ETHERNET.md), Wi-Fi and the adapter share one broadcast
+    address; with Wi-Fi switched off, an unbound send could leave by the
+    disconnected radio and be lost.
+  - The log line `sent Wake-on-LAN to <mac> via <address> (<interface>), …` names
+    what went out.
 
 Wake-on-LAN usually works only on the TV's built-in Ethernet port. A USB network
 adapter loses power when the TV sleeps, and some TVs drop Wi-Fi entirely. Look
@@ -160,7 +165,9 @@ builds `tools/androidtv/wol_test.c`, which includes `codex_androidtv.c` with
 - the magic packet goes to each interface's own broadcast address (e.g.
   `192.168.1.255`) as well as to `255.255.255.255`;
 - it still goes when `255.255.255.255` has no route, as when the cloud blocker is on;
-- loopback, down, point-to-point and IPv6 interfaces are skipped;
+- loopback, down, not running, point-to-point and IPv6 interfaces are skipped;
+- each subnet broadcast is sent bound to its interface, so with Wi-Fi off and a
+  USB adapter on the same subnet it goes out the adapter;
 - PowerOn sends it only for a TV that isn't connected and has a known MAC, at
   most once every 3 s.
 
