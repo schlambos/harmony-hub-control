@@ -527,12 +527,15 @@ static void test_power_on_wakes_an_unconnected_tv(void) {
 	hub_on_wifi();
 	fail_send("255.255.255.255", ENETUNREACH);   /* the usual case: cloud blocker on */
 	struct tv *t = add_tv(MAC, 0);
+	t->next_attempt = now_ms() + 60000;          /* a reconnect a minute away, after failures */
+	t->backoff = 30000;
 	const char *reply = post_cmd("PowerOn");
 	CHECK(!strcmp(reply, "{\"ok\":true}"), "reply %s", reply);
 	CHECK(count_to("192.168.1.255", -1, 1) == 4, "%d packets reached 192.168.1.255, expected 4", count_to("192.168.1.255", -1, 1));
 	CHECK(t->last_wol > 0, "last_wol not recorded");
 	CHECK(t->qcount == 1 && t->q[t->qhead].code == PSEUDO_POWER_ON, "PowerOn not queued for when the TV connects");
-	CHECK(t->next_attempt == 0, "the reconnect wasn't brought forward");
+	CHECK(t->next_attempt == 0, "the reconnect wasn't brought forward (next attempt in %lld ms)", t->next_attempt - now_ms());
+	CHECK(t->backoff == 1000, "the reconnect backoff wasn't reset (%d ms)", t->backoff);
 	check_tidy();
 }
 

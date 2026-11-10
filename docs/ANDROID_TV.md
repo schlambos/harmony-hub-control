@@ -168,7 +168,9 @@ It needs BearSSL unpacked as for the build (or `BEARSSL=<dir>`):
 
 ```bash
 sh tools/androidtv/wol_test.sh
-``` The writer has its own Lua tests:
+```
+
+The writer has its own Lua tests:
 `luajit tools/touch-validator/codexactivity-androidtv-devices-test.lua`.
 
 Protocol references: the
