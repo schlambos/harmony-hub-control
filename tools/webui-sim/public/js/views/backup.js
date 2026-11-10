@@ -41,6 +41,7 @@ const TARGET_HINTS = {
   devices: "This import is the hub's only writer of DeviceList.json. A foreign list can reset Bluetooth IsKeyboardAssociated flags and stop the paired remote from transmitting for those devices.",
   wifi: "Saved immediately; the new network only takes effect after a reboot.",
   cloud: "Only values that enable the blocker (1, on, true, enabled) are accepted here — this page never sends 0/off.",
+  restrictions: "Replaces every activity's time restrictions; a file with no activities lifts them all.",
 };
 
 const PLACEHOLDERS = {
@@ -55,6 +56,7 @@ const PLACEHOLDERS = {
   wifi: 'network={\n    ssid="LivingRoom"\n    psk=…\n}',
   cloud: "1",
   bluetooth: '{"devices":[ … ]}',
+  restrictions: '{"version":1,"activities":{"<id>":[{"days":["sat","sun"],"start":"06:00","end":"09:00"}]}}',
 };
 
 function consequenceFor(target) {
@@ -62,7 +64,7 @@ function consequenceFor(target) {
     case "devices":
       return "Replaces DeviceList.json — the hub's only writer of that file. A wrong list can reset Bluetooth IsKeyboardAssociated flags and stop the paired remote from transmitting for those devices. An automatic backup of the current list is kept on the hub's 5 MiB flash first.";
     case "bundle":
-      return "Overwrites every resource and setting on the hub: devices, functions, protocols, activities, maps, automation, MQTT, Wi-Fi, Bluetooth, and the cloud blocker flag. A bundle that tries to disable the cloud blocker is rejected before upload. Wi-Fi changes apply on reboot.";
+      return "Overwrites every resource and setting on the hub: devices, functions, protocols, activities, maps, automation, MQTT, Wi-Fi, Bluetooth, time restrictions, and the cloud blocker flag. A bundle that tries to disable the cloud blocker is rejected before upload. Wi-Fi changes apply on reboot.";
     case "wifi":
       return "Overwrites wpa_supplicant.conf. It is saved immediately but only takes effect after a reboot — a wrong PSK drops the hub off the network.";
     case "cloud":
@@ -71,6 +73,8 @@ function consequenceFor(target) {
       return "Overwrites the MQTT config, including broker credentials.";
     case "bluetooth":
       return "Replaces the saved Bluetooth device list.";
+    case "restrictions":
+      return "Replaces when each activity can't be started. Activities missing from the file can be started at any time afterwards.";
     default:
       return `Overwrites ${IMPORT_LABELS[target] ?? target} on the hub. An automatic timestamped backup of the current file is kept first.`;
   }

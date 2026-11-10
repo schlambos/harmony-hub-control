@@ -29,6 +29,7 @@ import {
   fixItDevices,
   softButtons,
 } from "./remote-model.js";
+import { startFailureText } from "./restrictions-model.js";
 import {
   describe,
   flash,
@@ -280,8 +281,9 @@ export function createRemoteView(section) {
     await hub.setRunning(id);
     const err = hub.state.runError;
     if (err) {
-      const what = id === "-1" ? "turn everything off" : `start ${hub.activityName(hub.activityById(id))}`;
-      snackbar(`Couldn't ${what} — ${err.message || "hub error"}`, { error: true });
+      snackbar(id === "-1"
+        ? `Couldn't turn everything off — ${err.message || "hub error"}`
+        : startFailureText(hub.activityName(hub.activityById(id)), err), { error: true });
     }
   }
 

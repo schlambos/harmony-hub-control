@@ -6,6 +6,7 @@
    Pure data logic — no DOM, no network — unit-testable under node:test. */
 
 import { serializeForm } from "../setup-parsers.js";
+import { MAX_ACTIVITIES, isRestrictableId, normalizeWindows } from "./restrictions-model.js";
 
 /* Mirrors #define MAX_REQUEST_BODY (1024 * 1024) in codex_webui.c: the
    whole form-urlencoded body (target + URL-encoded payload) must fit.
@@ -15,7 +16,7 @@ export const MAX_REQUEST_BODY = 1024 * 1024;
 /* Start warning as the encoded request approaches the limit. */
 export const REQUEST_WARN_BYTES = 900 * 1024;
 
-/* The ten resource/settings files the hub owns, in the order the legacy
+/* The eleven resource/settings files the hub owns, in the order the legacy
    /import target select lists them. kind mirrors which automatic backup
    the hub takes on import (backup_resources vs backup_settings). */
 export const RESOURCES = [
@@ -29,6 +30,7 @@ export const RESOURCES = [
   { target: "wifi", file: "wpa_supplicant.conf", kind: "settings", secret: true, desc: "Network credentials (PSK)" },
   { target: "cloud", file: "cloud-blocker.conf", kind: "settings", secret: false, desc: "Logitech cloud blocker flag" },
   { target: "bluetooth", file: "bt-devices.json", kind: "settings", secret: false, desc: "Paired Bluetooth devices" },
+  { target: "restrictions", file: "activity-restrictions.json", kind: "settings", secret: false, desc: "When activities can't be started" },
 ];
 
 /* File keys embedded by send_bundle_download(), in emission order. */
@@ -42,6 +44,7 @@ export const BUNDLE_FILES = [
   { name: "mqtt-config.json", secret: true },
   { name: "wpa_supplicant.conf", secret: true },
   { name: "bt-devices.json", secret: false },
+  { name: "activity-restrictions.json", secret: false },
   { name: "cloud-blocker.conf", secret: false },
 ];
 
@@ -58,6 +61,7 @@ export const IMPORT_LABELS = {
   wifi: "Wi-Fi config",
   cloud: "cloud blocker setting",
   bluetooth: "Bluetooth devices",
+  restrictions: "time restrictions",
 };
 
 /* The hub's cloud_value_known() also accepts disable values (0/off/false/
@@ -190,6 +194,38 @@ function fail(message) {
   return { ok: false, message };
 }
 
+/* Mirrors parse_restrictions(strict) in codex_webui.c: every activity id is
+   digits and listed once, every time is valid, at most MAX_ACTIVITIES. */
+function validateRestrictions(text) {
+  let parsed;
+  try {
+    parsed = JSON.parse(text);
+  } catch {
+    return fail("Time restrictions import must be a JSON object.");
+  }
+  const activities = parsed && typeof parsed === "object" && !Array.isArray(parsed) ? parsed.activities : null;
+  if (!activities || typeof activities !== "object" || Array.isArray(activities)) {
+    return fail("Time restrictions import must contain an activities object.");
+  }
+  // JSON.parse keeps only the last of a repeated key; the hub refuses repeats.
+  const ids = Object.keys(activities);
+  if (ids.filter((id) => (activities[id] ?? []).length).length > MAX_ACTIVITIES) {
+    return fail(`Up to ${MAX_ACTIVITIES} activities can have time restrictions.`);
+  }
+  for (const id of ids) {
+    if (!isRestrictableId(id)) return fail("Time restrictions import has an activity id that isn't digits.");
+    const { error } = normalizeWindows(activities[id]);
+    if (error) return fail(`Activity ${id}: ${error}`);
+  }
+  return { ok: true };
+}
+
+/* A bundle's activity-restrictions.json, when it has one, as the hub reads it. */
+function validateBundleRestrictions(text) {
+  const restrictions = bundleExtractString(text, "activity-restrictions.json");
+  return restrictions ? validateRestrictions(restrictions) : { ok: true };
+}
+
 /** Client mirror of validate_import_payload(target, payload) in
     codex_webui.c, with one deliberate tightening: cloud accepts only
     enable values. Returns { ok: true } or { ok: false, message }. */
@@ -203,7 +239,8 @@ export function validateImportPayload(target, payload) {
       (text.includes("harmony-owner-bundle-v1") || text.includes("harmony-owner-bundle-v2")) &&
       text.includes("\"DeviceList.json\"")
     ) {
-      return validateBundleCloudBlocker(text);
+      const cloud = validateBundleCloudBlocker(text);
+      return cloud.ok ? validateBundleRestrictions(text) : cloud;
     }
     return fail("Bundle import must be a harmony-owner-bundle-v1 or v2 JSON export.");
   }
@@ -222,6 +259,8 @@ export function validateImportPayload(target, payload) {
     if (looksLikeJsonObject(text) && text.includes("\"devices\"")) return { ok: true };
     return fail("Bluetooth devices import must be a JSON object with a devices list.");
   }
+
+  if (target === "restrictions") return validateRestrictions(text);
 
   if (!(target in IMPORT_LABELS)) return fail(`Unknown import target "${target}".`);
 

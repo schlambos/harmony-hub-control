@@ -871,6 +871,237 @@ local function installOfflineApiGuards()
   log.notice("codex offline HBus guards registered")
 end
 
+-- Activity time restrictions. Every activity start (Companion and Touch
+-- activity buttons through the activity engine, hbus startactivity from the
+-- web UI, apps and MQTT, the help press) ends in startActivity(params,
+-- clientId, callback) of tasks.harmonyengine.apihandler.activity, and every
+-- caller takes it from that module table when it calls or queues it. One
+-- wrapper there refuses a restricted start before the engine changes any
+-- state. hbus startactivity is also refused at its handler, so its callers
+-- get the refusal as the answer (guardedStartActivity). Only starts are
+-- refused: the running activity, the help press,
+-- PowerOff and the boot relaunch of the activity that ran before a reboot
+-- always pass, and so does everything while the clock or zone is unknown.
+--
+-- RESTRICTIONS_CONF is read on every start, so edits apply without a reboot:
+--   {"activities": {"<activityId>": [
+--     {"days": ["sat", "sun"], "start": "06:00", "end": "09:00"}]}}
+-- Times are hub-local, end is exclusive and may be "24:00". A window whose
+-- end is before its start runs past midnight and belongs to its start day.
+local RESTRICTIONS_CONF = "/data/codex/activity-restrictions.json"
+-- the engine's own refusals stop at 567 (activity not found)
+local RESTRICTED_CODE = "568"
+local DAY_NAMES = {"sun", "mon", "tue", "wed", "thu", "fri", "sat"}
+
+local activityRestrictionTask
+
+-- "HH:MM" -> minutes since midnight
+local function parseClock(value, isEnd)
+  local h, m = string.match(tostring(value), "^(%d%d?):(%d%d)$")
+  h, m = tonumber(h), tonumber(m)
+  if not h or m > 59 then
+    return nil
+  end
+  local minutes = h * 60 + m
+  if minutes < 1440 or (isEnd and minutes == 1440) then
+    return minutes
+  end
+  return nil
+end
+
+local function parseWindow(window)
+  if type(window) ~= "table" or type(window.days) ~= "table" then
+    return nil
+  end
+  local days, names = {}, {}
+  for _, name in ipairs(window.days) do
+    for wday, dayName in ipairs(DAY_NAMES) do
+      if string.lower(tostring(name)) == dayName and not days[wday] then
+        days[wday] = true
+        names[#names + 1] = dayName
+      end
+    end
+  end
+  local start, finish = parseClock(window.start, false), parseClock(window["end"], true)
+  if #names == 0 or not start or not finish or start == finish then
+    return nil
+  end
+  return {
+    days = days,
+    start = start,
+    finish = finish,
+    text = table.concat(names, ",") .. " " .. tostring(window.start) .. "-" .. tostring(window["end"])
+  }
+end
+
+-- activityId -> list of windows; a missing file means no restrictions
+local function readActivityRestrictions()
+  local f = io.open(RESTRICTIONS_CONF, "r")
+  if not f then
+    return {}
+  end
+  local body = f:read("*a")
+  f:close()
+  local ok, decoded = pcall(json.decode, body)
+  if not ok or type(decoded) ~= "table" or type(decoded.activities) ~= "table" then
+    return nil, "unreadable " .. RESTRICTIONS_CONF
+  end
+  local rules = {}
+  for activityId, windows in pairs(decoded.activities) do
+    if type(windows) == "table" then
+      for _, raw in ipairs(windows) do
+        local window = parseWindow(raw)
+        if window then
+          local key = tostring(activityId)
+          rules[key] = rules[key] or {}
+          table.insert(rules[key], window)
+        else
+          log.notice("codex activity restrictions: ignored a bad window for", tostring(activityId))
+        end
+      end
+    end
+  end
+  return rules
+end
+
+-- weekday (1 = Sunday) and minutes since midnight in hub-local time
+local function localClock(now)
+  local conf = readTimezoneConf()
+  local tz = conf and parsePosixTz(conf.posix)
+  if not tz then
+    local ok, digest = pcall(function()
+      return require("tasks.harmonywebservices.core.statedigest"):instance()
+    end)
+    tz = ok and type(digest) == "table" and parsePosixTz(digest.tz)
+  end
+  if not tz then
+    return nil
+  end
+  local _, offset = tzStateAt(tz, now)
+  local t = os.date("!*t", now + offset)
+  return t.wday, t.hour * 60 + t.min
+end
+
+local function windowCovers(window, wday, minutes)
+  if window.start < window.finish then
+    return window.days[wday] == true and minutes >= window.start and minutes < window.finish
+  end
+  local previous = (wday + 5) % 7 + 1
+  return (window.days[wday] == true and minutes >= window.start) or
+    (window.days[previous] == true and minutes < window.finish)
+end
+
+-- The window that refuses this start, and the account, or nil to let it run.
+local function restrictedStart(params, callback)
+  if type(params) ~= "table" or params.verb == "helpdiscretes" or params.activityId == nil then
+    return nil
+  end
+  local activityId = tostring(params.activityId)
+  if activityId == "-1" then
+    return nil
+  end
+  local account = session.getAccount()
+  if not account or activityId == tostring(account.currentActivityId) then
+    return nil
+  end
+  -- The rules runner passes a callback only for the boot relaunch, which
+  -- restores the activity that was running before the reboot.
+  if callback then
+    local digest = require("tasks.harmonywebservices.core.statedigest"):instance()
+    if digest.isDummyActivitySet() then
+      return nil
+    end
+  end
+  local rules, err = readActivityRestrictions()
+  if not rules then
+    log.notice("codex activity restrictions not applied:", err)
+    return nil
+  end
+  local windows = rules[activityId]
+  if not windows then
+    return nil
+  end
+  local now = os.time()
+  local wday, minutes
+  if now >= NTP_MIN_VALID then
+    wday, minutes = localClock(now)
+  end
+  if not wday then
+    log.notice("codex activity restrictions not applied: clock or time zone unknown")
+    return nil
+  end
+  for _, window in ipairs(windows) do
+    if windowCovers(window, wday, minutes) then
+      return window, account
+    end
+  end
+  return nil
+end
+
+-- Answer like the engine's own "activity not found" refusal.
+-- Logs the refusal; returns the message to answer with.
+local function refusalMessage(params, window, account)
+  local activity = type(account.activities) == "table" and account.activities[params.activityId]
+  local label = tostring(type(activity) == "table" and activity.label or params.activityId)
+  log.notice("codex activity restriction refused start of", label, tostring(params.activityId), window.text)
+  return "Activity is restricted at this time: " .. label
+end
+
+local function refuseStart(params, clientId, callback, window, account)
+  local message = refusalMessage(params, window, account)
+  if callback and params.noResponse ~= true then
+    return callback(clientId, params.cmd, RESTRICTED_CODE, message,
+      "activityId=" .. tostring(account.currentActivityId), params.id,
+      {noHttpResponse = true, headers = params.headers}, params.callbackUrl)
+  end
+end
+
+-- hbus harmony.engine?startactivity (the web UI, MQTT, the apps): the stock
+-- handler only broadcasts run_activity and answers 200 at once, so a refusal
+-- from the startActivity wrapper comes second, after callers such as
+-- codex_hbus have taken the 200 and gone. Refuse here first, as the answer
+-- itself; everything else goes to the stock handler.
+local function guardedStartActivity(cmd, verb, params)
+  local ok, window, account = pcall(restrictedStart, params, nil)
+  if not ok then
+    log.notice("codex activity restrictions check failed:", tostring(window))
+  elseif window then
+    return connectUtils.createResponse(cmd, RESTRICTED_CODE, refusalMessage(params, window, account),
+      {activityId = tostring(account.currentActivityId)})
+  end
+  local native = require("tasks.harmonyengine.apihandler.harmonyengine")
+  return native.processStartActivity(cmd, verb, params)
+end
+
+local function installActivityRestrictions()
+  if activityRestrictionTask and system.taskStatus(activityRestrictionTask) ~= "dead" then
+    return
+  end
+  engine.registerMessage("harmony.engine?startactivity", nil, guardedStartActivity)
+  activityRestrictionTask = system.addTask("codex activity restrictions", function()
+    -- the activity engine loads the module before it registers this
+    while not system.isMessageRegistered("process_activity") do
+      system.sleep(1000)
+    end
+    local heactivity = require("tasks.harmonyengine.apihandler.activity")
+    if heactivity.__codexTimeRestrictions then
+      return
+    end
+    local startActivity = heactivity.startActivity
+    heactivity.startActivity = function(params, clientId, callback)
+      local ok, window, account = pcall(restrictedStart, params, callback)
+      if not ok then
+        log.notice("codex activity restrictions check failed:", tostring(window))
+      elseif window then
+        return refuseStart(params, clientId, callback, window, account)
+      end
+      return startActivity(params, clientId, callback)
+    end
+    heactivity.__codexTimeRestrictions = true
+    log.notice("codex activity restrictions installed")
+  end)
+end
+
 local function startCloudModule(label, moduleName)
   log.notice("starting " .. label .. " task")
   local ok, task = pcall(require, moduleName)
@@ -979,6 +1210,7 @@ end
 
 installCloudHttpGuard()
 installOfflineApiGuards()
+installActivityRestrictions()
 
 if mfgData.hasNetwork == true then
   while not system.isMessageRegistered("config_unload") or not system.isMessageRegistered("get_setup_account") do

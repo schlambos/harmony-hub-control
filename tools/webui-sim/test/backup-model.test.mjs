@@ -293,10 +293,10 @@ describe("preflightImport levels", () => {
 });
 
 describe("export surface mirrors the hub", () => {
-  it("lists the ten individual exports in hub order", () => {
+  it("lists the eleven individual exports in hub order", () => {
     assert.deepEqual(
       RESOURCES.map((r) => r.target),
-      ["devices", "functions", "protocols", "activities", "maps", "automation", "mqtt", "wifi", "cloud", "bluetooth"],
+      ["devices", "functions", "protocols", "activities", "maps", "automation", "mqtt", "wifi", "cloud", "bluetooth", "restrictions"],
     );
   });
 
@@ -306,7 +306,7 @@ describe("export surface mirrors the hub", () => {
       [
         "DeviceList.json", "FunctionList.json", "ProtocolList.json", "ActivityList.json",
         "MapList.json", "AutomationConfig.json", "mqtt-config.json", "wpa_supplicant.conf",
-        "bt-devices.json", "cloud-blocker.conf",
+        "bt-devices.json", "activity-restrictions.json", "cloud-blocker.conf",
       ],
     );
     assert.deepEqual(BUNDLE_FILES.filter((f) => f.secret).map((f) => f.name), [
@@ -320,7 +320,7 @@ describe("export surface mirrors the hub", () => {
   });
 
   it("labels every import target", () => {
-    assert.equal(Object.keys(IMPORT_LABELS).length, 11);
+    assert.equal(Object.keys(IMPORT_LABELS).length, 12);
     assert.equal(IMPORT_LABELS.devices, "DeviceList.json");
     assert.equal(IMPORT_LABELS.cloud, "cloud blocker setting");
   });
@@ -337,5 +337,37 @@ describe("formatBytes / utf8ByteLength", () => {
   it("counts UTF-8 bytes", () => {
     assert.equal(utf8ByteLength("é"), 2);
     assert.equal(utf8ByteLength(""), 0);
+  });
+});
+
+describe("validateImportPayload — time restrictions", () => {
+  const SAT_SUN = { days: ["sat", "sun"], start: "06:00", end: "09:00" };
+  const file = (activities) => JSON.stringify({ version: 1, activities });
+  const bundle = (restrictions) => JSON.stringify({
+    format: "harmony-owner-bundle-v2",
+    files: { "DeviceList.json": "{}", "activity-restrictions.json": restrictions },
+  });
+
+  it("accepts the hub's own export, empty or not", () => {
+    assert.deepEqual(validateImportPayload("restrictions", file({})), { ok: true });
+    assert.deepEqual(validateImportPayload("restrictions", file({ 100: [SAT_SUN], 200: [] })), { ok: true });
+  });
+
+  it("refuses what the hub refuses, naming the activity", () => {
+    const message = (payload) => validateImportPayload("restrictions", payload).message;
+    assert.equal(message("nope"), "Time restrictions import must be a JSON object.");
+    assert.equal(message("{}"), "Time restrictions import must contain an activities object.");
+    assert.equal(message(file({ abc: [SAT_SUN] })), "Time restrictions import has an activity id that isn't digits.");
+    assert.equal(message(file({ 100: [{ days: [], start: "06:00", end: "09:00" }] })),
+      "Activity 100: Pick at least one day for time 1.");
+    const many = Object.fromEntries(Array.from({ length: 65 }, (_, i) => [String(i + 1), [SAT_SUN]]));
+    assert.equal(message(file(many)), "Up to 64 activities can have time restrictions.");
+  });
+
+  it("checks a bundle's restrictions, and allows bundles without them", () => {
+    assert.deepEqual(validateImportPayload("bundle", bundle(file({ 100: [SAT_SUN] }))), { ok: true });
+    assert.deepEqual(validateImportPayload("bundle", BUNDLE_V2), { ok: true });
+    assert.equal(validateImportPayload("bundle", bundle(file({ 100: [{ days: ["sat"], start: "7:00", end: "09:00" }] }))).message,
+      "Activity 100: Time 1 needs a start and an end, as HH:MM.");
   });
 });
