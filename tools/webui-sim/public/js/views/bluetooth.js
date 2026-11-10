@@ -607,12 +607,16 @@ export function createBluetoothView(section) {
         confirmLabel: "Confirm remove",
         onConfirm: () => setHarmony(dev, false, removeBtn),
       });
+      // Publishing again brings an existing Harmony device up to this hub's
+      // command set (new commands, discrete power) and keeps every ID.
+      const updateBtn = el("button", { type: "button", className: "btn btn-secondary btn-sm", text: "Update Harmony device" });
+      updateBtn.addEventListener("click", () => setHarmony(dev, true, updateBtn));
       row.append(
         el("p", {
           className: "mini",
-          text: `On the Harmony side as “${dev.name}” with Home, Back, OK, Menu, D-pad, media, channel, volume and number buttons. Map them in an activity or on the Devices page.`,
+          text: `On the Harmony side as “${dev.name}” with power (on, off), Home, Back, OK, Menu, D-pad, media, channel, volume and number buttons. Map them in an activity or on the Devices page.`,
         }),
-        el("div", { className: "setup-actions", children: [removeBtn] }),
+        el("div", { className: "setup-actions", children: [updateBtn, removeBtn] }),
       );
     } else {
       const addBtn = el("button", { type: "button", className: "btn btn-secondary btn-sm", text: "Add to Harmony" });
@@ -636,7 +640,9 @@ export function createBluetoothView(section) {
         savedOut.show({
           kind: "ok",
           message: publish
-            ? `${dev.name} is a Harmony device${changed ? "" : " already"}. Map its buttons in an activity or on the Devices page.`
+            ? (dev.harmony
+              ? `${dev.name}: ${changed ? "Harmony device updated" : "Harmony device already up to date"}.`
+              : `${dev.name} is a Harmony device${changed ? "" : " already"}. Map its buttons in an activity or on the Devices page.`)
             : `Removed the Harmony device ${dev.name}.`,
         });
         await hub.refreshConfig().catch(() => {});

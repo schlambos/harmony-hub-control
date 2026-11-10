@@ -44,6 +44,13 @@ EXPECTED = {
     "volumeup": ("A103E9000000", "A10300000000"),
     "volumedown": ("A103EA000000", "A10300000000"),
     "consumer:0x2FF": ("A103FF020000", "A10300000000"),
+    # Power: Sleep 0x032 (KEY_SLEEP), Power 0x030 (KEY_POWER); waking is AC
+    # Home, since HAL's system-control report has no System Wake Up.
+    "tvwake": ("A10323020000", "A10300000000"),
+    "tvsleep": ("A10332000000", "A10300000000"),
+    "sleep": ("A10332000000", "A10300000000"),
+    "tvpower": ("A10330000000", "A10300000000"),
+    "power": ("A10330000000", "A10300000000"),
     # Upstream's ac* names. Those below 0x200 (acmenu, acguide, acsettings,
     # acvoice, acinfo) once went out as keyboard keys.
     "achome": ("A10323020000", "A10300000000"),
@@ -108,9 +115,15 @@ def main():
         check(box["entity"] == "bt_1730000000_42" and box["model"] == "Android TV keyboard",
               "box fields: %r" % box)
         names = [c["name"] for c in box["commands"]]
-        check(len(names) == 31 and len(set(n.lower() for n in names)) == 31,
-              "31 distinct commands: %r" % names)
-        for required in ["Home", "Back", "Select", "Menu", "PlayPause", "Stop", "NextTrack",
+        check(len(names) == 34 and len(set(n.lower() for n in names)) == 34,
+              "34 distinct commands: %r" % names)
+        values = {c["name"]: c["value"] for c in box["commands"]}
+        check(values.get("PowerOn") == "tvwake" and values.get("PowerOff") == "tvsleep" and
+              values.get("PowerToggle") == "tvpower", "power command values: %r" % values)
+        check(box.get("power") == {"on": "PowerOn", "off": "PowerOff"},
+              "discrete power: %r" % box.get("power"))
+        for required in ["PowerOn", "PowerOff", "PowerToggle",
+                         "Home", "Back", "Select", "Menu", "PlayPause", "Stop", "NextTrack",
                          "PreviousTrack", "FastForward", "Rewind", "ChannelUp", "ChannelDown",
                          "Mute", "VolumeUp", "VolumeDown", "DirectionUp", "0", "9"]:
             check(required in names, "missing command " + required)
@@ -134,7 +147,8 @@ def main():
             result = subprocess.run(
                 [luajit, os.path.join(ROOT, "tools/touch-validator/codexactivity-bt-devices-test.lua"),
                  set_file], capture_output=True, text=True, cwd=ROOT)
-            check(result.returncode == 0 and "PASS the writer accepts codex_webui's set" in result.stdout,
+            check(result.returncode == 0 and "PASS the writer accepts codex_webui's set" in result.stdout and
+                  "PASS codex_webui's set gives the device discrete power" in result.stdout,
                   "codexactivity rejected the set:\n" + result.stdout[-2000:])
         else:
             print("SKIP the codexactivity cross-check: luajit is not installed")
