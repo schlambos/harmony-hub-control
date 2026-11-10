@@ -10,7 +10,7 @@
 import * as api from "../api.js";
 import * as hub from "../state.js";
 import { confirmDialog, escapeHtml, iconTile, listRow, screenTitle, sectionLabel, snackbar } from "../ui/shell.js";
-import { multiRemoteStatus } from "./remotes-model.js";
+import { multiRemoteStatus, usbEthStatus } from "./remotes-model.js";
 import { parseTextStatus } from "./bluetooth-model.js";
 
 const SIM = globalThis.HARMONY_SIM === true;
@@ -41,6 +41,8 @@ export function createSettingsView(section) {
   let events; // undefined while loading, null when the sim has no event log
   let multi; // /api/multi-remote; undefined while loading, null when it couldn't be read
   let multiBusy = ""; // "" | "saving" | "restarting"
+  let usbEth; // /api/usb-eth; undefined while loading, null when it couldn't be read
+  let usbEthBusy = ""; // "" | "saving"
 
   section.innerHTML = `<div class="page" id="settingsRoot"></div>`;
   const root = section.querySelector("#settingsRoot");
@@ -107,14 +109,20 @@ export function createSettingsView(section) {
   function experimentalMarkup() {
     const status = multiRemoteStatus(multi, multiBusy);
     const disabled = multi === undefined || multi === null || Boolean(multiBusy);
+    const ethStatus = usbEthStatus(usbEth, usbEthBusy);
+    const ethDisabled = usbEth === undefined || usbEth === null || Boolean(usbEthBusy);
     return `${sectionLabel("Experimental")}
       <div class="m-list">
         <label class="m-row ds-switch">
           <span class="m-row-text"><span class="ds-title">Multiple remotes of one model</span><span class="m-row-sub" data-multi-status>${escapeHtml(status)}</span></span>
           <input type="checkbox" role="switch" class="m-switch" data-multi-remote${multi?.enabled ? " checked" : ""}${disabled ? " disabled" : ""} aria-label="Multiple remotes of one model">
         </label>
+        <label class="m-row ds-switch">
+          <span class="m-row-text"><span class="ds-title">Ethernet (USB OTG)</span><span class="m-row-sub" data-usb-eth-status>${escapeHtml(ethStatus)}</span></span>
+          <input type="checkbox" role="switch" class="m-switch" data-usb-eth${usbEth?.enabled ? " checked" : ""}${ethDisabled ? " disabled" : ""} aria-label="Ethernet (USB OTG)">
+        </label>
       </div>
-      <p class="list-note">Lets the hub keep two or more remotes without a screen of the same model, such as two Smart Controls. They share one button setup. It changes the hub's own remote software, so it's experimental, and turning it on or off restarts the hub.</p>`;
+      <p class="list-note">Multiple remotes lets the hub keep two or more remotes without a screen of the same model, such as two Smart Controls (turning it on or off restarts the hub). Ethernet uses a <strong>self-powered OTG micro-USB Ethernet adapter</strong> (Realtek RTL8152/RTL8153) with DHCP — the hub's micro-USB port cannot supply power, so the adapter must have its own power leg.</p>`;
   }
 
   function render() {
@@ -148,6 +156,53 @@ export function createSettingsView(section) {
       multi = null;
     }
     if (!section.hidden) render();
+  }
+
+  async function loadUsbEth() {
+    try {
+      usbEth = await api.getUsbEth();
+    } catch (_) {
+      usbEth = null;
+    }
+    if (!section.hidden) render();
+  }
+
+  async function switchUsbEth(enabled) {
+    if (!usbEth || usbEthBusy) return;
+    if (enabled && !usbEth.supported) {
+      await confirmDialog({
+        title: "Can't turn on USB Ethernet",
+        text: "This hub's kernel is not the build USB Ethernet was made for (2.6.31-g89d565c).",
+        confirmLabel: "OK",
+        cancel: false,
+      });
+      return;
+    }
+    const ok = await confirmDialog({
+      title: enabled ? "Turn on USB Ethernet?" : "Turn off USB Ethernet?",
+      text: enabled
+        ? "Requires a self-powered OTG micro-USB Ethernet adapter with a Realtek RTL8152 or RTL8153 chip (the hub's micro-USB port cannot supply power). While host mode is active, the micro-USB port cannot be used as a USB device port until the hub restarts with Ethernet off. The wired interface uses DHCP alongside Wi-Fi."
+        : "Stops DHCP and brings down the USB Ethernet interface. Wi-Fi stays connected.",
+      confirmLabel: enabled ? "Turn on" : "Turn off",
+    });
+    if (!ok) return;
+    usbEthBusy = "saving";
+    render();
+    try {
+      usbEth = await api.setUsbEth({ enabled });
+      snackbar(`USB Ethernet is ${enabled ? "on" : "off"}.`);
+    } catch (error) {
+      await confirmDialog({
+        title: enabled ? "Couldn't turn on USB Ethernet" : "Couldn't turn off USB Ethernet",
+        text: error.message || "The hub didn't change the setting.",
+        confirmLabel: "OK",
+        cancel: false,
+      });
+      await loadUsbEth();
+    } finally {
+      usbEthBusy = "";
+      if (!section.hidden) render();
+    }
   }
 
   const pause = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
@@ -235,11 +290,19 @@ export function createSettingsView(section) {
   }
 
   root.addEventListener("change", (event) => {
-    const input = event.target.closest("[data-multi-remote]");
-    if (!input) return;
-    const enabled = input.checked;
-    input.checked = !enabled; // stays as it was until the hub has changed
-    switchMulti(enabled);
+    const multiInput = event.target.closest("[data-multi-remote]");
+    if (multiInput) {
+      const enabled = multiInput.checked;
+      multiInput.checked = !enabled; // stays as it was until the hub has changed
+      switchMulti(enabled);
+      return;
+    }
+    const ethInput = event.target.closest("[data-usb-eth]");
+    if (ethInput) {
+      const enabled = ethInput.checked;
+      ethInput.checked = !enabled;
+      switchUsbEth(enabled);
+    }
   });
 
   async function loadEvents() {
@@ -259,6 +322,7 @@ export function createSettingsView(section) {
       hub.refreshState();
       loadKeyboard();
       loadMulti();
+      loadUsbEth();
     } else if (act === "events") {
       loadEvents();
     }
@@ -274,6 +338,7 @@ export function createSettingsView(section) {
       render();
       loadKeyboard();
       loadMulti();
+      loadUsbEth();
       loadEvents();
     },
     onHide() {},

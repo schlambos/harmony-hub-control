@@ -560,6 +560,10 @@ let simMultiEnabled = false; // multi_remote.conf says 1
 let simHalSupported = true; // /usr/bin/hal is the stock 4.15.600 build
 let simOffPendingUntil = 0; // like codex_webui's pending-restart guard: no pairing until then
 let simRadioHung = false; // rf.info doesn't answer (a hung hal): off needs "force"
+let simUsbEthEnabled = false;
+let simUsbEthSupported = true;
+let simUsbEthEhciBound = false;
+let simUsbEthAdapter = null; // null | { vidPid, product, supportedChip, carrier, ipv4 }
 const SIM_RESTART_MS = 4000;
 const SIM_HAL_STOCK_MD5 = "a3fdd823440c43f36e235fe51c45f008";
 const SIM_HAL_MULTI_MD5 = "cafdd7930309c7d74a6a41a87642f0c1";
@@ -575,6 +579,10 @@ function resetSimRemotes() {
   simHalSupported = true;
   simOffPendingUntil = 0;
   simRadioHung = false;
+  simUsbEthEnabled = false;
+  simUsbEthSupported = true;
+  simUsbEthEhciBound = false;
+  simUsbEthAdapter = null;
 }
 
 /* The raw text of a top-level JSON member's value, like codex_webui's
@@ -659,6 +667,49 @@ function handleMultiRemoteSet(res, params) {
   if (rebooting) setTimeout(() => { simMultiRemote = simMultiEnabled; }, SIM_RESTART_MS);
   logEvent({ kind: "multi-remote", message: `Multiple remotes of one model ${params.enabled ? "on" : "off"}${rebooting ? " (restarting)" : ""}` });
   sendJson(res, 200, { ok: true, enabled: params.enabled, rebooting, ...(force ? { forced: true } : {}) });
+}
+
+/* GET /api/usb-eth, like codex_webui's render_usb_eth_json(). */
+function simUsbEthState() {
+  const kernel = simUsbEthSupported ? "2.6.31-g89d565c" : "2.6.31-other";
+  const dev = simUsbEthEhciBound && simUsbEthAdapter ? simUsbEthAdapter : null;
+  const boundIface = simUsbEthEnabled && dev && dev.supportedChip !== false ? "eth0" : "";
+  return {
+    ok: true,
+    enabled: simUsbEthEnabled,
+    supported: simUsbEthSupported,
+    kernel,
+    ehciBound: simUsbEthEhciBound,
+    driverLoaded: Boolean(simUsbEthEnabled && simUsbEthSupported),
+    gadgetLoaded: false,
+    usbDevice: dev ? String(dev.vidPid || "0bda:8152") : "",
+    usbProduct: dev ? String(dev.product || "USB 10/100 LAN") : "",
+    ifname: boundIface,
+    carrier: Boolean(boundIface && dev.carrier !== false),
+    ipv4: boundIface && dev.carrier !== false ? String(dev.ipv4 || "192.168.1.55") : ""
+  };
+}
+
+/* POST /api/usb-eth, like codex_webui's render_usb_eth_set_json(). */
+function handleUsbEthSet(res, params) {
+  const token = jsonTopToken(params.__raw, "enabled");
+  if (token !== "true" && token !== "false") {
+    sendJson(res, 400, { ok: false, error: 'Send {"enabled": true} or {"enabled": false}.' });
+    return;
+  }
+  const want = token === "true";
+  if (want && !simUsbEthSupported) {
+    sendJson(res, 409, {
+      ok: false,
+      error: "This hub's kernel is not the build USB Ethernet was made for (2.6.31-g89d565c).",
+      kernel: "2.6.31-other"
+    });
+    return;
+  }
+  simUsbEthEnabled = want;
+  if (want) simUsbEthEhciBound = true; // Like the hub: stop leaves EHCI registered.
+  logEvent({ kind: "usb-eth", message: `USB Ethernet ${want ? "on" : "off"}` });
+  sendJson(res, 200, simUsbEthState());
 }
 
 function simRfInfo() {
@@ -1507,7 +1558,7 @@ function handleExport(res, pathname) {
 /* Like codex_webui's request_same_origin_json(): the routes that change the
    radio or reboot the hub take only application/json, and a browser's Origin,
    when sent, must be this host. */
-const SAME_ORIGIN_JSON_ROUTES = new Set(["POST /api/multi-remote", "POST /api/remote-unpair"]);
+const SAME_ORIGIN_JSON_ROUTES = new Set(["POST /api/multi-remote", "POST /api/remote-unpair", "POST /api/usb-eth"]);
 const SAME_ORIGIN_JSON_ERROR =
   "This change takes a JSON request (Content-Type: application/json) from the hub's own web app.";
 
@@ -1699,6 +1750,20 @@ async function handleApi(req, res, pathname, url) {
       return;
     case "POST /api/multi-remote":
       handleMultiRemoteSet(res, params);
+      return;
+    case "POST /api/sim/usb-eth":
+      if (typeof params.supported === "boolean") simUsbEthSupported = params.supported;
+      if (typeof params.enabled === "boolean") simUsbEthEnabled = params.enabled;
+      if (typeof params.ehciBound === "boolean") simUsbEthEhciBound = params.ehciBound;
+      if (params.adapter === null) simUsbEthAdapter = null;
+      else if (params.adapter && typeof params.adapter === "object") simUsbEthAdapter = { ...params.adapter };
+      sendJson(res, 200, simUsbEthState());
+      return;
+    case "GET /api/usb-eth":
+      sendJson(res, 200, simUsbEthState());
+      return;
+    case "POST /api/usb-eth":
+      handleUsbEthSet(res, params);
       return;
     case "POST /api/remote-pair":
       await handleRemotePair(res, params);

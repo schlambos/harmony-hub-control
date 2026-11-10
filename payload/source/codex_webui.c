@@ -109,6 +109,7 @@ static const char *UPDATE_FILES[] = {
     "codex_bthid_keyboard",
     "codex_bt_pair_agent",
     "codex_androidtv",
+    "codex_usbeth",
     "codex_hal_ltcp",
     "codex_hbus",
     "codex_portal",
@@ -9219,6 +9220,146 @@ static void render_multi_remote_set_json(int fd, const struct request *req) {
     }
 }
 
+/* -------------------------------------------------------------------------
+ * USB Ethernet (docs/USB_ETHERNET.md): wired LAN over a self-powered OTG
+ * micro-USB Ethernet adapter (Realtek r8152/r8153). Gated by
+ * /data/codex/usb_eth.conf (ENABLED=0|1, default off); managed at runtime and
+ * boot by /data/codex/usb_eth_service.sh and /data/codex/bin/codex_usbeth.
+ * ------------------------------------------------------------------------- */
+#define USB_ETH_CONF    "/data/codex/usb_eth.conf"
+#define USB_ETH_LOCK    "/var/run/codex-usb-eth.lock"
+#define USB_ETH_HELPER  "/data/codex/bin/codex_usbeth"
+#define USB_ETH_SERVICE "/data/codex/usb_eth_service.sh"
+
+struct usb_eth_state {
+    char kernel[64];
+    int kernel_compatible;
+    int enabled;
+    int gadget_loaded;
+    int ehci_bound;
+    int driver_loaded;
+    char usb_device[32];
+    char usb_product[64];
+    char ifname[32];
+    int carrier;
+    char ipv4[32];
+};
+
+static int usb_eth_conf_enabled(void) {
+    char raw[64];
+    if (read_text(USB_ETH_CONF, raw, sizeof(raw)) <= 0) return 0;
+    if (strstr(raw, "ENABLED=1") != NULL) return 1;
+    if (raw[0] == '1' && (raw[1] == '\0' || raw[1] == '\n' || raw[1] == '\r')) return 1;
+    return 0;
+}
+
+static void read_usb_eth_state(struct usb_eth_state *st) {
+    char out[1024], *line, *save = NULL;
+    memset(st, 0, sizeof(*st));
+    st->enabled = usb_eth_conf_enabled();
+    if (access(USB_ETH_HELPER, X_OK) != 0) {
+        snprintf(st->kernel, sizeof(st->kernel), "unknown");
+        return;
+    }
+    if (run_cmd(USB_ETH_HELPER " status 2>/dev/null", out, sizeof(out)) != 0 && !out[0]) {
+        snprintf(st->kernel, sizeof(st->kernel), "unknown");
+        return;
+    }
+    for (line = strtok_r(out, "\r\n", &save); line; line = strtok_r(NULL, "\r\n", &save)) {
+        char *eq = strchr(line, '=');
+        if (!eq) continue;
+        *eq = '\0';
+        const char *k = line;
+        const char *v = eq + 1;
+        if (strcmp(k, "kernel") == 0) snprintf(st->kernel, sizeof(st->kernel), "%s", v);
+        else if (strcmp(k, "kernel_compatible") == 0) st->kernel_compatible = atoi(v) != 0;
+        else if (strcmp(k, "enabled") == 0) st->enabled = atoi(v) != 0;
+        else if (strcmp(k, "gadget_loaded") == 0) st->gadget_loaded = atoi(v) != 0;
+        else if (strcmp(k, "ehci_bound") == 0) st->ehci_bound = atoi(v) != 0;
+        else if (strcmp(k, "driver_loaded") == 0) st->driver_loaded = atoi(v) != 0;
+        else if (strcmp(k, "usb_device") == 0) snprintf(st->usb_device, sizeof(st->usb_device), "%s", v);
+        else if (strcmp(k, "usb_product") == 0) snprintf(st->usb_product, sizeof(st->usb_product), "%s", v);
+        else if (strcmp(k, "ifname") == 0) snprintf(st->ifname, sizeof(st->ifname), "%s", v);
+        else if (strcmp(k, "carrier") == 0) st->carrier = atoi(v) != 0;
+        else if (strcmp(k, "ipv4") == 0) snprintf(st->ipv4, sizeof(st->ipv4), "%s", v);
+    }
+}
+
+static void write_usb_eth_json(FILE *f, const struct usb_eth_state *st) {
+    fprintf(f,
+        "{\"ok\":true,\"enabled\":%s,\"supported\":%s,\"kernel\":",
+        st->enabled ? "true" : "false",
+        st->kernel_compatible ? "true" : "false");
+    json_write_string(f, st->kernel);
+    fprintf(f, ",\"ehciBound\":%s,\"driverLoaded\":%s,\"gadgetLoaded\":%s,\"usbDevice\":",
+        st->ehci_bound ? "true" : "false",
+        st->driver_loaded ? "true" : "false",
+        st->gadget_loaded ? "true" : "false");
+    json_write_string(f, st->usb_device);
+    fputs(",\"usbProduct\":", f);
+    json_write_string(f, st->usb_product);
+    fputs(",\"ifname\":", f);
+    json_write_string(f, st->ifname);
+    fprintf(f, ",\"carrier\":%s,\"ipv4\":", st->carrier ? "true" : "false");
+    json_write_string(f, st->ipv4);
+    fputs("}\n", f);
+}
+
+static void render_usb_eth_json(int fd) {
+    struct usb_eth_state st;
+    FILE *f;
+    read_usb_eth_state(&st);
+    f = send_json_start(fd, "200 OK");
+    if (!f) return;
+    write_usb_eth_json(f, &st);
+    fclose(f);
+}
+
+static void render_usb_eth_set_json(int fd, const struct request *req) {
+    struct usb_eth_state st;
+    char out[512];
+    int want, lock_fd;
+    FILE *f;
+    want = req->body ? json_top_bool(req->body, "enabled", -1) : -1;
+    if (want < 0) {
+        send_multi_remote_error(fd, "400 Bad Request",
+            "Send {\"enabled\": true} or {\"enabled\": false}.", NULL, NULL);
+        return;
+    }
+    lock_fd = open(USB_ETH_LOCK, O_RDWR | O_CREAT, 0600);
+    if (lock_fd < 0 || flock(lock_fd, LOCK_EX | LOCK_NB) != 0) {
+        if (lock_fd >= 0) close(lock_fd);
+        send_multi_remote_error(fd, "409 Conflict", "The hub is already changing this setting.", NULL, NULL);
+        return;
+    }
+    read_usb_eth_state(&st);
+    if (want && !st.kernel_compatible) {
+        close(lock_fd);
+        send_multi_remote_error(fd, "409 Conflict",
+            "This hub's kernel is not the build USB Ethernet was made for (2.6.31-g89d565c).",
+            "kernel", st.kernel);
+        return;
+    }
+    if (write_file_atomic(USB_ETH_CONF, want ? "ENABLED=1\n" : "ENABLED=0\n", 10) != 0) {
+        close(lock_fd);
+        send_multi_remote_error(fd, "500 Internal Server Error", "The setting couldn't be saved.", NULL, NULL);
+        return;
+    }
+    if (access(USB_ETH_SERVICE, X_OK) == 0) {
+        if (want) {
+            run_cmd(USB_ETH_SERVICE " start --force >/dev/null 2>&1", out, sizeof(out));
+        } else {
+            run_cmd(USB_ETH_SERVICE " stop >/dev/null 2>&1", out, sizeof(out));
+        }
+    }
+    read_usb_eth_state(&st);
+    close(lock_fd);
+    f = send_json_start(fd, "200 OK");
+    if (!f) return;
+    write_usb_eth_json(f, &st);
+    fclose(f);
+}
+
 /* Unpair the remote in one radio slot (rf.unpair). Refused while a pairing
  * window is open, for an empty slot, and outside 1..6 (hal's own range). */
 static void render_remote_unpair_json(int fd, const struct request *req) {
@@ -11389,6 +11530,11 @@ static void handle_client(int client) {
         render_multi_remote_json(client);
     } else if (strcmp(req.method, "POST") == 0 && strcmp(req.path, "/api/multi-remote") == 0) {
         if (request_same_origin_json(&req)) render_multi_remote_set_json(client, &req);
+        else send_cross_site_refused(client);
+    } else if (strcmp(req.method, "GET") == 0 && strcmp(req.path, "/api/usb-eth") == 0) {
+        render_usb_eth_json(client);
+    } else if (strcmp(req.method, "POST") == 0 && strcmp(req.path, "/api/usb-eth") == 0) {
+        if (request_same_origin_json(&req)) render_usb_eth_set_json(client, &req);
         else send_cross_site_refused(client);
     } else if (strcmp(req.method, "POST") == 0 && strcmp(req.path, "/api/ir-test-learned") == 0) {
         render_ir_test_learned_json(client, &req);

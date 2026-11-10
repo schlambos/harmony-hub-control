@@ -57,8 +57,8 @@ STRIP=mips-buildroot-linux-uclibc-strip
 # ---------------------------------------------------------------------------
 
 #: expected output digests (fail closed on any mismatch)
-WEBUI_EXPECT_SHA256=b1bea946b1f5437d81ae515cf39ef772d53331755be9da86258f96367a74b7ec
-WEBUI_EXPECT_SIZE=1257364
+WEBUI_EXPECT_SHA256=b2b8c8a7c1c7c6c1521be3c58719d7680f2f5b2aadd1c7f9ca07743920fa0709
+WEBUI_EXPECT_SIZE=1262980
 PAIR_EXPECT_SHA256=ab89be44f8d1db48e95a12ec3673145edfb8eb761f5e8db03f4e61acb8b01d72
 PAIR_EXPECT_SIZE=112708
 BTHID_EXPECT_SHA256=099b8a1428c2f34fe0b3428d280f65402cc6a5fd1e8e5723c56b462cc8ec2a86
@@ -73,6 +73,8 @@ PORTAL_EXPECT_SHA256=1596f6cac03dad4ce0254ac118de5527c41789f10c7bc95357860d0d96c
 PORTAL_EXPECT_SIZE=76724
 ANDROIDTV_EXPECT_SHA256=fbf0e953b47b10f29fb30a41a4d339f5a034e1cc7a26c12d79f4d3711161bba2
 ANDROIDTV_EXPECT_SIZE=266916
+USBETH_EXPECT_SHA256=db4fda20147e2892c1094025d83901b5bedbd461899e97540fe54ba2d36f28c1
+USBETH_EXPECT_SIZE=74740
 
 #: BearSSL 0.6 source for codex_androidtv (bearssl.org publishes no checksum; this
 #: is the tarball's SHA-256 as downloaded on 2026-11-07)
@@ -181,6 +183,9 @@ check_zig "OFFICIAL_ZIG" "$OFFICIAL_ZIG" "$OFFICIAL_ZIG_SHA256" "$OFFICIAL_ZIG_F
   "$OFFICIAL_ZIG" cc -target mips-linux-musleabi -Os -static -s \
     -o build/output/codex_portal \
     payload/source/codex_portal.c
+  "$OFFICIAL_ZIG" cc -target mips-linux-musleabi -Os -static -s \
+    -o build/output/codex_usbeth \
+    payload/source/codex_usbeth.c
 )
 
 PAIR_SHA256=$(sha256_of "$OUT/codex_bt_pair_agent")
@@ -217,6 +222,12 @@ PORTAL_SHA256=$(sha256_of "$OUT/codex_portal")
 PORTAL_SIZE=$(wc -c < "$OUT/codex_portal" | tr -d ' ')
 if [ "$PORTAL_SHA256" != "$PORTAL_EXPECT_SHA256" ] || [ "$PORTAL_SIZE" != "$PORTAL_EXPECT_SIZE" ]; then
   echo "error: codex_portal build is not exact (size $PORTAL_SIZE, sha256 $PORTAL_SHA256; expected size $PORTAL_EXPECT_SIZE, sha256 $PORTAL_EXPECT_SHA256)" >&2
+  exit 1
+fi
+USBETH_SHA256=$(sha256_of "$OUT/codex_usbeth")
+USBETH_SIZE=$(wc -c < "$OUT/codex_usbeth" | tr -d ' ')
+if [ "$USBETH_SHA256" != "$USBETH_EXPECT_SHA256" ] || [ "$USBETH_SIZE" != "$USBETH_EXPECT_SIZE" ]; then
+  echo "error: codex_usbeth build is not exact (size $USBETH_SIZE, sha256 $USBETH_SHA256; expected size $USBETH_EXPECT_SIZE, sha256 $USBETH_EXPECT_SHA256)" >&2
   exit 1
 fi
 
@@ -303,7 +314,7 @@ fi
 cd "$OUT"
 ln -sf dropbearmulti dropbear
 ln -sf dropbearmulti dropbearkey
-md5sum codex_dhcpd codex_portal codex_hbus codex_hal_ltcp codex_bthid_keyboard codex_bt_pair_agent codex_androidtv codex_webui dropbearmulti > MD5SUMS
-file codex_dhcpd codex_portal codex_hbus codex_hal_ltcp codex_bthid_keyboard codex_bt_pair_agent codex_androidtv codex_webui dropbearmulti > FILES
-ls -l codex_dhcpd codex_portal codex_hbus codex_hal_ltcp codex_bthid_keyboard codex_bt_pair_agent codex_androidtv codex_webui dropbearmulti > MANIFEST.txt
+md5sum codex_dhcpd codex_portal codex_hbus codex_hal_ltcp codex_bthid_keyboard codex_bt_pair_agent codex_androidtv codex_usbeth codex_webui dropbearmulti > MD5SUMS
+file codex_dhcpd codex_portal codex_hbus codex_hal_ltcp codex_bthid_keyboard codex_bt_pair_agent codex_androidtv codex_usbeth codex_webui dropbearmulti > FILES
+ls -l codex_dhcpd codex_portal codex_hbus codex_hal_ltcp codex_bthid_keyboard codex_bt_pair_agent codex_androidtv codex_usbeth codex_webui dropbearmulti > MANIFEST.txt
 cat MD5SUMS >> MANIFEST.txt

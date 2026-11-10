@@ -126,6 +126,32 @@ export function multiRemoteStatus(state, busy = "") {
   return state.supported ? "Off" : "Not available on this hub";
 }
 
+/**
+ * The Settings switch's status line for USB Ethernet (/api/usb-eth):
+ * `undefined` while loading, `null` when it couldn't be read, and `busy`
+ * ("saving" or "").
+ */
+export function usbEthStatus(state, busy = "") {
+  if (busy === "saving") return "Applying…";
+  if (state === undefined) return "Checking…";
+  if (!state) return "Couldn't check USB Ethernet";
+  if (!state.supported) return "Not available on this hub's kernel";
+  const dev = state.usbProduct || state.usbDevice || "";
+  if (state.enabled) {
+    if (state.ifname) {
+      const parts = ["Ethernet + Wi-Fi", state.ifname];
+      if (state.carrier) parts.push(state.ipv4 || "DHCP…");
+      else parts.push("No link");
+      if (dev) parts.push(dev);
+      return parts.join(" · ");
+    }
+    if (dev) return `On · ${dev} (unsupported chipset — Realtek RTL8152/RTL8153 required)`;
+    return "On · Waiting for self-powered OTG Realtek adapter";
+  }
+  if (dev) return `Wi-Fi only · ${dev} detected`;
+  return "Wi-Fi only · Self-powered OTG Realtek adapter";
+}
+
 /** A line for the pairing pop-up about one pairing window's outcome; "" when there's nothing to celebrate. */
 export function pairedMessage(outcome) {
   if (!outcome) return "";
