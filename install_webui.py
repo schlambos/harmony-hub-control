@@ -789,6 +789,18 @@ class Installer:
                 Candidate(
                     "/data/codex/androidtv_service.sh", "755", "runtime", local=PAYLOAD / "scripts" / "androidtv_service.sh"
                 ),
+                Candidate(
+                    "/data/codex/usb_eth_service.sh", "755", "runtime", local=PAYLOAD / "scripts" / "usb_eth_service.sh"
+                ),
+                Candidate(
+                    "/data/codex/modules/usb-net/r8152.ko", "644", "runtime", local=PAYLOAD / "modules" / "usb-net" / "r8152.ko"
+                ),
+                Candidate(
+                    "/data/codex/modules/usb-net/usbnet.ko", "644", "runtime", local=PAYLOAD / "modules" / "usb-net" / "usbnet.ko"
+                ),
+                Candidate(
+                    "/data/codex/modules/usb-net/README.md", "644", "runtime", local=PAYLOAD / "modules" / "usb-net" / "README.md"
+                ),
                 Candidate("/etc/init.d/rcS.local", "755", "runtime", local=PAYLOAD / "scripts" / "rcS.local"),
             ]
         )
@@ -1600,12 +1612,13 @@ class Installer:
         bin_names = bin_manifest_names()
         bin_chmod = " ".join(f"/data/codex/bin/{n}" for n in bin_names)
         post = (
-            "mkdir -p /data/codex/bin /etc/dropbear /home/root/.ssh /data/codexmqtt /pkg/codexactivity /pkg/codexmqtt; "
+            "mkdir -p /data/codex/bin /data/codex/modules/usb-net /etc/dropbear /home/root/.ssh /data/codexmqtt /pkg/codexactivity /pkg/codexmqtt; "
             "ln -sf dropbearmulti /data/codex/bin/dropbear; "
             "ln -sf dropbearmulti /data/codex/bin/dropbearkey; "
             f"chmod 755 {bin_chmod} /data/codex/init.sh /data/codex/offline_egress_guard.sh "
-            "/data/codex/recovery_ap.sh /data/codex/androidtv_service.sh /usr/sbin/dropbear "
+            "/data/codex/recovery_ap.sh /data/codex/androidtv_service.sh /data/codex/usb_eth_service.sh /usr/sbin/dropbear "
             "/usr/sbin/dropbearkey /etc/init.d/rcS.local; "
+            "chmod 644 /data/codex/modules/usb-net/r8152.ko /data/codex/modules/usb-net/usbnet.ko /data/codex/modules/usb-net/README.md 2>/dev/null || true; "
             "chmod 600 /data/codexmqtt/config.json 2>/dev/null || true; "
             "/bin/busybox sync 2>/dev/null || true"
         )

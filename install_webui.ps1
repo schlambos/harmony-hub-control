@@ -673,6 +673,10 @@ function Build-Inventory() {
     Add-Candidate (New-Candidate "/data/codex/offline_egress_guard.sh" "755" "runtime" -Local (Join-Path $Payload "scripts/offline_egress_guard.sh"))
     Add-Candidate (New-Candidate "/data/codex/recovery_ap.sh" "755" "runtime" -Local (Join-Path $Payload "scripts/recovery_ap.sh"))
     Add-Candidate (New-Candidate "/data/codex/androidtv_service.sh" "755" "runtime" -Local (Join-Path $Payload "scripts/androidtv_service.sh"))
+    Add-Candidate (New-Candidate "/data/codex/usb_eth_service.sh" "755" "runtime" -Local (Join-Path $Payload "scripts/usb_eth_service.sh"))
+    Add-Candidate (New-Candidate "/data/codex/modules/usb-net/r8152.ko" "644" "runtime" -Local (Join-Path $Payload "modules/usb-net/r8152.ko"))
+    Add-Candidate (New-Candidate "/data/codex/modules/usb-net/usbnet.ko" "644" "runtime" -Local (Join-Path $Payload "modules/usb-net/usbnet.ko"))
+    Add-Candidate (New-Candidate "/data/codex/modules/usb-net/README.md" "644" "runtime" -Local (Join-Path $Payload "modules/usb-net/README.md"))
     Add-Candidate (New-Candidate "/etc/init.d/rcS.local" "755" "runtime" -Local (Join-Path $Payload "scripts/rcS.local"))
     if (-not $SkipCloudSuppression) {
         Add-Candidate (New-Candidate "/opt/luaworks/tasks/connectserver/netservicestarter.lua" "644" "runtime" -Local (Join-Path $Payload "scripts/netservicestarter.lua"))
@@ -1587,12 +1591,13 @@ function Invoke-PostWiring() {
     Step "Post-install wiring"
     $binNames = Get-BinManifestNames
     $binChmod = ($binNames | ForEach-Object { "/data/codex/bin/$_" }) -join " "
-    $post = "mkdir -p /data/codex/bin /etc/dropbear /home/root/.ssh /data/codexmqtt /pkg/codexactivity /pkg/codexmqtt; " +
+    $post = "mkdir -p /data/codex/bin /data/codex/modules/usb-net /etc/dropbear /home/root/.ssh /data/codexmqtt /pkg/codexactivity /pkg/codexmqtt; " +
         "ln -sf dropbearmulti /data/codex/bin/dropbear; " +
         "ln -sf dropbearmulti /data/codex/bin/dropbearkey; " +
         "chmod 755 $binChmod /data/codex/init.sh /data/codex/offline_egress_guard.sh " +
-        "/data/codex/recovery_ap.sh /data/codex/androidtv_service.sh /usr/sbin/dropbear " +
+        "/data/codex/recovery_ap.sh /data/codex/androidtv_service.sh /data/codex/usb_eth_service.sh /usr/sbin/dropbear " +
         "/usr/sbin/dropbearkey /etc/init.d/rcS.local; " +
+        "chmod 644 /data/codex/modules/usb-net/r8152.ko /data/codex/modules/usb-net/usbnet.ko /data/codex/modules/usb-net/README.md 2>/dev/null || true; " +
         "chmod 600 /data/codexmqtt/config.json 2>/dev/null || true; " +
         "/bin/busybox sync 2>/dev/null || true"
     Invoke-Remote $post $null 60000 | Out-Null

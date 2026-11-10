@@ -1058,6 +1058,39 @@ buttons (`#activitybuttons/<EquadID>`) and keys per activity
 writes every remote's map in one save unless the owner sets that key for
 one remote only.
 
+### USB Ethernet (experimental)
+
+The Settings switch for [USB_ETHERNET.md](USB_ETHERNET.md)
+(`render_usb_eth_json()`, `render_usb_eth_set_json()`).
+
+```powershell
+Invoke-RestMethod "http://<hub-ip>:8080/api/usb-eth"
+```
+
+```json
+{"ok":true,"enabled":false,"supported":true,"kernel":"2.6.31-g89d565c",
+ "ehciBound":false,"driverLoaded":false,"gadgetLoaded":false,
+ "usbDevice":"","usbProduct":"","ifname":"","carrier":false,"ipv4":""}
+```
+
+- `enabled`: `/data/codex/usb_eth.conf` has `ENABLED=1`.
+- `supported`: the running kernel is `2.6.31-g89d565c`.
+- `ehciBound`, `driverLoaded`, `gadgetLoaded`, `usbDevice` (`VID:PID`),
+  `usbProduct`, `ifname`, `carrier` and `ipv4` come from
+  `/data/codex/bin/codex_usbeth status`.
+
+```powershell
+Invoke-RestMethod "http://<hub-ip>:8080/api/usb-eth" -Method Post `
+  -ContentType "application/json" -Body '{"enabled":true}'
+```
+
+- Writes `/data/codex/usb_eth.conf` (`ENABLED=1` or `ENABLED=0`), runs
+  `/data/codex/usb_eth_service.sh start --force` (or `stop`), and answers with
+  the updated state object above.
+- Requires a same-origin `application/json` request (`403` otherwise), a
+  top-level boolean `enabled` (`400` otherwise), and kernel `2.6.31-g89d565c`
+  when enabling (`409` otherwise).
+
 ## State changes (cheap liveness)
 
 Poll for state changes without a full engine round-trip
