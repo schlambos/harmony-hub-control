@@ -1070,7 +1070,9 @@ Invoke-RestMethod "http://<hub-ip>:8080/api/usb-eth"
 ```json
 {"ok":true,"enabled":false,"supported":true,"kernel":"2.6.31-g89d565c",
  "ehciBound":false,"driverLoaded":false,"gadgetLoaded":false,
- "usbDevice":"","usbProduct":"","ifname":"","carrier":false,"ipv4":""}
+ "usbDevice":"","usbProduct":"","ifname":"","carrier":false,"ipv4":"",
+ "platformRegistered":false,"operational":false,"state":"platform_absent",
+ "reason":"","routeMode":""}
 ```
 
 - `enabled`: `/data/codex/usb_eth.conf` has `ENABLED=1`.
@@ -1078,6 +1080,13 @@ Invoke-RestMethod "http://<hub-ip>:8080/api/usb-eth"
 - `ehciBound`, `driverLoaded`, `gadgetLoaded`, `usbDevice` (`VID:PID`),
   `usbProduct`, `ifname`, `carrier` and `ipv4` come from
   `/data/codex/bin/codex_usbeth status`.
+- `operational` is true only in state `operational` (interface up, link,
+  DHCP lease, wired routing applied). **Enabled is not operational.**
+  `state`/`reason` carry the service worker's progress or failure
+  (`starting`, `failed` + e.g. `phy_not_ready`, `adapter_absent`,
+  `awaiting_carrier_dhcp`, `degraded_routing`, …), and `routeMode` is
+  `policy` or `metric` once wired-path routing is applied. Poll `GET`
+  after toggling; `POST` returns as soon as the worker is queued.
 
 ```powershell
 Invoke-RestMethod "http://<hub-ip>:8080/api/usb-eth" -Method Post `

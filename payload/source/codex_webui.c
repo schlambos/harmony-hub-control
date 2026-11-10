@@ -9230,6 +9230,8 @@ static void render_multi_remote_set_json(int fd, const struct request *req) {
 #define USB_ETH_LOCK    "/var/run/codex-usb-eth.lock"
 #define USB_ETH_HELPER  "/data/codex/bin/codex_usbeth"
 #define USB_ETH_SERVICE "/data/codex/usb_eth_service.sh"
+#define USB_ETH_STATE   "/var/run/codex-usb-eth.state"
+#define USB_ETH_NETSTATE "/var/run/codex-usb-eth-net.state"
 
 struct usb_eth_state {
     char kernel[64];
@@ -9243,6 +9245,11 @@ struct usb_eth_state {
     char ifname[32];
     int carrier;
     char ipv4[32];
+    int platform_registered;
+    char helper_state[32];
+    char service_state[32];
+    char service_reason[48];
+    char route_mode[16];
 };
 
 static int usb_eth_conf_enabled(void) {
@@ -9282,7 +9289,40 @@ static void read_usb_eth_state(struct usb_eth_state *st) {
         else if (strcmp(k, "ifname") == 0) snprintf(st->ifname, sizeof(st->ifname), "%s", v);
         else if (strcmp(k, "carrier") == 0) st->carrier = atoi(v) != 0;
         else if (strcmp(k, "ipv4") == 0) snprintf(st->ipv4, sizeof(st->ipv4), "%s", v);
+        else if (strcmp(k, "platform_registered") == 0) st->platform_registered = atoi(v) != 0;
+        else if (strcmp(k, "state") == 0) snprintf(st->helper_state, sizeof(st->helper_state), "%s", v);
     }
+    /* The service worker owns startup progress and failure reasons; the
+     * helper state is the instantaneous hardware view. The service state
+     * wins for display when it exists. */
+    char svc[512], *sline, *ssave = NULL;
+    if (read_text(USB_ETH_STATE, svc, sizeof(svc)) > 0) {
+        for (sline = strtok_r(svc, "\r\n", &ssave); sline; sline = strtok_r(NULL, "\r\n", &ssave)) {
+            char *eq = strchr(sline, '=');
+            if (!eq) continue;
+            *eq = '\0';
+            if (strcmp(sline, "state") == 0)
+                snprintf(st->service_state, sizeof(st->service_state), "%s", eq + 1);
+            else if (strcmp(sline, "reason") == 0)
+                snprintf(st->service_reason, sizeof(st->service_reason), "%s", eq + 1);
+        }
+    }
+    char net[512], *nline, *nsave = NULL;
+    if (read_text(USB_ETH_NETSTATE, net, sizeof(net)) > 0) {
+        for (nline = strtok_r(net, "\r\n", &nsave); nline; nline = strtok_r(NULL, "\r\n", &nsave)) {
+            char *eq = strchr(nline, '=');
+            if (!eq) continue;
+            *eq = '\0';
+            if (strcmp(nline, "route_mode") == 0)
+                snprintf(st->route_mode, sizeof(st->route_mode), "%s", eq + 1);
+        }
+    }
+}
+
+/* Effective display state: service progress/failure when known, else the
+ * helper's instantaneous classification. */
+static const char *usb_eth_effective_state(const struct usb_eth_state *st) {
+    return st->service_state[0] ? st->service_state : st->helper_state;
 }
 
 static void write_usb_eth_json(FILE *f, const struct usb_eth_state *st) {
@@ -9302,6 +9342,14 @@ static void write_usb_eth_json(FILE *f, const struct usb_eth_state *st) {
     json_write_string(f, st->ifname);
     fprintf(f, ",\"carrier\":%s,\"ipv4\":", st->carrier ? "true" : "false");
     json_write_string(f, st->ipv4);
+    fprintf(f, ",\"platformRegistered\":%s,\"operational\":%s,\"state\":",
+        st->platform_registered ? "true" : "false",
+        strcmp(usb_eth_effective_state(st), "operational") == 0 ? "true" : "false");
+    json_write_string(f, usb_eth_effective_state(st));
+    fputs(",\"reason\":", f);
+    json_write_string(f, st->service_reason);
+    fputs(",\"routeMode\":", f);
+    json_write_string(f, st->route_mode);
     fputs("}\n", f);
 }
 

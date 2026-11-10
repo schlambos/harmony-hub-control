@@ -131,6 +131,21 @@ export function multiRemoteStatus(state, busy = "") {
  * `undefined` while loading, `null` when it couldn't be read, and `busy`
  * ("saving" or "").
  */
+const USB_ETH_REASONS = {
+  phy_not_ready: "USB PHY not ready",
+  deps_timeout: "USB drivers did not load in time",
+  controller_registered_unbound: "USB controller did not start",
+  kernel_or_slot_check_failed: "kernel check failed",
+  driver_load_failed: "adapter driver failed to load",
+  no_network_interface: "no wired network interface appeared",
+  route_apply_failed: "wired routing could not be applied",
+  unsupported_chipset: "unsupported chipset",
+  no_usb_device: "no adapter found",
+};
+
+/* Enabled (the saved switch) is not operational (traffic can use the
+ * cable). The hub reports both; this line must never call a merely
+ * enabled hub "Ethernet + Wi-Fi". */
 export function usbEthStatus(state, busy = "") {
   if (busy === "saving") return "Applying…";
   if (state === undefined) return "Checking…";
@@ -138,8 +153,39 @@ export function usbEthStatus(state, busy = "") {
   if (!state.supported) return "Not available on this hub's kernel";
   const dev = state.usbProduct || state.usbDevice || "";
   if (state.enabled) {
+    const operational = state.operational ??
+      (!state.state || state.state === "operational"
+        ? Boolean(state.ifname && state.carrier && state.ipv4)
+        : false);
+    if (operational && state.ifname) {
+      const parts = ["Ethernet + Wi-Fi", state.ifname, state.ipv4 || "DHCP…"];
+      if (dev) parts.push(dev);
+      return parts.join(" · ");
+    }
+    switch (state.state) {
+      case "starting":
+        return "Turning on… waiting for the USB controller";
+      case "failed":
+        return `On, but not working: ${USB_ETH_REASONS[state.reason] || (state.reason || "startup failed").replaceAll("_", " ")}`;
+      case "degraded_routing":
+        return "On, but wired replies are not confirmed on the cable: routing could not be applied";
+      case "adapter_absent":
+        return "On · Waiting for self-powered OTG Ethernet adapter";
+      case "adapter_unsupported":
+        return dev ? `On · ${dev} (unsupported chipset)` : "On · Unsupported USB Ethernet chipset";
+      case "awaiting_carrier_dhcp":
+      case "nic_not_bound":
+        if (state.ifname) return `On · ${state.ifname} · ${state.carrier ? "Waiting for DHCP…" : "No link"}`;
+        return "On · Waiting for the wired link";
+      case "platform_unbound":
+      case "deps_unavailable":
+      case "platform_absent":
+        return "On, but not working: USB controller did not start";
+      default:
+        break;
+    }
     if (state.ifname) {
-      const parts = ["Ethernet + Wi-Fi", state.ifname];
+      const parts = ["On", state.ifname];
       if (state.carrier) parts.push(state.ipv4 || "DHCP…");
       else parts.push("No link");
       if (dev) parts.push(dev);

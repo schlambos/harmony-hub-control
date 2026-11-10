@@ -20,7 +20,10 @@ and `/lib/modules/2.6.31-g89d565c/` are never modified.
 | `ax88179_178a.ko` | 30200 | `a80e278b2f009e633134986fa4421ffded32ff4f1c2fec8e25c63dee790cd05d` | `24f5ecf1433acf98db037fa552d76575` | Linux v3.14 `drivers/net/usb/ax88179_178a.c` (ASIX AX88179/AX88178A), GPLv2 |
 
 **Validation status (read this):** only `r8152.ko` + `usbnet.ko` have been
-traffic-tested on hub hardware (bound RTL8153 adapter, DHCP + ping + HTTP).
+load-tested on hub hardware (bound RTL8153 adapter, DHCP). Earlier ping/HTTP
+results were shown by the 2026-11-10 health check to have travelled over
+Wi-Fi, not the cable; counter-verified wired traffic is still pending, so
+no chipset is claimed traffic-tested (see docs/USB_ETHERNET.md).
 `asix.ko`, `cdc_ether.ko`, `cdc_ncm.ko` and `ax88179_178a.ko` are built from
 GPL kernel source, fully import-audited against the hub kernel (every import
 either exact genksyms-CRC-equal or proven field-identical against the hub's

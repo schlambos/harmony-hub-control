@@ -190,7 +190,9 @@ export function createSettingsView(section) {
     render();
     try {
       usbEth = await api.setUsbEth({ enabled });
-      snackbar(`USB Ethernet is ${enabled ? "on" : "off"}.`);
+      snackbar(enabled
+        ? (usbEth?.operational ? "USB Ethernet is on and working." : "USB Ethernet is on; its status above says whether the cable is working.")
+        : "USB Ethernet is off.");
     } catch (error) {
       await confirmDialog({
         title: enabled ? "Couldn't turn on USB Ethernet" : "Couldn't turn off USB Ethernet",
