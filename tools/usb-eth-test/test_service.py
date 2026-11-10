@@ -126,16 +126,29 @@ STUB_PLAIN = {
     "ifconfig": '#!/bin/sh\necho "ifconfig $@" >> "$FAKE_DIR/calls.log"\n',
     "killall": '#!/bin/sh\nexit 0\n',
     "sleep": '#!/bin/sh\nexec /bin/sleep 0.02\n',
-    "udhcpc": r'''#!/bin/sh
-echo "udhcpc $@" >> "$FAKE_DIR/calls.log"
-pidfile=""
-prev=""
-for a in "$@"; do
-  if [ "$prev" = "-p" ]; then pidfile="$a"; fi
-  prev="$a"
-done
-/bin/sleep 60 &
-echo $! > "$pidfile"
+    "udhcpc": r'''#!/usr/bin/env python3
+import json, os, subprocess, sys
+from pathlib import Path
+D = Path(os.environ["FAKE_DIR"])
+with open(D / "calls.log", "a") as f:
+    f.write("udhcpc " + " ".join(sys.argv[1:]) + "\n")
+pidfile = sys.argv[sys.argv.index("-p") + 1]
+s = json.loads((D / "fake.json").read_text())
+s["wired_route"] = True  # configuring the address recreates its route
+(D / "fake.json").write_text(json.dumps(s))
+child = subprocess.Popen(["/bin/sleep", "60"])
+Path(pidfile).write_text(str(child.pid) + "\n")
+''',
+    "route": r'''#!/usr/bin/env python3
+import json, os
+from pathlib import Path
+D = Path(os.environ["FAKE_DIR"])
+s = json.loads((D / "fake.json").read_text())
+print("Kernel IP routing table")
+print("Destination Gateway Genmask Flags Metric Ref Use Iface")
+print("192.168.0.0 0.0.0.0 255.255.255.0 U 0 0 0 ath0")
+if s.get("wired_route", True) and s.get("carrier"):
+    print("192.168.0.0 0.0.0.0 255.255.255.0 U 0 0 0 eth2")
 ''',
 }
 
@@ -159,7 +172,7 @@ class Sandbox:
             "device": "0bda:8153", "driver": "r8152", "product": "USB 10/100/1000 LAN",
             "iface": "eth2", "driver_loaded": True, "carrier": 1,
             "ipv4": "192.168.0.234", "phy_ready_after": 0, "probe_ok": True,
-            "registrations": 0, "phy_calls": 0,
+            "registrations": 0, "phy_calls": 0, "wired_route": True,
         }
         base.update(fake)
         self.write_fake(base)
@@ -390,6 +403,24 @@ class ServiceTests(unittest.TestCase):
             sb.wait_state("operational")
             self.assertIn("net_applied=1", sb.net_state())
             self.assertGreaterEqual(sb.calls().count("net-apply "), 2)
+        finally:
+            sb.run("stop")
+            proc.wait(timeout=10)
+
+    def test_link_return_without_route_reruns_dhcp_bounded(self):
+        sb = Sandbox({})
+        proc = sb.spawn_worker()
+        try:
+            sb.wait_state("operational")
+            sb.patch_fake(carrier=0, wired_route=False)
+            sb.wait_state("awaiting_carrier_dhcp", reason="no_carrier")
+            before = sb.calls().count("udhcpc ")
+            sb.patch_fake(carrier=1)  # link back, route still missing
+            sb.wait_state("operational")
+            after = sb.calls().count("udhcpc ")
+            self.assertEqual(after, before + 1)  # one re-run, not a loop
+            time.sleep(0.5)
+            self.assertEqual(sb.calls().count("udhcpc "), after)
         finally:
             sb.run("stop")
             proc.wait(timeout=10)

@@ -164,6 +164,20 @@ module_loaded() {
   grep "^$1 " "$PROC_MODULES" >/dev/null 2>&1
 }
 
+# Does the main table still carry a connected route for this interface?
+# After a cable pull this kernel can drop it without dropping the
+# address, and only re-running DHCP (which re-configures the address)
+# brings it back.
+wired_route_present() {
+  route -n 2>/dev/null | grep " $1\$" >/dev/null 2>&1
+}
+
+start_udhcpc() {
+  stop_udhcpc_for "$1"
+  udhcpc -R -p "$RUN_DIR/udhcpc.$1.pid" -i "$1" -H HarmonyHub -bS -t5 -T2 -A20 >> "$LOG" 2>&1 &
+  log "started udhcpc on $1"
+}
+
 # --- wired-path networking (owned by NET_STATE, removed by cleanup_net) ---
 
 save_sysctl() {
@@ -366,9 +380,7 @@ worker_main() {
 
   # Exactly one DHCP client for the wired interface.
   if ! udhcpc_running "$_if"; then
-    stop_udhcpc_for "$_if"
-    udhcpc -R -p "$RUN_DIR/udhcpc.${_if}.pid" -i "$_if" -H HarmonyHub -bS -t5 -T2 -A20 >> "$LOG" 2>&1 &
-    log "started udhcpc on $_if"
+    start_udhcpc "$_if"
   else
     log "udhcpc already running on $_if"
   fi
@@ -393,11 +405,26 @@ worker_main() {
     _ip=$(helper_field ipv4)
     if [ "$_carrier" != "1" ]; then
       [ -f "$NET_STATE" ] && cleanup_net
+      _route_fixes=0
       write_state awaiting_carrier_dhcp no_carrier
     elif [ -z "$_ip" ]; then
       write_state awaiting_carrier_dhcp no_ipv4_lease
     else
-      if apply_net "$_if"; then
+      if ! wired_route_present "$_if"; then
+        # Link returned without its connected route: re-running DHCP
+        # re-configures the address and recreates it. Bounded: three
+        # attempts per link episode, never a restart loop.
+        if [ "${_route_fixes:-0}" -lt 3 ]; then
+          _route_fixes=$(expr "${_route_fixes:-0}" + 1)
+          log "wired route missing on $_if; restarting DHCP (attempt $_route_fixes)"
+          start_udhcpc "$_if"
+          sleep "$POLL"
+          _ip=$(helper_field ipv4)
+        fi
+      else
+        _route_fixes=0
+      fi
+      if [ -n "$_ip" ] && apply_net "$_if"; then
         write_state operational ""
       else
         write_state degraded_routing route_apply_failed
