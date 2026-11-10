@@ -38,6 +38,42 @@ stop_udhcpc_for() {
   fi
 }
 
+# insmod one module file unless its module is already loaded.
+load_module_file() {
+  # $1 = file in $MOD_DIR, $2 = module name in /proc/modules
+  if grep "^$2 " /proc/modules >/dev/null 2>&1; then
+    return 0
+  fi
+  if [ -f "$MOD_DIR/$1" ]; then
+    insmod "$MOD_DIR/$1" >> "$LOG" 2>&1 || {
+      log "insmod $1 failed"
+      return 1
+    }
+  else
+    log "missing $MOD_DIR/$1"
+    return 1
+  fi
+  return 0
+}
+
+# Load the driver stack for one detected adapter driver.
+load_driver() {
+  case "$1" in
+    r8152)
+      load_module_file r8152.ko r8152 || return 1
+      ;;
+    asix|cdc_ether|cdc_ncm|ax88179_178a)
+      load_module_file usbnet.ko usbnet || return 1
+      load_module_file "$1.ko" "$1" || return 1
+      ;;
+    *)
+      log "unknown USB Ethernet driver '$1'; no driver loaded"
+      return 1
+      ;;
+  esac
+  return 0
+}
+
 start_usb_eth() {
   if [ "$1" != "--force" ] && ! is_enabled; then
     log "start skipped (disabled in $CONF)"
@@ -84,18 +120,21 @@ start_usb_eth() {
     sleep 1
   done
 
-  # Load the Realtek r8152 driver if not already loaded.
-  if ! grep '^r8152 ' /proc/modules >/dev/null 2>&1; then
-    if [ -f "$MOD_DIR/r8152.ko" ]; then
-      insmod "$MOD_DIR/r8152.ko" >> "$LOG" 2>&1 || {
-        log "insmod r8152.ko failed"
-        return 1
-      }
-    else
-      log "missing $MOD_DIR/r8152.ko"
-      return 1
+  # Load the driver for the attached adapter. Two shapes: standalone
+  # (r8152) and usbnet + minidriver (asix, cdc_ether, cdc_ncm,
+  # ax88179_178a — usbnet.ko first). The helper reports the driver from
+  # its VID:PID map, else from the CDC interface class (02/06 ECM,
+  # 02/0d NCM), so class-compliant adapters of any vendor are covered.
+  _drv=$("$HELPER" status 2>/dev/null | sed -n 's/^usb_driver=//p')
+  if [ -z "$_drv" ]; then
+    _dev=$("$HELPER" status 2>/dev/null | sed -n 's/^usb_device=//p')
+    if [ -n "$_dev" ]; then
+      log "unsupported USB Ethernet chipset $_dev; no driver loaded"
+      return 0
     fi
+    _drv=r8152
   fi
+  load_driver "$_drv" || return 1
 
   # Wait up to ~6 s for the network interface to appear.
   _if=""

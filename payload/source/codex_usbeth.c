@@ -23,7 +23,9 @@
  *   codex_usbeth status
  *     Emit key=value lines describing kernel compatibility, gadget module
  *     state, EHCI platform-driver binding, attached USB device VID:PID,
- *     USB-backed network interface name, link carrier, and IPv4 address.
+ *     the kernel driver that should bind it (VID:PID map, else CDC
+ *     interface-class 02/06 ECM or 02/0d NCM), USB-backed network interface
+ *     name, link carrier, and IPv4 address.
  */
 
 #include <arpa/inet.h>
@@ -315,46 +317,146 @@ static int cmd_eth_fix(const char *ifname) {
     return 0;
 }
 
-static void find_usb_device(char *vid_pid, size_t vp_len, char *product, size_t prod_len) {
+struct usbeth_id {
+    const char *vid;
+    const char *pid;
+    const char *driver;
+};
+
+/* VID:PID fast path. CDC devices additionally match by interface class below,
+ * so an unlisted CDC-ECM/NCM adapter does not need an entry in this table. */
+static const struct usbeth_id usbeth_ids[] = {
+    { "0bda", "8152", "r8152" }, { "0bda", "8153", "r8152" },
+    { "04e8", "a101", "r8152" },
+    /* Linux 2.6.31 asix.ko: AX88172/88772/88772A/88178 and clones. */
+    { "077b", "2226", "asix" }, { "0846", "1040", "asix" },
+    { "2001", "1a00", "asix" }, { "0b95", "1720", "asix" },
+    { "07b8", "420a", "asix" }, { "08dd", "90ff", "asix" },
+    { "0557", "2009", "asix" }, { "0411", "003d", "asix" },
+    { "0411", "006e", "asix" }, { "6189", "182d", "asix" },
+    { "07aa", "0017", "asix" }, { "1189", "0893", "asix" },
+    { "1631", "6200", "asix" }, { "04f1", "3008", "asix" },
+    { "0b95", "7720", "asix" }, { "0b95", "1780", "asix" },
+    { "13b1", "0018", "asix" }, { "1557", "7720", "asix" },
+    { "07d1", "3c05", "asix" }, { "2001", "3c05", "asix" },
+    { "1737", "0039", "asix" }, { "04bb", "0930", "asix" },
+    { "050d", "5055", "asix" }, { "05ac", "1402", "asix" },
+    { "0b95", "772a", "asix" }, { "14ea", "ab11", "asix" },
+    { "0db0", "a877", "asix" },
+    /* Linux v3.14 ax88179_178a.ko (AX88179/AX88178A). */
+    { "0b95", "1790", "ax88179_178a" }, { "0b95", "178a", "ax88179_178a" },
+    { "2001", "4a00", "ax88179_178a" }, { "0df6", "0072", "ax88179_178a" },
+    { "04e8", "a100", "ax88179_178a" }, { "17ef", "304b", "ax88179_178a" },
+};
+
+static const char *driver_for_vid_pid(const char *vid, const char *pid) {
+    size_t i;
+    for (i = 0; i < sizeof(usbeth_ids) / sizeof(usbeth_ids[0]); i++) {
+        if (strcmp(vid, usbeth_ids[i].vid) == 0 && strcmp(pid, usbeth_ids[i].pid) == 0)
+            return usbeth_ids[i].driver;
+    }
+    return NULL;
+}
+
+/* Match CDC by the Communications interface class (02), subclass 06 (ECM)
+ * or 0d (NCM), protocol 00. Check both device-level descriptors (rare for
+ * Ethernet) and every interface node, including composite devices. */
+static const char *cdc_driver_for_descriptors(const char *dir, const char *prefix) {
+    char path[256], cls[16], sub[16], proto[16];
+    const char *ncm = NULL;
+    snprintf(path, sizeof(path), "%s/%s/bInterfaceClass", dir, prefix);
+    if (read_first_line(path, cls, sizeof(cls)) != 0) {
+        snprintf(path, sizeof(path), "%s/%s/bDeviceClass", dir, prefix);
+        if (read_first_line(path, cls, sizeof(cls)) != 0) return NULL;
+        snprintf(path, sizeof(path), "%s/%s/bDeviceSubClass", dir, prefix);
+        if (read_first_line(path, sub, sizeof(sub)) != 0) return NULL;
+        snprintf(path, sizeof(path), "%s/%s/bDeviceProtocol", dir, prefix);
+        if (read_first_line(path, proto, sizeof(proto)) != 0) return NULL;
+    } else {
+        snprintf(path, sizeof(path), "%s/%s/bInterfaceSubClass", dir, prefix);
+        if (read_first_line(path, sub, sizeof(sub)) != 0) return NULL;
+        snprintf(path, sizeof(path), "%s/%s/bInterfaceProtocol", dir, prefix);
+        if (read_first_line(path, proto, sizeof(proto)) != 0) return NULL;
+    }
+    if (strcmp(cls, "02") != 0 || strcmp(proto, "00") != 0) return NULL;
+    if (strcmp(sub, "06") == 0) return "cdc_ether";
+    if (strcmp(sub, "0d") == 0) ncm = "cdc_ncm";
+    return ncm;
+}
+
+static const char *cdc_driver_for_device(const char *devname) {
+    const char *driver;
+    char prefix[96];
+    DIR *d;
+    struct dirent *de;
+
+    driver = cdc_driver_for_descriptors("/sys/bus/usb/devices", devname);
+    /* Device-level class 02 is unusual; otherwise inspect interface nodes. */
+    if (driver) return driver;
+    snprintf(prefix, sizeof(prefix), "%s:", devname);
+    d = opendir("/sys/bus/usb/devices");
+    if (!d) return NULL;
+    while ((de = readdir(d)) != NULL) {
+        if (strncmp(de->d_name, prefix, strlen(prefix)) != 0) continue;
+        driver = cdc_driver_for_descriptors("/sys/bus/usb/devices", de->d_name);
+        if (driver && strcmp(driver, "cdc_ether") == 0) {
+            closedir(d);
+            return driver; /* ECM is the preferred generic path. */
+        }
+        if (driver) {
+            /* Keep looking: a composite device may expose both ECM and NCM. */
+            closedir(d);
+            return driver;
+        }
+    }
+    closedir(d);
+    return NULL;
+}
+
+static void find_usb_device(char *vid_pid, size_t vp_len, char *product, size_t prod_len,
+                            char *driver_name, size_t driver_len) {
+    char fallback_vp[32] = "", fallback_prod[64] = "";
+    char class_vp[32] = "", class_prod[64] = "", class_driver[32] = "";
+    DIR *d;
+    struct dirent *de;
+
     vid_pid[0] = '\0';
     product[0] = '\0';
-    DIR *d = opendir("/sys/bus/usb/devices");
+    driver_name[0] = '\0';
+    d = opendir("/sys/bus/usb/devices");
     if (!d) return;
 
-    char fallback_vp[32] = "";
-    char fallback_prod[64] = "";
-    struct dirent *de;
     while ((de = readdir(d)) != NULL) {
-        if (de->d_name[0] == '.') continue;
-        if (strchr(de->d_name, ':') != NULL) continue; /* interface node */
         char p_vid[160], p_pid[160], p_prod[160], p_class[160];
-        char vid[32], pid[32], bclass[32];
+        char vid[32], pid[32], bclass[32], prod[64];
+        const char *driver;
+        if (de->d_name[0] == '.' || strchr(de->d_name, ':') != NULL) continue;
         snprintf(p_vid, sizeof(p_vid), "/sys/bus/usb/devices/%s/idVendor", de->d_name);
         snprintf(p_pid, sizeof(p_pid), "/sys/bus/usb/devices/%s/idProduct", de->d_name);
         if (read_first_line(p_vid, vid, sizeof(vid)) != 0 ||
-            read_first_line(p_pid, pid, sizeof(pid)) != 0 ||
-            !vid[0] || !pid[0]) {
-            continue;
-        }
-        /* Skip Linux root hub (1d6b:*) and USB hub class devices (bDeviceClass 09). */
-        if (strcmp(vid, "1d6b") == 0) continue;
+            read_first_line(p_pid, pid, sizeof(pid)) != 0 || !vid[0] || !pid[0]) continue;
+        if (strcmp(vid, "1d6b") == 0) continue; /* Linux root hub */
         snprintf(p_class, sizeof(p_class), "/sys/bus/usb/devices/%s/bDeviceClass", de->d_name);
-        if (read_first_line(p_class, bclass, sizeof(bclass)) == 0 && strcmp(bclass, "09") == 0) {
-            continue;
-        }
-        char prod[64];
+        if (read_first_line(p_class, bclass, sizeof(bclass)) == 0 && strcmp(bclass, "09") == 0)
+            continue; /* external USB hub */
         snprintf(p_prod, sizeof(p_prod), "/sys/bus/usb/devices/%s/product", de->d_name);
         if (read_first_line(p_prod, prod, sizeof(prod)) != 0) prod[0] = '\0';
         for (char *c = prod; *c; c++) {
             if (*c == '\n' || *c == '\r' || *c == '"') *c = ' ';
         }
-        /* Prefer known supported Ethernet VID:PIDs if multiple USB devices exist on a hub. */
-        if ((strcmp(vid, "0bda") == 0 && (strcmp(pid, "8152") == 0 || strcmp(pid, "8153") == 0)) ||
-            (strcmp(vid, "04e8") == 0 && strcmp(pid, "a101") == 0)) {
+        driver = driver_for_vid_pid(vid, pid);
+        if (driver) {
             snprintf(vid_pid, vp_len, "%s:%s", vid, pid);
             snprintf(product, prod_len, "%s", prod);
+            snprintf(driver_name, driver_len, "%s", driver);
             closedir(d);
             return;
+        }
+        driver = cdc_driver_for_device(de->d_name);
+        if (driver && !class_vp[0]) {
+            snprintf(class_vp, sizeof(class_vp), "%s:%s", vid, pid);
+            snprintf(class_prod, sizeof(class_prod), "%s", prod);
+            snprintf(class_driver, sizeof(class_driver), "%s", driver);
         }
         if (!fallback_vp[0]) {
             snprintf(fallback_vp, sizeof(fallback_vp), "%s:%s", vid, pid);
@@ -362,7 +464,11 @@ static void find_usb_device(char *vid_pid, size_t vp_len, char *product, size_t 
         }
     }
     closedir(d);
-    if (fallback_vp[0]) {
+    if (class_vp[0]) {
+        snprintf(vid_pid, vp_len, "%s", class_vp);
+        snprintf(product, prod_len, "%s", class_prod);
+        snprintf(driver_name, driver_len, "%s", class_driver);
+    } else if (fallback_vp[0]) {
         snprintf(vid_pid, vp_len, "%s", fallback_vp);
         snprintf(product, prod_len, "%s", fallback_prod);
     }
@@ -445,20 +551,32 @@ static int cmd_status(void) {
     int enabled = read_conf_enabled();
     int gadget = are_gadget_modules_loaded();
     int bound = is_ehci_bound();
-    int r8152_loaded = is_module_loaded("r8152");
-    char vid_pid[32], product[64], ifname[32], ipv4[32];
+    char vid_pid[32], product[64], driver[32], ifname[32], ipv4[32];
     int carrier = 0;
+    int driver_loaded;
 
-    find_usb_device(vid_pid, sizeof(vid_pid), product, sizeof(product));
+    find_usb_device(vid_pid, sizeof(vid_pid), product, sizeof(product),
+                    driver, sizeof(driver));
     find_usb_net_iface(ifname, sizeof(ifname), &carrier, ipv4, sizeof(ipv4));
+
+    /* driver_loaded tracks the detected adapter's driver when one is known;
+     * otherwise it reports whether any supported USB-Ethernet driver is up. */
+    if (driver[0]) {
+        driver_loaded = is_module_loaded(driver);
+    } else {
+        driver_loaded = is_module_loaded("r8152") || is_module_loaded("asix") ||
+                        is_module_loaded("cdc_ether") || is_module_loaded("cdc_ncm") ||
+                        is_module_loaded("ax88179_178a");
+    }
 
     printf("kernel=%s\n", rel[0] ? rel : "unknown");
     printf("kernel_compatible=%d\n", k_ok);
     printf("enabled=%d\n", enabled);
     printf("gadget_loaded=%d\n", gadget);
     printf("ehci_bound=%d\n", bound);
-    printf("driver_loaded=%d\n", r8152_loaded);
+    printf("driver_loaded=%d\n", driver_loaded);
     printf("usb_device=%s\n", vid_pid);
+    printf("usb_driver=%s\n", driver);
     printf("usb_product=%s\n", product);
     printf("ifname=%s\n", ifname);
     printf("carrier=%d\n", carrier);
