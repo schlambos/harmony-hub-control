@@ -327,7 +327,7 @@ function harmonyDate() {
   return `/Date(${Date.now()}+0000)/`;
 }
 
-function commandAction(deviceId, command, eventType) {
+export function commandAction(deviceId, command, eventType) {
   return {
     "DeviceId-": Number(deviceId),
     __type: "ButtonCommandAction",

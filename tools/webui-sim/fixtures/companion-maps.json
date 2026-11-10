@@ -1,0 +1,400 @@
+[
+  {
+    "ButtonMapId-": 47756170,
+    "Buttons": [
+      {
+        "ButtonKey": "MusicActivity",
+        "__type": "HardRemoteButton",
+        "ButtonLongPressAction": null,
+        "ButtonState": 1,
+        "FunctionGroupType": 0,
+        "ButtonDoublePressAction": null,
+        "ButtonAction": {
+          "__type": "ButtonActivityAction",
+          "ActivityId-": 49051068,
+          "Order": 0,
+          "EventType": 1,
+          "Id": 0
+        },
+        "ButtonId": 1700000001
+      },
+      {
+        "ButtonKey": "WatchTVActivity",
+        "__type": "HardRemoteButton",
+        "ButtonLongPressAction": null,
+        "ButtonState": 1,
+        "FunctionGroupType": 0,
+        "ButtonDoublePressAction": null,
+        "ButtonAction": {
+          "__type": "ButtonActivityAction",
+          "ActivityId-": 48113650,
+          "Order": 0,
+          "EventType": 1,
+          "Id": 0
+        },
+        "ButtonId": 1700000002
+      },
+      {
+        "ButtonKey": "MovieActivity",
+        "__type": "HardRemoteButton",
+        "ButtonLongPressAction": {
+          "__type": "ButtonActivityAction",
+          "ActivityId-": 51908793,
+          "Order": 0,
+          "EventType": 2,
+          "Id": 0
+        },
+        "ButtonState": 1,
+        "FunctionGroupType": 0,
+        "ButtonDoublePressAction": null,
+        "ButtonAction": {
+          "__type": "ButtonActivityAction",
+          "ActivityId-": 48113644,
+          "Order": 0,
+          "EventType": 1,
+          "Id": 0
+        },
+        "ButtonId": 1700000003
+      },
+      {
+        "ButtonKey": "Ha1",
+        "__type": "HardRemoteButton",
+        "ButtonLongPressAction": {
+          "DeviceId-": 81897247,
+          "__type": "ButtonCommandAction",
+          "FunctionId-": 0,
+          "Order": 0,
+          "CommandName": "DisplayOff",
+          "EventType": 2,
+          "Id": 0
+        },
+        "ButtonState": 1,
+        "FunctionGroupType": 0,
+        "ButtonDoublePressAction": null,
+        "ButtonAction": {
+          "DeviceId-": 81897247,
+          "__type": "ButtonCommandAction",
+          "FunctionId-": 0,
+          "Order": 0,
+          "CommandName": "Dimmer",
+          "EventType": 1,
+          "Id": 0
+        },
+        "ButtonId": 1700000004
+      },
+      {
+        "ButtonKey": "Ha1Up",
+        "__type": "HardRemoteButton",
+        "ButtonLongPressAction": null,
+        "ButtonState": 1,
+        "FunctionGroupType": 0,
+        "ButtonDoublePressAction": null,
+        "ButtonAction": {
+          "DeviceId-": 81897247,
+          "__type": "ButtonCommandAction",
+          "FunctionId-": 0,
+          "Order": 0,
+          "CommandName": "CenterUp",
+          "EventType": 1,
+          "Id": 0
+        },
+        "ButtonId": 1700000005
+      },
+      {
+        "ButtonKey": "Ha1Down",
+        "__type": "HardRemoteButton",
+        "ButtonLongPressAction": null,
+        "ButtonState": 1,
+        "FunctionGroupType": 0,
+        "ButtonDoublePressAction": null,
+        "ButtonAction": {
+          "DeviceId-": 81897247,
+          "__type": "ButtonCommandAction",
+          "FunctionId-": 0,
+          "Order": 0,
+          "CommandName": "CenterDown",
+          "EventType": 1,
+          "Id": 0
+        },
+        "ButtonId": 1700000006
+      },
+      {
+        "ButtonKey": "Ha2",
+        "__type": "HardRemoteButton",
+        "ButtonLongPressAction": null,
+        "ButtonState": 1,
+        "FunctionGroupType": 0,
+        "ButtonDoublePressAction": null,
+        "ButtonAction": {
+          "DeviceId-": 74521691,
+          "__type": "ButtonCommandAction",
+          "FunctionId-": 116,
+          "Order": 0,
+          "CommandName": "PowerToggle",
+          "EventType": 1,
+          "Id": 0
+        },
+        "ButtonId": 1700000007
+      },
+      {
+        "ButtonKey": "HcUp",
+        "__type": "HardRemoteButton",
+        "ButtonLongPressAction": null,
+        "ButtonState": 1,
+        "FunctionGroupType": 0,
+        "ButtonDoublePressAction": null,
+        "ButtonAction": {
+          "DeviceId-": 81897247,
+          "__type": "ButtonCommandAction",
+          "FunctionId-": 171,
+          "Order": 0,
+          "CommandName": "VolumeUp",
+          "EventType": 1,
+          "Id": 0
+        },
+        "ButtonId": 1700000008
+      },
+      {
+        "ButtonKey": "HcDown",
+        "__type": "HardRemoteButton",
+        "ButtonLongPressAction": null,
+        "ButtonState": 1,
+        "FunctionGroupType": 0,
+        "ButtonDoublePressAction": null,
+        "ButtonAction": {
+          "DeviceId-": 81897247,
+          "__type": "ButtonCommandAction",
+          "FunctionId-": 166,
+          "Order": 0,
+          "CommandName": "VolumeDown",
+          "EventType": 1,
+          "Id": 0
+        },
+        "ButtonId": 1700000009
+      }
+    ],
+    "ButtonMapSurfaceId-": 15151460,
+    "__type": "RootButtonMap",
+    "RemoteId-": 12345679,
+    "ButtonMapIdentifier": "16422Root",
+    "DateModified": null,
+    "Sequences": null,
+    "SurfaceId-": 15151460
+  },
+  {
+    "ButtonMapId-": 47756171,
+    "ActivityId-": 48113650,
+    "Buttons": [
+      {
+        "ButtonKey": "VolumeUp",
+        "__type": "HardRemoteButton",
+        "ButtonLongPressAction": null,
+        "ButtonState": 1,
+        "FunctionGroupType": 0,
+        "ButtonDoublePressAction": null,
+        "ButtonAction": {
+          "DeviceId-": 81897247,
+          "__type": "ButtonCommandAction",
+          "FunctionId-": 171,
+          "Order": 0,
+          "CommandName": "VolumeUp",
+          "EventType": 1,
+          "Id": 0
+        },
+        "ButtonId": 1700000010
+      },
+      {
+        "ButtonKey": "VolumeDown",
+        "__type": "HardRemoteButton",
+        "ButtonLongPressAction": null,
+        "ButtonState": 1,
+        "FunctionGroupType": 0,
+        "ButtonDoublePressAction": null,
+        "ButtonAction": {
+          "DeviceId-": 81897247,
+          "__type": "ButtonCommandAction",
+          "FunctionId-": 166,
+          "Order": 0,
+          "CommandName": "VolumeDown",
+          "EventType": 1,
+          "Id": 0
+        },
+        "ButtonId": 1700000011
+      },
+      {
+        "ButtonKey": "VolumeMute",
+        "__type": "HardRemoteButton",
+        "ButtonLongPressAction": null,
+        "ButtonState": 1,
+        "FunctionGroupType": 0,
+        "ButtonDoublePressAction": null,
+        "ButtonAction": {
+          "DeviceId-": 81897247,
+          "__type": "ButtonCommandAction",
+          "FunctionId-": 91,
+          "Order": 0,
+          "CommandName": "Mute",
+          "EventType": 1,
+          "Id": 0
+        },
+        "ButtonId": 1700000012
+      },
+      {
+        "ButtonKey": "Ha2",
+        "__type": "HardRemoteButton",
+        "ButtonLongPressAction": null,
+        "ButtonState": 1,
+        "FunctionGroupType": 0,
+        "ButtonDoublePressAction": null,
+        "ButtonAction": {
+          "DeviceId-": 74521691,
+          "__type": "ButtonCommandAction",
+          "FunctionId-": 0,
+          "Order": 0,
+          "CommandName": "InputHdmi1",
+          "EventType": 1,
+          "Id": 0
+        },
+        "ButtonId": 1700000013
+      },
+      {
+        "ButtonKey": "Ha3",
+        "__type": "HardRemoteButton",
+        "ButtonLongPressAction": null,
+        "ButtonState": 1,
+        "FunctionGroupType": 0,
+        "ButtonDoublePressAction": null,
+        "ButtonAction": {
+          "__type": "ButtonSequenceAction",
+          "SequenceId": 9101,
+          "Order": 0,
+          "EventType": 1,
+          "Id": 0
+        },
+        "ButtonId": 1700000014
+      }
+    ],
+    "ButtonMapSurfaceId-": 15151460,
+    "__type": "ActivityButtonMap",
+    "RemoteId-": 12345679,
+    "ButtonMapIdentifier": "16422Activity48113650",
+    "DateModified": null,
+    "Sequences": [
+      {
+        "SequenceId": 9101,
+        "Name": "Nothing",
+        "Actions": [
+          {
+            "__type": "ButtonDelayAction",
+            "Duration": 0,
+            "Order": 1
+          }
+        ]
+      }
+    ],
+    "SurfaceId-": 15151460
+  },
+  {
+    "ButtonMapId-": 47756172,
+    "ActivityId-": 48113644,
+    "Buttons": [
+      {
+        "ButtonKey": "VolumeUp",
+        "__type": "HardRemoteButton",
+        "ButtonLongPressAction": null,
+        "ButtonState": 1,
+        "FunctionGroupType": 0,
+        "ButtonDoublePressAction": null,
+        "ButtonAction": {
+          "DeviceId-": 81897247,
+          "__type": "ButtonCommandAction",
+          "FunctionId-": 171,
+          "Order": 0,
+          "CommandName": "VolumeUp",
+          "EventType": 1,
+          "Id": 0
+        },
+        "ButtonId": 1700000015
+      },
+      {
+        "ButtonKey": "VolumeDown",
+        "__type": "HardRemoteButton",
+        "ButtonLongPressAction": null,
+        "ButtonState": 1,
+        "FunctionGroupType": 0,
+        "ButtonDoublePressAction": null,
+        "ButtonAction": {
+          "DeviceId-": 81897247,
+          "__type": "ButtonCommandAction",
+          "FunctionId-": 166,
+          "Order": 0,
+          "CommandName": "VolumeDown",
+          "EventType": 1,
+          "Id": 0
+        },
+        "ButtonId": 1700000016
+      },
+      {
+        "ButtonKey": "DirectionUp",
+        "__type": "HardRemoteButton",
+        "ButtonLongPressAction": null,
+        "ButtonState": 1,
+        "FunctionGroupType": 0,
+        "ButtonDoublePressAction": null,
+        "ButtonAction": {
+          "DeviceId-": 66690268,
+          "__type": "ButtonCommandAction",
+          "FunctionId-": 65,
+          "Order": 0,
+          "CommandName": "DirectionUp",
+          "EventType": 1,
+          "Id": 0
+        },
+        "ButtonId": 1700000017
+      },
+      {
+        "ButtonKey": "DirectionDown",
+        "__type": "HardRemoteButton",
+        "ButtonLongPressAction": null,
+        "ButtonState": 1,
+        "FunctionGroupType": 0,
+        "ButtonDoublePressAction": null,
+        "ButtonAction": {
+          "DeviceId-": 66690268,
+          "__type": "ButtonCommandAction",
+          "FunctionId-": 62,
+          "Order": 0,
+          "CommandName": "DirectionDown",
+          "EventType": 1,
+          "Id": 0
+        },
+        "ButtonId": 1700000018
+      },
+      {
+        "ButtonKey": "Select",
+        "__type": "HardRemoteButton",
+        "ButtonLongPressAction": null,
+        "ButtonState": 1,
+        "FunctionGroupType": 0,
+        "ButtonDoublePressAction": null,
+        "ButtonAction": {
+          "DeviceId-": 66690268,
+          "__type": "ButtonCommandAction",
+          "FunctionId-": 139,
+          "Order": 0,
+          "CommandName": "Select",
+          "EventType": 1,
+          "Id": 0
+        },
+        "ButtonId": 1700000019
+      }
+    ],
+    "ButtonMapSurfaceId-": 15151460,
+    "__type": "ActivityButtonMap",
+    "RemoteId-": 12345679,
+    "ButtonMapIdentifier": "16422Activity48113644",
+    "DateModified": null,
+    "Sequences": [],
+    "SurfaceId-": 15151460
+  }
+]

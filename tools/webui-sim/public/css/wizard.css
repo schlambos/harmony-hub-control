@@ -384,10 +384,85 @@
   font-size: var(--fs-body-sm);
 }
 
+.pick-top.is-fixed .pick-now {
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
+
 .pick-chips {
   display: flex;
   flex-wrap: wrap;
   gap: var(--space-2);
+}
+
+/* One line of chips that scrolls sideways, so the top keeps
+   its height however many devices the hub has. A fade and an arrow mark each
+   side with more chips; the padding keeps the focus ring inside the row. */
+.pick-chip-row {
+  position: relative;
+  /* A grid item: without this it grows to fit every chip instead of scrolling. */
+  min-width: 0;
+}
+
+.pick-chips.is-row {
+  /* The chips' offsetParent: button-picker.js centres the pressed chip by it. */
+  position: relative;
+  flex-wrap: nowrap;
+  overflow-x: auto;
+  margin: 0 calc(-1 * var(--space-1));
+  padding: var(--space-1);
+}
+
+.pick-chips.is-row .chip {
+  flex: none;
+  white-space: nowrap;
+}
+
+.pick-chips.is-row.has-before {
+  mask-image: linear-gradient(to right, transparent, #000 48px);
+}
+
+.pick-chips.is-row.has-after {
+  mask-image: linear-gradient(to left, transparent, #000 48px);
+}
+
+.pick-chips.is-row.has-before.has-after {
+  mask-image: linear-gradient(to right, transparent, #000 48px, #000 calc(100% - 48px), transparent);
+}
+
+.pick-chip-step {
+  position: absolute;
+  top: calc(var(--space-1) + 4px);
+  z-index: 1;
+  width: 32px;
+  height: 32px;
+  background: var(--surface-highest);
+  color: var(--on-surface);
+}
+
+/* Stays opaque over the chips (.icon-btn:hover is see-through). */
+.pick-chip-step:hover {
+  background: var(--surface-highest);
+  box-shadow: inset 0 0 0 100px var(--state-hover);
+}
+
+.pick-chip-step[data-pick-scroll="-1"] {
+  left: 0;
+}
+
+.pick-chip-step[data-pick-scroll="1"] {
+  right: 0;
+}
+
+/* A mouse can't swipe: show a thin scrollbar, always there (scroll, not auto)
+   so the row is as tall with 3 chips as with 34. */
+@media (pointer: fine) {
+  .pick-chips.is-row {
+    overflow-x: scroll;
+    scrollbar-width: thin;
+    scrollbar-color: var(--outline) transparent;
+  }
 }
 
 .pick-top .search-field {
@@ -529,10 +604,12 @@
   margin-top: var(--space-4);
 }
 
-.touch .wiz-foot [data-act="undo"] {
+.touch .wiz-foot [data-act="undo"],
+.home-buttons .wiz-foot [data-act="undo"] {
   flex: 1;
 }
 
-.touch .wiz-foot [data-act="save"] {
+.touch .wiz-foot [data-act="save"],
+.home-buttons .wiz-foot [data-act="save"] {
   flex: 2;
 }
