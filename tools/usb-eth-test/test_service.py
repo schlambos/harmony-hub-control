@@ -381,6 +381,19 @@ class ServiceTests(unittest.TestCase):
         self.assertEqual(rc.returncode, 0)
         self.assertEqual(sb.state().get("state"), "adapter_unsupported")
 
+    def test_failed_route_apply_is_retried_not_cached(self):
+        sb = Sandbox({"net_apply_fail": True})
+        proc = sb.spawn_worker()
+        try:
+            sb.wait_state("degraded_routing", reason="route_apply_failed")
+            sb.patch_fake(net_apply_fail=False)
+            sb.wait_state("operational")
+            self.assertIn("net_applied=1", sb.net_state())
+            self.assertGreaterEqual(sb.calls().count("net-apply "), 2)
+        finally:
+            sb.run("stop")
+            proc.wait(timeout=10)
+
     def test_carrier_drop_restores_wifi_and_recovers(self):
         sb = Sandbox({})
         proc = sb.spawn_worker()

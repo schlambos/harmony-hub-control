@@ -776,8 +776,16 @@ static int iface_ipv4_prefix(const char *ifname, uint32_t *ip_ho, int *prefix) {
     return 0;
 }
 
-/* Metric of the main-table route to dst/prefix via oif, or -1. */
-static int find_route_metric(uint32_t dst_ho, int prefix, int oif) {
+struct route_entry {
+    uint32_t dst;
+    int prefix;
+    int oif;
+    uint32_t metric;
+    int scope;
+};
+
+/* Dump main-table routes into entries; returns the count. */
+static int dump_routes(struct route_entry *entries, int max_entries) {
     struct nl_req req;
     char resp[8192];
     memset(&req, 0, sizeof(req));
@@ -790,7 +798,7 @@ static int find_route_metric(uint32_t dst_ho, int prefix, int oif) {
     int fd = socket(AF_NETLINK, SOCK_RAW, NETLINK_ROUTE);
     if (fd < 0) return -1;
     if (send(fd, &req, req.hdr.nlmsg_len, 0) < 0) { close(fd); return -1; }
-    int found = -1;
+    int count = 0;
     int done = 0;
     while (!done) {
         ssize_t n = recv(fd, resp, sizeof(resp), 0);
@@ -801,30 +809,43 @@ static int find_route_metric(uint32_t dst_ho, int prefix, int oif) {
             if (h->nlmsg_type == NLMSG_ERROR) { done = 1; break; }
             if (h->nlmsg_type != RTM_NEWROUTE) continue;
             struct rtmsg *r = (struct rtmsg *)NLMSG_DATA(h);
-            if (r->rtm_table != RT_TABLE_MAIN || r->rtm_dst_len != prefix) continue;
-            uint32_t dst = 0, prio = 0;
-            int o = -1;
+            if (r->rtm_table != RT_TABLE_MAIN) continue;
+            if (count >= max_entries) { done = 1; break; }
+            struct route_entry *e = &entries[count];
+            memset(e, 0, sizeof(*e));
+            e->prefix = r->rtm_dst_len;
+            e->scope = r->rtm_scope;
+            e->oif = -1;
             struct rtattr *a = RTM_RTA(r);
             int alen = (int)RTM_PAYLOAD(h);
             for (; RTA_OK(a, alen); a = RTA_NEXT(a, alen)) {
-                if (a->rta_type == RTA_DST) dst = ntohl(*(uint32_t *)RTA_DATA(a));
-                else if (a->rta_type == RTA_OIF) o = *(int *)RTA_DATA(a);
-                else if (a->rta_type == RTA_PRIORITY) prio = *(uint32_t *)RTA_DATA(a);
+                if (a->rta_type == RTA_DST) e->dst = ntohl(*(uint32_t *)RTA_DATA(a));
+                else if (a->rta_type == RTA_OIF) e->oif = *(int *)RTA_DATA(a);
+                else if (a->rta_type == RTA_PRIORITY) e->metric = *(uint32_t *)RTA_DATA(a);
             }
-            if ((int)dst == (int)(dst_ho & ipv4_mask(prefix)) && o == oif) {
-                found = (int)prio;
-                done = 1;
-                break;
-            }
+            count++;
         }
     }
     close(fd);
-    return found;
+    return count;
+}
+
+/* Metric of the first main-table route to dst/prefix via oif, or -1. */
+static int find_route_metric(uint32_t dst_ho, int prefix, int oif) {
+    struct route_entry entries[32];
+    int n = dump_routes(entries, 32);
+    int i;
+    for (i = 0; i < n; i++) {
+        if (entries[i].prefix == prefix && entries[i].oif == oif &&
+            entries[i].dst == (dst_ho & ipv4_mask(prefix)))
+            return (int)entries[i].metric;
+    }
+    return -1;
 }
 
 static int route_change(int create, unsigned char table, uint32_t dst_ho,
                         int prefix, int oif, int has_prefsrc, uint32_t src_ho,
-                        int metric) {
+                        int metric, int scope) {
     struct nl_req req;
     char resp[1024];
     memset(&req, 0, sizeof(req));
@@ -836,8 +857,10 @@ static int route_change(int create, unsigned char table, uint32_t dst_ho,
     rtm->rtm_family = AF_INET;
     rtm->rtm_dst_len = (unsigned char)prefix;
     rtm->rtm_table = table;
-    rtm->rtm_protocol = RTPROT_STATIC;
-    rtm->rtm_scope = RT_SCOPE_UNIVERSE;
+    /* Deletes must wildcard the protocol: the kernel's own connected
+     * routes carry RTPROT_KERNEL, and fib delete matches protocol. */
+    rtm->rtm_protocol = create ? RTPROT_STATIC : RTPROT_UNSPEC;
+    rtm->rtm_scope = (unsigned char)scope;
     rtm->rtm_type = RTN_UNICAST;
     uint32_t be;
     if (prefix > 0) { be = htonl(dst_ho & ipv4_mask(prefix)); nl_addattr(&req, RTA_DST, &be, 4); }
@@ -897,7 +920,7 @@ static int cmd_net_apply(const char *wired, const char *wifi) {
     int policy = rule_policy_supported();
     printf("policy_supported=%d\n", policy);
     if (policy) {
-        int rc1 = route_change(1, USBETH_ROUTE_TABLE, subnet, wprefix, wif, 1, wip, -1);
+        int rc1 = route_change(1, USBETH_ROUTE_TABLE, subnet, wprefix, wif, 1, wip, -1, RT_SCOPE_LINK);
         int rc2 = rule_change(1, wip);
         if ((rc1 == 0 || rc1 == -EEXIST) && (rc2 == 0 || rc2 == -EEXIST)) {
             printf("route_mode=%s\n", route_mode_for_policy(1));
@@ -908,29 +931,62 @@ static int cmd_net_apply(const char *wired, const char *wifi) {
     }
     /* Metric fallback (this hub's kernel): the wired connected route is
      * already metric 0; demote only the Wi-Fi connected route for the same
-     * subnet so destination lookups prefer the wire. Restored verbatim by
-     * net-remove; nothing else in the main table is touched. */
-    int wm = find_route_metric(subnet, wprefix, wif);
-    int fm = find_route_metric(subnet, wprefix, fif);
+     * subnet so destination lookups prefer the wire. Every Wi-Fi alias
+     * for the subnet is deleted by its exact dumped scope (fib delete
+     * matches scope on 2.6.31) and replaced by a single metric-20 alias.
+     * Restored by net-remove; nothing else in the main table is touched. */
+    struct route_entry entries[32];
+    int n = dump_routes(entries, 32);
+    int i, wm = -1, fm = -1, have_good_wifi = 0, have_wifi = 0;
+    for (i = 0; i < n; i++) {
+        if (entries[i].prefix != wprefix || entries[i].dst != subnet) continue;
+        if (entries[i].oif == wif && wm < 0) wm = (int)entries[i].metric;
+        if (entries[i].oif == fif) {
+            have_wifi = 1;
+            if (fm < 0) fm = (int)entries[i].metric;
+            if ((int)entries[i].metric == USBETH_WIFI_METRIC &&
+                entries[i].scope == RT_SCOPE_LINK)
+                have_good_wifi = 1;
+        }
+    }
     if (wm < 0) {
         printf("route_mode=none reason=wired_route_missing\n");
         return 1;
     }
-    if (fm == USBETH_WIFI_METRIC) {
+    if (!have_wifi) {
+        printf("route_mode=none reason=wifi_route_missing\n");
+        return 1;
+    }
+    if (have_good_wifi && fm == USBETH_WIFI_METRIC) {
         printf("route_mode=%s wifi_metric_old=%d (already applied)\n",
                route_mode_for_policy(0), USBETH_WIFI_METRIC);
         return 0;
     }
-    if (fm < 0) {
-        printf("route_mode=none reason=wifi_route_missing\n");
-        return 1;
+    for (i = 0; i < n; i++) {
+        if (entries[i].prefix != wprefix || entries[i].dst != subnet ||
+            entries[i].oif != fif)
+            continue;
+        if ((int)entries[i].metric == USBETH_WIFI_METRIC &&
+            entries[i].scope == RT_SCOPE_LINK)
+            continue; /* the alias we want to keep */
+        int rd = route_change(0, RT_TABLE_MAIN, subnet, wprefix, fif, 0, 0,
+                              (int)entries[i].metric, entries[i].scope);
+        if (rd != 0 && rd != -ESRCH) {
+            printf("route_mode=none reason=wifi_route_change_failed rc=%d\n", rd);
+            return 1;
+        }
     }
-    int rd = route_change(0, RT_TABLE_MAIN, subnet, wprefix, fif, 0, 0, fm);
-    int ra = route_change(1, RT_TABLE_MAIN, subnet, wprefix, fif, 0, 0, USBETH_WIFI_METRIC);
-    if (rd != 0 || (ra != 0 && ra != -EEXIST)) {
-        printf("route_mode=none reason=wifi_route_change_failed rc=%d,%d\n", rd, ra);
-        /* Best effort: put the Wi-Fi route back rather than leave it gone. */
-        if (rd == 0) route_change(1, RT_TABLE_MAIN, subnet, wprefix, fif, 0, 0, fm);
+    if (!have_good_wifi) {
+        int ra = route_change(1, RT_TABLE_MAIN, subnet, wprefix, fif, 0, 0,
+                              USBETH_WIFI_METRIC, RT_SCOPE_LINK);
+        if (ra != 0 && ra != -EEXIST) {
+            printf("route_mode=none reason=wifi_route_change_failed rc=%d\n", ra);
+            return 1;
+        }
+    }
+    /* The demotion counts only if no preferred Wi-Fi alias survives. */
+    if (find_route_metric(subnet, wprefix, fif) != USBETH_WIFI_METRIC) {
+        printf("route_mode=none reason=wifi_route_still_preferred\n");
         return 1;
     }
     printf("route_mode=%s wifi_metric_old=%d\n", route_mode_for_policy(0), fm);
@@ -951,20 +1007,33 @@ static int cmd_net_remove(const char *wired, const char *wifi) {
         int wif = (int)if_nametoindex(wired);
         if (wif > 0)
             route_change(0, USBETH_ROUTE_TABLE, wip & ipv4_mask(wprefix),
-                         wprefix, wif, 1, wip, -1);
+                         wprefix, wif, 1, wip, -1, RT_SCOPE_LINK);
     }
     if (iface_ipv4_prefix(wifi, &fip, &fprefix) == 0) {
         int fif = (int)if_nametoindex(wifi);
         if (fif > 0) {
             uint32_t subnet = fip & ipv4_mask(fprefix);
-            int fm = find_route_metric(subnet, fprefix, fif);
-            if (fm == USBETH_WIFI_METRIC) {
-                /* find_route_metric returns the preferred alias, so metric
-                 * 20 here also proves no metric-0 route came back alone. */
-                route_change(0, RT_TABLE_MAIN, subnet, fprefix, fif, 0, 0,
-                             USBETH_WIFI_METRIC);
-                route_change(1, RT_TABLE_MAIN, subnet, fprefix, fif, 0, 0, 0);
+            /* Delete every demoted Wi-Fi alias by exact scope; re-add the
+             * plain metric-0 connected route only if none is present. */
+            struct route_entry entries[32];
+            int n = dump_routes(entries, 32);
+            int i, have_zero = 0;
+            for (i = 0; i < n; i++) {
+                if (entries[i].prefix == fprefix && entries[i].dst == subnet &&
+                    entries[i].oif == fif && entries[i].metric == 0)
+                    have_zero = 1;
             }
+            for (i = 0; i < n; i++) {
+                if (entries[i].prefix != fprefix || entries[i].dst != subnet ||
+                    entries[i].oif != fif ||
+                    (int)entries[i].metric != USBETH_WIFI_METRIC)
+                    continue;
+                route_change(0, RT_TABLE_MAIN, subnet, fprefix, fif, 0, 0,
+                             USBETH_WIFI_METRIC, entries[i].scope);
+            }
+            if (!have_zero)
+                route_change(1, RT_TABLE_MAIN, subnet, fprefix, fif, 0, 0, 0,
+                             RT_SCOPE_LINK);
         }
     }
     printf("net_removed=1\n");

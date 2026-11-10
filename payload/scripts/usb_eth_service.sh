@@ -182,25 +182,35 @@ set_sysctl() {
 
 apply_net() {
   # $1 = wired iface. Exactly the settings recorded in NET_STATE change.
+  # A failed apply is never cached as success: without a net_applied=1
+  # marker the helper is retried on every monitor pass.
   _if="$1"
   _ip=$(helper_field ipv4)
   if [ -f "$NET_STATE" ]; then
     _old_if=$(sed -n 's/^wired_if=//p' "$NET_STATE")
     _old_ip=$(sed -n 's/^wired_ip=//p' "$NET_STATE")
     if [ "$_old_if" = "$_if" ] && [ "$_old_ip" = "$_ip" ] && [ -n "$_ip" ]; then
-      return 0
+      grep '^net_applied=1$' "$NET_STATE" >/dev/null 2>&1 && return 0
+    else
+      cleanup_net
     fi
-    cleanup_net
   fi
-  : > "$NET_STATE"
-  echo "wired_if=$_if" >> "$NET_STATE"
-  echo "wifi_if=$WIFI_IF" >> "$NET_STATE"
-  echo "wired_ip=$_ip" >> "$NET_STATE"
+  if [ ! -f "$NET_STATE" ]; then
+    : > "$NET_STATE"
+    echo "wired_if=$_if" >> "$NET_STATE"
+    echo "wifi_if=$WIFI_IF" >> "$NET_STATE"
+    echo "wired_ip=$_ip" >> "$NET_STATE"
+  fi
   _out=$("$HELPER" net-apply "$_if" "$WIFI_IF" 2>>"$LOG")
   _rc=$?
   echo "$_out" >> "$LOG"
-  _mode=$(echo "$_out" | sed -n 's/^route_mode=//p' | sed -n '1p')
+  _mode=$(echo "$_out" | sed -n 's/^route_mode=\([a-z]*\).*/\1/p' | sed -n '1p')
+  grep -v '^route_mode=' "$NET_STATE" > "$NET_STATE.tmp" 2>/dev/null || true
+  mv "$NET_STATE.tmp" "$NET_STATE" 2>/dev/null || true
   echo "route_mode=$_mode" >> "$NET_STATE"
+  if [ "$_rc" = "0" ]; then
+    echo "net_applied=1" >> "$NET_STATE"
+  fi
   # ARP hygiene on just these two interfaces: answer ARP only for the
   # address the receiving interface owns, and announce only addresses
   # that interface owns. Restored verbatim by cleanup_net.
