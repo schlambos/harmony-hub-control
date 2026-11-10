@@ -318,34 +318,53 @@ static int cmd_eth_fix(const char *ifname) {
 static void find_usb_device(char *vid_pid, size_t vp_len, char *product, size_t prod_len) {
     vid_pid[0] = '\0';
     product[0] = '\0';
-    const char *candidates[] = {
-        "/sys/bus/usb/devices/1-1",
-        "/sys/bus/usb/devices/1-1.1",
-        "/sys/bus/usb/devices/1-1.2",
-        "/sys/bus/usb/devices/1-1.3",
-        "/sys/bus/usb/devices/1-1.4",
-        NULL
-    };
-    for (int i = 0; candidates[i]; i++) {
-        char p_vid[128], p_pid[128], p_prod[128];
-        char vid[32], pid[32];
-        snprintf(p_vid, sizeof(p_vid), "%s/idVendor", candidates[i]);
-        snprintf(p_pid, sizeof(p_pid), "%s/idProduct", candidates[i]);
-        if (read_first_line(p_vid, vid, sizeof(vid)) == 0 &&
-            read_first_line(p_pid, pid, sizeof(pid)) == 0 &&
-            vid[0] && pid[0]) {
-            /* Skip root hub (1d6b:0002). */
-            if (strcmp(vid, "1d6b") == 0) continue;
+    DIR *d = opendir("/sys/bus/usb/devices");
+    if (!d) return;
+
+    char fallback_vp[32] = "";
+    char fallback_prod[64] = "";
+    struct dirent *de;
+    while ((de = readdir(d)) != NULL) {
+        if (de->d_name[0] == '.') continue;
+        if (strchr(de->d_name, ':') != NULL) continue; /* interface node */
+        char p_vid[160], p_pid[160], p_prod[160], p_class[160];
+        char vid[32], pid[32], bclass[32];
+        snprintf(p_vid, sizeof(p_vid), "/sys/bus/usb/devices/%s/idVendor", de->d_name);
+        snprintf(p_pid, sizeof(p_pid), "/sys/bus/usb/devices/%s/idProduct", de->d_name);
+        if (read_first_line(p_vid, vid, sizeof(vid)) != 0 ||
+            read_first_line(p_pid, pid, sizeof(pid)) != 0 ||
+            !vid[0] || !pid[0]) {
+            continue;
+        }
+        /* Skip Linux root hub (1d6b:*) and USB hub class devices (bDeviceClass 09). */
+        if (strcmp(vid, "1d6b") == 0) continue;
+        snprintf(p_class, sizeof(p_class), "/sys/bus/usb/devices/%s/bDeviceClass", de->d_name);
+        if (read_first_line(p_class, bclass, sizeof(bclass)) == 0 && strcmp(bclass, "09") == 0) {
+            continue;
+        }
+        char prod[64];
+        snprintf(p_prod, sizeof(p_prod), "/sys/bus/usb/devices/%s/product", de->d_name);
+        if (read_first_line(p_prod, prod, sizeof(prod)) != 0) prod[0] = '\0';
+        for (char *c = prod; *c; c++) {
+            if (*c == '\n' || *c == '\r' || *c == '"') *c = ' ';
+        }
+        /* Prefer known supported Ethernet VID:PIDs if multiple USB devices exist on a hub. */
+        if ((strcmp(vid, "0bda") == 0 && (strcmp(pid, "8152") == 0 || strcmp(pid, "8153") == 0)) ||
+            (strcmp(vid, "04e8") == 0 && strcmp(pid, "a101") == 0)) {
             snprintf(vid_pid, vp_len, "%s:%s", vid, pid);
-            snprintf(p_prod, sizeof(p_prod), "%s/product", candidates[i]);
-            if (read_first_line(p_prod, product, prod_len) != 0) {
-                product[0] = '\0';
-            }
-            for (char *c = product; *c; c++) {
-                if (*c == '\n' || *c == '\r' || *c == '"') *c = ' ';
-            }
+            snprintf(product, prod_len, "%s", prod);
+            closedir(d);
             return;
         }
+        if (!fallback_vp[0]) {
+            snprintf(fallback_vp, sizeof(fallback_vp), "%s:%s", vid, pid);
+            snprintf(fallback_prod, sizeof(fallback_prod), "%s", prod);
+        }
+    }
+    closedir(d);
+    if (fallback_vp[0]) {
+        snprintf(vid_pid, vp_len, "%s", fallback_vp);
+        snprintf(product, prod_len, "%s", fallback_prod);
     }
 }
 
@@ -361,7 +380,7 @@ static int is_usb_net_iface(const char *name) {
     ssize_t n = readlink(link_path, target, sizeof(target) - 1);
     if (n > 0) {
         target[n] = '\0';
-        if (strstr(target, "usb") != NULL || strstr(target, "1-1") != NULL)
+        if (strstr(target, "usb") != NULL || strstr(target, "ar7240-ehci") != NULL)
             return 1;
     }
     if (strncmp(name, "usb", 3) == 0 || strncmp(name, "eth", 3) == 0)

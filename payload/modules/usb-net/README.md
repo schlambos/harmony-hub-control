@@ -12,7 +12,7 @@ and `/lib/modules/2.6.31-g89d565c/` are never modified.
 
 | File | Size | SHA-256 | MD5 | Source & license |
 | --- | --- | --- | --- | --- |
-| `r8152.ko` | 45432 | `addaeed4e117428f33b343d402efa2719580ad0604c4b1c633761a05ea123cbc` | `ef0ea4cccd7518d7e4bb8349eea6d340` | Linux v3.14 `drivers/net/usb/r8152.c` (Realtek RTL8152/RTL8153 v1.04.0, backported to 2.6.31), GPLv2 |
+| `r8152.ko` | 45664 | `e4896b7f9e2ec1a952c5840e1fba4ef9fc0c6b2855163e5545f40fb7d9f98c58` | `2e38f4ab96ac07e91fc6673232e1debc` | Linux v3.14 `drivers/net/usb/r8152.c` + v4.4 `RTL_VER_06` (`0x5c30`) support (Realtek RTL8152/RTL8153, backported to 2.6.31), GPLv2 |
 | `usbnet.ko` | 33388 | `d31b8c9413e80fc082a68fa21abfaaf0e3c50e7173bfc450edb4e7d3ae5efefb` | `8225a6661f8debe6874fe109894fbb41` | Linux v2.6.31 `drivers/net/usb/usbnet.c` (USB network driver framework), GPLv2 |
 
 ## Supported USB IDs (`r8152.ko`)
