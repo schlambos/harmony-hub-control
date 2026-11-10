@@ -121,7 +121,7 @@ export function createHomeButtonsView(section) {
     if (assignment.source === "other") return `${lead} set up elsewhere, kept as it is.`;
     if (assignment.press) return `${lead} ${pressAndLong(assignment)}${from}`;
     if (title) return `${lead} not set, so ${title[0]} does what “${title[0]}” says.`;
-    return "Not set yet.";
+    return HOME_BUTTONS.some((b) => b.key === key) ? "Not set yet. Long press needs a press first." : "Not set yet.";
   }
 
   function globalSummary(key) {
@@ -360,6 +360,9 @@ export function createHomeButtonsView(section) {
           if (draft.entries[slot.key]?.state === "other") return false;
           return slot.which !== "long" || Boolean(effectiveAssignment(draft, slot.key).press);
         },
+        tabHint: (tab) => (slotOf(tab).which === "long" && draft.entries[button.key]?.state !== "other"
+          ? "Set a press first"
+          : ""),
         canClear: () => keys.some((key) => draft.entries[key] && draft.entries[key].state !== "other"),
         canUndo: () => keysChanged(hub.state.config, draft, keys),
         startChip: (tab) => {

@@ -20,8 +20,9 @@ export function matchingRowsOfAllChips(lists, query) {
 /**
  * openSheet options for one button's sheet. Fixed: label, tabs, tabsLabel,
  * chips, searchLabel. Asked after every change: now(tab), tabEnabled(tab),
- * canClear(), canUndo(), startChip(tab), rows(tab, chip) and extraRows(tab)
- * as [{ label, current, pick }]. Changes: pick(), onClear(), onUndo(); onDone().
+ * tabHint(tab) (why a tab is off), canClear(), canUndo(), startChip(tab),
+ * rows(tab, chip) and extraRows(tab) as [{ label, current, pick }].
+ * Changes: pick(), onClear(), onUndo(); onDone().
  */
 export function buttonPickerSheet(picker) {
   return {
@@ -98,6 +99,7 @@ function renderPicker(content, close, picker) {
     content.querySelectorAll("[data-pick-tab]").forEach((b) => {
       b.setAttribute("aria-selected", String(b.dataset.pickTab === tab));
       b.disabled = !picker.tabEnabled(b.dataset.pickTab);
+      b.title = b.disabled ? picker.tabHint?.(b.dataset.pickTab) ?? "" : "";
     });
     $("[data-pick-chips]").innerHTML = chips.map((c) => `<button type="button" class="chip" data-pick-device="${escapeHtml(c.id)}" aria-pressed="${c.id === chip}">${escapeHtml(c.label)}</button>`).join("");
     $("[data-pick-foot]").innerHTML = picker.canUndo()
