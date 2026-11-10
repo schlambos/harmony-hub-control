@@ -403,6 +403,38 @@ local after = entryBy("Melodious Bluetooth")
 check("adding a command keeps the device ID",
   updated.ok and updated.updated[1] == "Homatics Box" and after.Device["Id-"] == idBefore and
     #after.Commands == 5, encodeJson(updated))
+-- Power added to the existing device keeps every ID ---------------------------
+local idsBefore = {}
+for _, command in ipairs(after.Commands) do idsBefore[command.Name] = command["Id-"] end
+local powered = commitBt({ devices = { box({
+  power = { on = "PowerOn", off = "PowerOff" },
+  commands = {
+    { name = "PowerOn", value = "tvwake" }, { name = "PowerOff", value = "tvsleep" },
+    { name = "PowerToggle", value = "tvpower" },
+    { name = "Home", value = "tvhome" }, { name = "Back", value = "tvback" },
+    { name = "Select", value = "select" }, { name = "DirectionUp", value = "directionup" },
+    { name = "Mute", value = "mute" } } }) } })
+local poweredEntry = entryBy("Melodious Bluetooth")
+local keptIds = poweredEntry ~= nil and poweredEntry.Device["Id-"] == idBefore
+for _, command in ipairs(poweredEntry and poweredEntry.Commands or {}) do
+  if idsBefore[command.Name] then keptIds = keptIds and command["Id-"] == idsBefore[command.Name] end
+end
+check("adding power commands keeps the device ID and every existing command ID",
+  powered.ok and powered.updated[1] == "Homatics Box" and keptIds and #poweredEntry.Commands == 8,
+  encodeJson(powered))
+local powerFeature
+for _, feature in ipairs(poweredEntry and poweredEntry.DeviceFeatures or {}) do
+  if feature.__type == "PowerFeature" then powerFeature = feature end
+end
+check("the device gets discrete power from PowerOn and PowerOff",
+  powerFeature ~= nil and powerFeature.PowerTypeId == 1 and
+    powerFeature.PowerOnActions[1].IRCommandName == "PowerOn" and
+    powerFeature.PowerOffActions[1].IRCommandName == "PowerOff" and
+    #powerFeature.PowerToggleActions == 0, encodeJson(powerFeature))
+local badPower = commitBt({ devices = { box({ power = { on = "PowerOn", off = "Nope" } }) } })
+check("refuses power that names a command the device lacks",
+  badPower.ok == false, badPower.error)
+
 local cleared = commitBt({ devices = {} })
 check("an empty Bluetooth set removes the device and its protocol",
   cleared.ok and cleared.removed[1] == "Homatics Box" and entryBy("Melodious Bluetooth") == nil and
@@ -420,6 +452,15 @@ if arg and arg[1] then
   check("the writer accepts codex_webui's set",
     committed.ok and committed.added[1] == fromWebui.devices[1].name and entry ~= nil and
       #entry.Commands == #fromWebui.devices[1].commands, encodeJson(committed))
+  local power
+  for _, feature in ipairs(entry and entry.DeviceFeatures or {}) do
+    if feature.__type == "PowerFeature" then power = feature end
+  end
+  check("codex_webui's set gives the device discrete power",
+    power ~= nil and power.PowerTypeId == 1 and
+      power.PowerOnActions[1].IRCommandName == "PowerOn" and
+      power.PowerOffActions[1].IRCommandName == "PowerOff",
+    encodeJson(power))
 end
 
 print(string.format("%d/%d checks passed", count - failures, count))
