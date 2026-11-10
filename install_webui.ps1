@@ -676,6 +676,10 @@ function Build-Inventory() {
     Add-Candidate (New-Candidate "/data/codex/usb_eth_service.sh" "755" "runtime" -Local (Join-Path $Payload "scripts/usb_eth_service.sh"))
     Add-Candidate (New-Candidate "/data/codex/modules/usb-net/r8152.ko" "644" "runtime" -Local (Join-Path $Payload "modules/usb-net/r8152.ko"))
     Add-Candidate (New-Candidate "/data/codex/modules/usb-net/usbnet.ko" "644" "runtime" -Local (Join-Path $Payload "modules/usb-net/usbnet.ko"))
+    Add-Candidate (New-Candidate "/data/codex/modules/usb-net/asix.ko" "644" "runtime" -Local (Join-Path $Payload "modules/usb-net/asix.ko"))
+    Add-Candidate (New-Candidate "/data/codex/modules/usb-net/cdc_ether.ko" "644" "runtime" -Local (Join-Path $Payload "modules/usb-net/cdc_ether.ko"))
+    Add-Candidate (New-Candidate "/data/codex/modules/usb-net/cdc_ncm.ko" "644" "runtime" -Local (Join-Path $Payload "modules/usb-net/cdc_ncm.ko"))
+    Add-Candidate (New-Candidate "/data/codex/modules/usb-net/ax88179_178a.ko" "644" "runtime" -Local (Join-Path $Payload "modules/usb-net/ax88179_178a.ko"))
     Add-Candidate (New-Candidate "/data/codex/modules/usb-net/README.md" "644" "runtime" -Local (Join-Path $Payload "modules/usb-net/README.md"))
     Add-Candidate (New-Candidate "/etc/init.d/rcS.local" "755" "runtime" -Local (Join-Path $Payload "scripts/rcS.local"))
     if (-not $SkipCloudSuppression) {
@@ -1597,7 +1601,7 @@ function Invoke-PostWiring() {
         "chmod 755 $binChmod /data/codex/init.sh /data/codex/offline_egress_guard.sh " +
         "/data/codex/recovery_ap.sh /data/codex/androidtv_service.sh /data/codex/usb_eth_service.sh /usr/sbin/dropbear " +
         "/usr/sbin/dropbearkey /etc/init.d/rcS.local; " +
-        "chmod 644 /data/codex/modules/usb-net/r8152.ko /data/codex/modules/usb-net/usbnet.ko /data/codex/modules/usb-net/README.md 2>/dev/null || true; " +
+        "chmod 644 /data/codex/modules/usb-net/r8152.ko /data/codex/modules/usb-net/usbnet.ko /data/codex/modules/usb-net/asix.ko /data/codex/modules/usb-net/cdc_ether.ko /data/codex/modules/usb-net/cdc_ncm.ko /data/codex/modules/usb-net/ax88179_178a.ko /data/codex/modules/usb-net/README.md 2>/dev/null || true; " +
         "chmod 600 /data/codexmqtt/config.json 2>/dev/null || true; " +
         "/bin/busybox sync 2>/dev/null || true"
     Invoke-Remote $post $null 60000 | Out-Null

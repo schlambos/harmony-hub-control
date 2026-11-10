@@ -799,6 +799,18 @@ class Installer:
                     "/data/codex/modules/usb-net/usbnet.ko", "644", "runtime", local=PAYLOAD / "modules" / "usb-net" / "usbnet.ko"
                 ),
                 Candidate(
+                    "/data/codex/modules/usb-net/asix.ko", "644", "runtime", local=PAYLOAD / "modules" / "usb-net" / "asix.ko"
+                ),
+                Candidate(
+                    "/data/codex/modules/usb-net/cdc_ether.ko", "644", "runtime", local=PAYLOAD / "modules" / "usb-net" / "cdc_ether.ko"
+                ),
+                Candidate(
+                    "/data/codex/modules/usb-net/cdc_ncm.ko", "644", "runtime", local=PAYLOAD / "modules" / "usb-net" / "cdc_ncm.ko"
+                ),
+                Candidate(
+                    "/data/codex/modules/usb-net/ax88179_178a.ko", "644", "runtime", local=PAYLOAD / "modules" / "usb-net" / "ax88179_178a.ko"
+                ),
+                Candidate(
                     "/data/codex/modules/usb-net/README.md", "644", "runtime", local=PAYLOAD / "modules" / "usb-net" / "README.md"
                 ),
                 Candidate("/etc/init.d/rcS.local", "755", "runtime", local=PAYLOAD / "scripts" / "rcS.local"),
@@ -1618,7 +1630,7 @@ class Installer:
             f"chmod 755 {bin_chmod} /data/codex/init.sh /data/codex/offline_egress_guard.sh "
             "/data/codex/recovery_ap.sh /data/codex/androidtv_service.sh /data/codex/usb_eth_service.sh /usr/sbin/dropbear "
             "/usr/sbin/dropbearkey /etc/init.d/rcS.local; "
-            "chmod 644 /data/codex/modules/usb-net/r8152.ko /data/codex/modules/usb-net/usbnet.ko /data/codex/modules/usb-net/README.md 2>/dev/null || true; "
+            "chmod 644 /data/codex/modules/usb-net/r8152.ko /data/codex/modules/usb-net/usbnet.ko /data/codex/modules/usb-net/asix.ko /data/codex/modules/usb-net/cdc_ether.ko /data/codex/modules/usb-net/cdc_ncm.ko /data/codex/modules/usb-net/ax88179_178a.ko /data/codex/modules/usb-net/README.md 2>/dev/null || true; "
             "chmod 600 /data/codexmqtt/config.json 2>/dev/null || true; "
             "/bin/busybox sync 2>/dev/null || true"
         )

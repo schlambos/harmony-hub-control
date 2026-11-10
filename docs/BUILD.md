@@ -20,13 +20,13 @@ exact SHA-256 digests and sizes are:
 
 | Binary | Size | SHA-256 |
 | --- | --- | --- |
-| `codex_webui` | 1262980 | `b2b8c8a7c1c7c6c1521be3c58719d7680f2f5b2aadd1c7f9ca07743920fa0709` |
+| `codex_webui` | 1262948 | `7a95f09180fe360f1946055f4a91ad3e224cdb14dddbde1ec92acd487d269b1a` |
 | `codex_dhcpd` | 58328 | `e9db51f4691511f1ae10182143518e758fc7aca0a84994fe9be602be37957592` |
 | `codex_portal` | 76724 | `1596f6cac03dad4ce0254ac118de5527c41789f10c7bc95357860d0d96c61b5f` |
 | `dropbearmulti` | 577296 | `e2ea632aed8b31dc5ea56b9673cbd983ec83260a97d33f891a0cebf51d5c6c8d` |
 | `codex_hbus` | 74660 | `4be9e6ac2e09e7eb052f9c47e81480d1e32aee7190bedb6ef7f932cf07aab8f9` |
 | `codex_androidtv` | 266916 | `fbf0e953b47b10f29fb30a41a4d339f5a034e1cc7a26c12d79f4d3711161bba2` |
-| `codex_usbeth` | 75428 | `0ed9c730658617b3fd72e0149591c64dfbd2ec00036b96d55f7ac4fd8ae85251` |
+| `codex_usbeth` | 77668 | `7148c3d20a52a592cea494c0d4670904c4f5233ce8dfe915991aa6349b5cf6ab` |
 
 The remaining binaries (`codex_bt_pair_agent`, `codex_bthid_keyboard`,
 `codex_hal_ltcp`) are pinned by their MD5 digests in
@@ -76,7 +76,7 @@ Both regenerators reproduce the committed headers byte-for-byte.
 Pinned source blobs:
 
 - `payload/source/codex_webui.c` — `b7632da65779bf69b6b4bb3d8da880ebbff85988`
-- `payload/source/harmony_shell_assets.h` — `d054eee35da1f12eb4fe72e140a11594de935090`
+- `payload/source/harmony_shell_assets.h` — `a245737f6632e2f073c2e55b19b013a9fc254e51`
 - `payload/source/activity_ui_assets.h` — `f68a2bce58e71242b2480b2d483f405484c036da`
 - `payload/source/remote_skin_jpg.h` — `419611c5ff0713f1f5de2dd684d699f6d77238d5`
 
@@ -88,8 +88,8 @@ Pinned source blobs:
 ```
 
 Result must be `ELF 32-bit MSB executable, MIPS, MIPS32 rel2, statically
-linked, stripped`, size 1262980, SHA-256
-`b2b8c8a7c1c7c6c1521be3c58719d7680f2f5b2aadd1c7f9ca07743920fa0709`.
+linked, stripped`, size 1262948, SHA-256
+`7a95f09180fe360f1946055f4a91ad3e224cdb14dddbde1ec92acd487d269b1a`.
 
 To compare against a Homebrew-built box binary, strip the compiler stamp from
 both first:
