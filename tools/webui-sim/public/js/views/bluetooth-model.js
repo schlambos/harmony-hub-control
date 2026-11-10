@@ -289,6 +289,8 @@ export const TV_KEYS = [
   { code: "mute", label: "Mute" },
   { code: "volumedown", label: "Volume -" },
   { code: "volumeup", label: "Volume +" },
+  { code: "tvsleep", label: "Sleep" },
+  { code: "tvpower", label: "Power" },
 ];
 
 /** A Harmony device the hub made from a saved Bluetooth target (codexactivity

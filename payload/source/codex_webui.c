@@ -9482,6 +9482,13 @@ static int bt_consumer_usage(const char *key) {
         {"acvoice", 0x0cf},     /* Voice Command */
         {"acpanel", 0x2a2},     /* AC Desktop Show All Applications */
         {"select", 0x041}, {"ok", 0x041},   /* Menu Pick: DPAD_CENTER */
+        /* Power. HAL's system-control collection (report 4) carries only
+           System Sleep (0x01/0x82), not System Wake Up (0x01/0x83), so
+           waking uses AC Home: any key press over Bluetooth wakes an
+           Android TV box, and Home is harmless when it is already on. */
+        {"tvwake", 0x223},                  /* AC Home: wake */
+        {"tvsleep", 0x032}, {"sleep", 0x032},   /* Sleep: KEY_SLEEP, discrete standby */
+        {"tvpower", 0x030}, {"power", 0x030},   /* Power: KEY_POWER, toggles */
         {"playpause", 0x0cd},
         {"stop", 0x0b7}, {"mediastop", 0x0b7},
         {"nexttrack", 0x0b5}, {"next", 0x0b5},
@@ -10790,11 +10797,15 @@ static void send_payload_too_large(int fd, const struct request *req) {
    device. codexactivity (CommitBtDevices) owns them, separately from the
    Home Assistant devices. Each gets this fixed Android TV command set; the
    value is the key name bt_keyboard_report_hex() understands. Play and
-   Pause both send Play/Pause, as Logitech's own Android TV devices do. */
+   Pause both send Play/Pause, as Logitech's own Android TV devices do.
+   Power is discrete (PowerFeature on/off, so the device can take an
+   activity role): PowerOff sends Sleep, PowerOn wakes it with AC Home, and
+   PowerToggle (Power) is there for a button, not for activities. */
 static const struct {
     const char *name;
     const char *key;
 } BT_HARMONY_COMMANDS[] = {
+    {"PowerOn", "tvwake"}, {"PowerOff", "tvsleep"}, {"PowerToggle", "tvpower"},
     {"DirectionUp", "directionup"}, {"DirectionDown", "directiondown"},
     {"DirectionLeft", "directionleft"}, {"DirectionRight", "directionright"},
     {"Select", "select"}, {"Back", "tvback"}, {"Home", "tvhome"}, {"Menu", "tvmenu"},
@@ -10835,7 +10846,8 @@ static char *bt_harmony_set_json(const struct bt_inventory *inv) {
             return NULL;
         }
         used += (size_t)snprintf(out + used, cap - used,
-            "%s{\"entity\":%s,\"name\":%s,\"model\":\"" BT_HARMONY_MODEL "\",\"commands\":[",
+            "%s{\"entity\":%s,\"name\":%s,\"model\":\"" BT_HARMONY_MODEL "\","
+            "\"power\":{\"on\":\"PowerOn\",\"off\":\"PowerOff\"},\"commands\":[",
             first ? "" : ",", id, name);
         free(name);
         free(id);

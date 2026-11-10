@@ -898,6 +898,14 @@ moves the cursor:
 | `channelup` / `channeldown` | `0x09C` / `0x09D` | CHANNEL_UP / CHANNEL_DOWN |
 | `mute` | `0x0E2` | VOLUME_MUTE |
 | `volumeup` / `volumedown` | `0x0E9` / `0x0EA` | VOLUME_UP / VOLUME_DOWN |
+| `tvsleep` (`sleep`) | `0x032` | SLEEP (standby, never wakes) |
+| `tvpower` (`power`) | `0x030` | POWER (toggles) |
+| `tvwake` | `0x223` | HOME, used to wake the box (see below) |
+
+HAL's system-control collection (report `0x04`) carries only System Sleep
+(`0x01/0x82`), not System Wake Up (`0x01/0x83`), so the hub cannot send
+WAKEUP. `tvwake` sends AC Home instead: any key over Bluetooth wakes an
+Android TV box, and Home does no harm when it is already on.
 
 `tvhome`, `tvback` and `tvmenu` are the same keys as `achome`, `acback` and
 `acmenu`; the hub's [Bluetooth Harmony devices](#a-saved-target-as-a-harmony-device)
@@ -941,6 +949,7 @@ named after the saved device. It is built like the
 (`melodious-bt-`) and protocol, and one writer never touches the other's
 devices. Its commands:
 
+- `PowerOn` (`tvwake`), `PowerOff` (`tvsleep`), `PowerToggle` (`tvpower`)
 - `DirectionUp`/`Down`/`Left`/`Right`: keyboard arrows
 - `Select`, `Back`, `Home`, `Menu`
 - `PlayPause`, `Play` and `Pause` (all three send Play/Pause), `Stop`,
@@ -954,6 +963,18 @@ The protocol posts each press to `http://127.0.0.1:8080/api/bt-webhook`
 target if needed and sends the key, one call at a time. Like the Home
 Assistant devices, a press is sent once; holding a button does not repeat
 it.
+
+Publishing a device that is already on Harmony again (`publish = "1"`, or
+**Update Harmony device** on the Bluetooth page) brings it up to the hub's
+current command set. Its device and command IDs stay, so activities,
+buttons and anything that sends its commands by name keep working.
+
+The device has discrete power: its PowerFeature uses `PowerOn` and
+`PowerOff`, so it can take an activity role. `PowerOff` sends Sleep, which
+only ever puts the box in standby. `PowerOn` wakes it with Home. While the
+box sleeps, its Bluetooth link may be down; the webhook reconnects first,
+which can take a few seconds, so give the device a power-on delay in its
+settings if an activity sends keys right after waking it.
 
 The reply is the writer's JSON (`added`, `removed`, `changed`, …); `422`
 carries its refusal. It refuses to remove a device that an activity or
