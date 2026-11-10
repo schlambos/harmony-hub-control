@@ -145,11 +145,11 @@ export function usbEthStatus(state, busy = "") {
       if (dev) parts.push(dev);
       return parts.join(" · ");
     }
-    if (dev) return `On · ${dev} (unsupported chipset — Realtek RTL8152/RTL8153 required)`;
-    return "On · Waiting for self-powered OTG Realtek adapter";
+    if (dev) return `On · ${dev} (unsupported chipset)`;
+    return "On · Waiting for self-powered OTG Ethernet adapter";
   }
   if (dev) return `Wi-Fi only · ${dev} detected`;
-  return "Wi-Fi only · Self-powered OTG Realtek adapter";
+  return "Wi-Fi only · Self-powered OTG Ethernet adapter";
 }
 
 /** A line for the pairing pop-up about one pairing window's outcome; "" when there's nothing to celebrate. */

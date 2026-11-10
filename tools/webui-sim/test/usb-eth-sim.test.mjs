@@ -44,7 +44,7 @@ describe("usbEthStatus model", () => {
     assert.equal(usbEthStatus({ supported: false }), "Not available on this hub's kernel");
     assert.equal(
       usbEthStatus({ supported: true, enabled: false }),
-      "Wi-Fi only · Self-powered OTG Realtek adapter",
+      "Wi-Fi only · Self-powered OTG Ethernet adapter",
     );
     assert.equal(
       usbEthStatus({ supported: true, enabled: false, usbProduct: "USB 10/100 LAN" }),
@@ -52,7 +52,7 @@ describe("usbEthStatus model", () => {
     );
     assert.equal(
       usbEthStatus({ supported: true, enabled: true, ifname: "" }),
-      "On · Waiting for self-powered OTG Realtek adapter",
+      "On · Waiting for self-powered OTG Ethernet adapter",
     );
     assert.equal(
       usbEthStatus({ supported: true, enabled: true, ifname: "eth0", carrier: true, ipv4: "192.168.1.55", usbProduct: "USB 10/100 LAN" }),
@@ -110,6 +110,34 @@ describe("simulator /api/usb-eth", () => {
       const bad = await postRaw("/api/usb-eth", raw);
       assert.equal(bad.status, 400, raw);
     }
+  });
+
+  it("binds ASIX and class-matched CDC adapters like the hub service", async () => {
+    // ASIX AX88772 by VID:PID (usb_driver=asix on the hub).
+    await post("/api/sim/usb-eth", {
+      adapter: { vidPid: "0b95:7720", product: "ASIX AX88772", carrier: true, ipv4: "192.168.1.88" },
+    });
+    const asix = await (await post("/api/usb-eth", { enabled: true })).json();
+    assert.equal(asix.ifname, "eth0");
+    assert.equal(asix.driverLoaded, true);
+    assert.equal(asix.ipv4, "192.168.1.88");
+
+    // CDC-ECM with an unlisted VID:PID: binds by interface class (02/06).
+    await post("/api/sim/usb-eth", {
+      adapter: { vidPid: "1234:5678", product: "Generic CDC Ethernet", carrier: true, ipv4: "192.168.1.99" },
+    });
+    const cdc = await (await fetch(`${BASE}/api/usb-eth`)).json();
+    assert.equal(cdc.ifname, "eth0");
+    assert.equal(cdc.driverLoaded, true);
+    assert.equal(cdc.usbDevice, "1234:5678");
+
+    // A chipset with no shipped driver never pretends to bind.
+    await post("/api/sim/usb-eth", {
+      adapter: { vidPid: "0424:ec00", product: "SMSC LAN9500", supportedChip: false },
+    });
+    const other = await (await fetch(`${BASE}/api/usb-eth`)).json();
+    assert.equal(other.ifname, "");
+    assert.equal(other.driverLoaded, false);
   });
 
   it("refuses to enable on an incompatible kernel build", async () => {

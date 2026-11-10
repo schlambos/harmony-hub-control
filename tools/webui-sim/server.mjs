@@ -680,7 +680,7 @@ function simUsbEthState() {
     supported: simUsbEthSupported,
     kernel,
     ehciBound: simUsbEthEhciBound,
-    driverLoaded: Boolean(simUsbEthEnabled && simUsbEthSupported),
+    driverLoaded: Boolean(simUsbEthEnabled && simUsbEthSupported && dev && dev.supportedChip !== false),
     gadgetLoaded: false,
     usbDevice: dev ? String(dev.vidPid || "0bda:8152") : "",
     usbProduct: dev ? String(dev.product || "USB 10/100 LAN") : "",
