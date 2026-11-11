@@ -1,7 +1,8 @@
 # Linux 2.6.31 for the Harmony Hub: config and patches for `asix.ko`
 
 These files, with Logitech's published kernel archive and the Bootlin toolchain,
-are the complete source of `payload/modules/usb-net/asix.ko` (GPL-2.0).
+are the complete source of `payload/modules/usb-net/asix.ko`. Like the kernel,
+it is GPL-2.0: [`LICENSE`](LICENSE) is the kernel's `COPYING`, from the archive.
 `build/build_usb_eth_asix.sh` builds it from scratch and checks the result
 against a pinned SHA-256. [docs/USB_ETHERNET.md](../../docs/USB_ETHERNET.md)
 explains the feature.
@@ -17,7 +18,9 @@ explains the feature.
 | usbnet CRCs | the `__crc_*` symbols of `payload/modules/usb-net/usbnet.ko` | |
 
 The kernel archive is the Atheros LSDK 9.2.0_U10.5.13 tree that Logitech
-published for hub firmware 4.3.48 (2015). Hubs today run firmware 4.15.600,
+published for hub firmware 4.3.48 (2015). Releases that ship `asix.ko` also
+carry the archive as a release asset, so the source is available from the
+same place as the module. Hubs today run firmware 4.15.600,
 kernel `2.6.31-g89d565c`; Logitech hasn't published that tree.
 
 ## The config: matching 4.15.600's symbol versions
@@ -67,10 +70,12 @@ needs no `mii.ko`.
 
 ## The patches
 
-Both are upstream Linux 3.1 changes, the release that added the AX88772B:
+Both are upstream Linux 3.1 commits by Marek Vasut, adapted to 2.6.31. Each
+patch's header names its commit, author and sign-offs:
 
-- **`0001-asix-add-ax88772b-id.patch`:** `0b95:772b` with `ax88772_info`,
-  the same way Linux 3.1 added it.
+- **`0001-asix-add-ax88772b-id.patch`:** upstream commit `308859097831`
+  ("ASIX: Add AX88772B USB ID"): `0b95:772b` with `ax88772_info`. Placed at
+  the end of 2.6.31's table rather than before the AX88772 entry.
 - **`0002-asix-use-11-bits-of-rx-header.patch`:** upstream commit
   `bca0beb9363f` ("ASIX: Use only 11 bits of header for data size"). The
   AX88772B/C uses only the low 11 bits of each received packet's header for

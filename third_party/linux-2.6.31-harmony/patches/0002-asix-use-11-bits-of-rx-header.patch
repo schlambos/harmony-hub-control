@@ -1,10 +1,20 @@
+From: Marek Vasut <marek.vasut@gmail.com>
+Subject: ASIX: Use only 11 bits of header for data size
+
+Upstream Linux commit bca0beb9363f8487ac902931a50eb00180a2d14a
+("ASIX: Use only 11 bits of header for data size", Linux 3.1), by Marek
+Vasut, with "Signed-off-by: Marek Vasut <marek.vasut@gmail.com>" and
+"Signed-off-by: David S. Miller <davem@davemloft.net>".
+
+Adapted to Linux 2.6.31 for Melodious: upstream applied it to the check as
+bc466e678d0a had simplified it; this applies the same change to 2.6.31's
+form of the check.
+
 The AX88772B/C uses only the low 11 bits of each received packet's header for
 its length and sets some of the other bits (e.g. 0x803c for a 60-byte frame).
 Linux 2.6.31 reads all 16 bits, logs "asix_rx_fixup() Bad Header Length" and
 then "Bad RX Length 32828", and drops the whole USB transfer, so almost nothing
-is received. This is upstream commit bca0beb9363f ("ASIX: Use only 11 bits of
-header for data size", Linux 3.1, the same series as the AX88772B ID in 0001),
-applied to 2.6.31's form of the check (bc466e678d0a simplified it first).
+is received.
 
 --- a/drivers/net/usb/asix.c
 +++ b/drivers/net/usb/asix.c

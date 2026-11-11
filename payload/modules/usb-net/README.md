@@ -19,11 +19,12 @@ and `/lib/modules/2.6.31-g89d565c/` are never modified.
 | `cdc_ncm.ko` | 19216 | `ef32e97e692f6caa2b23114ced08c7f98b24cf76cd49d38ad4243c3f435e3f25` | `b53ea73aaf7e7f567f547a7551f0522d` | Linux v2.6.38 `drivers/net/usb/cdc_ncm.c` (CDC NCM, class-matched), Dual BSD/GPL (GPL-compatible) |
 | `ax88179_178a.ko` | 30200 | `a80e278b2f009e633134986fa4421ffded32ff4f1c2fec8e25c63dee790cd05d` | `24f5ecf1433acf98db037fa552d76575` | Linux v3.14 `drivers/net/usb/ax88179_178a.c` (ASIX AX88179/AX88178A), GPLv2 |
 
-**Validation status (read this):** only `r8152.ko` + `usbnet.ko` have been
-load-tested on hub hardware (bound RTL8153 adapter, DHCP). Earlier ping/HTTP
-results were shown by the 2026-11-10 health check to have travelled over
-Wi-Fi, not the cable; counter-verified wired traffic is still pending, so
-no chipset is claimed traffic-tested (see docs/USB_ETHERNET.md).
+**Validation status (read this):** `r8152.ko` + `usbnet.ko` have been
+load-tested on hub hardware (bound RTL8153 adapter, DHCP). Earlier Realtek
+ping/HTTP results were shown by the 2026-11-10 health check to have
+travelled over Wi-Fi, not the cable; counter-verified wired traffic is
+still pending for Realtek, so it is not claimed traffic-tested (see
+docs/USB_ETHERNET.md).
 `asix.ko` with this directory's `usbnet.ko` is **traffic-tested** on hub
 hardware with an AX88772C (TRENDnet TU2-ET100, `0b95:772b`): DHCP, wired
 traffic in both directions counter-verified on `eth2` (about 6,000 packets
@@ -110,13 +111,13 @@ this directory's `usbnet.ko`). The recipe below covers the other modules.
      (`netdev->mc_list` / `netdev->mc_count` / `dmi_addr`) and provide thin
      2.6.31 compatibility macros for `netdev_alloc_skb_ip_align`,
      `module_usb_driver`, and `netif_*` logging helpers.
-5. **usbnet minidriver adaptations (asix / cdc_ether / cdc_ncm / ax88179_178a):**
+5. **usbnet minidriver adaptations (cdc_ether / cdc_ncm / ax88179_178a;
+   `asix.ko` has its own recipe, above, and none of these):**
    - Route `kmalloc` / `kzalloc` through out-of-line `__kmalloc` (same
      `malloc_sizes[]` stride fix as `r8152`); no module indexes the
      config-sized kernel table directly.
    - Hardware checksum offload is off at probe on this big-endian kernel:
-     no `NETIF_F_IP_CSUM`/`NETIF_F_RXCSUM`/SG/TSO anywhere; the AX88178
-     `AX_MEDIUM_ENCK` chip-checksum enable is removed; AX88179
+     no `NETIF_F_IP_CSUM`/`NETIF_F_RXCSUM`/SG/TSO anywhere; AX88179
      `AX_RXCOE_CTL`/`AX_TXCOE_CTL` are written 0 at bind and reset and its
      RX-checksum marking is neutralized. `ethtool_op_get/set_tx_csum` plus
      no-op `get/set_rx_csum` are wired into every driver's `ethtool_ops`
