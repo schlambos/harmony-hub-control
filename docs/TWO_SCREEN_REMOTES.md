@@ -4,11 +4,11 @@ The stock hub keeps one remote with a screen (Harmony Touch, Ultimate, Elite,
 950). Pair a second and it unpairs the first. `--two-screen on` lets the hub
 keep two and serve both at the same time.
 
-**Status: experimental, and not yet proven on hardware.** The change runs
-against the hub's real `hal` code in an emulator (see [Tests](#tests)); the
-hardware checks are listed under [What is and isn't proven](#what-is-and-isnt-proven).
-It is off unless you turn it on, it is only in the Python installer, and it
-changes the hub's own remote software.
+**Status: proven on hardware for everyday use (Gate C, 2026-11-10), with the
+known limitations below.** Two screen remotes (a Touch and a 950) worked at
+the same time on one hub, and the setting is on there now. It is off unless
+you turn it on, it is only in the Python installer, and it changes the hub's
+own remote software.
 
 ## What you get
 
@@ -160,7 +160,10 @@ As for multi-remote, with four additions.
 - **Load check.** Before it restarts the hub, the installer runs the installed
   copy with an option `hal` doesn't have (`hal_remotes -h`). `hal` prints its
   usage and exits before it opens anything. If the hub can't start the copy,
-  the setting goes back to `0` and the hub is not restarted.
+  the setting goes back to `0` and the hub is not restarted. The check runs
+  in the apply path, just before that restart: `--preflight-only` only stages
+  and compares in RAM and does not run it, so a preflight prints no
+  `two_screen_load_check` line.
 - **Bind-mounted at boot** by `rcS.local`, when `/data/codex/two_screen.conf`
   says `1`, `once`, `serial` or `serial-once` and both files have exactly the
   md5s above. The stock file is never modified.
@@ -223,19 +226,34 @@ Proven in the emulator, against the stock `hal` binary:
   as one remote on stock: 9 failed requests in 320 calls against 6, and
   sequence errors per message within a few percent either way.
 
-Not proven until it runs on a hub:
+Proven on a hub (Gate C, 2026-11-10; Touch in slot 2, 950 in slot 3, per-slot
+mode, gates `100`):
 
-- That the hub's kernel (2.6.31) loads a `hal` with the extra program header.
-  It should (a segment after the one with `.bss` is ordinary), and the
-  installer's load check finds out before any restart.
-- That the radio delivers two remotes' frames interleaved. Its 8-frame queue
-  may be shared between slots; `IO ERROR` in `hot.stats` would show it, and
-  serial mode is the answer.
-- That the remotes' own firmware and the hub's Lua are content with two of
-  them in day-to-day use.
+- The hub's kernel (2.6.31) loads the `hal` with the extra program header;
+  the load check passed and the hub has booted on it since.
+- The radio delivers the two remotes' frames interleaved: alternating
+  presses on both remotes, an activity started on one following on the
+  other's screen, one remote asleep while the other worked, and a 60-press
+  soak, with `IO ERROR` and `TIMEOUT` at 0 throughout.
+- The setting is on permanently there and survived a restart with both
+  remotes paired.
 
-Known limits:
+Known limitations (Gate C):
 
+- The hub's Lua engine stalled for 60 seconds twice, each time just after
+  broadcasting an activity change to a web-app socket that had closed. The
+  radio and remotes kept working through both stalls, and the changed
+  `hal` had delivered its part before each one; this looks like the stock
+  engine's web-socket broadcast, not the two-screen change, but it has not
+  been reproduced on the stock `hal`. While it lasts, an activity change's
+  final state can arrive a minute late with the web app open.
+- `MSG SEQ ERROR` ran at 8 in 615 objects (1.3%) over the first evening,
+  against 0 in 109 in a single-Touch baseline capture. Every one was a
+  press and a state update crossing on the air, and every one resynced by
+  itself.
+- Not yet exercised on the hub: a firmware sync, IR sent through a remote's
+  own emitter, explicit `hot.1N` commands, file sessions, and long uptime
+  (one evening so far).
 - The PowerShell installer has no `-TwoScreen` yet.
 - A pairing started with `delayunpair` still unpairs the older screen remote
   five seconds later. Nothing in the hub or the remotes sends it.
