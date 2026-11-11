@@ -9,8 +9,9 @@ It checks: the hub identity is made on first use; a TV that acknowledges a secre
 never got, or never confirms the code, fails the pairing; pairing (a mistyped code is
 caught before anything is sent, the right one pairs); the TV connects; PowerOff/PowerOn
 send the power key only when the state differs, and wait for the TV to report its state
-on a new connection; keys arrive; an unknown command still gets HTTP 200; on a
-Hisense TV InputHdmi1-4 open the input by its TV-input URI; after the power key,
+on a new connection; keys arrive; an unknown command still gets HTTP 200; other
+TVs get the HDMI keys for InputHdmi1-4, while a Hisense TV gets the input's TV-input
+URI (the keys again if it offers no app links); after the power key,
 inputs wait until the TV reports it is on; a command queued behind PowerOn waits as
 long as it does; a TV that drops off while turning on gets the power key again; and
 forgetting the TV removes it.
@@ -182,8 +183,14 @@ def main() -> int:
         mark = len(fake.events)
         cmd("VolumeUp")
         fake.wait_for("key", since=mark, code=24)
-        cmd("InputHdmi2")
-        fake.wait_for("key", since=mark, code=244)
+        # A TV without an input URI (this one says it is a FakeCo) gets the HDMI
+        # keys, KEYCODE_TV_INPUT_HDMI_1..4, for all four inputs, never an app link.
+        assert call(args.port, "/status")["tvs"][0]["vendor"] == "FakeCo"
+        for n in range(1, 5):
+            cmd(f"InputHdmi{n}")
+            fake.wait_for("key", since=mark, code=242 + n)
+        assert fake.count("app_link", since=mark) == 0, "a non-Hisense TV got an input by app link"
+        mark = len(fake.events)
         cmd("app:https://www.netflix.com/title")
         fake.wait_for("app_link", since=mark, link="https://www.netflix.com/title")
         r = cmd("NoSuchCommand")
@@ -252,6 +259,20 @@ def main() -> int:
         cmd("InputNext")
         fake.wait_for("key", since=mark, code=178)
         assert fake.count("key", since=mark, code=243) == 0 and fake.count("key", since=mark, code=246) == 0
+
+        # A Hisense TV that doesn't offer app links gets the HDMI keys instead.
+        set_mode("vendor=Hisense no-applink")
+        mark = restart_connected()
+        e = fake.wait_for("remote_configured", since=mark)
+        assert not e["features"] & 0x200, e   # the daemon took up no app links (F_APPLINK)
+        assert call(args.port, "/status")["tvs"][0]["vendor"] == "Hisense"
+        mark = len(fake.events)
+        for n in range(1, 5):
+            cmd(f"InputHdmi{n}")
+            fake.wait_for("key", since=mark, code=242 + n)
+        assert fake.count("app_link", since=mark) == 0, "an input went by app link to a TV without app links"
+        set_mode("vendor=Hisense")
+        restart_connected()
 
         # After the power key, an input waits until the TV reports that it is on.
         mark = len(fake.events)

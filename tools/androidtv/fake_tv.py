@@ -32,6 +32,7 @@ import threading
 import time
 
 FEATURES = 0x26F
+F_APPLINK = 0x200  # app links (field 90); mode no-applink leaves it out
 
 
 def log(event: str, **kw) -> None:
@@ -198,13 +199,19 @@ class FakeTV:
         offline (close the remote connection and refuse new ones);
         wake-on-return makes a power-drop-once TV come back on by itself;
         boot-on=<s>: a TV that is off when a connection starts reports standby,
-        then turns on by itself <s> later (as when Wake-on-LAN powers it on).
+        then turns on by itself <s> later (as when Wake-on-LAN powers it on);
+        no-applink: don't offer app links in remote_configure (read when a
+        connection starts).
         True for a flag, the value for name=value, None if absent."""
         for tok in self.mode().split():
             key, _, value = tok.partition("=")
             if key == name:
                 return value if value else True
         return None
+
+    def features(self) -> int:
+        """What this TV offers in remote_configure."""
+        return FEATURES & ~F_APPLINK if self.opt("no-applink") else FEATURES
 
     def context(self) -> ssl.SSLContext:
         ctx = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)
@@ -281,7 +288,8 @@ class FakeTV:
             return
         f = Framed(sock)
         vendor = str(self.opt("vendor") or "FakeCo").encode()
-        f.send(field_bytes(1, field_uint(1, FEATURES) + field_bytes(2, field_bytes(1, b"Fake") + field_bytes(2, vendor))))
+        features = self.features()
+        f.send(field_bytes(1, field_uint(1, features) + field_bytes(2, field_bytes(1, b"Fake") + field_bytes(2, vendor))))
         configured = False
         with self.lock:
             self.remote_conns.append(f)
@@ -315,7 +323,7 @@ class FakeTV:
                 if get(msg, 1) is not None and not configured:
                     configured = True
                     log("remote_configured", features=get(get(msg, 1), 1, 0))
-                    f.send(field_bytes(2, field_uint(1, FEATURES)))
+                    f.send(field_bytes(2, field_uint(1, features)))
                 elif get(msg, 2) is not None:
                     boot = self.opt("boot-on")
                     if boot and not self.on:
@@ -419,7 +427,8 @@ def main() -> None:
     ap.add_argument("--bt", default="AA:BB:CC:00:11:22", help="Bluetooth address in the certificate CN")
     ap.add_argument("--accept-unpaired", action="store_true")
     ap.add_argument("--mode-file", help="behave as this file says: early-ack, no-ack, start-delay=<s>, vendor=<name>, "
-                                        "wake-delay=<s>, power-drop-once, wake-on-return, boot-on=<s>, quiet-once, offline (space-separated)")
+                                        "wake-delay=<s>, power-drop-once, wake-on-return, boot-on=<s>, quiet-once, offline, "
+                                        "no-applink (space-separated)")
     args = ap.parse_args()
     tv = FakeTV(args)
     threading.Thread(target=tv.serve, args=(args.pair_port, tv.pairing), daemon=True).start()

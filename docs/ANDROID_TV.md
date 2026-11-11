@@ -66,9 +66,11 @@ to 4), except on TVs known to ignore them (if the TV offers app links):
 
 The TV names its vendor when it connects; the hub's log says
 `TV <id> is a <vendor> <model>`, and `/api/androidtv/status` shows it. These
-were checked on a Hisense 75U8H (Google TV): the HDMI keys do nothing, the
-input URIs switch to HDMI 1, 2 and 3. A TV can show an input this way even
-when nothing is plugged into it (its own menu greys those out).
+were checked on a Hisense 75U8H (Google TV): the HDMI keys do nothing, and the
+input URIs HW2, HW3 and HW4 switch to HDMI 1, 2 and 3. HDMI 4 as HW5 follows
+the same pattern but hasn't been checked on a TV yet. A TV can show an input
+this way even when nothing is plugged into it (its own menu greys those out).
+A Hisense TV that doesn't offer app links gets the HDMI keys.
 
 If your TV ignores the keys and isn't listed, let a source switch it by
 HDMI-CEC, or use InputNext.
