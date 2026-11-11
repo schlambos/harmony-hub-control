@@ -239,6 +239,13 @@ def running_hal_command() -> str:
     )
 
 
+def hal_load_check_command() -> str:
+    """Run the installed copy with an option hal doesn't have: it prints its
+    usage and exits before it opens anything. That the hub's kernel and loader
+    start the copy at all is the one thing no test off the hub can show."""
+    return f"{HAL_REMOTES_DEST} -h 2>&1; echo rc=$?"
+
+
 def remotes_hal(data: bytes) -> bytes:
     """The two-screen hal from the hub's own /usr/bin/hal; fails closed."""
     digest = hashlib.md5(data).hexdigest()
@@ -1918,7 +1925,24 @@ class Installer:
             return "multi-remote"
         return "multi-remote" if self.args.multi_remote == "on" else "stock"
 
+    def check_two_screen_loads(self) -> None:
+        """Before a reboot into the two-screen hal: the copy must start on this
+        hub. If it doesn't, the setting goes back to 0 and the hub stays up."""
+        if self.two_screen_wanted() != "on":
+            return
+        out = self.run_remote(hal_load_check_command(), timeout=60, quiet=True)
+        if "Usage:" in out and "rc=1" in out.split():
+            kv("two_screen_load_check=ok")
+            return
+        kv("two_screen_load_check=failed")
+        self.run_remote(f"echo 0 > {TWO_SCREEN_CONF}", timeout=30, quiet=True)
+        raise RuntimeError(
+            f"the hub could not start {HAL_REMOTES_DEST} ({' '.join(out.split())[:200]!r}); "
+            f"{TWO_SCREEN_CONF} was put back to 0 and the hub was not restarted"
+        )
+
     def reboot_and_wait(self) -> None:
+        self.check_two_screen_loads()
         self.run_remote("(/bin/sleep 2; /sbin/reboot || reboot) >/dev/null 2>&1 & echo rebooting", timeout=30, quiet=True)
         time.sleep(8)
         wait_for_port(self.args.hub_host, self.args.port, 180, "SSH")

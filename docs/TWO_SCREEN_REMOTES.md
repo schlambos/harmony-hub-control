@@ -147,16 +147,20 @@ which `tools/build_hal_remotes.py` writes from the source:
 | | md5 | Size |
 | --- | --- | --- |
 | Stock `hal` (firmware 4.15.600) | `a3fdd823440c43f36e235fe51c45f008` | 363,640 |
-| Two-screen `hal` | `84bcb78e4c7e7b7a7e195b9990547fe0` | 363,640 |
+| Two-screen `hal` | `904560dfaa3dc84a175524c2a80ec240` | 363,640 |
 
 ### Delivery
 
-As for multi-remote, with three additions.
+As for multi-remote, with four additions.
 
 - **Built from the hub's own file, never shipped.** The installer reads the
   hub's `/usr/bin/hal`, applies the edits and checks the md5. If the
   multi-remote copy is running it takes that copy's edits back out first. It
   installs the result as `/data/codex/bin/hal_remotes`.
+- **Load check.** Before it restarts the hub, the installer runs the installed
+  copy with an option `hal` doesn't have (`hal_remotes -h`). `hal` prints its
+  usage and exits before it opens anything. If the hub can't start the copy,
+  the setting goes back to `0` and the hub is not restarted.
 - **Bind-mounted at boot** by `rcS.local`, when `/data/codex/two_screen.conf`
   says `1`, `once`, `serial` or `serial-once` and both files have exactly the
   md5s above. The stock file is never modified.
@@ -206,19 +210,24 @@ Proven in the emulator, against the stock `hal` binary:
 
 - With one screen remote, the changed `hal` sends byte-for-byte the frames
   stock sends, at the same times, whatever the settings (also with frames
-  lost, a sleep and a wake).
+  lost, a sleep and a wake). The request queue is not used with one remote
+  either.
 - With the setting off and two remotes, it behaves as stock does.
 - Two and three remotes sending at once all get through, with no resends.
-- Replies, state updates and hub-initiated commands reach the right remote.
+- Replies, state updates and hub-initiated commands reach the right remote,
+  including `hot.1N` and a file session that stays with the remote it opened
+  on.
 - One remote asleep, or gone without the radio saying so, doesn't hold up the
   other.
-- With 5% of frames lost, error rates stay within twice stock's with one
-  remote.
+- With 5% of frames lost, two remotes on the changed `hal` do about as well
+  as one remote on stock: 9 failed requests in 320 calls against 6, and
+  sequence errors per message within a few percent either way.
 
 Not proven until it runs on a hub:
 
 - That the hub's kernel (2.6.31) loads a `hal` with the extra program header.
-  It should: a segment after the one with `.bss` is ordinary.
+  It should (a segment after the one with `.bss` is ordinary), and the
+  installer's load check finds out before any restart.
 - That the radio delivers two remotes' frames interleaved. Its 8-frame queue
   may be shared between slots; `IO ERROR` in `hot.stats` would show it, and
   serial mode is the answer.

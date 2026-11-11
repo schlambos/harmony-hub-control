@@ -106,7 +106,7 @@ elif [ -n "$codex_two" ] && [ -f /data/codex/bin/hal_remotes ]; then
 	*) codex_gates=${codex_gates}0 ;;
 	esac
 	if [ "${codex_hal_md5%% *}" != "a3fdd823440c43f36e235fe51c45f008" ] ||
-		[ "${codex_hal_remotes_md5%% *}" != "84bcb78e4c7e7b7a7e195b9990547fe0" ]; then
+		[ "${codex_hal_remotes_md5%% *}" != "904560dfaa3dc84a175524c2a80ec240" ]; then
 		echo "$(date) codex two-screen hal skipped (unexpected hal build)" >> /cache/codex-init.log
 	elif [ "$codex_tries" -ge 3 ]; then
 		echo "$(date) codex two-screen hal skipped (the last 3 boots with it didn't stay up; save the setting again to retry)" >> /cache/codex-init.log

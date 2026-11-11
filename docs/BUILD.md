@@ -176,7 +176,7 @@ at fixed addresses) and checks the compiled code against its rules.
 HAL_REMOTES_ZIG=<zig 0.16.0> python3 tools/build_hal_remotes.py --stock <stock hal, firmware 4.15.600>
 ```
 
-`--stock` pins the patched md5 (`84bcb78e4c7e7b7a7e195b9990547fe0`), which
+`--stock` pins the patched md5 (`904560dfaa3dc84a175524c2a80ec240`), which
 `payload/scripts/rcS.local` must name too. Without it the build keeps the
 pinned md5 when the edits come out unchanged. `--check` fails if the file
 differs from what the source builds. Needs `pyelftools`.

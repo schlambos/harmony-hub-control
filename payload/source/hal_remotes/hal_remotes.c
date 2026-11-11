@@ -382,25 +382,33 @@ int ts_hot_loop(void *primary, void *sub)
 		}
 
 		/* wait for the radio, at most until the earliest poll timeout */
-		now = now_ms();
-		wait = 0;
-		which = -1;
 		n = ts.nctx;
-		for (i = 0; i < n; i++) {
-			if (!U32(ts.ctxs[i], C_TIMEOUT))
-				continue;
-			rem = ts.deadline[i] - now;
-			if ((s32)rem < 1)
-				rem = 1;
-			if (which < 0 || rem < wait) {
-				wait = rem;
-				which = i;
-			}
-		}
 		if (n == 1) {
 			/* one context: the stock wait, to the millisecond */
 			wait = U32(PRIMARY, C_TIMEOUT);
 			which = wait ? 0 : -1;
+		} else {
+			now = now_ms();
+			wait = 0;
+			which = -1;
+			for (i = 0; i < n; i++) {
+				if (!U32(ts.ctxs[i], C_TIMEOUT))
+					continue;
+				rem = ts.deadline[i] - now;
+				if ((s32)rem < 1)
+					break; /* due: the other remote's frames must not put it off */
+				if (which < 0 || rem < wait) {
+					wait = rem;
+					which = i;
+				}
+			}
+			if (i < n) {
+				c = ts.ctxs[i];
+				U32(c, C_FIFO) = 0;
+				U32(c, C_NTIMEOUT)++;
+				fire(c, ST_TIMEOUT, S_TIMEOUT);
+				continue;
+			}
 		}
 		rc = rf_msg_wait(sub, wait, msg);
 
@@ -485,7 +493,7 @@ int ts_object_data(void *ctx, u32 *obj)
 	u32 *q;
 
 	ts_init();
-	if (!ts.two || HOT_MODE || obj != HOT_REQUEST_OBJ)
+	if (!ts.two || HOT_MODE || obj != HOT_REQUEST_OBJ || ts.nctx == 1) /* one remote: stock, to the letter */
 		return orig_hot_object_data(ctx, obj);
 	if (pthread_mutex_lock(obj + 5))
 		return -1;

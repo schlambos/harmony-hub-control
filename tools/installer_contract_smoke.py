@@ -152,6 +152,8 @@ class FakeHub:
         # Reads of /usr/bin/hal return the copy bound over it (the two-screen
         # tests; the multi-remote tests place the bytes they want read).
         self.read_through_bind = False
+        # The hub's kernel and loader start the two-screen copy.
+        self.hal_copy_loads = True
         # A pairing window is open, and hal's rf.info answer.
         self.rf_pairing = False
         self.rf_info = RF_INFO_ONE_SMART
@@ -281,6 +283,18 @@ class FakeHub:
             out += f"gates={self.hal_gates}\nmulti={conf.decode().strip()}\n"
             out += "multi_copy=" + ("yes" if INST.HAL_MULTI_DEST in self.fs else "no") + "\n"
             return 0, out, ""
+
+        if c == INST.hal_load_check_command():
+            self.events.append(("load_check",))
+            if INST.HAL_REMOTES_DEST not in self.fs:
+                return 0, f"sh: {INST.HAL_REMOTES_DEST}: not found\nrc=127\n", ""
+            if not self.hal_copy_loads:
+                return 0, "Segmentation fault\nrc=139\n", ""
+            return 0, f"Usage: {INST.HAL_REMOTES_DEST}\n\t-d: enable debug\n\t-s: log to syslog\nrc=1\n", ""
+
+        if c == f"echo 0 > {INST.TWO_SCREEN_CONF}":
+            self.set_file(INST.TWO_SCREEN_CONF, b"0\n", "644")
+            return 0, "", ""
 
         if c.startswith("md5sum "):
             return self.do_md5sum(shlex.split(c)[1:])
@@ -2097,6 +2111,25 @@ class PythonInstallerTwoScreen(unittest.TestCase):
         self.assertEqual(code, 0, stderr or stdout)
         self.assertEqual(self.writes(hub), [])
         self.assertEqual(self.reboots(hub), 0)
+
+    def test_copy_must_start_on_the_hub_before_any_reboot(self):
+        """The installer runs the installed copy with -h before it restarts the
+        hub. A hub whose kernel can't start it keeps running what it runs."""
+        hub = self.current_hub()
+        code, stdout, stderr = self.run_on(hub, "--two-screen", "on")
+        self.assertEqual(code, 0, stderr or stdout)
+        self.assertEqual(kv_value(stdout, "two_screen_load_check"), "ok")
+        self.assertLess(hub.events.index(("load_check",)), hub.events.index(("service", "reboot")))
+
+        hub = self.current_hub()
+        hub.hal_copy_loads = False
+        code, stdout, stderr = self.run_on(hub, "--two-screen", "on")
+        self.assertNotEqual(code, 0)
+        self.assertEqual(kv_value(stdout, "two_screen_load_check"), "failed")
+        self.assertIn("could not start", stderr + stdout)
+        self.assertEqual(self.reboots(hub), 0)
+        self.assertEqual(hub.fs[INST.TWO_SCREEN_CONF]["data"], b"0\n")
+        self.assertFalse(hub.remotes_bound)
 
     def test_once_is_spent_by_the_boot(self):
         hub = self.current_hub()
