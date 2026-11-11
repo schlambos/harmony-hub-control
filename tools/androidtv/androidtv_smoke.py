@@ -417,6 +417,32 @@ def main() -> int:
         time.sleep(6)
         assert fake.count("power", since=mark, on=True) == 0, "the retry turned on a TV the user had turned off"
 
+        # ...and so does one that arrives after the retry is queued: the retry
+        # and the input behind it are cancelled, not sent first.
+        set_mode("vendor=Hisense")
+        end = time.time() + 10
+        while not (call(args.port, "/status")["tvs"] or [{}])[0].get("connected") and time.time() < end:
+            time.sleep(0.1)
+        mark = len(fake.events)
+        cmd("Mute")   # a key re-arms the fake TV's once-only modes
+        fake.wait_for("key", since=mark, code=164)
+        log_path = os.path.join(tmp, "codex-androidtv.log")
+        retries = open(log_path).read().count("trying again")
+        set_mode("vendor=Hisense power-drop-once")
+        mark = len(fake.events)
+        cmd("PowerOn")
+        cmd("InputHdmi2")
+        fake.wait_for("power_dropped", since=mark)
+        end = time.time() + 5
+        while open(log_path).read().count("trying again") == retries and time.time() < end:
+            time.sleep(0.05)
+        assert open(log_path).read().count("trying again") > retries, "the PowerOn wasn't queued again"
+        cmd("PowerOff")
+        time.sleep(8)
+        assert fake.count("power", since=mark, on=True) == 0, "the retry went ahead of a later PowerOff"
+        assert fake.count("app_link", since=mark) == 0, fake.events[mark:]
+        assert "PowerOff cancels a PowerOn not sent yet; dropped 2 queued command(s)" in open(log_path).read()
+
         # A burst of keys to an unreachable TV doesn't push its PowerOn out of
         # the queue.
         set_mode("vendor=Hisense offline")

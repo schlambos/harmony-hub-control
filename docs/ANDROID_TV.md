@@ -89,7 +89,9 @@ moment ago does) and drops off the network, or goes silent on the connection,
 the hub sends Wake-on-LAN and the power key once more. While PowerOn waits for
 a TV that can't be reached, Wake-on-LAN is repeated every 5 s. If the TV still
 doesn't come on, the commands an activity queued behind PowerOn (its input, say)
-are dropped rather than sent to it later.
+are dropped rather than sent to it later. A PowerOff that arrives while a PowerOn
+hasn't been sent yet (a retry, or one waiting for a TV it can't reach) cancels it
+and those commands, so the TV isn't woken only to be turned off.
 
 How a TV turns on from standby depends on how it sleeps:
 

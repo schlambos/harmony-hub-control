@@ -1118,6 +1118,19 @@ static void tv_enqueue(struct tv *t, const struct cmd *c) {
 			return;
 		}
 		t->wake_retries = 0;   /* a new request gets its own retry */
+	} else if (n.code == PSEUDO_POWER_OFF) {
+		/* A PowerOn not sent yet (a retry, or one waiting for an unreachable
+		 * TV) is cancelled with what was queued behind it: the TV is to end
+		 * up off, and needn't wake first. */
+		int k = -1;
+		for (int i = 0; i < t->qcount; i++)
+			if (is_power(t->q[(t->qhead + i) % QLEN].code)) k = i;
+		if (k >= 0 && t->q[(t->qhead + k) % QLEN].code == PSEUDO_POWER_ON) {
+			logmsg("TV %s: PowerOff cancels a PowerOn not sent yet; dropped %d queued command(s)",
+			       t->id, t->qcount - k);
+			t->qcount = k;
+			t->wake_retries = 0;
+		}
 	}
 	if (t->qcount == QLEN) {
 		/* Full: drop the oldest command that isn't a power command, which the
@@ -1221,7 +1234,12 @@ static void tv_flush(struct tv *t) {
 			int was_on = c->code == PSEUDO_POWER_ON;
 			logmsg("TV %s: dropped a command that waited %lld ms", t->id, now - c->at);
 			tv_pop(t);
-			if (was_on) tv_drop_group(t, "didn't come on");
+			if (was_on) {
+				tv_drop_group(t, "didn't come on");
+				/* What is left is a new request: its wait starts now, as
+				 * after a power command that completed. */
+				tv_release(t, now);
+			}
 			continue;
 		}
 		if (!t->ready || !t->c || !t->c->tls_up) return;
