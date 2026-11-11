@@ -13,6 +13,29 @@ source in this setup — unplugging USB is a power-cycle).
 Timings and hashes quoted are from that run; treat them as expectations,
 not guarantees.
 
+
+## Provenance
+
+The root mechanism this chain builds on is the Harmony Hub root tool by
+**Ripthulhu** and contributors (upstream: Ripthulhu/harmony-hub-root). That
+tool — persistent key-only root SSH, USB diagnostics, Wi-Fi provisioning,
+factory reset, firmware upload — is now **bundled into this repository** at
+`tools/hub-root/`, under the upstream all-rights-reserved terms in
+`LICENSE` section 1 (see `tools/hub-root/PROVENANCE.md`). Melodious's
+additions there are the fresh-hub transports (POST, USB hbus) and the
+TDE-gate handling that let the chain start from a blank hub.
+
+## Coming next: automated fresh-hub installation
+
+Everything in this runbook is currently a guided manual procedure. The
+planned next step is a **one-command automated installer for fresh hubs**:
+detect the hub over USB, check (and, with approval, update) the firmware,
+reset, join Wi-Fi, open the TDE gate, provision the local account, seed
+the starter config, root, install Melodious, and finish ready to pair a
+remote — with the same checkpoints this runbook documents, and the
+two wizard gaps below fixed so a blank hub needs no SSH workarounds.
+Until that lands, this runbook is the procedure.
+
 ## Before you start: what is irreversible
 
 - **Factory reset erases the hub's data and cache partitions**: account

@@ -17,6 +17,14 @@ files, is copyright its respective authors, with all rights reserved. It is
 not licensed under the MIT License in section 2, and nothing in this file
 grants any right to use, copy, modify or distribute it.
 
+The same applies to `tools/hub-root/`, bundled into this repository from
+Ripthulhu/harmony-hub-root (the Harmony Hub root tool by Ripthulhu and its
+contributors; see `tools/hub-root/PROVENANCE.md`). The original root
+mechanism and tool are that project's work, under the same all-rights-reserved
+terms. Melodious additions inside `tools/hub-root/` (the POST and USB hbus
+transports, fresh-hub TDE-gate handling, and their tests) are Melodious code
+under section 2.
+
 
 2. Melodious code: MIT License
 ------------------------------
