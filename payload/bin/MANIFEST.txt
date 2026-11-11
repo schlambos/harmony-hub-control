@@ -8,6 +8,7 @@
 -rwxr-xr-x 1 codex codex 48680 Nov 11 08:00 codex_portal
 -rwxr-xr-x 1 codex codex 1243704 Nov 11 08:00 codex_webui
 -rwxr-xr-x 1 codex codex 577296 Aug 19 10:05 dropbearmulti
+-rwxr-xr-x 1 codex codex 418688 Nov 11 09:10 busybox-extra
 225897177e00a87d11765dcf75f29540  codex_dhcpd
 ae43e73bdd9ca1054bfd277d1627438a  codex_portal
 164cd9f51711a3965a2b0b949d827332  codex_hbus
@@ -18,3 +19,4 @@ f902638ca6e497a0809a6ccd40d27915  codex_usbeth
 91baeb6d8d67bd6d3ffd9bc822a01b1d  codex_bt_pair_agent
 4460978faff68c1d4069e5ad85963770  codex_webui
 3733327fd04bca282dbf06f33da0bf6c  dropbearmulti
+132ede57c5fc479a2bf94069a7f91f1c  busybox-extra

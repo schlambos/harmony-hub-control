@@ -93,7 +93,7 @@ can back up, restore and edit account-free.
 | Harmony Hub | Rooted with [harmony-hub-root](https://github.com/Ripthulhu/harmony-hub-root). Melodious doesn't root hubs. |
 | SSH key | The root tool's private key, `harmony_owner_*`, in `~/.ssh` (`%USERPROFILE%\.ssh` on Windows). |
 | Hub ID | The numeric Hub ID the root tool prints. Don't guess it: Melodious sends it with every command to the hub's engine. |
-| Free flash | About 1.4 MB of the hub's 5 MB data flash for the first install (about 1 MB if the root tool's Dropbear can be reused); each later web app update needs about 0.65 MB. The installer measures it and stops before writing anything if there isn't enough — see [docs/INSTALL.md](docs/INSTALL.md#if-the-hubs-flash-is-full). |
+| Free flash | About 1.6 MB of the hub's 5 MB data flash for the first install (about 1.2 MB if the root tool's Dropbear can be reused); each later web app update needs about 0.65 MB (the first one that adds BusyBox, about 0.25 MB more). The installer measures it and stops before writing anything if there isn't enough — see [docs/INSTALL.md](docs/INSTALL.md#if-the-hubs-flash-is-full). |
 | Install computer | Windows with PowerShell, Linux or macOS with Python 3, or a Docker or Unraid host. The installer needs only `ssh`, not `scp` or `sftp`. |
 | Network | A trusted home network. The web app is plain HTTP. |
 | Home Assistant (optional) | Any recent Home Assistant with [HACS](https://hacs.xyz/), reachable from the hub over plain `http://`. An MQTT broker is needed only for the MQTT bridge. |
@@ -553,7 +553,11 @@ tokens, hub backups, firmware dumps or rooting tools. Read [CONTRIBUTING.md](CON
 - **Third-party code:**
   - Material Icons (Apache-2.0), in [`third_party/material-icons/`](third_party/material-icons/);
   - Dropbear SSH, in [`third_party/dropbear-2025.89/`](third_party/dropbear-2025.89/), with its
-    licence.
+    licence;
+  - BusyBox 1.37.0 (GPL-2.0), built into `busybox-extra`, with its licence, patch, configuration
+    and how to rebuild it in [`third_party/busybox-1.37.0/`](third_party/busybox-1.37.0/);
+  - BearSSL 0.6 (MIT), built into `codex_androidtv`, in
+    [`third_party/bearssl-0.6/`](third_party/bearssl-0.6/).
 
 **Contributors.** Thank you to everyone who has contributed code, pull requests, testing and issue
 reports so far:

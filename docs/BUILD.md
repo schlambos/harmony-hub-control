@@ -27,6 +27,7 @@ exact SHA-256 digests and sizes are:
 | `codex_hbus` | 47160 | `5d649e9455c93badf6843b7f973d526ac2be7313465525ca81f5b24b85ff8b74` |
 | `codex_androidtv` | 218568 | `5dbbdbc8bad9440e553e45fe9ae6b161b66d3fa860c05b7eced137c6ad003c53` |
 | `codex_usbeth` | 57736 | `f45949f5cab0fdbda3394e8024d8b5bda8d706c502a43b7d6e1e04ae23c81a90` |
+| `busybox-extra` | 418688 | `f516bde18556bfe4c63731f882bc06d02beed1f61dff92898fd9cd9773e6a3bc` |
 
 The remaining binaries (`codex_bt_pair_agent`, `codex_bthid_keyboard`,
 `codex_hal_ltcp`) are pinned by their MD5 digests in
@@ -184,6 +185,42 @@ Result must be `ELF 32-bit MSB executable, MIPS, MIPS32`, statically linked,
 stripped, size 27912, SHA-256
 `749c055e9fdc5cea50d3f48d0775441bd758f6811ee32f625c5b423121854177`.
 
+### busybox-extra (BusyBox 1.37.0, Official Zig, GPL-2.0)
+
+A second, static BusyBox with the commands the hub's own BusyBox 1.13.4 lacks
+([BUSYBOX.md](BUSYBOX.md)), installed as `busybox-extra` so it never shadows
+the stock `busybox` on a `PATH` that puts `/data/codex/bin` first. Its corresponding source is the upstream tarball
+plus [`third_party/busybox-1.37.0/`](../third_party/busybox-1.37.0/README.md):
+one patch, the complete `.config` and BusyBox's LICENSE. The build script's
+busybox section, `build/busybox-zig-cc.sh` and `build/busybox-zig-ar.sh` are
+the build scripts. It needs GNU make and a host C compiler for kconfig
+(`HOSTCC`, default `cc`), so it builds on Linux like Dropbear.
+
+The script downloads `https://busybox.net/downloads/busybox-1.37.0.tar.bz2`,
+checks it against `BUSYBOX_TARBALL_SHA256`
+(`3311dff32e746499f4df0d5df04d7eb396382d7e108bb9250e7b519b837043a4`, matching
+busybox.net's `.sha256`), applies `patches/*.patch`, and copies
+`busybox.config` in as `.config`. It fails if `make oldconfig` would change
+that file. Then, with `SOURCE_DATE_EPOCH=1727395200 TZ=UTC LC_ALL=C`:
+
+```sh
+make -C "$PWD/build/tmp/busybox-1.37.0" O="$PWD/build/tmp/busybox-out" -j"$(nproc)" \
+  CC="$PWD/build/busybox-zig-cc.sh" AR="$PWD/build/busybox-zig-ar.sh" HOSTCC=cc \
+  EXTRA_LDFLAGS="-s -Wl,-T,$PWD/build/discard-mips-pdr.ld" SKIP_STRIP=y busybox
+```
+
+Run it from the repository root. The paths must be absolute: `make -C` runs
+in the source tree, so a relative `O`, `CC` or `AR` would resolve from there.
+
+`BUSYBOX_ZIG` must name the pinned Zig (the script uses `OFFICIAL_ZIG`). The
+compiler wrapper drops the GNU ld options BusyBox's `scripts/trylink` passes
+that lld rejects or that only write a map file and a log. Result must be
+`ELF 32-bit MSB executable, MIPS, MIPS32 rel2`, statically linked, stripped,
+size 418688, SHA-256
+`f516bde18556bfe4c63731f882bc06d02beed1f61dff92898fd9cd9773e6a3bc`. The script
+copies it to `build/output/busybox-extra`. The output doesn't depend on
+where the tree is.
+
 ### hal_remotes (the two-screen `hal` edits, Official Zig, `-mcpu=mips32r2`)
 
 Not a binary. `payload/helpers/hal_remotes_patch.json` holds the edits the
@@ -223,7 +260,7 @@ the Dropbear build. The Dropbear source tarball is verified against
 `dropbearmulti` must reproduce the committed binary
 (`DROPBEAR_EXPECT_SHA256`, see the table above) or the script fails.
 
-## Per-binary build status (all 9)
+## Per-binary build status (all 10)
 
 | Binary | Build status |
 | --- | --- |
@@ -236,6 +273,7 @@ the Dropbear build. The Dropbear source tarball is verified against
 | `codex_usbeth` | EXACT_SOURCE_REPRODUCIBLE (Official Zig 0.16.0) |
 | `codex_dhcpd` | EXACT_SOURCE_REPRODUCIBLE (Official Zig 0.16.0) |
 | `codex_portal` | EXACT_SOURCE_REPRODUCIBLE (Official Zig 0.16.0) |
+| `busybox-extra` | EXACT_SOURCE_REPRODUCIBLE (Official Zig 0.16.0, BusyBox 1.37.0 tarball pinned by SHA-256, patch and `.config` in `third_party/busybox-1.37.0/`) |
 | `dropbearmulti` | **UNVERIFIED_THIRD_PARTY** (version/license verified, build unverified) |
 
 `dropbearmulti` is the **only** UNVERIFIED_THIRD_PARTY artifact. Its
@@ -332,6 +370,7 @@ node --test tools/webui-sim/test/                 # web app models and hub contr
 node tools/harmony_shell_smoke.mjs                # rebuilds the embedded web app and checks it (needs bun)
 node tools/shipped_copy_hygiene.mjs               # no personal names or IDs in shipped files
 python3 tools/installer_contract_smoke.py         # the installers' contract, with a fake hub; rcS.local's hal blocks under sh
+python3 tools/busybox_links_smoke.py              # init.sh's BusyBox applet links, under /bin/sh with a fake busybox
 python3 tools/build_hal_remotes.py --check        # the two-screen hal edits are what their source builds (needs Zig 0.16.0)
 HAL_STOCK=<stock hal> python3 tools/hal_remotes/test_hal_remotes.py   # hal's own HOT code, patched, under Unicorn (needs unicorn, pyelftools)
 python3 -m unittest discover -s docker/tests      # the Docker manager

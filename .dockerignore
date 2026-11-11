@@ -11,6 +11,8 @@ __pycache__
 artifacts
 backups
 build
+!build/*.sh
+!build/*.ld
 diagnostics
 dist
 docs

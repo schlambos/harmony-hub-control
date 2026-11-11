@@ -5,9 +5,9 @@
  *
  * Roles derived from the manifest:
  *   install  — every MANIFEST name (uploaded by installers)
- *   update   — every MANIFEST name except dropbearmulti (C UPDATE_FILES,
- *              which GET /api/update-status reports; dropbear is
- *              install-only plumbing)
+ *   update   — every MANIFEST name except dropbearmulti and busybox-extra (C
+ *              UPDATE_FILES, which GET /api/update-status reports; both are
+ *              install-only third-party plumbing)
  *   restart  — daemons init.sh launches and an update must restart
  *
  * Usage:
@@ -24,7 +24,7 @@ const MANIFEST_PATH = path.join(ROOT, "payload/bin/MANIFEST.txt");
 const BIN_DIR = path.join(ROOT, "payload/bin");
 
 /** Install-only: not reported by /api/update-status. */
-const INSTALL_ONLY = new Set(["dropbearmulti"]);
+const INSTALL_ONLY = new Set(["dropbearmulti", "busybox-extra"]);
 
 /** Daemons init.sh launches; an update must restart them. */
 const RESTART_SET = [

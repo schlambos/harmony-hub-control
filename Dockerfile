@@ -33,6 +33,12 @@ WORKDIR /app
 
 COPY install_webui.py /app/install_webui.py
 COPY payload/ /app/payload/
+# The payload's third-party licences, and for the GPL-2.0
+# payload/bin/busybox-extra the corresponding source this repository holds
+# (third_party/busybox-*/ names the upstream tarball; build/ has the scripts).
+COPY LICENSE /app/LICENSE
+COPY third_party/ /app/third_party/
+COPY build/*.sh build/*.ld /app/build/
 COPY UPSTREAM_REVISION /app/UPSTREAM_REVISION
 COPY docker/manager.py /usr/local/bin/harmony-container
 

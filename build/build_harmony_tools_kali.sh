@@ -83,6 +83,12 @@ FLASHFREE_EXPECT_SIZE=27912
 #: is the tarball's SHA-256 as downloaded on 2026-11-07)
 BEARSSL_VERSION=0.6
 BEARSSL_SHA256=6705bba1714961b41a728dfc5debbe348d2966c117649392f8c8139efc83ff14
+#: BusyBox 1.37.0 (GPL-2.0): pinned upstream tarball (busybox.net publishes a
+#: .sha256 beside it; this matches it) and the committed binary's identity
+BUSYBOX_VERSION=1.37.0
+BUSYBOX_TARBALL_SHA256=3311dff32e746499f4df0d5df04d7eb396382d7e108bb9250e7b519b837043a4
+BUSYBOX_EXPECT_SHA256=f516bde18556bfe4c63731f882bc06d02beed1f61dff92898fd9cd9773e6a3bc
+BUSYBOX_EXPECT_SIZE=418688
 #: committed dropbearmulti identity and its pinned upstream source tarball
 DROPBEAR_EXPECT_SHA256=e2ea632aed8b31dc5ea56b9673cbd983ec83260a97d33f891a0cebf51d5c6c8d
 DROPBEAR_EXPECT_SIZE=577296
@@ -283,6 +289,59 @@ if [ "$ANDROIDTV_SHA256" != "$ANDROIDTV_EXPECT_SHA256" ] || [ "$ANDROIDTV_SIZE" 
   exit 1
 fi
 
+# ---------------------------------------------------------------------------
+# busybox-extra — BusyBox 1.37.0, Official Zig 0.16.0, static. A second
+# BusyBox beside the hub's own (1.13.4, which is left alone) with the
+# commands the stock one lacks. Not named "busybox", so a PATH that puts
+# /data/codex/bin first still finds the stock one; BusyBox answers to any
+# name that starts with "busybox". The complete corresponding source is the pinned upstream
+# tarball plus third_party/busybox-$BUSYBOX_VERSION/ (patches, the exact
+# .config, LICENSE) and this section. Needs a host C compiler for kconfig
+# (HOSTCC, default cc) and GNU make.
+# ---------------------------------------------------------------------------
+BUSYBOX_TARBALL="$BUILD/busybox-$BUSYBOX_VERSION.tar.bz2"
+BUSYBOX_URL="https://busybox.net/downloads/busybox-$BUSYBOX_VERSION.tar.bz2"
+BUSYBOX_THIRD_PARTY="$REPO_ROOT/third_party/busybox-$BUSYBOX_VERSION"
+if [ ! -f "$BUSYBOX_TARBALL" ]; then
+  # download to .part first, so an interrupted fetch isn't mistaken for the tarball
+  wget -O "$BUSYBOX_TARBALL.part" "$BUSYBOX_URL"
+  mv "$BUSYBOX_TARBALL.part" "$BUSYBOX_TARBALL"
+fi
+BUSYBOX_TARBALL_SHA256_FOUND=$(sha256_of "$BUSYBOX_TARBALL")
+if [ "$BUSYBOX_TARBALL_SHA256_FOUND" != "$BUSYBOX_TARBALL_SHA256" ]; then
+  echo "error: BusyBox tarball SHA-256 mismatch (found $BUSYBOX_TARBALL_SHA256_FOUND, expected $BUSYBOX_TARBALL_SHA256)" >&2
+  exit 1
+fi
+rm -rf "$BUILD/busybox-$BUSYBOX_VERSION" "$BUILD/busybox-out"
+tar -C "$BUILD" -xjf "$BUSYBOX_TARBALL"
+for _patch in "$BUSYBOX_THIRD_PARTY"/patches/*.patch; do
+  patch -d "$BUILD/busybox-$BUSYBOX_VERSION" -p1 --no-backup-if-mismatch < "$_patch"
+done
+mkdir -p "$BUILD/busybox-out"
+cp "$BUSYBOX_THIRD_PARTY/busybox.config" "$BUILD/busybox-out/.config"
+(
+  # A fixed build date (1.37.0's release day) and locale keep the output
+  # the same on every machine.
+  export BUSYBOX_ZIG="$OFFICIAL_ZIG" SOURCE_DATE_EPOCH=1727395200 TZ=UTC LC_ALL=C
+  make -s -C "$BUILD/busybox-$BUSYBOX_VERSION" O="$BUILD/busybox-out" \
+    HOSTCC="${HOSTCC:-cc}" oldconfig < /dev/null > /dev/null
+  #: fail closed if kconfig resolved the committed .config to anything else
+  if ! cmp -s "$BUSYBOX_THIRD_PARTY/busybox.config" "$BUILD/busybox-out/.config"; then
+    echo "error: BusyBox .config changed under oldconfig; regenerate third_party/busybox-$BUSYBOX_VERSION/busybox.config" >&2
+    exit 1
+  fi
+  make -s -C "$BUILD/busybox-$BUSYBOX_VERSION" O="$BUILD/busybox-out" -j"$(nproc)" \
+    CC="$SCRIPT_DIR/busybox-zig-cc.sh" AR="$SCRIPT_DIR/busybox-zig-ar.sh" \
+    HOSTCC="${HOSTCC:-cc}" EXTRA_LDFLAGS="-s $PDR_LDFLAGS" SKIP_STRIP=y busybox
+)
+cp "$BUILD/busybox-out/busybox" "$OUT/busybox-extra"
+BUSYBOX_SHA256=$(sha256_of "$OUT/busybox-extra")
+BUSYBOX_SIZE=$(wc -c < "$OUT/busybox-extra" | tr -d ' ')
+if [ "$BUSYBOX_SHA256" != "$BUSYBOX_EXPECT_SHA256" ] || [ "$BUSYBOX_SIZE" != "$BUSYBOX_EXPECT_SIZE" ]; then
+  echo "error: busybox-extra build is not exact (size $BUSYBOX_SIZE, sha256 $BUSYBOX_SHA256; expected size $BUSYBOX_EXPECT_SIZE, sha256 $BUSYBOX_EXPECT_SHA256)" >&2
+  exit 1
+fi
+
 DROPBEAR_VERSION=2025.89
 DROPBEAR_TARBALL="$BUILD/dropbear-$DROPBEAR_VERSION.tar.bz2"
 DROPBEAR_URL="https://matt.ucc.asn.au/dropbear/releases/dropbear-$DROPBEAR_VERSION.tar.bz2"
@@ -333,7 +392,7 @@ fi
 cd "$OUT"
 ln -sf dropbearmulti dropbear
 ln -sf dropbearmulti dropbearkey
-md5sum codex_dhcpd codex_portal codex_hbus codex_hal_ltcp codex_bthid_keyboard codex_bt_pair_agent codex_androidtv codex_usbeth codex_webui dropbearmulti > MD5SUMS
-file codex_dhcpd codex_portal codex_hbus codex_hal_ltcp codex_bthid_keyboard codex_bt_pair_agent codex_androidtv codex_usbeth codex_webui dropbearmulti > FILES
-ls -l codex_dhcpd codex_portal codex_hbus codex_hal_ltcp codex_bthid_keyboard codex_bt_pair_agent codex_androidtv codex_usbeth codex_webui dropbearmulti > MANIFEST.txt
+md5sum codex_dhcpd codex_portal codex_hbus codex_hal_ltcp codex_bthid_keyboard codex_bt_pair_agent codex_androidtv codex_usbeth codex_webui dropbearmulti busybox-extra > MD5SUMS
+file codex_dhcpd codex_portal codex_hbus codex_hal_ltcp codex_bthid_keyboard codex_bt_pair_agent codex_androidtv codex_usbeth codex_webui dropbearmulti busybox-extra > FILES
+ls -l codex_dhcpd codex_portal codex_hbus codex_hal_ltcp codex_bthid_keyboard codex_bt_pair_agent codex_androidtv codex_usbeth codex_webui dropbearmulti busybox-extra > MANIFEST.txt
 cat MD5SUMS >> MANIFEST.txt

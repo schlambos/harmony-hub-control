@@ -39,6 +39,18 @@ if [ -x /data/codex/bin/dropbear ]; then
   fi
 fi
 
+if [ -x /data/codex/bin/busybox-extra ]; then
+  # A newer BusyBox with the commands the hub's own 1.13.4 lacks (head, tail,
+  # timeout, flock, ip, tar, ...). Its applet links live in RAM: nothing on
+  # flash, and an empty directory if the binary is missing or won't run.
+  # Nothing uses them by default. Append the directory to PATH to use them
+  # (PATH=$PATH:/var/volatile/codex-bb): the stock commands still come first.
+  rm -rf /var/volatile/codex-bb
+  mkdir -p /var/volatile/codex-bb
+  /data/codex/bin/busybox-extra --install -s /var/volatile/codex-bb >/dev/null 2>&1 ||
+    echo "$(date) busybox-extra --install failed; no extra commands this boot" >> "$LOG"
+fi
+
 if [ -x /data/codex/bin/codex_bt_pair_agent ]; then
   bt_hid_running() {
     BT_HID_PID=$(cat /var/run/codex-bt-hid-control.pid 2>/dev/null)
