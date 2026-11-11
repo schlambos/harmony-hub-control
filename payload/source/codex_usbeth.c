@@ -852,6 +852,10 @@ static int find_route_metric(uint32_t dst_ho, int prefix, int oif) {
     return -1;
 }
 
+/* create: 0 deletes; 1 adds, failing if a route with the same prefix and
+ * metric exists (NLM_F_EXCL: on 2.6.31 that includes one on another
+ * interface); 2 adds next to such a route, ahead of it, so it's the one
+ * lookups pick. */
 static int route_change(int create, unsigned char table, uint32_t dst_ho,
                         int prefix, int oif, int has_prefsrc, uint32_t src_ho,
                         int metric, int scope) {
@@ -861,7 +865,7 @@ static int route_change(int create, unsigned char table, uint32_t dst_ho,
     req.hdr.nlmsg_len = NLMSG_LENGTH(sizeof(struct rtmsg));
     req.hdr.nlmsg_type = create ? RTM_NEWROUTE : RTM_DELROUTE;
     req.hdr.nlmsg_flags = NLM_F_REQUEST | NLM_F_ACK |
-        (create ? (NLM_F_CREATE | NLM_F_EXCL) : 0);
+        (create == 2 ? NLM_F_CREATE : create ? (NLM_F_CREATE | NLM_F_EXCL) : 0);
     struct rtmsg *rtm = (struct rtmsg *)NLMSG_DATA(&req.hdr);
     rtm->rtm_family = AF_INET;
     rtm->rtm_dst_len = (unsigned char)prefix;
@@ -1010,8 +1014,13 @@ static int cmd_net_remove(const char *wired, const char *wifi) {
     uint32_t wip, fip;
     int wprefix, fprefix;
     /* Table/rule cleanup needs only the wired address; a missing address
-     * (interface already down) still allows the Wi-Fi metric restore. */
-    if (iface_ipv4_prefix(wired, &wip, &wprefix) == 0) {
+     * (interface already down) still allows the Wi-Fi metric restore.
+     * Only where policy routing exists, the only case net-apply adds them:
+     * a kernel without CONFIG_IP_MULTIPLE_TABLES (this hub's) maps every
+     * table id to main, so the table delete would match the wired
+     * interface's own connected route (same subnet, oif and prefsrc, any
+     * metric) and remove it. */
+    if (rule_policy_supported() && iface_ipv4_prefix(wired, &wip, &wprefix) == 0) {
         rule_change(0, wip);
         int wif = (int)if_nametoindex(wired);
         if (wif > 0)
@@ -1040,8 +1049,11 @@ static int cmd_net_remove(const char *wired, const char *wifi) {
                 route_change(0, RT_TABLE_MAIN, subnet, fprefix, fif, 0, 0,
                              USBETH_WIFI_METRIC, entries[i].scope);
             }
+            /* The wired interface's own metric-0 route for the same subnet
+             * is still there: add Wi-Fi's beside it, ahead of it, so local
+             * traffic goes back to Wi-Fi (an exclusive add would fail). */
             if (!have_zero)
-                route_change(1, RT_TABLE_MAIN, subnet, fprefix, fif, 0, 0, 0,
+                route_change(2, RT_TABLE_MAIN, subnet, fprefix, fif, 0, 0, 0,
                              RT_SCOPE_LINK);
         }
     }
