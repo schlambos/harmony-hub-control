@@ -29,6 +29,7 @@ local ifconfigAddr = {}                   -- what `ifconfig <dev>` shows
 local sessionIp, setIpCalls = nil, 0
 local joins, closes, joinFails = {}, 0, false
 local tasks = {}
+local melodiousOffFile = false            -- /etc/melodious-off present
 
 local realOpen = io.open
 local fakeIo = {
@@ -46,6 +47,9 @@ local fakeIo = {
         read = function() return lines[1] end,
         close = noop,
       }
+    end
+    if path == "/etc/melodious-off" and melodiousOffFile then
+      return { read = function() return "" end, close = noop }
     end
     if path == "/data/codex/cloud_blocker.conf" then
       return { read = function() return "1" end, close = noop }
@@ -261,6 +265,38 @@ check("a mixed batch: getNetworkAttribute(ipaddr) follows it", config.getNetwork
 lanDevFile = "br0; reboot"
 pass()
 check("a bogus lan-dev name falls back to Wi-Fi", sessionIp == WIFI, sessionIp)
+
+-- Melodious off (/etc/melodious-off): a fresh run of the script installs
+-- neither part, and the netlink handlers keep the stock session address and
+-- join nothing, even with a stale lan-dev file naming the cable.
+melodiousOffFile = true
+tasks = {}
+local offConfig = { getNetworkAttribute = stockAttr }
+local offWorks = { getNetworkAttribute = stockAttr }
+package.loaded["common.config"], package.loaded["works.system"] = nil, nil
+package.preload["common.config"] = function() return offConfig end
+package.preload["works.system"] = function() return offWorks end
+sessionIp = nil
+ifconfigAddr.ath0, ifconfigAddr.eth2 = WIFI, CABLE
+routes = { "ath0", "eth2" }
+lanDevFile = "eth2"
+local offMain = coroutine.create(assert(loadfile(repoRoot .. "/payload/scripts/netservicestarter.lua")))
+local okOff, whyOff = coroutine.resume(offMain)
+assert(okOff and whyOff == "need-events", "the script didn't reach its netlink loop: " .. tostring(whyOff))
+local offJoins = #joins
+local function offEvent(msgtype, label, address)
+  local ok2, why2 = coroutine.resume(offMain, { { family = "inet", msgtype = msgtype, label = label, address = address } })
+  assert(ok2, why2)
+end
+check("Melodious off: no codex lan advertise task", tasks["codex lan advertise"] == nil)
+check("Melodious off: getNetworkAttribute is left stock, in both modules",
+  offConfig.getNetworkAttribute == stockAttr and offWorks.getNetworkAttribute == stockAttr)
+offEvent("newaddr", "ath0", WIFI)
+offEvent("newaddr", "eth2", CABLE)
+check("Melodious off: the hub's address is the last newaddr's, as stock", sessionIp == CABLE, sessionIp)
+offEvent("deladdr", "ath0", WIFI)
+check("Melodious off: a deladdr clears it, as stock", sessionIp == nil, sessionIp)
+check("Melodious off: no SSDP group joined", #joins == offJoins, #joins - offJoins)
 
 print(string.format("%d/%d checks passed", count - failures, count))
 io.open = realOpen

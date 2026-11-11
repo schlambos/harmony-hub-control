@@ -422,6 +422,9 @@ local SSDP_GROUP = "239.255.255.250"
 local addrByLabel = {}
 local lanAdvert = { ip = nil, sock = nil }
 local advertisedIp
+-- Set by startLanAdvertise, which doesn't run with Melodious off: the netlink
+-- handlers then leave the session address and the SSDP group to stock.
+local lanAdvertOn = false
 
 -- Modules are shared by the engine's tasks (see installCloudHttpGuard), so
 -- this covers the stock callers. Only "ipaddr", only while the cable carries
@@ -487,6 +490,9 @@ end
 -- on another interface (an adapter that isn't carrying local traffic) is
 -- corrected, to Wi-Fi's.
 local function lanAdvertSync()
+  if not lanAdvertOn then
+    return
+  end
   local dev = lanDev()
   local want
   if dev ~= "ath0" then
@@ -510,6 +516,7 @@ local function startLanAdvertise()
   if lanAdvertTask and system.taskStatus(lanAdvertTask) ~= "dead" then
     return
   end
+  lanAdvertOn = true
   lanAdvertTask = system.addTask("codex lan advertise", function()
     while true do
       local ok, err = pcall(lanAdvertSync)
