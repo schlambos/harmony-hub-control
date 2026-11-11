@@ -26,7 +26,7 @@ exact SHA-256 digests and sizes are:
 | `dropbearmulti` | 577296 | `e2ea632aed8b31dc5ea56b9673cbd983ec83260a97d33f891a0cebf51d5c6c8d` |
 | `codex_hbus` | 47160 | `5d649e9455c93badf6843b7f973d526ac2be7313465525ca81f5b24b85ff8b74` |
 | `codex_androidtv` | 223720 | `f22754d76d931755238a533eae8a30257ddc58eaa46e5139bd0605b665c9e2ec` |
-| `codex_usbeth` | 57736 | `f45949f5cab0fdbda3394e8024d8b5bda8d706c502a43b7d6e1e04ae23c81a90` |
+| `codex_usbeth` | 57752 | `db1b3158a350c1ccd51a5618efd8c78313007b491bddb93eea897556050e233b` |
 | `busybox-extra` | 418688 | `f516bde18556bfe4c63731f882bc06d02beed1f61dff92898fd9cd9773e6a3bc` |
 
 The remaining binaries (`codex_bt_pair_agent`, `codex_bthid_keyboard`,
@@ -353,6 +353,23 @@ After rebuilding:
 Windows can deploy with PowerShell, and Linux/macOS can deploy with the Python
 installer. Use WSL, a Linux VM, or the existing build server for rebuilding MIPS
 binaries.
+
+## USB Ethernet modules
+
+`payload/modules/usb-net/README.md` lists every module with its source and
+digests. `asix.ko` is reproducible from published source only:
+
+```sh
+sh build/build_usb_eth_asix.sh
+```
+
+It downloads Logitech's Harmony Hub kernel tree and the Bootlin toolchain
+(both pinned by SHA-256), applies `third_party/linux-2.6.31-harmony/`'s config
+and patches, links `asix.ko` against the shipped `usbnet.ko`'s CRCs, and fails
+unless the result matches its pinned SHA-256. Needs Linux, perl, patch, unzip
+and a host C compiler; about 20 s on 24 cores after the downloads.
+[`third_party/linux-2.6.31-harmony/README.md`](../third_party/linux-2.6.31-harmony/README.md)
+explains the config and patches.
 
 ## Dropbear
 

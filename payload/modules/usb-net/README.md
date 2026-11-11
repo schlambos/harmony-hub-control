@@ -14,7 +14,7 @@ and `/lib/modules/2.6.31-g89d565c/` are never modified.
 | --- | --- | --- | --- | --- |
 | `r8152.ko` | 45664 | `e4896b7f9e2ec1a952c5840e1fba4ef9fc0c6b2855163e5545f40fb7d9f98c58` | `2e38f4ab96ac07e91fc6673232e1debc` | Linux v3.14 `drivers/net/usb/r8152.c` + v4.4 `RTL_VER_06` (`0x5c30`) support (Realtek RTL8152/RTL8153, backported to 2.6.31), GPLv2 |
 | `usbnet.ko` | 33388 | `d31b8c9413e80fc082a68fa21abfaaf0e3c50e7173bfc450edb4e7d3ae5efefb` | `8225a6661f8debe6874fe109894fbb41` | Linux v2.6.31 `drivers/net/usb/usbnet.c` (USB network driver framework), GPLv2 |
-| `asix.ko` | 33096 | `abbd332d7b2df96c1d18f477ccbe04458ca62477591588fab1302cc4e86797da` | `5d7655595b5acfe1f15a596c6325397b` | Linux v2.6.31 `drivers/net/usb/asix.c` (ASIX AX88172/AX88772/AX88772A/AX88178), GPLv2 |
+| `asix.ko` | 28352 | `64b59b465dda22bdd414a15863b301462fea9004c5bafa381b8d72d5788dab07` | `a89bb57b8dbb6d63d79424f05129eaa3` | Linux v2.6.31 `drivers/net/usb/asix.c` + the Linux 3.1 AX88772B ID and 11-bit RX header fix (ASIX AX88172/AX88772/AX88772A/AX88772B/C/AX88178), built from Logitech's published hub kernel tree by `build/build_usb_eth_asix.sh`, GPLv2 |
 | `cdc_ether.ko` | 11916 | `c1d574d16bd9df3412b550eb1ad77dd2fd8fa367a2f3acfda40ae1cbc81a955c` | `7eeeaf966728a2c5e915c8ce42bec619` | Linux v2.6.31 `drivers/net/usb/cdc_ether.c` (CDC Ethernet / ECM, class-matched), GPLv2 |
 | `cdc_ncm.ko` | 19216 | `ef32e97e692f6caa2b23114ced08c7f98b24cf76cd49d38ad4243c3f435e3f25` | `b53ea73aaf7e7f567f547a7551f0522d` | Linux v2.6.38 `drivers/net/usb/cdc_ncm.c` (CDC NCM, class-matched), Dual BSD/GPL (GPL-compatible) |
 | `ax88179_178a.ko` | 30200 | `a80e278b2f009e633134986fa4421ffded32ff4f1c2fec8e25c63dee790cd05d` | `24f5ecf1433acf98db037fa552d76575` | Linux v3.14 `drivers/net/usb/ax88179_178a.c` (ASIX AX88179/AX88178A), GPLv2 |
@@ -24,12 +24,22 @@ load-tested on hub hardware (bound RTL8153 adapter, DHCP). Earlier ping/HTTP
 results were shown by the 2026-11-10 health check to have travelled over
 Wi-Fi, not the cable; counter-verified wired traffic is still pending, so
 no chipset is claimed traffic-tested (see docs/USB_ETHERNET.md).
-`asix.ko`, `cdc_ether.ko`, `cdc_ncm.ko` and `ax88179_178a.ko` are built from
+`asix.ko` with this directory's `usbnet.ko` is **traffic-tested** on hub
+hardware with an AX88772C (TRENDnet TU2-ET100, `0b95:772b`): DHCP, wired
+traffic in both directions counter-verified on `eth2` (about 6,000 packets
+each way, 0 errors) while Wi-Fi sent 1 packet, 100 Mb/s full duplex. The same
+driver code had run for over a day before with a `usbnet.ko` from its own
+tree (73 receive errors in 106,729 packets over 2.7 h, 0.07%); only the
+`usbnet_*` import CRCs differ in the shipped `asix.ko`. Of its other 35
+imports, 33 carry the same CRCs as the previous `asix.ko`'s; the other two
+(`malloc_sizes`, `kmem_cache_alloc`, from the inline `kmalloc`) are the ones
+the hub accepted in that run.
+`cdc_ether.ko`, `cdc_ncm.ko` and `ax88179_178a.ko` are built from
 GPL kernel source, fully import-audited against the hub kernel (every import
 either exact genksyms-CRC-equal or proven field-identical against the hub's
 own `usbcore.ko`/`athrs_gmac.ko`/kernel image), but they are **built and
-audited only** — no ASIX or CDC adapter has been traffic-tested, and no
-inert load test has been run yet for these four. See the layout audit
+audited only** — no CDC adapter has been traffic-tested, and no
+inert load test has been run yet for these three. See the layout audit
 (`USBNET_LAYOUT_AUDIT.md`, Part 3) for the per-symbol evidence.
 
 ## Supported USB IDs (`r8152.ko`)
@@ -49,9 +59,12 @@ class for CDC devices.
   `0411:003d`, `6189:182d`, `07aa:0017`, `1189:0893`, `1631:6200`,
   `04f1:3008`), AX88772 (`0b95:7720`, `13b1:0018`, `1557:7720`, `07d1:3c05`,
   `2001:3c05`, `05ac:1402` Apple USB Ethernet, `0b95:772a`), AX88772A
-  (`0db0:a877`), AX88178 (`0411:006e`, `0b95:1780`, `1737:0039`, `04bb:0930`,
-  `050d:5055`, `14ea:ab11`). **Not** AX88772B (`0b95:772b`): its upstream
-  bind/reset sequence changed after 2.6.31 and is not included.
+  (`0db0:a877`), AX88772B/C (`0b95:772b`, e.g. TRENDnet TU2-ET100 v3),
+  AX88178 (`0411:006e`, `0b95:1780`, `1737:0039`, `04bb:0930`,
+  `050d:5055`, `14ea:ab11`). The AX88772B/C uses `ax88772_info`, as Linux 3.1
+  added it, plus that release's 11-bit RX header fix (without it almost every
+  received packet is dropped). Later kernels gave the 772B its own
+  `driver_info`; the 3.1 form is what was tested.
 - **`ax88179_178a.ko`** (Linux v3.14 backport): AX88179 (`0b95:1790`),
   AX88178A (`0b95:178a`), D-Link DUB-1312 (`2001:4a00`), Sitecom
   (`0df6:0072`), Samsung (`04e8:a100`), Lenovo OneLink (`17ef:304b`).
@@ -64,6 +77,12 @@ class for CDC devices.
   class (02 / NCM subclass 0d / protocol 00).
 
 ## Build recipe
+
+`asix.ko` has its own, fully published recipe:
+[`third_party/linux-2.6.31-harmony/`](../../../third_party/linux-2.6.31-harmony/README.md)
+and `build/build_usb_eth_asix.sh` (Logitech's hub kernel tree, a config that
+reproduces the hub's symbol versions, two Linux 3.1 patches, linked against
+this directory's `usbnet.ko`). The recipe below covers the other modules.
 
 1. **Kernel tree:** upstream Linux `v2.6.31` (`linux-2.6.31.tar.bz2`), prepared
    for modern host tools and GCC 5 (`compiler-gcc5.h` copied from

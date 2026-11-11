@@ -40,7 +40,7 @@ load test has been run for them yet.
 | Driver | Chipsets / match | Validation |
 | --- | --- | --- |
 | `r8152.ko` | Realtek RTL8152B (`0bda:8152`), RTL8153 (`0bda:8153`, USB 2.0 High-Speed on the hub), Samsung (`04e8:a101`) | Driver loads and binds on hardware; **wired-traffic validation pending** (see below) |
-| `asix.ko` | ASIX AX88172 / AX88772 / AX88772A / AX88178 + clones (see payload README for the VID:PID list; incl. `05ac:1402` Apple USB Ethernet). **Not** AX88772B (`0b95:772b`) | Built + audited only; traffic test pending hardware |
+| `asix.ko` | ASIX AX88172 / AX88772 / AX88772A / AX88772B/C (`0b95:772b`) / AX88178 + clones (see payload README for the VID:PID list; incl. `05ac:1402` Apple USB Ethernet) | AX88772C (TRENDnet TU2-ET100): **traffic-tested** on hardware with this repo's `usbnet.ko` (counter-verified both directions). Other chipsets built + audited only |
 | `ax88179_178a.ko` | ASIX AX88179 (`0b95:1790`), AX88178A (`0b95:178a`), D-Link DUB-1312, Sitecom, Samsung, Lenovo (VID:PID list in payload README) | Built + audited only; traffic test pending hardware |
 | `cdc_ether.ko` | CDC-ECM: matched by USB class (Communications 02 / subclass 06), any vendor; plus Ericsson/Toshiba/Dell IDs | Built + audited only; traffic test pending hardware |
 | `cdc_ncm.ko` | CDC-NCM: matched by USB class (02 / subclass 0d), any vendor | Built + audited only; traffic test pending hardware |

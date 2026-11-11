@@ -1,0 +1,13 @@
+--- a/drivers/net/usb/asix.c
++++ b/drivers/net/usb/asix.c
+@@ -1492,6 +1492,10 @@
+ 	// ASIX 88772a
+ 	USB_DEVICE(0x0db0, 0xa877),
+ 	.driver_info = (unsigned long) &ax88772_info,
++}, {
++	// ASIX AX88772B 10/100 (added upstream in Linux 3.1 the same way)
++	USB_DEVICE (0x0b95, 0x772b),
++	.driver_info = (unsigned long) &ax88772_info,
+ },
+ 	{ },		// END
+ };
