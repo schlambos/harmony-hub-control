@@ -145,6 +145,13 @@ class FakeHub:
         self.hal_bound = False
         # The next reboot leaves hal as it was (rcS.local didn't bind the copy).
         self.reboot_keeps_hal = False
+        # /usr/bin/hal has the two-screen copy bind-mounted over it, and the
+        # gates rcS.local wrote for it (/var/run, gone with every boot).
+        self.remotes_bound = False
+        self.hal_gates = ""
+        # Reads of /usr/bin/hal return the copy bound over it (the two-screen
+        # tests; the multi-remote tests place the bytes they want read).
+        self.read_through_bind = False
         # A pairing window is open, and hal's rf.info answer.
         self.rf_pairing = False
         self.rf_info = RF_INFO_ONE_SMART
@@ -265,6 +272,16 @@ class FakeHub:
         if c.startswith("for p in "):
             return self.do_probe(shlex.split(c[len("for p in "):c.index("; do ")]))
 
+        if c == INST.running_hal_command():
+            # What runs is what is bound over /usr/bin/hal, if anything.
+            path = INST.HAL_REMOTES_DEST if self.remotes_bound else INST.HAL_MULTI_DEST if self.hal_bound else INST.HAL_PATH
+            entry = self.fs.get(path)
+            conf = self.fs.get(INST.MULTI_REMOTE_CONF, {}).get("data", b"")
+            out = (md5_bytes(entry["data"]) + f"  {INST.HAL_PATH}\n") if entry else ""
+            out += f"gates={self.hal_gates}\nmulti={conf.decode().strip()}\n"
+            out += "multi_copy=" + ("yes" if INST.HAL_MULTI_DEST in self.fs else "no") + "\n"
+            return 0, out, ""
+
         if c.startswith("md5sum "):
             return self.do_md5sum(shlex.split(c)[1:])
 
@@ -341,13 +358,25 @@ class FakeHub:
 
         if c.startswith("(/bin/sleep 2;"):
             self.events.append(("service", "reboot"))
-            # Like rcS.local at the next boot: bind the copy when the setting is 1.
+            # Like rcS.local at the next boot: the two-screen copy when its
+            # setting asks for it, else the multi-remote copy when its setting is 1.
             conf = self.fs.get(INST.MULTI_REMOTE_CONF, {}).get("data")
-            self.hal_bound = conf == b"1\n" and INST.HAL_MULTI_DEST in self.fs and not self.reboot_keeps_hal
+            two = self.fs.get(INST.TWO_SCREEN_CONF, {}).get("data", b"").decode().strip()
+            self.remotes_bound, self.hal_gates = False, ""
+            if two in INST.TWO_SCREEN_SETTINGS.values() and INST.HAL_REMOTES_DEST in self.fs and not self.reboot_keeps_hal:
+                if two.endswith("once"):
+                    self.fs[INST.TWO_SCREEN_CONF]["data"] = b"0\n"
+                self.remotes_bound = True
+                self.hal_gates = "1" + ("1" if conf == b"1\n" else "0") + ("1" if two.startswith("serial") else "0")
+            elif two not in INST.TWO_SCREEN_SETTINGS.values():
+                self.fs.pop(INST.HAL_REMOTES_DEST, None)
+            self.hal_bound = (
+                not self.remotes_bound and conf == b"1\n" and INST.HAL_MULTI_DEST in self.fs and not self.reboot_keeps_hal
+            )
             return 0, "rebooting\n", ""
 
         if c == INST.hal_bound_command():
-            return 0, ("bound\n" if self.hal_bound else "stock\n"), ""
+            return 0, ("bound\n" if self.hal_bound or self.remotes_bound else "stock\n"), ""
 
         if c == f"touch {INST.MULTI_REMOTE_PENDING} 2>/dev/null; true":
             self.events.append(("guard", INST.MULTI_REMOTE_PENDING))
@@ -588,7 +617,11 @@ class InstallerHarness:
             if not match:
                 raise AssertionError(f"fake hub: unexpected raw command {command!r}")
             hub.events.append(("raw_read", match.group(1)))
-            entry = hub.fs.get(match.group(1))
+            bound = INST.HAL_REMOTES_DEST if hub.remotes_bound else INST.HAL_MULTI_DEST if hub.hal_bound else None
+            if match.group(1) == INST.HAL_PATH and bound and hub.read_through_bind:
+                entry = hub.fs.get(bound)  # a read of /usr/bin/hal sees the copy bound over it
+            else:
+                entry = hub.fs.get(match.group(1))
             return (0, entry["data"], "") if entry else (1, b"", f"cat: {match.group(1)}: No such file or directory")
 
         def fake_wait_for_port(host, port, seconds, label):
@@ -1619,7 +1652,7 @@ def fake_stock_hal() -> bytes:
     """A stand-in for the hub's /usr/bin/hal: filler bytes carrying the real
     stock instructions at the real patch offsets (hal itself is never in
     the repo). Tests point HAL_STOCK_MD5/HAL_MULTI_MD5 at it."""
-    data = bytearray(b"fake-hal-image-" * 12000)
+    data = bytearray((b"fake-hal-image-" * 25000)[:363640])  # hal's size: the two-screen edits reach its end
     for offset, old, _new in INST.HAL_MULTI_PATCH:
         data[offset : offset + len(old)] = old
     return bytes(data)
@@ -1940,6 +1973,380 @@ class PythonInstallerMultiRemote(unittest.TestCase):
         self.assertEqual(self.writes(hub), [])
         self.assertNotIn(("raw_read", INST.HAL_PATH), hub.events)
         self.assertFalse([e for e in hub.events if e[0] == "rm"])
+
+
+def fake_remotes_patch() -> list[tuple[int, bytes | None, bytes]]:
+    """The real two-screen edits, with the stock bytes of the multi-remote
+    region taken from the fake stock hal (the real ones would not match it
+    anywhere else)."""
+    stock = fake_stock_hal()
+    return [(o, None if old is None else stock[o : o + len(old)], new) for o, old, new in INST.HAL_REMOTES_PATCH]
+
+
+def fake_remotes_hal() -> bytes:
+    data = bytearray(fake_stock_hal())
+    for offset, _old, new in INST.HAL_REMOTES_PATCH:
+        data[offset : offset + len(new)] = new
+    return bytes(data)
+
+
+class PythonInstallerTwoScreen(unittest.TestCase):
+    """[PYTHON BEHAVIORAL] --two-screen: the copy is built from the hub's own
+    hal (stock, or the multi-remote copy with its edits taken back out) and
+    fails closed on anything else; the hub reboots only when the setting or
+    the running hal changes; "once" is spent by the boot; off leaves the copy
+    to rcS.local; and multi-remote is never left on without a copy to carry it."""
+
+    def setUp(self):
+        saved = (INST.HAL_STOCK_MD5, INST.HAL_MULTI_MD5, INST.HAL_REMOTES_MD5, INST.HAL_REMOTES_PATCH)
+        INST.HAL_STOCK_MD5 = md5_bytes(fake_stock_hal())
+        INST.HAL_MULTI_MD5 = md5_bytes(fake_patched_hal())
+        INST.HAL_REMOTES_MD5 = md5_bytes(fake_remotes_hal())
+        INST.HAL_REMOTES_PATCH = fake_remotes_patch()
+
+        def restore():
+            INST.HAL_STOCK_MD5, INST.HAL_MULTI_MD5, INST.HAL_REMOTES_MD5, INST.HAL_REMOTES_PATCH = saved
+
+        self.addCleanup(restore)
+
+    def current_hub(self, two: bytes | None = None, multi: bytes | None = None, multi_copy: bool = False) -> FakeHub:
+        hub = FakeHub()
+        prime_current_hub(hub)
+        hub.read_through_bind = True
+        hub.fs[INST.HAL_PATH] = {"data": fake_stock_hal(), "mode": "755"}
+        if two is not None:
+            hub.fs[INST.TWO_SCREEN_CONF] = {"data": two, "mode": "644"}
+        if multi is not None:
+            hub.fs[INST.MULTI_REMOTE_CONF] = {"data": multi, "mode": "644"}
+        if multi_copy:
+            hub.fs[INST.HAL_MULTI_DEST] = {"data": fake_patched_hal(), "mode": "755"}
+        return hub
+
+    def run_on(self, hub: FakeHub, *extra: str, restart: bool = True) -> tuple[int, str, str]:
+        harness = InstallerHarness(hub)
+        self.addCleanup(harness.close)
+        argv = harness.base_argv(*extra)
+        if restart:
+            argv = [a for a in argv if a != "--no-apply-cloud-restart"]
+        elif "--no-apply-cloud-restart" not in argv:
+            argv.append("--no-apply-cloud-restart")
+        return harness.run(argv)
+
+    def writes(self, hub: FakeHub) -> list[str]:
+        """Destinations written, without the installer's own temporary names."""
+        temp = (INST.NEW_SUFFIX, INST.RESTORE_SUFFIX)
+        return sorted({e[1] for e in hub.events if e[0] == "persistent_write" and not e[1].endswith(temp)})
+
+    def reboots(self, hub: FakeHub) -> int:
+        return hub.events.count(("service", "reboot"))
+
+    def test_build_from_stock_or_multi_remote_only(self):
+        want = fake_remotes_hal()
+        self.assertEqual(INST.remotes_hal(fake_stock_hal()), want)
+        self.assertEqual(INST.remotes_hal(fake_patched_hal()), want)  # the multi-remote copy, undone first
+        self.assertEqual(INST.remotes_hal(want), want)  # already this build
+        with self.assertRaisesRegex(RuntimeError, "not the hal build two-screen supports"):
+            INST.remotes_hal(fake_stock_hal() + b"x")
+        other = bytearray(fake_stock_hal())
+        other[0x27CE8:0x27CEC] = bytes.fromhex("24064021")  # the Phase 1 test build's first word
+        with self.assertRaisesRegex(RuntimeError, "restart the hub into the stock hal first"):
+            INST.remotes_hal(bytes(other))
+
+    def test_real_patch_matches_rcs_local(self):
+        """The boot script binds only the builds the patch file names, writes
+        the gates before the mount, and clears "once" before either."""
+        doc = json.loads(INST.HAL_REMOTES_PATCH_FILE.read_text(encoding="utf-8"))
+        rcs = (INST.PAYLOAD / "scripts" / "rcS.local").read_text(encoding="utf-8")
+        block = rcs[rcs.index("# Two remotes with a screen") : rcs.index("# Multiple remotes of one model")]
+        for value in (doc["stock_md5"], doc["patched_md5"], INST.HAL_REMOTES_DEST, INST.TWO_SCREEN_CONF,
+                      INST.HAL_REMOTES_TRIES, INST.HAL_GATES, doc["gates_file"], INST.HAL_PATH):
+            self.assertIn(value, block)
+        self.assertEqual(doc["gates_file"], INST.HAL_GATES)
+        self.assertLess(block.index("echo 0 > /data/codex/two_screen.conf"), block.index("mount -o bind"))
+        self.assertLess(block.index('> /var/run/codex_hal_gates'), block.index("mount -o bind"))
+        self.assertLess(block.index("hal_remotes.tries &&"), block.index("mount -o bind"))
+        self.assertIn("\n" + " | ".join(INST.TWO_SCREEN_SETTINGS.values()) + ") ;;\n", block)
+        # and the multi-remote copy is not bound on top of it
+        legacy = rcs[rcs.index("# Multiple remotes of one model") :]
+        self.assertIn("! grep ' /usr/bin/hal ' /proc/mounts", legacy[: legacy.index("mount -o bind")])
+
+    def test_preflight_writes_nothing(self):
+        hub = self.current_hub()
+        code, stdout, stderr = self.run_on(hub, "--preflight-only", "--two-screen", "on")
+        self.assertEqual(code, 0, stderr or stdout)
+        self.assertEqual(kv_value(stdout, "two_screen"), "on")
+        self.assertEqual(kv_value(stdout, "two_screen_active"), "no")
+        self.assertEqual(self.writes(hub), [])
+        self.assertEqual(self.reboots(hub), 0)
+
+    def test_on_installs_the_copy_and_reboots_once(self):
+        hub = self.current_hub()
+        code, stdout, stderr = self.run_on(hub, "--two-screen", "on")
+        self.assertEqual(code, 0, stderr or stdout)
+        self.assertEqual(sorted(self.writes(hub)), sorted([INST.HAL_REMOTES_DEST, INST.TWO_SCREEN_CONF, INST.HAL_REMOTES_TRIES]))
+        self.assertEqual(hub.fs[INST.HAL_REMOTES_DEST]["data"], fake_remotes_hal())
+        self.assertEqual(hub.fs[INST.TWO_SCREEN_CONF]["data"], b"1\n")
+        self.assertEqual(hub.fs[INST.HAL_PATH]["data"], fake_stock_hal())  # the stock file is never written
+        self.assertEqual(self.reboots(hub), 1)
+        self.assertEqual(kv_values(stdout, "two_screen_active"), ["no", "yes"])
+        self.assertEqual(kv_values(stdout, "two_screen_gates")[-1], "100")
+        self.assertNotIn("WARNING", stdout)
+        # again: it reads the bound copy, finds everything in place, restarts nothing
+        hub.events.clear()
+        code, stdout, stderr = self.run_on(hub, "--two-screen", "on")
+        self.assertEqual(code, 0, stderr or stdout)
+        self.assertEqual(self.writes(hub), [])
+        self.assertEqual(self.reboots(hub), 0)
+
+    def test_once_is_spent_by_the_boot(self):
+        hub = self.current_hub()
+        code, stdout, stderr = self.run_on(hub, "--two-screen", "serial-once")
+        self.assertEqual(code, 0, stderr or stdout)
+        self.assertEqual(hub.fs[INST.TWO_SCREEN_CONF]["data"], b"0\n")  # rcS.local cleared it before binding
+        self.assertEqual(kv_values(stdout, "two_screen_gates")[-1], "101")
+        self.assertEqual(kv_values(stdout, "two_screen_active")[-1], "yes")
+        self.assertNotIn("WARNING", stdout)
+        # the next boot of any kind is the stock hal, and the copy is gone
+        hub.dispatch("(/bin/sleep 2; /sbin/reboot || reboot) >/dev/null 2>&1 & echo rebooting")
+        self.assertFalse(hub.remotes_bound)
+        self.assertNotIn(INST.HAL_REMOTES_DEST, hub.fs)
+
+    def test_from_a_hub_running_the_multi_remote_copy(self):
+        hub = self.current_hub(multi=b"1\n", multi_copy=True)
+        hub.hal_bound = True
+        code, stdout, stderr = self.run_on(hub, "--two-screen", "on")
+        self.assertEqual(code, 0, stderr or stdout)
+        self.assertEqual(hub.fs[INST.HAL_REMOTES_DEST]["data"], fake_remotes_hal())
+        self.assertTrue(hub.remotes_bound and not hub.hal_bound)
+        self.assertEqual(kv_values(stdout, "two_screen_gates")[-1], "110")  # multi-remote stays on, inside it
+        self.assertIn(INST.HAL_MULTI_DEST, hub.fs)
+        # off again: back to the multi-remote copy, not to stock
+        hub.events.clear()
+        code, stdout, stderr = self.run_on(hub, "--two-screen", "off")
+        self.assertEqual(code, 0, stderr or stdout)
+        self.assertEqual(self.reboots(hub), 1)
+        self.assertTrue(hub.hal_bound and not hub.remotes_bound)
+        self.assertNotIn(INST.HAL_REMOTES_DEST, hub.fs)
+
+    def test_refuses_any_other_hal_before_writing(self):
+        hub = self.current_hub()
+        hub.fs[INST.HAL_PATH] = {"data": fake_stock_hal() + b"firmware-update", "mode": "755"}
+        code, stdout, stderr = self.run_on(hub, "--two-screen", "on")
+        self.assertNotEqual(code, 0)
+        self.assertIn("not the hal build two-screen supports", stderr + stdout)
+        self.assertEqual(self.writes(hub), [])
+        self.assertEqual(self.reboots(hub), 0)
+
+    def test_off_writes_the_setting_and_reboots_into_stock(self):
+        hub = self.current_hub(two=b"1\n")
+        hub.fs[INST.HAL_REMOTES_DEST] = {"data": fake_remotes_hal(), "mode": "755"}
+        hub.remotes_bound, hub.hal_gates = True, "100"
+        for flag in ("off", "force-off"):
+            with self.subTest(flag=flag):
+                h = self.current_hub(two=b"1\n")
+                h.fs[INST.HAL_REMOTES_DEST] = {"data": fake_remotes_hal(), "mode": "755"}
+                h.remotes_bound, h.hal_gates = True, "100"
+                code, stdout, stderr = self.run_on(h, "--two-screen", flag)
+                self.assertEqual(code, 0, stderr or stdout)
+                self.assertEqual(self.writes(h), [INST.TWO_SCREEN_CONF])
+                self.assertEqual(h.fs[INST.TWO_SCREEN_CONF]["data"], b"0\n")
+                self.assertEqual(self.reboots(h), 1)
+                self.assertFalse(h.remotes_bound)
+                self.assertEqual(kv_values(stdout, "two_screen_active"), ["yes", "no"])
+                self.assertIn("stay paired", stdout)
+
+    def test_off_refused_when_only_this_copy_carries_multi_remote(self):
+        hub = self.current_hub(two=b"1\n", multi=b"1\n")  # multi-remote on, no hal_multiremote
+        hub.fs[INST.HAL_REMOTES_DEST] = {"data": fake_remotes_hal(), "mode": "755"}
+        hub.remotes_bound, hub.hal_gates = True, "110"
+        code, stdout, stderr = self.run_on(hub, "--two-screen", "off")
+        self.assertNotEqual(code, 0)
+        self.assertIn("--two-screen off refused", stderr + stdout)
+        self.assertEqual(self.writes(hub), [])
+        self.assertEqual(self.reboots(hub), 0)
+
+    def test_multi_remote_on_while_it_runs_only_saves_the_setting(self):
+        hub = self.current_hub(two=b"1\n", multi=b"0\n")
+        hub.fs[INST.HAL_REMOTES_DEST] = {"data": fake_remotes_hal(), "mode": "755"}
+        hub.remotes_bound, hub.hal_gates = True, "100"
+        code, stdout, stderr = self.run_on(hub, "--multi-remote", "on")
+        self.assertEqual(code, 0, stderr or stdout)
+        self.assertEqual(self.writes(hub), [INST.MULTI_REMOTE_CONF])
+        self.assertNotIn(INST.HAL_MULTI_DEST, hub.fs)
+        self.assertEqual(self.reboots(hub), 1)
+        self.assertTrue(hub.remotes_bound)
+        self.assertEqual(hub.hal_gates, "110")
+
+    def test_warns_when_the_boot_did_not_bind_it(self):
+        hub = self.current_hub()
+        hub.reboot_keeps_hal = True
+        code, stdout, stderr = self.run_on(hub, "--two-screen", "on")
+        self.assertEqual(code, 0, stderr or stdout)
+        self.assertEqual(kv_values(stdout, "two_screen_active"), ["no", "no"])
+        self.assertIn("WARNING: the hub restarted but does not run the two-screen hal", stdout)
+
+    def test_leaving_the_flag_out_touches_nothing(self):
+        hub = self.current_hub(two=b"1\n")
+        hub.fs[INST.HAL_REMOTES_DEST] = {"data": fake_remotes_hal(), "mode": "755"}
+        hub.remotes_bound, hub.hal_gates = True, "100"
+        code, stdout, stderr = self.run_on(hub)
+        self.assertEqual(code, 0, stderr or stdout)
+        self.assertEqual(self.writes(hub), [])
+        self.assertEqual(self.reboots(hub), 0)
+        self.assertNotIn(("raw_read", INST.HAL_PATH), hub.events)
+
+
+class RcsLocalHalBoot(unittest.TestCase):
+    """[SHELL BEHAVIORAL] the two hal blocks of rcS.local, run by /bin/sh in a
+    scratch root with mount, md5sum, pidof and sleep stubbed: which copy gets
+    bound, what it is told, and what a boot leaves behind."""
+
+    STOCK, MULTI = "a3fdd823440c43f36e235fe51c45f008", "cafdd7930309c7d74a6a41a87642f0c1"
+    SHELL = "/bin/sh"
+
+    def setUp(self):
+        self.root = Path(tempfile.mkdtemp(prefix="rcs-hal-"))
+        self.addCleanup(shutil.rmtree, self.root, True)
+        for d in ("data/codex/bin", "run", "usr/bin", "cache", "proc"):
+            (self.root / d).mkdir(parents=True)
+        (self.root / "proc/mounts").write_text("rootfs / rootfs rw 0 0\n")
+        (self.root / "usr/bin/hal").write_text("stock")
+        self.remotes_md5 = json.loads(INST.HAL_REMOTES_PATCH_FILE.read_text(encoding="utf-8"))["patched_md5"]
+        rcs = (INST.PAYLOAD / "scripts" / "rcS.local").read_text(encoding="utf-8")
+        block = rcs[rcs.index("# Two remotes with a screen") : rcs.index("# USB Ethernet over")]
+        self.assertIn("# Multiple remotes of one model", block)
+        for path, to in (("/data/codex", "data/codex"), ("/var/run", "run"), ("/usr/bin/hal", "usr/bin/hal"),
+                         ("/cache", "cache"), ("/proc/mounts", "proc/mounts")):
+            block = block.replace(path, str(self.root / to))
+        self.assertNotIn(" /data", block)
+        stubs = f"""
+md5sum() {{ case "$1" in
+  */usr/bin/hal) echo "$HAL_MD5  $1" ;;
+  */hal_remotes) echo "$REMOTES_MD5  $1" ;;
+  */hal_multiremote) echo "$MULTI_MD5  $1" ;;
+esac; }}
+mount() {{ [ -n "${{MOUNT_FAILS:-}}" ] && return 1; echo "none {self.root}/usr/bin/hal unionfs rw 0 0 from=$3" >> {self.root}/proc/mounts; }}
+pidof() {{ [ -z "${{HAL_DIED:-}}" ]; }}
+sleep() {{ :; }}
+"""
+        self.script = stubs + block + "\nwait\n"
+
+    def put(self, name: str, text: str) -> None:
+        (self.root / "data/codex" / name).write_text(text)
+
+    def get(self, name: str) -> str | None:
+        path = self.root / name
+        return path.read_text() if path.exists() else None
+
+    def boot(self, **env: str) -> str:
+        """One boot; returns which copy was bound ("" for the stock hal)."""
+        (self.root / "proc/mounts").write_text("rootfs / rootfs rw 0 0\n")  # mounts and /var/run don't outlive a boot
+        (self.root / "run/codex_hal_gates").unlink(missing_ok=True)
+        full = {"HAL_MD5": self.STOCK, "REMOTES_MD5": self.remotes_md5, "MULTI_MD5": self.MULTI, "PATH": os.environ["PATH"], **env}
+        # rcS sources rcS.local without -e; -u is ours, to catch a misspelt variable.
+        done = subprocess.run([self.SHELL, "-u", "-c", self.script], env=full, capture_output=True, text=True)
+        self.assertEqual((done.returncode, done.stderr), (0, ""), done.stdout)
+        bound = [line.rsplit("from=", 1)[1] for line in self.get("proc/mounts").splitlines() if "from=" in line]
+        self.assertLessEqual(len(bound), 1, "two copies bound over one another")
+        return Path(bound[0]).name if bound else ""
+
+    def test_nothing_configured_is_the_stock_hal(self):
+        self.assertEqual(self.boot(), "")
+        self.assertIsNone(self.get("run/codex_hal_gates"))
+        self.assertIsNone(self.get("cache/codex-init.log"))
+
+    def test_each_setting(self):
+        for setting, gates, after in (("1", "100", "1"), ("serial", "101", "serial"), ("once", "100", "0"), ("serial-once", "101", "0")):
+            with self.subTest(setting=setting):
+                self.put("bin/hal_remotes", "copy")
+                self.put("two_screen.conf", setting + "\n")
+                self.assertEqual(self.boot(), "hal_remotes")
+                self.assertEqual(self.get("run/codex_hal_gates"), gates + "\n")
+                self.assertEqual(self.get("data/codex/two_screen.conf").strip(), after)
+                self.assertEqual(self.get("data/codex/hal_remotes.tries").strip(), "0")  # it stayed up
+                self.assertIn(f"bound over {self.root}/usr/bin/hal (setting {setting}, gates {gates})", self.get("cache/codex-init.log"))
+
+    def test_once_then_any_boot_is_stock_and_the_copy_goes(self):
+        self.put("bin/hal_remotes", "copy")
+        self.put("two_screen.conf", "once\n")
+        self.assertEqual(self.boot(), "hal_remotes")
+        self.assertEqual(self.boot(), "")
+        self.assertIsNone(self.get("data/codex/bin/hal_remotes"))
+        self.assertIsNone(self.get("run/codex_hal_gates"))
+        self.assertEqual(self.boot(), "")
+
+    def test_with_multi_remote_on_one_copy_carries_both(self):
+        self.put("bin/hal_remotes", "copy")
+        self.put("bin/hal_multiremote", "copy")
+        self.put("two_screen.conf", "1\n")
+        self.put("multi_remote.conf", "1\n")
+        self.assertEqual(self.boot(), "hal_remotes")
+        self.assertEqual(self.get("run/codex_hal_gates"), "110\n")
+        self.assertIsNotNone(self.get("data/codex/bin/hal_multiremote"))  # kept for when two-screen goes off
+        self.assertNotIn("multi-remote hal", self.get("cache/codex-init.log"))
+        # two-screen off: the multi-remote copy takes over, with no gates file
+        self.put("two_screen.conf", "0\n")
+        self.assertEqual(self.boot(), "hal_multiremote")
+        self.assertIsNone(self.get("run/codex_hal_gates"))
+        self.assertIsNone(self.get("data/codex/bin/hal_remotes"))
+
+    def test_multi_remote_alone_is_unchanged(self):
+        self.put("bin/hal_multiremote", "copy")
+        self.put("multi_remote.conf", "1\n")
+        self.assertEqual(self.boot(), "hal_multiremote")
+        self.assertIsNone(self.get("run/codex_hal_gates"))
+        self.put("multi_remote.conf", "0\n")
+        self.assertEqual(self.boot(), "")
+        self.assertIsNone(self.get("data/codex/bin/hal_multiremote"))
+
+    def test_fails_closed_on_any_other_build(self):
+        for env in ({"HAL_MD5": "0" * 32}, {"REMOTES_MD5": "1" * 32}):
+            with self.subTest(env=env):
+                self.put("bin/hal_remotes", "copy")
+                self.put("two_screen.conf", "1\n")
+                self.assertEqual(self.boot(**env), "")
+                self.assertIsNone(self.get("run/codex_hal_gates"))
+                self.assertIn("skipped (unexpected hal build)", self.get("cache/codex-init.log"))
+
+    def test_garbage_setting_is_off(self):
+        self.put("bin/hal_remotes", "copy")
+        for text in ("", "2\n", "on\n", "1 1\n", "once more\n"):
+            with self.subTest(text=text):
+                self.put("bin/hal_remotes", "copy")
+                self.put("two_screen.conf", text)
+                self.assertEqual(self.boot(), "")
+                self.assertIsNone(self.get("data/codex/bin/hal_remotes"))
+
+    def test_three_boots_that_did_not_stay_up(self):
+        self.put("bin/hal_remotes", "copy")
+        self.put("two_screen.conf", "1\n")
+        for n in (1, 2, 3):
+            self.assertEqual(self.boot(HAL_DIED="1"), "hal_remotes")
+            self.assertEqual(self.get("data/codex/hal_remotes.tries").strip(), str(n))
+        self.assertEqual(self.boot(HAL_DIED="1"), "")  # left alone now
+        self.assertEqual(self.boot(), "")
+        self.assertIn("didn't stay up", self.get("cache/codex-init.log"))
+        self.assertEqual(self.get("data/codex/two_screen.conf"), "1\n")
+        self.put("hal_remotes.tries", "0\n")  # what saving the setting again does
+        self.assertEqual(self.boot(), "hal_remotes")
+        self.assertEqual(self.get("data/codex/hal_remotes.tries").strip(), "0")
+        # a count that isn't a number is no count
+        self.put("hal_remotes.tries", "many\n")
+        self.assertEqual(self.boot(), "hal_remotes")
+
+    def test_mount_failure_leaves_no_gates(self):
+        self.put("bin/hal_remotes", "copy")
+        self.put("two_screen.conf", "1\n")
+        self.assertEqual(self.boot(MOUNT_FAILS="1"), "")
+        self.assertIsNone(self.get("run/codex_hal_gates"))
+        self.assertIn("not bound", self.get("cache/codex-init.log"))
+
+
+@unittest.skipUnless(os.path.exists("/bin/dash"), "no /bin/dash")
+class RcsLocalHalBootDash(RcsLocalHalBoot):
+    """The same, under dash: nearer the hub's BusyBox ash than bash is."""
+
+    SHELL = "/bin/dash"
 
 
 class PowerShellStaticContract(unittest.TestCase):

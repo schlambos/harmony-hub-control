@@ -35,7 +35,8 @@ experimental: it changes the hub's own remote software.
   - The hub can't tell which of the two sent a press.
 - **Remotes with a screen keep the stock rule.** A second Touch or Elite still
   replaces the first one, because the hub can sync its setup to only one
-  remote with a screen.
+  remote with a screen. Lifting that is a separate, experimental setting:
+  [TWO_SCREEN_REMOTES.md](TWO_SCREEN_REMOTES.md).
 - **So does the Harmony keyboard.** `hal` gives it one thread with a static
   radio subscriber, like the remotes' key threads below, so a second keyboard
   would hang the radio the same way. It still replaces an older one.

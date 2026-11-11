@@ -385,6 +385,73 @@ class TwoScreenRemotes(unittest.TestCase):
         rig.run()
         self.assertEqual({r[0]: r for r in rig.results}["c3"][1:3], (0, b"ok:3:led-fallback"))
 
+    def test_file_session_stays_with_the_remote_it_opened_on(self):
+        """open (type 1) picks a remote; read, write and close (2-6) follow it
+        even when the other remote has asked for something since."""
+        rig = Rig(PATCHED, "100", slots=(2, 3))
+        rig.press(3, b"wake-3")
+        rig.run()
+        rig.press(2, b"wake-2")
+        rig.run()
+        rig.command(b"open ir_send", tag="open", typ=1)
+        rig.run()
+        rig.press(3, b"three-speaks")
+        rig.run()
+        rig.command(b"write", tag="write", typ=3)
+        rig.command(b"close", tag="close", typ=4)
+        rig.run()
+        rig.command(b"led", tag="cmd")  # not a file operation: back to the remote that asked last
+        rig.run()
+        results = {r[0]: r[2] for r in rig.results}
+        self.assertEqual(results["open"], b"ok:2:open ir_send")
+        self.assertEqual(results["write"], b"ok:2:write")
+        self.assertEqual(results["close"], b"ok:2:close")
+        self.assertEqual(results["cmd"], b"ok:3:led")
+
+    def explicit(self, entry: int, body: int, path: bytes, path_arg: int):
+        """Run a stock function whose entry is hooked for the hot.N index, with
+        its body stood in for by the one thing it does that matters here: a
+        hub-initiated request (hot_send_data_wait_reply)."""
+        rig = Rig(PATCHED, "100", slots=(2, 3))
+        rig.press(3, b"wake-3")
+        rig.run()
+        rig.press(2, b"wake-2")  # slot 2 asked last, so "hot.1" means slot 2
+        rig.run()
+        hub = rig.hub
+        out = hub.alloc(8)
+        # addiu sp,-0x28; sw ra,0x24(sp); lui t9; ori t9; jalr t9; nop; lw ra,0x24(sp); jr ra; addiu sp,0x28
+        code = "27bdffd8afbf00243c1900423739e3400320f809000000008fbf002403e0000827bd0028"
+        hub.uc.mem_write(body, bytes.fromhex(code))
+
+        def args(t, a):
+            sp = hub.uc.reg_read(emu.GPR[emu.SP])
+            for reg, v in ((emu.A0, 9), (emu.A1, emu.iov(hub, b"explicit")), (emu.A2, 1), (emu.A3, out)):
+                hub.uc.reg_write(emu.GPR[reg], v)
+            hub.w32(sp + 0x10, out + 4)
+            hub.w32(sp + 0x14, 5000)
+            t.skip = False
+
+        hub.internal[body + 8] = args
+        hub.uc.hook_add(emu.UC_HOOK_CODE, hub._on_code, begin=body + 8, end=body + 8)
+        request = hub.alloc(0x40)
+        hub.w32(request + 4, hub.alloc(64, path + b"\0"))
+        call = [request, 0, 0, 0]
+        call[path_arg] = hub.u32(request + 4) if path_arg else request
+        t = hub.spawn("explicit", entry, tuple(call[: path_arg + 1]))
+        hub.world.run(done=lambda: t.state == "done")
+        self.assertEqual(t.ret, 0)
+        return hub.read(hub.u32(out), hub.u32(out + 4))
+
+    def test_hot_1n_names_a_slot(self):
+        hbus, hbus_body, open_, open_body = 0x42A23C, 0x42A248, 0x4292EC, 0x4292F8
+        self.assertEqual(self.explicit(hbus, hbus_body, b"hot.1.sys.info", 0), b"ok:2:explicit")
+        self.assertEqual(self.explicit(hbus, hbus_body, b"hot.13.sys.info", 0), b"ok:3:explicit")
+        self.assertEqual(self.explicit(hbus, hbus_body, b"hot.12.sys.info", 0), b"ok:2:explicit")
+        self.assertEqual(self.explicit(hbus, hbus_body, b"hot.15.sys.info", 0), b"ok:2:explicit")  # no screen remote in 5
+        self.assertEqual(self.explicit(hbus, hbus_body, b"hot.3.sys.info", 0), b"ok:2:explicit")  # 3 is not 13
+        self.assertEqual(self.explicit(open_, open_body, b"/rf/hot/13/ir/ir_send", 1), b"ok:3:explicit")
+        self.assertEqual(self.explicit(open_, open_body, b"/rf/hot/1/ir/ir_send", 1), b"ok:2:explicit")
+
     def test_command_to_a_sleeping_only_remote_fails_as_stock(self):
         outcomes = []
         for image, gates in ((STOCK, None), (PATCHED, "100")):

@@ -162,6 +162,7 @@ $UpgradeProtectedPaths = @(
     "/data/codex/hub_id",
     "/data/codex/cloud_blocker.conf",
     "/data/codex/multi_remote.conf",
+    "/data/codex/two_screen.conf",
     "/data/codexmqtt/config.json",
     "/data/codex/resource-backups",
     "/data/codex-backups",
