@@ -178,14 +178,16 @@ export function createEthernetView(section) {
     return root.contains(document.activeElement?.closest?.("[data-ip-form]") ?? null);
   }
 
+  // The overview, and the status with it: status polling stops in steady
+  // states (cable working, Wi-Fi off, router not answering), and a cable
+  // unplugged or a router answering again must still show.
   async function loadOverview() {
-    try {
-      overview = await api.getNetworkOverview();
-    } catch (_) {
-      overview = null;
-    }
+    const [o, s] = await Promise.allSettled([api.getNetworkOverview(), api.getUsbEth()]);
+    overview = o.status === "fulfilled" ? o.value : null;
+    if (s.status === "fulfilled") status = s.value;
     if (!section.hidden && !editingIpForm()) render();
     scheduleOverview();
+    if (!timer) schedule();
   }
 
   async function load() {

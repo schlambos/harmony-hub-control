@@ -791,6 +791,13 @@ function simUsbEthState() {
   };
 }
 
+/* The network an address is on: address AND mask, like the hub's connected route. */
+function simNetworkOf(ip, mask) {
+  const a = ip.split(".").map(Number);
+  const m = (mask || "255.255.255.0").split(".").map(Number);
+  return a.map((x, i) => x & m[i]).join(".");
+}
+
 /* GET /api/network-overview, like codex_webui's render_network_overview_json(). */
 function simNetworkOverview() {
   const st = simUsbEthState();
@@ -798,7 +805,7 @@ function simNetworkOverview() {
   const route = (destination, gateway, netmask, metric, iface) =>
     ({ destination, gateway, netmask, flags: gateway === "0.0.0.0" ? "U" : "UG", metric, interface: iface });
   const routes = [];
-  if (st.ifname && st.ipv4) routes.push(route(st.ipv4.replace(/\.\d+$/, ".0"), "0.0.0.0", st.netmask, 0, st.ifname));
+  if (st.ifname && st.ipv4) routes.push(route(simNetworkOf(st.ipv4, st.netmask), "0.0.0.0", st.netmask, 0, st.ifname));
   // The Wi-Fi subnet route is demoted while the cable carries local traffic.
   routes.push(route("192.168.1.0", "0.0.0.0", "255.255.255.0", lan === "ath0" ? 0 : 20, "ath0"));
   for (const [net, mask] of [["192.168.0.0", "255.255.0.0"], ["172.16.0.0", "255.240.0.0"], ["10.0.0.0", "255.0.0.0"]]) {

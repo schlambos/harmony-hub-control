@@ -6,8 +6,10 @@ ash) with only the hub's own commands on PATH, against fake route (a
 routing table kept in routes.json and printed like `route -n`) and
 wpa_cli commands and a temporary /sys tree. It must route the private
 ranges and multicast through the interface usb_eth_service.sh names in
-codex-lan-dev (only while that interface can actually carry them), and
-reconnect Wi-Fi when the service turned it off and its worker is gone.
+codex-lan-dev (only while the service's worker runs and that interface can
+actually carry them), and when the worker is gone, have the service hand
+everything back to Wi-Fi. GuardAndService runs the guard together with the
+real usb_eth_service.sh in test_service.py's sandbox.
 
 Run via tools/usb-eth-test/run_tests.sh (or directly with python3).
 """
@@ -110,6 +112,14 @@ class GuardHub(unittest.TestCase):
             "FAKE_LOG": str(t / "calls.log"), "FAKE_WPA_FAIL": str(t / "wpa-fails"),
             "FAKE_WIFI_IP": str(t / "wifi-ip"),
         }
+        # usb_eth_service.sh's worker, alive unless a test ends it (kill_worker).
+        self.worker = subprocess.Popen(["sleep", "300"])
+        self.addCleanup(self.worker.kill)
+        (t / "run/codex-usb-eth-worker.pid").write_text(f"{self.worker.pid}\n")
+
+    def kill_worker(self):
+        self.worker.kill()
+        self.worker.wait()
 
     def tearDown(self):
         shutil.rmtree(self.tmp, ignore_errors=True)
@@ -139,7 +149,8 @@ class EgressGuardLanDevice(GuardHub):
 
     def guard(self, **extra):
         e = dict(self.env, GUARD_USBETH_WIFI_OFF=str(self.tmp / "run/codex-usb-eth-wifi-off"),
-                 GUARD_USBETH_PID=str(self.tmp / "run/codex-usb-eth-worker.pid"))
+                 GUARD_USBETH_PID=str(self.tmp / "run/codex-usb-eth-worker.pid"),
+                 GUARD_USBETH_SERVICE=str(self.tmp / "no-usb_eth_service.sh"))
         e.update(extra)
         e = dict(e, GUARD_PATH=self.env["USBETH_PATH"], GUARD_BLOCKER=self.env["USBETH_BLOCKER"],
                  GUARD_GATEWAY_STATE=str(self.tmp / "run/gateway"), GUARD_PID_FILE=str(self.tmp / "run/guard.pid"),
@@ -258,6 +269,7 @@ class EgressGuardLanDevice(GuardHub):
         self.assertEqual(self.route_metric("224.0.0.0", "ath0"), [])
 
     def test_the_watchdog_keeps_trying_if_the_reconnect_fails(self):
+        self.kill_worker()
         state = self.tmp / "run/codex-usb-eth-wifi-off"
         state.write_text("")
         (self.tmp / "wpa-fails").write_text("")
@@ -349,11 +361,130 @@ class EgressGuardLanDevice(GuardHub):
         self.assertTrue(pidf.exists(), "the installer removed the new guard's pid file")
         self.assertEqual(pidf.read_text().strip(), str(new.pid))
 
+    def fake_service(self, rc=0):
+        """A usb_eth_service.sh that logs `recover` and, if rc is 0, clears codex-lan-dev."""
+        svc = self.tmp / "usb_eth_service.sh"
+        svc.write_text(f"""#!/bin/sh
+echo "service $*" >> "{self.tmp / 'calls.log'}"
+[ {rc} = 0 ] || exit {rc}
+rm -f "{self.tmp / 'run/codex-lan-dev'}" "{self.tmp / 'run/codex-usb-eth-wifi-off'}"
+echo recovered
+""")
+        svc.chmod(0o755)
+        return svc
+
+    def cable_carrying_lan(self):
+        self.plug_adapter()
+        r = self.routes()
+        r.append({"net": "192.168.1.0", "mask": "255.255.255.0", "gw": "0.0.0.0", "dev": "eth2", "metric": "0"})
+        (self.tmp / "routes.json").write_text(json.dumps(r))
+        (self.tmp / "run/codex-lan-dev").write_text("eth2\n")
+
+    def test_a_dead_workers_lan_device_is_ignored_and_handed_back(self):
+        # The adapter keeps its link and address, but nothing watches it any more.
+        self.cable_carrying_lan()
+        self.guard(GUARD_USBETH_SERVICE=str(self.fake_service(rc=1)))
+        self.assertEqual(self.route_metric("224.0.0.0", "eth2"), ["0"], "a live worker's cable wasn't used")
+        self.assertNotIn("service", (self.tmp / "calls.log").read_text())
+        self.kill_worker()
+        self.guard(GUARD_USBETH_SERVICE=str(self.fake_service(rc=1)))
+        # recover couldn't finish (lock busy): the guard still keeps off the cable, and asks again next time.
+        self.assertEqual(self.route_metric("224.0.0.0", "ath0"), ["0"])
+        self.assertEqual(self.route_metric("224.0.0.0", "eth2"), [])
+        self.assertEqual({d for _, _, d in self.private()}, {"ath0"})
+        self.assertTrue((self.tmp / "run/codex-lan-dev").exists())
+        self.guard(GUARD_USBETH_SERVICE=str(self.fake_service()))
+        self.assertEqual((self.tmp / "calls.log").read_text().count("service recover"), 2)
+        self.assertFalse((self.tmp / "run/codex-lan-dev").exists())
+        self.assertIn("restored local traffic on Wi-Fi", (self.tmp / "guard.log").read_text())
+
+    def test_wifi_comes_back_even_if_recover_cant_run(self):
+        self.cable_carrying_lan()
+        state = self.tmp / "run/codex-usb-eth-wifi-off"
+        state.write_text("")
+        self.kill_worker()
+        self.guard(GUARD_USBETH_SERVICE=str(self.fake_service(rc=1)))
+        self.assertFalse(state.exists())
+        self.assertIn("wpa_cli -i ath0 reconnect", (self.tmp / "calls.log").read_text())
+
     def test_a_bogus_lan_device_falls_back_to_wifi(self):
         for bogus in ("eth9", "br0; reboot", "../ath0"):
             (self.tmp / "run/codex-lan-dev").write_text(bogus + "\n")
             self.guard()
             self.assertEqual(self.route_metric("224.0.0.0", "ath0"), ["0"], bogus)
+
+
+class GuardAndService(unittest.TestCase):
+    """The egress guard and the real usb_eth_service.sh together, in
+    test_service.py's sandbox: the worker dies while the cable carries local
+    traffic, Wi-Fi is off and the adapter keeps its link and address."""
+
+    def setUp(self):
+        sys.path.insert(0, str(Path(__file__).resolve().parent))
+        import test_service
+        self.ts = test_service
+        self.sb = test_service.Sandbox({"bound": True, "wifi_ip": "192.168.0.50"})
+        self.addCleanup(shutil.rmtree, self.sb.dir, True)
+        (self.sb.dir / "sys/class/net/eth2").mkdir(parents=True)
+        (self.sb.dir / "sys/class/net/ath0").mkdir(parents=True)
+        p = f"{self.sb.bin}:{self.sb.hubbin}"
+        self.path = {"USBETH_PATH": p, "PATH": p}
+        self.procs = []
+
+    def tearDown(self):
+        self.sb.run("stop", **self.path)
+        for proc in self.procs:
+            if proc.poll() is None:
+                proc.kill()
+            proc.wait()
+
+    def wait(self, cond, timeout=20.0):
+        import time
+        end = time.time() + timeout
+        while time.time() < end:
+            if cond():
+                return True
+            time.sleep(0.05)
+        return False
+
+    def test_the_guard_hands_everything_back_when_the_worker_dies(self):
+        sb, run = self.sb, self.sb.run_dir
+        (sb.dir / "usb_eth.conf").write_text("ENABLED=1\nWIFI_OFF=1\n")
+        env = sb.env(**self.path)
+        env.update(GUARD_PATH=self.path["PATH"], GUARD_BLOCKER=str(sb.dir / "cloud_blocker.conf"),
+                   GUARD_GATEWAY_STATE=str(sb.dir / "gateway"), GUARD_PID_FILE=str(sb.dir / "guard.pid"),
+                   GUARD_CAPS_FILE=str(sb.dir / "guard.caps"), GUARD_LAN_DEV_FILE=str(run / "codex-lan-dev"),
+                   GUARD_SYS=str(sb.dir / "sys"), GUARD_LOG=str(sb.dir / "guard.log"),
+                   GUARD_USBETH_WIFI_OFF=str(run / "codex-usb-eth-wifi-off"),
+                   GUARD_USBETH_PID=str(run / "codex-usb-eth-worker.pid"), GUARD_USBETH_SERVICE=str(self.ts.SERVICE))
+        guard = subprocess.Popen(SHELL + [str(GUARD), "monitor"], env=env, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        self.procs.append(guard)
+        self.assertTrue(self.wait(lambda: (sb.dir / "guard.caps").exists()))
+        worker = subprocess.Popen(["sh", str(self.ts.SERVICE), "worker"], env=sb.env(**self.path),
+                                  stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        self.procs.append(worker)
+        lan = run / "codex-lan-dev"
+        wifi_off = run / "codex-usb-eth-wifi-off"
+        multicast = lambda dev: any(r["net"] == "224.0.0.0" and r["dev"] == dev for r in sb.read_fake().get("extra_routes", []))
+        self.assertTrue(self.wait(lambda: lan.exists() and lan.read_text().strip() == "eth2"))
+        self.assertTrue(self.wait(lambda: multicast("eth2")), "the guard didn't follow the cable")
+        (sb.dir / "uptime").write_text("1061.00 0.00\n")
+        self.assertTrue(self.wait(lambda: wifi_off.exists() and "Wi-Fi off: the cable works" in sb.log.read_text()))
+        # The worker dies; the adapter keeps carrier and its address.
+        worker.kill()
+        worker.wait()
+        self.assertTrue(self.wait(lambda: not lan.exists()), "codex-lan-dev still names the cable")
+        self.assertTrue(self.wait(lambda: not wifi_off.exists()), "Wi-Fi stayed off")
+        self.assertTrue(self.wait(lambda: multicast("ath0") and not multicast("eth2")), "multicast stayed on the cable")
+        calls = sb.calls()
+        self.assertIn("wpa_cli -i ath0 reconnect", calls)
+        self.assertIn("net-remove eth2 ath0", calls)
+        self.assertEqual((sb.dir / "ipv4conf" / "eth2" / "arp_ignore").read_text().strip(), "0")
+        self.assertEqual((sb.state().get("state"), sb.state().get("reason")), ("failed", "worker_stopped"))
+        self.assertIn("restored local traffic on Wi-Fi", (sb.dir / "guard.log").read_text())
+        privates = lambda: [r for r in sb.read_fake().get("extra_routes", [])
+                            if r["net"] in ("10.0.0.0", "172.16.0.0", "192.168.0.0") and r["mask"] != "255.255.255.0"]
+        self.assertTrue(self.wait(lambda: len(privates()) == 3 and {r["dev"] for r in privates()} == {"ath0"}), privates())
 
 
 if __name__ == "__main__":

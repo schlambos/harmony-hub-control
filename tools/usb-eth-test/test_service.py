@@ -1171,6 +1171,115 @@ class CableTests(unittest.TestCase):
         dh = [c for c in self.calls() if c.startswith("udhcpc")][0]
         self.assertIn("-t20 -T2 -A10", dh)
 
+    # --- the same network with another mask ---
+
+    def test_an_overlapping_prefix_never_takes_local_traffic_or_wifi(self):
+        # Wi-Fi 192.168.0.50/24, the cable 192.168.0.234/16: net-apply can't
+        # move a subnet that isn't the same prefix, and Wi-Fi's /24 would win.
+        self.sb.patch_fake(wifi_ip="192.168.0.50", netmask="255.255.0.0")
+        self.conf("WIFI_OFF=1\n")
+        self.guard_with_watchdog()
+        self.start()
+        self.sb.wait_state("degraded_routing", reason="prefix_mismatch")
+        self.clock(1100)
+        time.sleep(1.0)
+        self.assertEqual(self.lan_dev(), "ath0")
+        self.assertFalse(self.suspended(), "Wi-Fi went off without the cable carrying local traffic")
+        self.assertNotIn("net-apply eth2 ath0", self.calls())
+        self.assertEqual(self.log().count("is on Wi-Fi's network with another mask"), 1, "logged every pass, or never")
+        # Same mask again: the cable takes over as usual.
+        self.sb.patch_fake(netmask="255.255.255.0")
+        self.sb.wait_state("operational")
+        self.assertTrue(self.wait(lambda: self.lan_dev() == "eth2"))
+
+    def test_a_mask_that_stops_matching_hands_everything_back(self):
+        self.sb.patch_fake(wifi_ip="192.168.0.50")
+        self.conf("WIFI_OFF=1\n")
+        self.guard_with_watchdog()
+        self.start()
+        self.assertTrue(self.wait(lambda: self.lan_dev() == "eth2"))
+        self.clock(1061)
+        self.assertTrue(self.wait(self.suspended))
+        self.sb.patch_fake(netmask="255.255.0.0")
+        self.sb.wait_state("degraded_routing", reason="prefix_mismatch")
+        self.assertTrue(self.wait(lambda: self.lan_dev() == "ath0"))
+        self.assertTrue(self.wait(lambda: not self.suspended()), "Wi-Fi stayed off")
+        self.assertIn("wpa_cli -i ath0 reconnect", self.calls())
+        self.assertIn("net-remove eth2 ath0", self.calls())
+
+    def test_a_smaller_wifi_prefix_counts_too(self):
+        # Wi-Fi on the wider network this time (the cable a /25 holding the gateway).
+        self.sb.patch_fake(wifi_ip="192.168.0.50", ipv4="192.168.0.100", netmask="255.255.255.128")
+        self.start()
+        self.sb.wait_state("degraded_routing", reason="prefix_mismatch")
+        self.assertEqual(self.lan_dev(), "ath0")
+
+    # --- recover: the egress guard, after the worker died ---
+
+    def test_recover_hands_everything_back_after_the_worker_died(self):
+        self.conf("WIFI_OFF=1\n")
+        self.guard_with_watchdog()
+        w = self.start()
+        self.assertTrue(self.wait(lambda: self.lan_dev() == "eth2"))
+        self.clock(1061)
+        self.assertTrue(self.wait(self.suspended))
+        w.kill()
+        w.wait()
+        r = self.sb.run("recover", **self.path())
+        self.assertEqual(r.returncode, 0, r.stderr)
+        self.assertIn("recovered", r.stdout)
+        self.assertEqual(self.lan_dev(), "ath0")
+        self.assertFalse(self.suspended())
+        self.assertIn("wpa_cli -i ath0 reconnect", self.calls())
+        self.assertIn("net-remove eth2 ath0", self.calls())
+        self.assertEqual((self.sb.dir / "ipv4conf" / "eth2" / "arp_ignore").read_text().strip(), "0")
+        self.assertEqual(self.led()[-2:], [self.NONEXT, self.FIRE])
+        st = self.sb.state()
+        self.assertEqual((st.get("state"), st.get("reason")), ("failed", "worker_stopped"))
+        # Nothing left: a second call does nothing.
+        again = self.sb.run("recover", **self.path())
+        self.assertEqual((again.returncode, again.stdout.strip()), (0, ""))
+
+    def test_recover_leaves_a_running_worker_alone(self):
+        self.start()
+        self.assertTrue(self.wait(lambda: self.lan_dev() == "eth2"))
+        r = self.sb.run("recover", **self.path())
+        self.assertEqual((r.returncode, r.stdout.strip()), (0, ""))
+        self.assertEqual(self.lan_dev(), "eth2")
+        self.assertNotIn("net-remove eth2 ath0", self.calls())
+
+    def test_recover_keeps_trying_while_wifi_refuses(self):
+        self.conf("WIFI_OFF=1\n")
+        self.guard_with_watchdog()
+        w = self.start()
+        self.assertTrue(self.wait(lambda: self.lan_dev() == "eth2"))
+        self.clock(1061)
+        self.assertTrue(self.wait(self.suspended))
+        w.kill()
+        w.wait()
+        self.sb.patch_fake(wpa_fail=True)
+        r = self.sb.run("recover", **self.path())
+        self.assertNotEqual(r.returncode, 0, "recover claimed success with Wi-Fi still off")
+        self.assertEqual(self.lan_dev(), "ath0", "the cable kept local traffic")
+        self.sb.patch_fake(wpa_fail=False)
+        self.assertEqual(self.sb.run("recover", **self.path()).returncode, 0)
+        self.assertFalse((self.sb.run_dir / "codex-usb-eth-wifi-off").exists())
+
+    def test_recover_waits_for_a_busy_lock(self):
+        lock = self.sb.run_dir / "codex-usb-eth-service.lock"
+        lock.mkdir()
+        holder = subprocess.Popen(["/bin/sleep", "30"])
+        self.addCleanup(holder.kill)
+        (lock / "pid").write_text(f"{holder.pid}\n")
+        (self.sb.run_dir / "codex-lan-dev").write_text("eth2\n")
+        r = self.sb.run("recover", **self.path())
+        self.assertNotEqual(r.returncode, 0)
+        self.assertTrue((self.sb.run_dir / "codex-lan-dev").exists(), "acted without the lock")
+        holder.kill()
+        holder.wait()
+        self.assertEqual(self.sb.run("recover", **self.path()).returncode, 0)
+        self.assertFalse((self.sb.run_dir / "codex-lan-dev").exists())
+
     def test_with_the_blocker_off_wifis_default_route_gives_way_and_comes_back(self):
         (self.sb.dir / "cloud_blocker.conf").write_text("0\n")
         self.sb.patch_fake(extra_routes=[

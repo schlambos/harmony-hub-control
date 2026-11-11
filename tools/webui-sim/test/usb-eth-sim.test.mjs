@@ -111,6 +111,14 @@ describe("usbEthStatus model", () => {
       "On, but not working: static address settings need fixing",
     );
     assert.equal(usbEthStatus({ ...up, operational: false, state: "adapter_absent", reason: "interface_gone", ifname: "" }), "On · Adapter disconnected");
+    assert.equal(
+      usbEthStatus({ ...up, operational: false, state: "degraded_routing", reason: "prefix_mismatch" }),
+      "On · eth0 · Subnet mask differs from Wi-Fi's · using Wi-Fi",
+    );
+    assert.equal(
+      usbEthStatus({ ...up, operational: false, state: "failed", reason: "worker_stopped" }),
+      "On, but not working: stopped unexpectedly, back on Wi-Fi",
+    );
     assert.equal(usbEthStatus({ supported: false, kernel: "unknown" }), "USB Ethernet files missing · install again");
     assert.equal(usbEthStatus({ supported: false, kernel: "2.6.31-other" }), "Not available on this hub's kernel");
   });
@@ -292,6 +300,14 @@ describe("simulator /api/usb-eth", () => {
     await post("/api/sim/usb-eth", { adapter: { vidPid: "0b95:772a", carrier: true, ipv4: "192.168.1.77" } });
     const up = await (await post("/api/usb-eth", { enabled: true })).json();
     assert.deepEqual([up.state, up.ipv4, up.netmask, up.router, up.dns], ["operational", "192.168.1.20", "255.255.255.0", "192.168.1.1", ["1.1.1.1"]]);
+    // The overview's connected route is the address AND its mask, for any accepted mask.
+    for (const [address, netmask, destination] of [["192.168.1.22", "255.255.255.252", "192.168.1.20"], ["192.168.1.20", "255.255.0.0", "192.168.0.0"]]) {
+      await post("/api/usb-eth", { ipMode: "static", address, netmask });
+      const routes = (await (await fetch(`${BASE}/api/network-overview`)).json()).routes;
+      const wired = routes.find((r) => r.interface !== "ath0" && r.gateway === "0.0.0.0" && r.destination !== "224.0.0.0");
+      assert.deepEqual([wired.destination, wired.netmask], [destination, netmask], `${address}/${netmask}`);
+    }
+    await post("/api/usb-eth", { ipMode: "static", address: "192.168.1.20", netmask: "255.255.255.0", gateway: "192.168.1.1", dns1: "1.1.1.1", dns2: "" });
     // Back to DHCP: the static values stay for the form.
     const dhcp = await (await post("/api/usb-eth", { ipMode: "dhcp" })).json();
     assert.deepEqual([dhcp.ipMode, dhcp.ipv4, dhcp.staticConfig.address], ["dhcp", "192.168.1.77", "192.168.1.20"]);

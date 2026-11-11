@@ -138,6 +138,7 @@ const USB_ETH_REASONS = {
   kernel_or_slot_check_failed: "kernel check failed",
   driver_load_failed: "adapter driver failed to load",
   no_network_interface: "no wired network interface appeared",
+  worker_stopped: "stopped unexpectedly, back on Wi-Fi",
   route_apply_failed: "wired routing could not be applied",
   unsupported_chipset: "unsupported chipset",
   no_usb_device: "no adapter found",
@@ -176,6 +177,7 @@ export function usbEthStatus(state, busy = "") {
       case "failed":
         return `On, but not working: ${USB_ETH_REASONS[state.reason] || (state.reason || "startup failed").replaceAll("_", " ")}`;
       case "degraded_routing":
+        if (state.reason === "prefix_mismatch") return `On${state.ifname ? ` · ${state.ifname}` : ""} · Subnet mask differs from Wi-Fi's · using Wi-Fi`;
         return "On, but wired replies are not confirmed on the cable: routing could not be applied";
       case "gateway_unreachable":
         return `On${state.ifname ? ` · ${state.ifname}` : ""} · Router not answering through the cable · using Wi-Fi`;

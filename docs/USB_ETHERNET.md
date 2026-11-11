@@ -144,7 +144,13 @@ hub with no Wi-Fi address at all, the cable's own default route counts.)
    (10 minutes, as above).
 
 On another network than the gateway's, the cable is only an extra address and
-Wi-Fi keeps carrying everything else. With the cloud blocker off, the default
+Wi-Fi keeps carrying everything else. On Wi-Fi's network but with another
+subnet mask (say Wi-Fi `/24`, the cable a static `/16`), the cable doesn't take
+local traffic either: the hand-over moves only a subnet both share with the
+same prefix, and Wi-Fi's more specific route would keep the traffic anyway.
+The state is then `degraded_routing` with reason `prefix_mismatch`, Wi-Fi stays
+on, and the page asks for the same mask; a cable already carrying local
+traffic hands it back if its mask changes like that. With the cloud blocker off, the default
 route the cable's own DHCP adds then moves to metric 30, behind Wi-Fi's, so the
 internet stays on Wi-Fi too; the same while its gateway isn't answering. Losing the link, the address or the
 adapter, or switching the feature off, puts everything back at once: routes,
@@ -178,12 +184,30 @@ While Wi-Fi is off the hub answers only at its wired address: point Home
 Assistant and anything else there first (a DHCP reservation for the adapter's
 MAC address helps). If the cable fails, Wi-Fi comes back on its own address.
 
-**Safety net.** If the worker itself dies while Wi-Fi is off, the egress guard
-(`offline_egress_guard.sh`, which runs every couple of seconds) finds
-`/var/run/codex-usb-eth-wifi-off` without a live worker and reconnects Wi-Fi.
-It announces that ability in `/var/run/codex-offline-egress.caps`; a guard from
-before an upgrade keeps running until the hub restarts, and until then Wi-Fi
-stays on (`wifiNeedsRestart` in the API).
+**Safety net.** The worker is what watches the cable. If it dies (crashes, is
+killed) while the cable carries local traffic or Wi-Fi is off, the egress guard
+(`offline_egress_guard.sh`, which runs every couple of seconds and which
+`init.sh` respawns) notices `/var/run/codex-lan-dev` or
+`/var/run/codex-usb-eth-wifi-off` without a live worker:
+
+- it stops routing the private ranges and multicast through the cable at once;
+- it runs `usb_eth_service.sh recover`, which takes the service lock (without
+  waiting: a start, stop or restart holding it sorts things out itself),
+  checks again that no worker runs, and hands everything back the way losing
+  the gateway does: Wi-Fi reconnected, `codex-lan-dev` removed, the routes
+  (`net-remove`, default routes) and ARP settings as they were, the LED out
+  of extender mode, state `failed` with reason `worker_stopped`;
+- if `recover` can't run or finish, it reconnects Wi-Fi itself, and asks again
+  on its next pass until nothing is left.
+
+The cable keeps its address (nothing watches it any more, so it no longer
+carries local traffic), and the page offers "Try again". This covers a cable
+that keeps its link but stops passing traffic after the worker died. It
+doesn't cover the guard dying at the same time; then a reboot brings Wi-Fi back,
+since nothing persists the disconnect. The guard announces the watchdog in
+`/var/run/codex-offline-egress.caps`; a guard from before an upgrade keeps
+running until the hub restarts, and until then Wi-Fi stays on
+(`wifiNeedsRestart` in the API).
 
 ## Static address
 

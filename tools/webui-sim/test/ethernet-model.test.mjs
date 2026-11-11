@@ -23,7 +23,7 @@ const STATES = [
   ["starting", "queued"], ["starting", "phy_wait"], ["starting", "controller_wait"], ["starting", "adapter_wait"],
   ["failed", "static_invalid"], ["failed", "phy_not_ready"], ["failed", "deps_timeout"], ["failed", "controller_registered_unbound"],
   ["failed", "kernel_or_slot_check_failed"], ["failed", "driver_load_failed"], ["failed", "no_network_interface"], ["failed", "something_new"],
-  ["degraded_routing", "route_apply_failed"], ["adapter_absent", "no_usb_device"], ["adapter_absent", "interface_gone"],
+  ["degraded_routing", "route_apply_failed"], ["degraded_routing", "prefix_mismatch"], ["failed", "worker_stopped"], ["adapter_absent", "no_usb_device"], ["adapter_absent", "interface_gone"],
   ["adapter_unsupported", "unsupported_chipset"], ["awaiting_carrier_dhcp", "no_carrier"], ["awaiting_carrier_dhcp", "no_ipv4_lease"],
   ["awaiting_carrier_dhcp", "dhcp_or_carrier"], ["awaiting_carrier_dhcp", "gateway_check"], ["gateway_unreachable", "gateway_lost"],
   ["stopped", "stopped_by_request"], ["platform_absent", ""], ["platform_unbound", ""], ["deps_unavailable", ""], ["bus_ready", ""],
@@ -44,6 +44,14 @@ describe("ethernet model", () => {
     assert.match(failed("controller_registered_unbound").detail, /Restart the hub/);
     assert.match(failed("something_new").detail, /something new/);
     assert.equal(failed("static_invalid").title, "Static address settings need fixing");
+    // The worker died and the egress guard handed everything back to Wi-Fi: say so, and offer to try again.
+    assert.match(failed("worker_stopped").detail, /back to Wi-Fi/);
+    assert.equal(canRetry({ ...base, ...notWorking, state: "failed", reason: "worker_stopped" }), true);
+    // The cable on Wi-Fi's network with another mask: it never takes local traffic, and the fix is named.
+    const mask = ethernetState({ ...base, ...notWorking, state: "degraded_routing", reason: "prefix_mismatch", netmask: "255.255.0.0" });
+    assert.match(mask.title, /subnet mask/);
+    assert.match(mask.detail, /255\.255\.0\.0/);
+    assert.match(mask.detail, /same subnet mask/);
     const absent = ethernetState({ ...base, ...notWorking, state: "adapter_absent", reason: "no_usb_device", ifname: "", carrier: false });
     assert.match(absent.detail, /self-powered/);
     assert.match(ethernetState({ ...base, ...notWorking, state: "adapter_absent", reason: "interface_gone" }).title, /disconnected/);

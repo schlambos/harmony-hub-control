@@ -1147,6 +1147,10 @@ Invoke-RestMethod "http://<hub-ip>:8080/api/usb-eth"
   after toggling; `POST` returns as soon as the worker is queued.
   `gateway_unreachable` (reason `gateway_lost`): the gateway didn't answer
   through the cable, so local traffic stays on Wi-Fi for now.
+  `degraded_routing` with reason `prefix_mismatch`: the cable is on Wi-Fi's
+  network with another subnet mask, so local traffic (and Wi-Fi) stays on
+  Wi-Fi. `failed` with reason `worker_stopped`: the worker died and the egress
+  guard handed everything back to Wi-Fi.
 - `speedMbps`/`fullDuplex`: the wired link, from the driver (`null` if it
   doesn't say). `netmask`, `router` and `dns`: the wired address's mask, the
   cable's default-route gateway (the static settings' in static mode) and the

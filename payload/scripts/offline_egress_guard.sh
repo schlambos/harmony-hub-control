@@ -11,6 +11,7 @@ SYS=${GUARD_SYS:-/sys}
 # its monitor's pid file (see wifi_watchdog).
 USBETH_WIFI_OFF=${GUARD_USBETH_WIFI_OFF:-/var/run/codex-usb-eth-wifi-off}
 USBETH_PID=${GUARD_USBETH_PID:-/var/run/codex-usb-eth-worker.pid}
+USBETH_SERVICE=${GUARD_USBETH_SERVICE:-/data/codex/usb_eth_service.sh}
 # Tells usb_eth_service.sh this running guard has wifi_watchdog. A guard from
 # before it keeps running its old code after an upgrade until the hub
 # restarts, and usb_eth_service.sh won't turn Wi-Fi off without the watchdog.
@@ -23,16 +24,25 @@ LOG=${GUARD_LOG:-/cache/codex-init.log}
 # replies. The internet stays unreachable.
 PRIVATE_ROUTES="10.0.0.0/255.0.0.0 172.16.0.0/255.240.0.0 192.168.0.0/255.255.0.0"
 
+# usb_eth_service.sh's worker is running (its pid file names a live process).
+usbeth_worker_alive() {
+  pid=$(sed -n '1p' "$USBETH_PID" 2>/dev/null)
+  case "$pid" in *[!0-9]*|"") return 1 ;; esac
+  kill -0 "$pid" 2>/dev/null
+}
+
 # The interface LAN traffic goes through: Wi-Fi (ath0), or a USB Ethernet
-# adapter (usb_eth_service.sh writes LAN_DEV_FILE). The adapter only while it
-# has an address and the saved gateway is on its subnet, so a route through
-# it can actually be added; otherwise Wi-Fi.
+# adapter (usb_eth_service.sh writes LAN_DEV_FILE). The adapter only while
+# the service's worker runs (nothing else watches the cable), it has an
+# address and the saved gateway is on its subnet, so a route through it can
+# actually be added; otherwise Wi-Fi.
 lan_dev() {
   dev=$(sed -n '1p' "$LAN_DEV_FILE" 2>/dev/null)
   case "$dev" in
     eth[0-9]|eth[0-9][0-9]|usb[0-9]|usb[0-9][0-9]) ;;
     *) echo ath0; return ;;
   esac
+  usbeth_worker_alive || { echo ath0; return; }
   # The hub's gateway, as usb_eth_service.sh's hub_gateway() sees it: the one
   # saved while the blocker is on; with it off the default route's (the saved
   # file can be stale from when it was on), else the saved one.
@@ -159,16 +169,28 @@ clear_private_routes() {
   done
 }
 
-# usb_eth_service.sh can disconnect Wi-Fi while its cable works, and reconnects
-# it when the cable stops. If its monitor has gone (crashed, killed), nothing
-# would: reconnect Wi-Fi here. This guard is always running (init.sh respawns it).
+# usb_eth_service.sh's worker moves local traffic to its cable (and can turn
+# Wi-Fi off) while the cable works, and hands everything back when it
+# stops. If the worker has gone (crashed, killed) while it had the LAN or
+# Wi-Fi was off, nothing would watch the cable any more, and a cable that
+# keeps its link but stops working would keep the hub's replies: have the
+# service undo it all (usb_eth_service.sh recover: Wi-Fi reconnected,
+# codex-lan-dev cleared, routes and ARP restored). lan_dev() already
+# ignores codex-lan-dev without a worker. If recover can't run or finish,
+# at least reconnect Wi-Fi here; the next tick tries again. This guard is
+# always running (init.sh respawns it).
 wifi_watchdog() {
+  [ -f "$USBETH_WIFI_OFF" ] || [ -f "$LAN_DEV_FILE" ] || return 0
+  usbeth_worker_alive && return 0
+  if [ -x "$USBETH_SERVICE" ]; then
+    out=$("$USBETH_SERVICE" recover 2>/dev/null)
+    rc=$?
+    case "$out" in
+      *recovered*) echo "$(date) codex offline egress guard restored local traffic on Wi-Fi (the USB Ethernet worker had stopped)" >> "$LOG" ;;
+    esac
+    [ "$rc" = 0 ] && return 0
+  fi
   [ -f "$USBETH_WIFI_OFF" ] || return 0
-  pid=$(sed -n '1p' "$USBETH_PID" 2>/dev/null)
-  case "$pid" in
-    *[!0-9]*|"") ;;
-    *) kill -0 "$pid" 2>/dev/null && return 0 ;;
-  esac
   # Only once wpa_supplicant took it (exit 0 and no FAIL reply): otherwise
   # the state file stays and the next tick tries again.
   out=$(wpa_cli -i ath0 reconnect 2>/dev/null) || return 0

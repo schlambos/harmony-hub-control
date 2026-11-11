@@ -122,19 +122,26 @@ worker_running() {
   kill -0 "$_pid" 2>/dev/null
 }
 
+# One try at the lock; a lock whose owner has died is cleared and taken.
+lock_try() {
+  if ! mkdir "$LOCK_DIR" 2>/dev/null; then
+    _owner=$(cat "$LOCK_DIR/pid" 2>/dev/null)
+    case "$_owner" in
+      *[!0-9]*|"") return 1 ;;
+    esac
+    kill -0 "$_owner" 2>/dev/null && return 1
+    rm -rf "$LOCK_DIR"
+    mkdir "$LOCK_DIR" 2>/dev/null || return 1
+  fi
+  # The worker's own pid ($$ is its parent's, long gone, in a subshell).
+  echo "${WORKER_SELF:-$$}" > "$LOCK_DIR/pid"
+  return 0
+}
+
 lock_acquire() {
   _tries=0
   while [ "$_tries" -lt 50 ]; do
-    if mkdir "$LOCK_DIR" 2>/dev/null; then
-      # The worker's own pid ($$ is its parent's, long gone, in a subshell).
-      echo "${WORKER_SELF:-$$}" > "$LOCK_DIR/pid"
-      return 0
-    fi
-    _owner=$(cat "$LOCK_DIR/pid" 2>/dev/null)
-    case "$_owner" in
-      *[!0-9]*|"") ;;
-      *) kill -0 "$_owner" 2>/dev/null || rm -rf "$LOCK_DIR" ;;
-    esac
+    lock_try && return 0
     _tries=$(expr "$_tries" + 1)
     sleep 1
   done
@@ -391,6 +398,23 @@ lan_role() {
   else
     [ -z "$(iface_ip "$WIFI_IF")" ]
   fi
+}
+
+# True if Wi-Fi has an address on a network that overlaps the wired address
+# $1/$2 but with another mask (say Wi-Fi 192.168.1.50/24, cable
+# 192.168.1.20/16). net-apply moves only a shared subnet with one prefix, so
+# Wi-Fi's more specific route would keep the local traffic: the cable must
+# not take it over (nor turn Wi-Fi off) then.
+prefix_mismatch() {
+  _fip=$(iface_ip "$WIFI_IF")
+  _fmask=$(iface_mask "$WIFI_IF")
+  [ -n "$_fip" ] && [ -n "$_fmask" ] && [ "$_fmask" != "$2" ] || return 1
+  _short=$(echo "$2 $_fmask" | awk '{
+    split($1, a, "."); split($2, b, ".")
+    x = ((a[1] * 256 + a[2]) * 256 + a[3]) * 256 + a[4]
+    y = ((b[1] * 256 + b[2]) * 256 + b[3]) * 256 + b[4]
+    print (x < y ? $1 : $2) }')
+  [ "$(network_of "$1" "$_short")" = "$(network_of "$_fip" "$_short")" ]
 }
 
 gateway_lost() {
@@ -749,6 +773,7 @@ worker_main() {
   NEXT_GATEWAY_CHECK=0
   NOT_BEFORE=0
   DHCP_STARTED_AT=""
+  PREFIX_LOGGED=""
   write_state starting phy_wait
 
   # Phase 1: dependencies + PHY readiness, bounded. phy-host writes
@@ -985,6 +1010,18 @@ use_cable() {
     fi
     return
   fi
+  if prefix_mismatch "$_uip" "$_umask"; then
+    if [ -f "$NET_STATE" ] || [ -f "$LAN_DEV_FILE" ]; then
+      cleanup_net
+    fi
+    demote_wired_default "$_uif"
+    [ "$PREFIX_LOGGED" = "$_uip/$_umask" ] ||
+      log "$_uif ($_uip, mask $_umask) is on Wi-Fi's network with another mask ($(iface_mask "$WIFI_IF")): local traffic stays on $WIFI_IF"
+    PREFIX_LOGGED="$_uip/$_umask"
+    write_state degraded_routing prefix_mismatch
+    return
+  fi
+  PREFIX_LOGGED=""
   if gateway_lost; then
     if [ -f "$NET_STATE" ] || [ -f "$LAN_DEV_FILE" ]; then
       cleanup_net
@@ -1023,6 +1060,31 @@ use_cable() {
   else
     write_state degraded_routing route_apply_failed
   fi
+}
+
+# Called by the egress guard when the worker has gone while the cable carried
+# local traffic or Wi-Fi was off: undo what the worker had set up, as a
+# hand-back to Wi-Fi does (cleanup_net: Wi-Fi reconnected, codex-lan-dev
+# gone, routes and ARP as they were), so the hub can be reached over Wi-Fi
+# even if the adapter still has its link. Without waiting for the lock: a
+# start, stop or restart holding it sorts things out itself, and the guard
+# asks again 2 s later. Prints "recovered" when it did something; false while
+# something is left to do (a refused reconnect, the lock busy).
+recover_usb_eth() {
+  lock_try || return 1
+  if worker_running; then
+    lock_release
+    return 0
+  fi
+  if [ -f "$LAN_DEV_FILE" ] || [ -f "$NET_STATE" ] || wifi_suspended; then
+    log "the USB Ethernet worker has stopped: local traffic back on $WIFI_IF"
+    cleanup_net
+    led_sync
+    write_state failed worker_stopped
+    echo recovered
+  fi
+  lock_release
+  ! wifi_suspended && [ ! -f "$LAN_DEV_FILE" ]
 }
 
 start_usb_eth() {
@@ -1256,10 +1318,11 @@ case "$1" in
   stop-if-disabled) stop_usb_eth if-disabled ;;
   restart) restart_usb_eth ;;
   status) status_usb_eth ;;
+  recover) recover_usb_eth ;;
   overview) overview_usb_eth ;;
   worker) echo $$ > "$WORKER_PIDFILE"; worker_main ;;  # tests drive the worker in the foreground
   *)
-    echo "usage: $0 {start [--force]|stop|stop-if-disabled|restart|status|overview}" >&2
+    echo "usage: $0 {start [--force]|stop|stop-if-disabled|restart|recover|status|overview}" >&2
     exit 2
     ;;
 esac

@@ -39,6 +39,8 @@ const FAILED = {
     "The hub found the adapter but couldn't load its driver. Install Melodious again, then try again."],
   no_network_interface: ["No wired interface appeared",
     "The adapter's driver loaded, but no wired network interface appeared. Unplug the adapter, plug it back in, and try again."],
+  worker_stopped: ["Stopped unexpectedly",
+    "The part of the hub that watches the cable stopped, so the hub moved local traffic back to Wi-Fi and turned Wi-Fi back on. Try again; if it keeps happening, restart the hub."],
 };
 
 const STARTING = {
@@ -120,6 +122,13 @@ export function ethernetState(status) {
       return { tone: "warn", title, detail };
     }
     case "degraded_routing":
+      if (status.reason === "prefix_mismatch") {
+        return {
+          tone: "warn",
+          title: "Connected by cable · subnet mask differs from Wi-Fi's",
+          detail: `The cable's address ${ip || ""}${status.netmask ? ` (mask ${status.netmask})` : ""} is on Wi-Fi's network, but with a different subnet mask. The hub can't move local traffic to the cable then, so it stays on Wi-Fi, and Wi-Fi stays on. Give the cable the same subnet mask as Wi-Fi.`,
+        };
+      }
       return {
         tone: "warn",
         title: "Connected, but routing isn't set up",
