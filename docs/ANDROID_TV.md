@@ -99,7 +99,10 @@ How a TV turns on from standby depends on how it sleeps:
   "network standby" or "quick start" setting): the hub sends the power key.
 - **Network down** (deep standby): the hub sends a Wake-on-LAN packet to the
   TV's address on the network (learned when it pairs) and then the key if it's
-  still needed.
+  still needed. Many TVs power fully on from Wake-on-LAN, and some report
+  standby for a moment while they boot, so after a Wake-on-LAN the hub waits
+  5 s from the TV's latest state report before it presses the key. A key during
+  that boot would turn the TV off again.
   The packet goes to the hub's own subnet broadcast address (for example
   `192.168.1.255`) as well as `255.255.255.255`. With the cloud blocker on, the hub
   has no default route, so only the subnet address can be sent.

@@ -754,14 +754,16 @@ struct cmd { int code; int dir; int retry; char link[200]; long long at, start; 
  * PowerOn longer, since a TV woken by Wake-on-LAN takes a while to come back.
  * Commands behind a PowerOn don't age while it is pending or the TV is waking:
  * their clock restarts when it is done (tv_release). After the power key the
- * TV gets WAKE_CONFIRM_MS to report "on". A PowerOn retried after the TV
- * dropped waits RETRY_SETTLE_MS after the new session's state report before it
- * decides, so a TV that took the key and is booting isn't keyed off again. */
+ * TV gets WAKE_CONFIRM_MS to report "on". A PowerOn that sent Wake-on-LAN, or
+ * was retried after the TV dropped, waits WAKE_SETTLE_MS after the session's
+ * latest state report before it presses the key: many TVs power fully on from
+ * Wake-on-LAN (or the key that was ignored) and report standby for a moment
+ * while booting, and a key then would turn them off again. */
 #define CMD_WAIT_MS 8000
 #define POWER_ON_WAIT_MS 20000
 #define WAKE_CONFIRM_MS 8000
 #define WAKE_RETRIES 1
-#define RETRY_SETTLE_MS 3000
+#define WAKE_SETTLE_MS 5000
 /* A connected TV pings every 5 s: this long without anything from it means it
  * isn't listening. While a PowerOn waits for an unreachable TV, Wake-on-LAN is
  * sent again this often (a TV still shutting down can miss one). */
@@ -1251,8 +1253,9 @@ static void tv_flush(struct tv *t) {
 			/* remote_set_active carries no power state: wait for remote_start,
 			 * or a stale is_on could toggle the TV the wrong way. */
 			if (!t->state_known) return;
-			if (c->retry && now - t->state_at < RETRY_SETTLE_MS) return;
 			int want_on = code == PSEUDO_POWER_ON;
+			if (want_on && !t->is_on && (c->retry || (t->last_wol && t->last_wol >= c->at))
+			    && now - t->state_at < WAKE_SETTLE_MS) return;
 			if (t->is_on == want_on) {
 				DBG("TV %s: already %s", t->id, want_on ? "on" : "off");
 				code = 0;

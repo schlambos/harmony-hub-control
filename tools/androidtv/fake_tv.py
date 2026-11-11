@@ -196,7 +196,9 @@ class FakeTV:
         for 1.5 s, like a TV that is still shutting down), quiet-once (ignore
         the next power-on key and go silent on that connection, no pings) or
         offline (close the remote connection and refuse new ones);
-        wake-on-return makes a power-drop-once TV come back on by itself.
+        wake-on-return makes a power-drop-once TV come back on by itself;
+        boot-on=<s>: a TV that is off when a connection starts reports standby,
+        then turns on by itself <s> later (as when Wake-on-LAN powers it on).
         True for a flag, the value for name=value, None if absent."""
         for tok in self.mode().split():
             key, _, value = tok.partition("=")
@@ -287,13 +289,20 @@ class FakeTV:
         last_ping = time.time()
         start_at = None  # a delayed remote_start (mode start-delay=<s>)
         quiet = False    # quiet-once: this connection says nothing more
+        boot_at = None   # boot-on=<s>: when this TV, woken off, turns on by itself
         try:
             while True:
-                msg = f.recv(0.2 if start_at else 1.0)
+                msg = f.recv(0.2 if start_at or boot_at else 1.0)
                 if self.opt("offline"):
                     raise ConnectionError("offline")
                 if quiet:
                     continue
+                if boot_at and time.time() >= boot_at:
+                    boot_at = None
+                    self.on = True
+                    self.awake_at = time.time()
+                    log("power", on=True, by="boot")
+                    f.send(self.start_message())
                 if start_at and time.time() >= start_at:
                     start_at = None
                     log("remote_start_sent")
@@ -308,6 +317,11 @@ class FakeTV:
                     log("remote_configured", features=get(get(msg, 1), 1, 0))
                     f.send(field_bytes(2, field_uint(1, FEATURES)))
                 elif get(msg, 2) is not None:
+                    boot = self.opt("boot-on")
+                    if boot and not self.on:
+                        # Woken by Wake-on-LAN, it powers fully on, but
+                        # reports standby until it has booted.
+                        boot_at = time.time() + float(boot)
                     delay = self.opt("start-delay")
                     if delay:
                         start_at = time.time() + float(delay)
@@ -338,7 +352,12 @@ class FakeTV:
                         raise ConnectionError("dropped off while shutting down")
                     self.keys.append(code)
                     log("key", code=code, direction=direction, awake=self.awake())
-                    if code == 26:
+                    if code == 26 and boot_at:
+                        # Keyed while booting: it finishes, then turns off.
+                        boot_at = None
+                        log("power", on=False, by="keyed while booting")
+                        f.send(self.start_message())
+                    elif code == 26:
                         self.on = not self.on
                         log("power", on=self.on)
                         wake = self.opt("wake-delay")
@@ -400,7 +419,7 @@ def main() -> None:
     ap.add_argument("--bt", default="AA:BB:CC:00:11:22", help="Bluetooth address in the certificate CN")
     ap.add_argument("--accept-unpaired", action="store_true")
     ap.add_argument("--mode-file", help="behave as this file says: early-ack, no-ack, start-delay=<s>, vendor=<name>, "
-                                        "wake-delay=<s>, power-drop-once, wake-on-return, quiet-once, offline (space-separated)")
+                                        "wake-delay=<s>, power-drop-once, wake-on-return, boot-on=<s>, quiet-once, offline (space-separated)")
     args = ap.parse_args()
     tv = FakeTV(args)
     threading.Thread(target=tv.serve, args=(args.pair_port, tv.pairing), daemon=True).start()

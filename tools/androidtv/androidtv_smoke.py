@@ -443,6 +443,32 @@ def main() -> int:
         assert fake.count("app_link", since=mark) == 0, fake.events[mark:]
         assert "PowerOff cancels a PowerOn not sent yet; dropped 2 queued command(s)" in open(log_path).read()
 
+        # A TV that Wake-on-LAN powers fully on reports standby while it boots:
+        # the PowerOn waits for that to settle instead of keying it off again.
+        set_mode("vendor=Hisense")
+        end = time.time() + 10
+        while not (call(args.port, "/status")["tvs"] or [{}])[0].get("connected") and time.time() < end:
+            time.sleep(0.1)
+        cmd("PowerOff")
+        time.sleep(1)
+        set_mode("vendor=Hisense offline")
+        end = time.time() + 6
+        while (call(args.port, "/status")["tvs"] or [{}])[0].get("connected") and time.time() < end:
+            time.sleep(0.1)
+        mark = len(fake.events)
+        cmd("PowerOn")
+        cmd("InputHdmi2")
+        time.sleep(1)
+        set_mode("vendor=Hisense boot-on=2")
+        fake.wait_for("power", since=mark, timeout=20, on=True, by="boot")
+        e = fake.wait_for("app_link", since=mark, timeout=10, link=hisense + "3")
+        assert e["awake"] is True, e
+        assert fake.count("key", since=mark, code=26) == 0, "keyed a TV that was booting on from Wake-on-LAN"
+        set_mode("vendor=Hisense")
+        mark = len(fake.events)
+        cmd("PowerOff")
+        fake.wait_for("power", since=mark, on=False)
+
         # A burst of keys to an unreachable TV doesn't push its PowerOn out of
         # the queue.
         set_mode("vendor=Hisense offline")
