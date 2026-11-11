@@ -52,11 +52,30 @@ of them.
 | VolumeUp, VolumeDown, Mute | Volume keys. Holding a button repeats, as with any IP command |
 | ChannelUp, ChannelDown, PrevChannel | Channel keys |
 | Play, Pause, PlayPause, Stop, FastForward, Rewind, SkipForward, SkipBack, Record | Media keys |
-| InputHdmi1 to InputHdmi4, InputNext | The HDMI input keys and the input menu. The device's inputs HDMI 1-4 use them |
+| InputHdmi1 to InputHdmi4, InputNext | HDMI 1-4 (see Inputs) and the input menu. The device's inputs HDMI 1-4 use them |
 | Number0 to Number9, Red, Green, Yellow, Blue, Captions | Those keys |
 
-Whether a TV honours the HDMI input keys depends on the TV. If yours doesn't,
-let a source switch it by HDMI-CEC, or use InputNext.
+## Inputs
+
+InputHdmi1 to InputHdmi4 send Android's HDMI input keys (KEYCODE_TV_INPUT_HDMI_1
+to 4), except on TVs known to ignore them (if the TV offers app links):
+
+| TV (vendor it reports) | InputHdmi<n> opens |
+|---|---|
+| Hisense | the TV's own input, `content://android.media.tv/passthrough/com.hisense.tv.hitvinput%2F.hdmi.HdmiTvInputService%2FHW<n+1>` |
+
+The TV names its vendor when it connects; the hub's log says
+`TV <id> is a <vendor> <model>`, and `/api/androidtv/status` shows it. These
+were checked on a Hisense 75U8H (Google TV): the HDMI keys do nothing, the
+input URIs switch to HDMI 1, 2 and 3. A TV can show an input this way even
+when nothing is plugged into it (its own menu greys those out).
+
+If your TV ignores the keys and isn't listed, let a source switch it by
+HDMI-CEC, or use InputNext.
+
+When an activity turns the TV on and then picks an input, the input waits until
+the TV reports that it is on (up to 8 s after the power key): a TV that is still
+waking up ignores it.
 
 ## Power
 
@@ -64,6 +83,13 @@ PowerOn and PowerOff are discrete for the Harmony engine, but many TVs ignore
 Android's separate wake and sleep keys and only answer the power key. So the hub
 sends the power key only when the TV reports the other state: PowerOn on a TV
 that is already on does nothing.
+
+If a TV ignores the power key (one that is still shutting down from a PowerOff a
+moment ago does) and drops off the network, or goes silent on the connection,
+the hub sends Wake-on-LAN and the power key once more. While PowerOn waits for
+a TV that can't be reached, Wake-on-LAN is repeated every 5 s. If the TV still
+doesn't come on, the commands an activity queued behind PowerOn (its input, say)
+are dropped rather than sent to it later.
 
 How a TV turns on from standby depends on how it sleeps:
 

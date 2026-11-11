@@ -175,15 +175,34 @@ class FakeTV:
         self.paired_clients: set[bytes] = set()
         self.lock = threading.Lock()
         self.remote_conns: list[Framed] = []
+        self.awake_at = 0.0       # wake-delay: "on" is reported from then on
+        self.power_dropped = False
+        self.power_quieted = False
+        self.refuse_until = 0.0   # power-drop-once: off the network until then
 
     def mode(self) -> str:
-        """Test misbehaviour, read from --mode-file at each step: early-ack,
-        no-ack or start-delay=<seconds>; empty for a well-behaved TV."""
+        """Test behaviour, read from --mode-file at each step: space-separated
+        options (see opt()); empty for a well-behaved TV."""
         path = self.args.mode_file
         try:
             return open(path).read().strip() if path else ""
         except OSError:
             return ""
+
+    def opt(self, name: str):
+        """One mode option: early-ack, no-ack, start-delay=<s>, vendor=<name>,
+        wake-delay=<s> (report "on" that long after the power key),
+        power-drop-once (ignore the next power-on key and drop off the network
+        for 1.5 s, like a TV that is still shutting down), quiet-once (ignore
+        the next power-on key and go silent on that connection, no pings) or
+        offline (close the remote connection and refuse new ones);
+        wake-on-return makes a power-drop-once TV come back on by itself.
+        True for a flag, the value for name=value, None if absent."""
+        for tok in self.mode().split():
+            key, _, value = tok.partition("=")
+            if key == name:
+                return value if value else True
+        return None
 
     def context(self) -> ssl.SSLContext:
         ctx = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)
@@ -227,13 +246,13 @@ class FakeTV:
                     with open(self.args.code_file, "w") as cf:
                         cf.write(code + "\n")
                 f.send(ok + field_bytes(31, b""))
-                if self.mode() == "early-ack":
+                if self.opt("early-ack"):
                     # A peer acknowledging a secret it never got.
                     log("early_ack")
                     f.send(ok + field_bytes(41, field_bytes(1, b"\0" * 32)))
             elif get(msg, 40) is not None:
                 secret = get(get(msg, 40), 1, b"")
-                if self.mode() == "no-ack":
+                if self.opt("no-ack"):
                     # Keep the connection open and never confirm the code.
                     log("secret_ignored")
                     while f.recv(120) is not None:
@@ -259,16 +278,22 @@ class FakeTV:
             sock.close()
             return
         f = Framed(sock)
-        f.send(field_bytes(1, field_uint(1, FEATURES) + field_bytes(2, field_bytes(1, b"Fake") + field_bytes(2, b"FakeCo"))))
+        vendor = str(self.opt("vendor") or "FakeCo").encode()
+        f.send(field_bytes(1, field_uint(1, FEATURES) + field_bytes(2, field_bytes(1, b"Fake") + field_bytes(2, vendor))))
         configured = False
         with self.lock:
             self.remote_conns.append(f)
         log("remote_connected")
         last_ping = time.time()
         start_at = None  # a delayed remote_start (mode start-delay=<s>)
+        quiet = False    # quiet-once: this connection says nothing more
         try:
             while True:
                 msg = f.recv(0.2 if start_at else 1.0)
+                if self.opt("offline"):
+                    raise ConnectionError("offline")
+                if quiet:
+                    continue
                 if start_at and time.time() >= start_at:
                     start_at = None
                     log("remote_start_sent")
@@ -283,9 +308,9 @@ class FakeTV:
                     log("remote_configured", features=get(get(msg, 1), 1, 0))
                     f.send(field_bytes(2, field_uint(1, FEATURES)))
                 elif get(msg, 2) is not None:
-                    mode = self.mode()
-                    if mode.startswith("start-delay="):
-                        start_at = time.time() + float(mode.split("=", 1)[1])
+                    delay = self.opt("start-delay")
+                    if delay:
+                        start_at = time.time() + float(delay)
                     else:
                         f.send(self.start_message())
                     f.send(field_bytes(50, field_uint(6, 100) + field_uint(7, self.volume) + field_uint(8, 0)))
@@ -294,23 +319,49 @@ class FakeTV:
                 elif get(msg, 10) is not None:
                     k = get(msg, 10)
                     code, direction = get(k, 1, 0), get(k, 2, 0)
+                    # the once-only modes re-arm when they are taken out of the mode file
+                    if not self.opt("power-drop-once"):
+                        self.power_dropped = False
+                    if not self.opt("quiet-once"):
+                        self.power_quieted = False
+                    if code == 26 and not self.on and self.opt("quiet-once") and not self.power_quieted:
+                        self.power_quieted = True
+                        quiet = True
+                        log("power_quiet")
+                        continue
+                    if code == 26 and not self.on and self.opt("power-drop-once") and not self.power_dropped:
+                        self.power_dropped = True
+                        self.refuse_until = time.time() + 1.5
+                        if self.opt("wake-on-return"):
+                            self.on = True   # comes back on by itself (Wake-on-LAN did it)
+                        log("power_dropped")
+                        raise ConnectionError("dropped off while shutting down")
                     self.keys.append(code)
-                    log("key", code=code, direction=direction)
+                    log("key", code=code, direction=direction, awake=self.awake())
                     if code == 26:
                         self.on = not self.on
                         log("power", on=self.on)
-                        f.send(self.start_message())
+                        wake = self.opt("wake-delay")
+                        if self.on and wake:
+                            self.awake_at = time.time() + float(wake)
+                            start_at = self.awake_at
+                        else:
+                            f.send(self.start_message())
                     elif code in (24, 25):
                         self.volume = max(0, min(100, self.volume + (1 if code == 24 else -1)))
                         f.send(field_bytes(50, field_uint(6, 100) + field_uint(7, self.volume) + field_uint(8, 0)))
                 elif get(msg, 90) is not None:
-                    log("app_link", link=get(get(msg, 90), 1, b"").decode())
+                    log("app_link", link=get(get(msg, 90), 1, b"").decode(), awake=self.awake())
         except (ConnectionError, OSError, ssl.SSLError) as exc:
             log("remote_closed", why=str(exc))
         finally:
             with self.lock:
                 if f in self.remote_conns:
                     self.remote_conns.remove(f)
+
+    def awake(self) -> bool:
+        """On, and done waking (wake-delay)."""
+        return self.on and time.time() >= self.awake_at
 
     def serve(self, port: int, handler) -> None:
         srv = socket.create_server((self.args.host, port), reuse_port=False)
@@ -321,6 +372,9 @@ class FakeTV:
             def run(raw=raw):
                 try:
                     if self.args.trust_wait and self.args.trust and not os.path.exists(self.args.trust):
+                        raw.close()
+                        return
+                    if time.time() < self.refuse_until or (port == self.args.remote_port and self.opt("offline")):
                         raw.close()
                         return
                     sock = self.context().wrap_socket(raw, server_side=True)
@@ -345,7 +399,8 @@ def main() -> None:
     ap.add_argument("--code-file", help="write the pairing code here")
     ap.add_argument("--bt", default="AA:BB:CC:00:11:22", help="Bluetooth address in the certificate CN")
     ap.add_argument("--accept-unpaired", action="store_true")
-    ap.add_argument("--mode-file", help="misbehave as this file says (early-ack, no-ack, start-delay=<s>)")
+    ap.add_argument("--mode-file", help="behave as this file says: early-ack, no-ack, start-delay=<s>, vendor=<name>, "
+                                        "wake-delay=<s>, power-drop-once, wake-on-return, quiet-once, offline (space-separated)")
     args = ap.parse_args()
     tv = FakeTV(args)
     threading.Thread(target=tv.serve, args=(args.pair_port, tv.pairing), daemon=True).start()

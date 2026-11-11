@@ -457,7 +457,7 @@ See [ANDROID_TV.md](ANDROID_TV.md).
 
 | Method | Path | Body | Answer |
 | --- | --- | --- | --- |
-| GET | `/api/androidtv/status` | | `identity` (`ready`, `preparing` or `none`) and `tvs`: each `id`, `name`, `host`, `mac`, `connected`, `on`, `volume`, `volumeMax`, `muted`, `keysSent`, `connects`, `error` |
+| GET | `/api/androidtv/status` | | `identity` (`ready`, `preparing` or `none`) and `tvs`: each `id`, `name`, `vendor`, `model` (as the TV reports them once connected; empty before), `host`, `mac`, `connected`, `on`, `volume`, `volumeMax`, `muted`, `keysSent`, `connects`, `error` |
 | GET | `/api/androidtv/discover` | | Starts a 2.5 s mDNS search and answers what has been found so far: `found`, each `name`, `host` and `paired` (the TV's id when the hub already has it). Ask again to see more |
 | POST | `/api/androidtv/pair-start` | `{"host":"192.168.1.40","name":"Den TV"}` | The pairing state (below). The TV shows a code once the state is `code` |
 | GET | `/api/androidtv/pair-status` | | `state`: `idle`, `preparing` (the hub is making its key, first time only), `connecting`, `code`, `checking`, `paired` (with `tvId`) or `failed` (with `error`) |
