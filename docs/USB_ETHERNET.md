@@ -261,6 +261,12 @@ and refreshes while the page is open.
 - **Micro-USB device mode is unavailable while host mode is active.** Switching
   the AR9330 USB controller to host mode disconnects the USB gadget path until
   USB Ethernet is turned off and the hub reboots.
+- **A driver update needs a reboot.** The service loads each module once and
+  never reloads one it finds loaded, since unloading it would drop a working
+  cable. So when an install replaces a USB Ethernet module that is loaded
+  (`/proc/modules`, read before anything is replaced), the installer reboots
+  the hub afterwards; the Mac app reboots for any change in that folder. With
+  `--no-apply-cloud-restart` the installer says to reboot by hand instead.
 - **Keep `ar7240-ehci` bound until reboot.** Stopping the service downs the
   network interface and kills its `udhcpc` process, but deliberately leaves the
   `ar7240-ehci` platform device registered for the rest of the boot to avoid

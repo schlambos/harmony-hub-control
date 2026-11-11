@@ -24,8 +24,10 @@
 # intended change.
 set -eu
 
-SCRIPT_DIR=$(cd "$(dirname "$0")" && pwd)
-REPO_DIR=$(cd "$SCRIPT_DIR/.." && pwd)
+# CDPATH= : with CDPATH set, cd prints the directory and SCRIPT_DIR would
+# capture it twice.
+SCRIPT_DIR=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
+REPO_DIR=$(CDPATH= cd -- "$SCRIPT_DIR/.." && pwd)
 TOOLS="$SCRIPT_DIR/toolchains"
 WORK="$SCRIPT_DIR/tmp/usb-eth-asix"
 THIRD="$REPO_DIR/third_party/linux-2.6.31-harmony"

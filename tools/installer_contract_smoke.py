@@ -122,6 +122,10 @@ class FakeHub:
         self.fail_link = False
         # harmony-hub-root staging folders: path -> (bytes, files).
         self.root_stages: dict[str, tuple[int, int]] = {}
+        # Module names /proc/modules lists, and whether reading it times out.
+        self.loaded_modules: set[str] = set()
+        self.proc_modules_timeout = False
+        self.proc_modules_fail = False
         self.next_inode = 100
         # Report a fresh inode per path, as the hub's unionfs does after a reboot.
         self.union_inodes = False
@@ -254,6 +258,14 @@ class FakeHub:
                 f"flash type=0xf15f083d total_bytes={self.flash_total} free_bytes={free} "
                 f"avail_bytes={free} path={INST.FLASH_PATH}\n"
             ), ""
+
+        if c == "cat /proc/modules":
+            self.events.append(("proc_modules",))
+            if self.proc_modules_timeout:
+                raise INST.subprocess.TimeoutExpired(c, 30)
+            if self.proc_modules_fail:
+                return 1, "", "cat: can't open '/proc/modules'"
+            return 0, "".join(f"{m} 12345 0 - Live 0xc0000000\n" for m in sorted(self.loaded_modules)), ""
 
         if c == INST.ROOT_TOOL_SCAN:
             lines = [
@@ -1284,6 +1296,83 @@ def candidate_flash(stdout: str) -> list[tuple[str, str, int]]:
                 int(re.search(r" flash=(\d+)", line).group(1)),
             ))
     return rows
+
+
+class PythonInstallerUsbNetModules(unittest.TestCase):
+    """[PYTHON BEHAVIORAL] a replaced USB Ethernet module that is loaded
+    needs a reboot; one that isn't loaded doesn't."""
+
+    ASIX = INST.USB_NET_MODULES_DIR + "asix.ko"
+
+    def setUp(self):
+        self.hub = FakeHub()
+        prime_current_hub(self.hub)
+        self.hub.fs[self.ASIX] = {"data": b"an older asix.ko\n", "mode": "644"}
+        self.harness = InstallerHarness(self.hub)
+        self.addCleanup(self.harness.close)
+
+    def argv(self) -> list[str]:
+        return [a for a in self.harness.base_argv() if a != "--no-apply-cloud-restart"]
+
+    def test_loaded_module_update_reboots(self):
+        """...reading /proc/modules before anything is replaced, so a module
+        loaded from the new file mid-install doesn't count."""
+        self.hub.loaded_modules = {"usbnet", "asix"}
+        code, stdout, stderr = self.harness.run(self.argv())
+        self.assertEqual(code, 0, stderr or stdout)
+        self.assertIn(("service", "reboot"), self.hub.events)
+        self.assertIn("loads the updated USB Ethernet driver", stdout)
+        events = self.hub.events
+        first_write = next(i for i, e in enumerate(events) if e[0] == "persistent_write")
+        self.assertLess(events.index(("proc_modules",)), first_write)
+        self.assertEqual(events.count(("proc_modules",)), 1)
+
+    def test_unreadable_module_list_reboots_to_be_safe(self):
+        """...a timeout reading /proc/modules counts as loaded, not a crash."""
+        self.hub.loaded_modules = {"usbnet"}
+        self.hub.proc_modules_timeout = True
+        code, stdout, stderr = self.harness.run(self.argv())
+        self.assertEqual(code, 0, stderr or stdout)
+        self.assertIn(("service", "reboot"), self.hub.events)
+
+    def test_failed_module_list_read_reboots_to_be_safe(self):
+        """...so does a read that fails (non-zero exit)."""
+        self.hub.loaded_modules = {"usbnet"}
+        self.hub.proc_modules_fail = True
+        code, stdout, stderr = self.harness.run(self.argv())
+        self.assertEqual(code, 0, stderr or stdout)
+        self.assertIn(("service", "reboot"), self.hub.events)
+
+    def test_first_install_with_no_restart_flag_gives_no_reboot_advice(self):
+        """...the advice is for replaced modules only, not newly created ones."""
+        del self.hub.fs[self.ASIX]
+        code, stdout, stderr = self.harness.run(self.harness.base_argv())
+        self.assertEqual(code, 0, stderr or stdout)
+        self.assertNotIn("reboot the hub to load it", stdout)
+
+    def test_unloaded_module_update_does_not_reboot(self):
+        self.hub.loaded_modules = {"usbnet"}
+        code, stdout, stderr = self.harness.run(self.argv())
+        self.assertEqual(code, 0, stderr or stdout)
+        self.assertNotIn(("service", "reboot"), self.hub.events)
+
+    def test_no_module_change_does_not_read_proc_modules(self):
+        self.hub.fs[self.ASIX] = {"data": (INST.PAYLOAD / "modules" / "usb-net" / "asix.ko").read_bytes(), "mode": "644"}
+        self.hub.fs[INST.WEBUI_DEST] = {"data": b"an older codex_webui\n", "mode": "755"}  # something else to install
+        self.hub.loaded_modules = {"asix"}
+        code, stdout, stderr = self.harness.run(self.argv())
+        self.assertEqual(code, 0, stderr or stdout)
+        self.assertIn(("new_copy", INST.WEBUI_DEST), self.hub.events)
+        self.assertNotIn(("proc_modules",), self.hub.events)
+        self.assertNotIn(("service", "reboot"), self.hub.events)
+
+    def test_no_restart_flag_skips_the_check_and_says_to_reboot(self):
+        self.hub.loaded_modules = {"asix"}
+        code, stdout, stderr = self.harness.run(self.harness.base_argv())
+        self.assertEqual(code, 0, stderr or stdout)
+        self.assertNotIn(("proc_modules",), self.hub.events)
+        self.assertNotIn(("service", "reboot"), self.hub.events)
+        self.assertIn("reboot the hub to load it", stdout)
 
 
 class PythonInstallerFlash(unittest.TestCase):
@@ -3732,6 +3821,22 @@ class PowerShellStaticContract(unittest.TestCase):
         self.assertIn("$Cand.LinkMd5", self.text.split("function Add-NewCopyLink(", 1)[1].split("\nfunction ", 1)[0])
         self.assertIn("$cand.LinkMd5", self.text.split("function Test-Installed(", 1)[1].split("\nfunction ", 1)[0])
 
+    def test_usb_net_module_update_reboots_like_python(self):
+        """[PS1 STATIC] a loaded USB Ethernet module that changed reboots the
+        hub, read from /proc/modules only when restarts are allowed."""
+        self.assertEqual(self.ps_scalar("UsbNetModulesDir"), INST.USB_NET_MODULES_DIR)
+        body = self.text.split("function Read-LoadedModules(", 1)[1].split("\nfunction ", 1)[0]
+        self.assertIn('"cat /proc/modules"', body)
+        self.assertIn("} catch {", body)
+        self.assertLess(self.main.index("if (-not $NoApplyCloudRestart) { Read-LoadedModules }"),
+                        self.main.index("Add-RollbackCopies"))
+        self.assertIn("$usbNetChanged = (-not $NoApplyCloudRestart) -and (Test-UsbNetModulesChanged)", self.main)
+        self.assertIn('(Get-UsbNetModuleNames @("replace")).Count -gt 0', self.main)
+        self.assertIn("$script:LoadedModules = $names", body)
+        changed = self.text.split("function Test-UsbNetModulesChanged(", 1)[1].split("\n}\n", 1)[0]
+        self.assertNotIn("Read-LoadedModules", changed)
+        self.assertIn("-or $usbNetChanged)", self.main)
+
     def test_contract_switches_present(self):
         """[PS1 STATIC] -PreflightOnly and -CleanInstall switches exist."""
         self.assertIn("[switch]$PreflightOnly", self.text)
@@ -3825,7 +3930,7 @@ class PowerShellStaticContract(unittest.TestCase):
                          "else /data/codex/bin/codex_hal_ltcp rf.info '{}' 8 2>&1; fi"):
             self.assertIn(fragment, python_command)
             self.assertIn(fragment, command)
-        self.assertIn("-or $multiRemoteChanged) -and -not $NoApplyCloudRestart", self.main)
+        self.assertIn("-or $multiRemoteChanged -or $usbNetChanged) -and -not $NoApplyCloudRestart", self.main)
         # force-off, the mount probe, and the reboot decided by the running hal too.
         self.assertRegex(self.text, r'\[ValidateSet\("on", "off", "force-off"\)\]\s*\[string\]\$MultiRemote')
         self.assertIn('$MultiRemoteForce = $MultiRemote -eq "force-off"', self.text)
