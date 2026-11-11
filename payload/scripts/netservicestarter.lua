@@ -48,7 +48,29 @@ local CLOUD_HOST_PATTERNS = {
   "pubnub%.net$"
 }
 
+local MELODIOUS_OFF_FILE = "/etc/melodious-off"
+local LEGACY_MELODIOUS_OFF_FILE = "/data/codex/melodious-off"
+
+local function fileExists(path)
+  if not io or not io.open then
+    return false
+  end
+  local f = io.open(path, "r")
+  if not f then
+    return false
+  end
+  f:close()
+  return true
+end
+
+local function melodiousOff()
+  return fileExists(MELODIOUS_OFF_FILE) or fileExists(LEGACY_MELODIOUS_OFF_FILE)
+end
+
 local function cloudBlockerEnabled()
+  if melodiousOff() then
+    return false
+  end
   if not io or not io.open then
     return true
   end
@@ -1190,8 +1212,10 @@ local function handleEvent(event)
     end
 
     if event.label ~= "lo" then
-      startTimeSync()
-      startTimezoneWatch()
+      if not melodiousOff() then
+        startTimeSync()
+        startTimezoneWatch()
+      end
       maybeStartCloudTasks()
       system.broadcastMessageExceptMeNoWarning(MSG_NETSERVICE_NEW_ADDRESS, {
         label = event.label,
@@ -1208,9 +1232,13 @@ local function handleEvent(event)
   end
 end
 
-installCloudHttpGuard()
-installOfflineApiGuards()
-installActivityRestrictions()
+if not melodiousOff() then
+  installCloudHttpGuard()
+  installOfflineApiGuards()
+  installActivityRestrictions()
+else
+  log.notice("codex melodious off: skipping offline guards and activity restrictions")
+end
 
 if mfgData.hasNetwork == true then
   while not system.isMessageRegistered("config_unload") or not system.isMessageRegistered("get_setup_account") do

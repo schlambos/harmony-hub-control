@@ -10,6 +10,7 @@ local connect = require("tasks.connectserver.core.utils")
 local REQUEST_FILE = "/var/volatile/codex-activity-request.json"
 local RESPONSE_FILE = "/var/volatile/codex-activity-response.json"
 local CLOUD_BLOCKER_FILE = "/data/codex/cloud_blocker.conf"
+local MELODIOUS_OFF_FILE = "/etc/melodious-off"
 -- The activityengine task is the only listener for process_activity, so a
 -- synchronous send is a FIFO barrier behind the init_activity_engine that
 -- harmonyengine broadcasts while handling config_new.
@@ -86,7 +87,19 @@ local function writeFileAtomic(path, data)
   return true
 end
 
+local function melodiousOff()
+  local f = io.open(MELODIOUS_OFF_FILE, "r")
+  if not f then
+    return false
+  end
+  f:close()
+  return true
+end
+
 local function blockerActive()
+  if melodiousOff() then
+    return false
+  end
   local value = readFile(CLOUD_BLOCKER_FILE)
   return value ~= nil and string.match(value, "^%s*1[%s]*$") ~= nil
 end
@@ -2775,7 +2788,7 @@ end
 local function workerLoop()
   os.remove(REQUEST_FILE)
   os.remove(RESPONSE_FILE)
-  while not stopRequested do
+  while not stopRequested and not melodiousOff() do
     local raw = readFile(REQUEST_FILE)
     if raw then
       os.remove(REQUEST_FILE)
@@ -2807,6 +2820,9 @@ local function workerLoop()
 end
 
 local function start()
+  if melodiousOff() then
+    return false
+  end
   stopRequested = false
   if not workerTask then
     workerTask = system.addTask("codexactivity", workerLoop)
@@ -2815,6 +2831,9 @@ local function start()
 end
 
 function discover(self)
+  if melodiousOff() then
+    return {}
+  end
   start()
   return {
     ["codex-activity"] = {
@@ -2830,8 +2849,11 @@ function pair(self, gatewayId, gateway)
 end
 
 function monitor(self)
+  if melodiousOff() then
+    return
+  end
   start()
-  while not stopRequested do
+  while not stopRequested and not melodiousOff() do
     system.sleep(60000)
   end
 end

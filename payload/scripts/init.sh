@@ -1,4 +1,5 @@
 #!/bin/sh
+[ -f /etc/melodious-off ] && exit 0
 PATH=/data/codex/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
 LOG=/cache/codex-init.log
 HUB_ID=$(cat /data/codex/hub_id 2>/dev/null)

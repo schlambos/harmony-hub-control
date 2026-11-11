@@ -50,7 +50,7 @@ start_ap() {
 
 monitor() {
   count=0
-  while true; do
+  while [ ! -f /etc/melodious-off ]; do
     val=$(cat /sys/class/input/input0/tde 2>/dev/null)
     case "$val" in
       1*) count=$(expr "$count" + 1) ;;
@@ -66,7 +66,8 @@ monitor() {
 }
 
 case "$1" in
-  monitor) monitor ;;
-  start|boot-tde|"") start_ap ;;
+  monitor) [ -f /etc/melodious-off ] && exit 0; monitor ;;
+  boot-tde) [ -f /etc/melodious-off ] && exit 0; start_ap ;;
+  start|"") start_ap ;;
   *) echo "usage: $0 [start|boot-tde|monitor]" ;;
 esac

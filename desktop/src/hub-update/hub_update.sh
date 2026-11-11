@@ -12,7 +12,8 @@
 #   when boot scripts or plugins changed.
 #
 #   sh hub_update.sh status <dest>...  one "file <md5|absent> <dest>" line each,
-#                                      then "memfree_kb N" and "hub_id yes|no"
+#                                      then "memfree_kb N", "hub_id yes|no", and
+#                                      "melodious off" if /etc/melodious-off is set
 #   sh hub_update.sh apply <stage>     <stage>/plan lines:
 #                                      "<md5> <mode> <reboot 0|1> <name> <dest>",
 #                                      files in <stage>/files/<name>; progress and
@@ -23,7 +24,8 @@
 # wc, sort or printf).
 
 set -u
-HANDOFF_ROOT=/data/codex-backups
+R=${HUB_UPDATE_ROOT:-}
+HANDOFF_ROOT=$R/data/codex-backups
 HANDOFF_BUDGET=262144
 HANDOFF_KEEP=3
 # :8080 in /proc/net/tcp; tests may point the health check elsewhere.
@@ -36,15 +38,16 @@ md5_of() { md5sum "$1" 2>/dev/null | cut -d' ' -f1; }
 # no MemAvailable. Cached would also count the tmpfs files this update stages,
 # so credit only free memory plus what the kernel can reclaim: inactive file
 # cache and reclaimable slab.
-usable_kb() { awk '/^MemFree:|^Inactive\(file\):|^SReclaimable:/ {s += $2} END {print s + 0}' /proc/meminfo; }
+usable_kb() { awk '/^MemFree:|^Inactive\(file\):|^SReclaimable:/ {s += $2} END {print s + 0}' "$R/proc/meminfo"; }
 size_of() { ls -l "$1" 2>/dev/null | awk '{print $5}'; }
 
 status() {
   for d in "$@"; do
-    if [ -f "$d" ]; then echo "file $(md5_of "$d") $d"; else echo "file absent $d"; fi
+    if [ -f "$R$d" ]; then echo "file $(md5_of "$R$d") $d"; else echo "file absent $d"; fi
   done
   echo "memfree_kb $(usable_kb)"
-  if [ -f /data/codex/hub_id ]; then echo "hub_id yes"; else echo "hub_id no"; fi
+  if [ -f "$R/data/codex/hub_id" ]; then echo "hub_id yes"; else echo "hub_id no"; fi
+  if [ -f "$R/etc/melodious-off" ] || [ -f "$R/data/codex/melodious-off" ]; then echo "melodious off"; fi
 }
 
 apply() {
@@ -107,8 +110,12 @@ apply() {
   }
 
   say "STEP checking"
-  if [ ! -f /data/codex/hub_id ]; then
+  if [ ! -f "$R/data/codex/hub_id" ]; then
     result refused "This hub has no Melodious setup yet (/data/codex/hub_id). Install it once with the installer."
+    return 1
+  fi
+  if [ -f "$R/etc/melodious-off" ] || [ -f "$R/data/codex/melodious-off" ]; then
+    result refused "Melodious is turned off on this hub. Run with --turn-on to turn it back on first."
     return 1
   fi
   while read md5 mode reboot name dest; do

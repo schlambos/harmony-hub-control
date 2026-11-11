@@ -442,6 +442,28 @@ class ServiceTests(unittest.TestCase):
             sb.run("stop")
             proc.wait(timeout=10)
 
+    def test_melodious_off_skips_start_and_exits_running_worker(self):
+        sb = Sandbox({})
+        off_marker = sb.dir / "melodious-off"
+        off_marker.write_text("off\n")
+        for args in (["start"], ["start", "--force"]):
+            rc = sb.run(*args, USBETH_OFF_MARKER=str(off_marker))
+            self.assertEqual(rc.returncode, 0)
+            self.assertFalse((sb.run_dir / "codex-usb-eth-worker.pid").exists())
+            self.assertEqual(sb.calls(), "")
+
+        off_marker.unlink()
+        proc = sb.spawn_worker(USBETH_OFF_MARKER=str(off_marker), USBETH_MONITOR_POLL=1)
+        try:
+            sb.wait_state("operational")
+            off_marker.write_text("off\n")
+            self.assertEqual(proc.wait(timeout=5), 0)
+            self.assertFalse((sb.run_dir / "codex-usb-eth-worker.pid").exists())
+        finally:
+            if proc.poll() is None:
+                proc.kill()
+            sb.run("stop")
+
 
 if __name__ == "__main__":
     unittest.main(verbosity=2)
