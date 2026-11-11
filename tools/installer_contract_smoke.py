@@ -290,8 +290,13 @@ class FakeHub:
                 return 0, f"sh: {INST.HAL_REMOTES_DEST}: not found\nrc=127\n", ""
             if not self.hal_copy_loads:
                 return 0, "Segmentation fault\nrc=139\n", ""
-            # As the hub prints it: the last usage line has no newline of its own.
-            return 0, f"Usage: {INST.HAL_REMOTES_DEST}\n\t-d: enable debug\n\t-w: disable watchdog thread\nrc=1\n", ""
+            # As the hub prints it: the usage text has no trailing newline, so
+            # the status lands glued to it ("...threadrc=1") unless the check
+            # command puts it on its own line (the f6bd325 fix).
+            usage = f"Usage: {INST.HAL_REMOTES_DEST}\n\t-d: enable debug\n\t-w: disable watchdog thread"
+            if "echo; echo rc=" in c:
+                return 0, usage + "\nrc=1\n", ""
+            return 0, usage + "rc=1\n", ""
 
         if c == f"echo 0 > {INST.TWO_SCREEN_CONF}":
             self.set_file(INST.TWO_SCREEN_CONF, b"0\n", "644")
