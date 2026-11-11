@@ -60,6 +60,7 @@ import subprocess
 import sys
 import tempfile
 import unittest
+from unittest import mock
 from pathlib import Path
 
 TOOLS_DIR = Path(__file__).resolve().parent
@@ -122,6 +123,8 @@ class FakeHub:
         # harmony-hub-root staging folders: path -> (bytes, files).
         self.root_stages: dict[str, tuple[int, int]] = {}
         self.next_inode = 100
+        # Report a fresh inode per path, as the hub's unionfs does after a reboot.
+        self.union_inodes = False
         self.ram_free_kb = 26_000
         self.ram_inactive_file_kb = 0
         self.ram_slab_reclaimable_kb = 0
@@ -256,7 +259,10 @@ class FakeHub:
             for path in (INST.ROOT_TOOL_DROPBEAR, INST.DROPBEAR_DEST):
                 entry = self.fs.get(path)
                 if entry is not None and path not in self.symlinks:
-                    lines.append(f"dropbear_copy inode={self.inode(entry)} path={path}")
+                    links = sum(1 for e in self.fs.values() if e is entry)
+                    # The hub's unionfs, after a reboot, numbers each path afresh.
+                    inode = 900000 + len(path) if self.union_inodes else self.inode(entry)
+                    lines.append(f"dropbear_copy inode={inode} links={links} path={path}")
             return 0, "".join(line + "\n" for line in lines), ""
 
         if c == INST.ROOT_TOOL_DROPBEAR_REMOVE:
@@ -1414,6 +1420,115 @@ class PythonInstallerFlash(unittest.TestCase):
         self.assertEqual(self.hub.fs["/usr/sbin/dropbear"]["data"], wrapper)
         self.assertEqual(self.hub.leftovers(), [])
 
+    # A stand-in for the other build of the same Dropbear (the real stripped
+    # one is a MIPS strip away), registered as equivalent for the test.
+    OTHER_BUILD = DROPBEAR[: len(DROPBEAR) - 41644]
+
+    def other_build_known(self):
+        version = INST.DROPBEAR_BUILDS[hashlib.md5(self.DROPBEAR).hexdigest()]
+        other = {hashlib.md5(self.OTHER_BUILD).hexdigest(): version}
+        return mock.patch.dict(INST.DROPBEAR_BUILDS, other)
+
+    def test_payload_dropbear_is_a_known_build(self):
+        """[PYTHON BEHAVIORAL] the shipped dropbearmulti is listed in
+        DROPBEAR_BUILDS, or no other build would count as the same program."""
+        self.assertIn(hashlib.md5(self.DROPBEAR).hexdigest(), INST.DROPBEAR_BUILDS)
+
+    def test_a_new_dropbear_version_still_replaces_the_old_one(self):
+        """[PYTHON BEHAVIORAL] builds count as each other only within one
+        Dropbear version: a hub with an older version's build gets ours."""
+        ours = hashlib.md5(self.DROPBEAR).hexdigest()
+        old = hashlib.md5(self.OTHER_BUILD).hexdigest()
+        with mock.patch.dict(INST.DROPBEAR_BUILDS, {old: "2020.1"}):
+            self.assertFalse(INST.hub_copy_current(INST.DROPBEAR_DEST, old, ours))
+        with self.other_build_known():
+            self.assertTrue(INST.hub_copy_current(INST.DROPBEAR_DEST, old, ours))
+            self.assertFalse(INST.hub_copy_current(INST.WEBUI_DEST, old, ours))
+
+    def test_root_tool_other_dropbear_build_is_linked(self):
+        """[PYTHON BEHAVIORAL] a root tool that ships the other (.pdr-stripped)
+        build still gets its copy reused by hard link, and the install verifies
+        the linked file against that build."""
+        self.root_tool_hub()
+        self.hub.fs[INST.ROOT_TOOL_DROPBEAR] = {"data": self.OTHER_BUILD, "mode": "755"}
+        with self.other_build_known():
+            code, stdout, stderr = self.harness.run(self.harness.base_argv("--hub-id", FAKE_HUB_ID))
+        self.assertEqual(code, 0, stderr or stdout)
+        self.assertIs(self.hub.fs[INST.DROPBEAR_DEST], self.hub.fs[INST.ROOT_TOOL_DROPBEAR])
+        self.assertEqual(self.hub.fs[INST.DROPBEAR_DEST]["data"], self.OTHER_BUILD)
+        self.assertIn(("link", INST.ROOT_TOOL_DROPBEAR, INST.DROPBEAR_DEST), self.hub.events)
+        self.assertNotIn(("new_copy", INST.DROPBEAR_DEST), self.hub.events)
+        self.assertEqual(kv_value(stdout, "flash_link dest"),
+                         f"{INST.DROPBEAR_DEST} source={INST.ROOT_TOOL_DROPBEAR}")
+        self.assertEqual(self.hub.leftovers(), [])
+
+    def test_installed_other_dropbear_build_is_left_alone(self):
+        """[PYTHON BEHAVIORAL] once linked, the other build counts as current:
+        the next run leaves it (and the link) alone instead of copying ours."""
+        self.root_tool_hub()
+        self.hub.fs[INST.ROOT_TOOL_DROPBEAR] = {"data": self.OTHER_BUILD, "mode": "755"}
+        with self.other_build_known():
+            code, stdout, stderr = self.harness.run(self.harness.base_argv("--hub-id", FAKE_HUB_ID))
+            self.assertEqual(code, 0, stderr or stdout)
+            self.hub.events.clear()
+            code, stdout, stderr = self.harness.run(self.harness.base_argv())
+        self.assertEqual(code, 0, stderr or stdout)
+        line = next(l for l in stdout.splitlines()
+                    if l.startswith(f"destination dest={INST.DROPBEAR_DEST} "))
+        self.assertIn("action=unchanged", line)
+        self.assertNotIn(("new_copy", INST.DROPBEAR_DEST), self.hub.events)
+        self.assertIs(self.hub.fs[INST.DROPBEAR_DEST], self.hub.fs[INST.ROOT_TOOL_DROPBEAR])
+
+    def test_linked_dropbear_is_not_a_leftover_after_a_reboot(self):
+        """[PYTHON BEHAVIORAL] after a reboot the hub's unionfs shows the two
+        names of the linked Dropbear with different inodes; their link counts
+        and MD5 still mark them as one file, so it is neither reported as a
+        spare copy nor removed with --remove-root-tool-leftovers."""
+        self.root_tool_hub()
+        self.hub.fs[INST.ROOT_TOOL_DROPBEAR] = {"data": self.OTHER_BUILD, "mode": "755"}
+        with self.other_build_known():
+            code, stdout, stderr = self.harness.run(self.harness.base_argv("--hub-id", FAKE_HUB_ID))
+            self.assertEqual(code, 0, stderr or stdout)
+            self.hub.union_inodes = True
+            code, stdout, stderr = self.harness.run(self.harness.base_argv("--remove-root-tool-leftovers"))
+        self.assertEqual(code, 0, stderr or stdout)
+        self.assertNotIn(f"path={INST.ROOT_TOOL_DROPBEAR}", stdout)
+        self.assertNotIn(f"removed_leftover={INST.ROOT_TOOL_DROPBEAR}", stdout)
+        self.assertIs(self.hub.fs[INST.DROPBEAR_DEST], self.hub.fs[INST.ROOT_TOOL_DROPBEAR])
+
+    def test_separate_root_dropbear_copy_is_credited_at_its_own_size(self):
+        """[PYTHON BEHAVIORAL] a separate (unlinked) root-tool copy of the
+        other, smaller build is reported, and credited, at its own size."""
+        self.root_tool_hub()
+        self.hub.fs[INST.ROOT_TOOL_DROPBEAR] = {"data": self.OTHER_BUILD, "mode": "755"}
+        self.hub.fail_link = True  # the first install has to copy ours
+        with self.other_build_known():
+            code, stdout, stderr = self.harness.run(self.harness.base_argv("--hub-id", FAKE_HUB_ID))
+            self.assertEqual(code, 0, stderr or stdout)
+            code, stdout, stderr = self.harness.run(self.harness.base_argv())
+        self.assertEqual(code, 0, stderr or stdout)
+        self.assertIn(f"root_tool_leftover bytes={len(self.OTHER_BUILD)} files=1 path={INST.ROOT_TOOL_DROPBEAR}", stdout)
+        # On a full hub, the advice names the credit: ours scaled to the root copy's size.
+        ours_flash = next(int(flash) for dest, _action, flash in candidate_flash(stdout) if dest == INST.DROPBEAR_DEST)
+        self.hub.fs[INST.WEBUI_DEST] = {"data": b"an older codex_webui\n", "mode": "755"}  # something to install
+        self.hub.available_bytes = 1
+        with self.other_build_known():
+            code, stdout, _stderr = self.harness.run(self.harness.base_argv())
+        self.assertEqual(kv_value(stdout, "verdict"), INST.VERDICT_CAPACITY)
+        expect = INST.kib(ours_flash * len(self.OTHER_BUILD) // len(self.DROPBEAR))
+        self.assertIn(f"--remove-root-tool-leftovers) frees about {expect}", stdout)
+
+    def test_unknown_root_tool_dropbear_is_not_linked(self):
+        """[PYTHON BEHAVIORAL] a root-tool Dropbear that is neither build gets
+        an ordinary copy of ours, never a link."""
+        self.root_tool_hub()
+        self.hub.fs[INST.ROOT_TOOL_DROPBEAR] = {"data": self.OTHER_BUILD, "mode": "755"}
+        code, stdout, stderr = self.harness.run(self.harness.base_argv("--hub-id", FAKE_HUB_ID))
+        self.assertEqual(code, 0, stderr or stdout)
+        self.assertIn(("new_copy", INST.DROPBEAR_DEST), self.hub.events)
+        self.assertEqual(self.hub.fs[INST.DROPBEAR_DEST]["data"], self.DROPBEAR)
+        self.assertIsNone(kv_value(stdout, "flash_link dest"))
+
     def test_hard_link_lets_a_tight_hub_install(self):
         """[PYTHON BEHAVIORAL] flash that fits everything but a second Dropbear
         is enough once the root tool's copy is linked, and too little without it."""
@@ -1549,6 +1664,24 @@ class PythonInstallerFlash(unittest.TestCase):
         self.assertIn(INST.DROPBEAR_DEST, self.hub.fs)
         self.assertGreater(self.hub.available_bytes, before)
         self.assertFalse(any(e[0] in ("handoff", "service", "new_copy") for e in self.hub.events))
+
+    def test_root_tool_dropbear_kept_while_ours_is_damaged(self):
+        """[PYTHON BEHAVIORAL] while our Dropbear isn't a known build (a
+        damaged copy), the root tool's working one is never offered for removal."""
+        # A root copy that isn't a listed build is never a link source, so
+        # only the known-build check on ours can keep it.
+        argv = self.harness.base_argv("--preflight-only", "--remove-root-tool-leftovers")
+        prime_current_hub(self.hub)
+        self.hub.fs[INST.ROOT_TOOL_DROPBEAR] = {"data": self.OTHER_BUILD, "mode": "755"}
+        code, stdout, stderr = self.harness.run(argv)
+        self.assertEqual(code, 0, stderr or stdout)
+        self.assertIn(f"root_tool_leftover bytes={len(self.OTHER_BUILD)} files=1 path={INST.ROOT_TOOL_DROPBEAR}", stdout)
+
+        self.hub.fs[INST.DROPBEAR_DEST] = {"data": self.DROPBEAR[:4096], "mode": "755"}
+        code, stdout, stderr = self.harness.run(argv)
+        self.assertEqual(code, 0, stderr or stdout)
+        self.assertNotIn(f"path={INST.ROOT_TOOL_DROPBEAR}", stdout)
+        self.assertIn(INST.ROOT_TOOL_DROPBEAR, self.hub.fs)
 
     def test_spare_root_tool_dropbear_kept_while_ssh_uses_it(self):
         """[PYTHON BEHAVIORAL] with the root tool's wrapper still in
@@ -2415,6 +2548,23 @@ class PowerShellStaticContract(unittest.TestCase):
         match = re.search(rf"\${re.escape(variable)} = @\((.*?)\)", self.text, re.S)
         assert match, f"missing ${variable} array"
         return re.findall(r'"([^"]+)"', match.group(1))
+
+    def test_dropbear_builds_match_python(self):
+        """[PS1 STATIC] $DropbearBuilds lists the same builds as DROPBEAR_BUILDS."""
+        match = re.search(r"\$DropbearBuilds = @\{(.*?)\n\}", self.text, re.S)
+        self.assertIsNotNone(match)
+        builds = dict(re.findall(r'"([0-9a-f]{32})"\s*=\s*"([^"]+)"', match.group(1)))
+        self.assertEqual(builds, INST.DROPBEAR_BUILDS)
+        for name in ("Set-UpgradeGates", "Set-DropbearLink"):
+            body = self.text.split(f"function {name}(", 1)[1].split("\nfunction ", 1)[0]
+            self.assertIn("Test-HubCopyCurrent", body, name)
+        removable = self.text.split("function Test-RootToolDropbearRemovable(", 1)[1].split("\nfunction ", 1)[0]
+        self.assertIn("$DropbearLinks[$RootToolDropbear] -ne 1", removable)
+        self.assertIn("$DropbearBuilds.Keys -ccontains [string]$Probe[$DropbearDest]", removable)
+        credit = self.text.split("function Get-LeftoverCredit(", 1)[1].split("\nfunction ", 1)[0]
+        self.assertIn('$Probe[$RootToolDropbear]["size"]', credit)
+        self.assertIn("$Cand.LinkMd5", self.text.split("function Add-NewCopyLink(", 1)[1].split("\nfunction ", 1)[0])
+        self.assertIn("$cand.LinkMd5", self.text.split("function Test-Installed(", 1)[1].split("\nfunction ", 1)[0])
 
     def test_contract_switches_present(self):
         """[PS1 STATIC] -PreflightOnly and -CleanInstall switches exist."""

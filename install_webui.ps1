@@ -22,8 +22,8 @@
   anyway, every copy is removed and nothing live changed), then renamed into
   place, codex_webui last. Unchanged files are left alone. Originals are
   copied into RAM first so any later failure restores them with their
-  observed modes. An identical dropbearmulti left by harmony-hub-root is
-  hard-linked instead of copied.
+  observed modes. The dropbearmulti harmony-hub-root leaves (the same build
+  as ours, or the .pdr-stripped one) is hard-linked instead of copied.
 .PARAMETER PreflightOnly
   Volatile preflight only: stage/verify/compare/report under
   /var/volatile/codex-install-*. No persistent writes, pruning, handoff,
@@ -97,15 +97,37 @@ $Jffs2DirentHeader = 40
 $FlashMarginBytes = 64 * 1024
 $FlashMarginPercent = 5
 
-# What harmony-hub-root leaves behind. Its dropbearmulti is the same build as
-# ours, and its staging folders hold about 0.5 MB of base64 chunks each.
+# What harmony-hub-root leaves behind. Its dropbearmulti is our Dropbear
+# ($DropbearBuilds), and its staging folders hold about 0.5 MB of base64
+# chunks each.
 $DropbearDest = "/data/codex/bin/dropbearmulti"
 $RootToolDropbear = "/data/rootssh/bin/dropbearmulti"
 $RootToolStagePattern = '^/data/codexssh_[A-Za-z0-9_]+_stage$'
+# Known builds of Dropbear, by MD5: their version. Same as DROPBEAR_BUILDS in
+# install_webui.py: builds of one version load the same image, so either
+# counts as the installed Dropbear and the root tool's copy is reused
+# whichever it is (2025.89 as built, and .pdr-stripped as harmony-hub-root
+# ships it). A new Dropbear release gets its own version, so it still
+# replaces the old one.
+$DropbearBuilds = @{
+    "3733327fd04bca282dbf06f33da0bf6c" = "2025.89"  # as built, 577296 bytes
+    "ceabc15471be6f67f1e13fccd20a9508" = "2025.89"  # .pdr stripped, 535652 bytes
+}
+
+function Test-HubCopyCurrent([string]$Dest, [string]$Have, [string]$Want) {
+    # True when a file with MD5 $Have on the hub can stand for ours ($Want) at
+    # $Dest: the same bytes, or at the Dropbear destination another build of
+    # the same Dropbear version. -ccontains: a hashtable's ContainsKey
+    # ignores case; MD5s here are exact.
+    if ($Have -ceq $Want) { return $true }
+    if ($Dest -cne $DropbearDest) { return $false }
+    if (-not (($DropbearBuilds.Keys -ccontains $Have) -and ($DropbearBuilds.Keys -ccontains $Want))) { return $false }
+    return $DropbearBuilds[$Have] -ceq $DropbearBuilds[$Want]
+}
 # The hub's ls has no -R; a root-tool stage holds files and a chunks/ folder.
 # Same command as ROOT_TOOL_SCAN in install_webui.py.
 $RootToolScan = @'
-for d in /data/codexssh_*_stage; do [ -d "$d" ] || continue; set -- $(ls -l "$d" "$d/chunks" 2>/dev/null | awk '/^-/ {s += $5; n++} END {print s + 0, n + 0}'); echo "root_tool_stage bytes=$1 files=$2 path=$d"; done; for f in /data/rootssh/bin/dropbearmulti /data/codex/bin/dropbearmulti; do [ -f "$f" ] && [ ! -L "$f" ] || continue; set -- $(ls -il "$f"); echo "dropbear_copy inode=$1 path=$f"; done
+for d in /data/codexssh_*_stage; do [ -d "$d" ] || continue; set -- $(ls -l "$d" "$d/chunks" 2>/dev/null | awk '/^-/ {s += $5; n++} END {print s + 0, n + 0}'); echo "root_tool_stage bytes=$1 files=$2 path=$d"; done; for f in /data/rootssh/bin/dropbearmulti /data/codex/bin/dropbearmulti; do [ -f "$f" ] && [ ! -L "$f" ] || continue; set -- $(ls -il "$f"); echo "dropbear_copy inode=$1 links=$3 path=$f"; done
 '@
 # Removes the root tool's Dropbear only while SSH runs ours.
 $RootToolDropbearRemove = @'
@@ -488,6 +510,8 @@ $CapacityStage = ""
 $RootToolStages = [System.Collections.ArrayList]::new()
 # Inode of each Dropbear copy, by path.
 $DropbearCopies = @{}
+# Hard-link count of each, by path.
+$DropbearLinks = @{}
 $MqttExplicitSupplied = ($PSBoundParameters.ContainsKey("MqttBroker") -or
     $PSBoundParameters.ContainsKey("MqttPort") -or
     $PSBoundParameters.ContainsKey("MqttUser") -or
@@ -517,8 +541,13 @@ function New-Candidate([string]$Dest, [string]$Mode, [string]$Kind,
         FlashBytes = 0
         Action = "replace"
         StagedName = ""
-        # An identical file already on the hub that phase 1 hard-links.
+        # An identical (or, for Dropbear, equivalent) file already on the hub
+        # that phase 1 hard-links, and the MD5 and size it has.
         LinkSource = ""
+        LinkMd5 = ""
+        LinkBytes = 0
+        # phase 1 linked it rather than copying the payload
+        Linked = $false
     }
 }
 
@@ -974,7 +1003,7 @@ function Set-UpgradeGates() {
         $exists = ($null -ne $state) -and ($state["kind"] -eq "regular")
         if ($cand.Condition -eq "if-missing" -and $exists -and -not $CleanInstall) {
             $cand.Action = "preserve"
-        } elseif ($exists -and ($state["md5"] -ceq $cand.Md5) -and ($state["mode"] -ceq $cand.Mode)) {
+        } elseif ($exists -and ($state["mode"] -ceq $cand.Mode) -and (Test-HubCopyCurrent $cand.Dest ([string]$state["md5"]) $cand.Md5)) {
             $cand.Action = "unchanged"
         } elseif ($exists) {
             $cand.Action = "replace"
@@ -993,13 +1022,18 @@ function Set-UpgradeGates() {
 }
 
 function Set-DropbearLink() {
-    # Reuse harmony-hub-root's dropbearmulti when it is byte-identical.
+    # Reuse harmony-hub-root's dropbearmulti when it is the same build as
+    # ours, or another build of the same Dropbear ($DropbearBuilds).
     $source = $null
     if ($Probe.Contains($RootToolDropbear)) { $source = $Probe[$RootToolDropbear] }
+    if ($null -eq $source -or $source["kind"] -ne "regular") { return }
+    $md5 = [string]$source["md5"]
     foreach ($cand in $Candidates) {
         if ($cand.Dest -eq $DropbearDest -and $cand.Action -in @("replace", "create") -and
-            $null -ne $source -and $source["kind"] -eq "regular" -and $source["md5"] -ceq $cand.Md5) {
+            (Test-HubCopyCurrent $cand.Dest $md5 $cand.Md5)) {
             $cand.LinkSource = $RootToolDropbear
+            $cand.LinkMd5 = $md5
+            $cand.LinkBytes = [long]$source["size"]
         }
     }
 }
@@ -1008,6 +1042,7 @@ function Get-RootToolLeftovers() {
     $out = Invoke-Remote $RootToolScan $null 60000
     $RootToolStages.Clear()
     $DropbearCopies.Clear()
+    $DropbearLinks.Clear()
     foreach ($line in ($out -split "`n")) {
         $line = $line.Trim()
         if ($line -cmatch '^root_tool_stage bytes=(\d+) files=(\d+) path=(\S+)$') {
@@ -1016,10 +1051,14 @@ function Get-RootToolLeftovers() {
             if ($stage.Path -cmatch $RootToolStagePattern) { $RootToolStages.Add($stage) | Out-Null }
             continue
         }
-        if ($line -cmatch '^dropbear_copy inode=(\d+) path=(\S+)$') {
+        if ($line -cmatch '^dropbear_copy inode=(\d+) links=(\d+) path=(\S+)$') {
             $inode = $Matches[1]
-            $path = $Matches[2]
-            if ($path -in @($RootToolDropbear, $DropbearDest)) { $DropbearCopies[$path] = $inode }
+            $links = [int]$Matches[2]
+            $path = $Matches[3]
+            if ($path -in @($RootToolDropbear, $DropbearDest)) {
+                $DropbearCopies[$path] = $inode
+                $DropbearLinks[$path] = $links
+            }
         }
     }
 }
@@ -1027,8 +1066,14 @@ function Get-RootToolLeftovers() {
 function Test-RootToolDropbearRemovable() {
     # True when the root tool's Dropbear is a separate copy that SSH no longer
     # uses and phase 1 won't link.
-    if (-not ($DropbearCopies.Contains($DropbearDest) -and $DropbearCopies.Contains($RootToolDropbear))) { return $false }
-    if ($DropbearCopies[$DropbearDest] -eq $DropbearCopies[$RootToolDropbear]) { return $false }
+    # Separate means its only name: with a second link (ours, or anything
+    # else), removing it frees nothing. Inode numbers can't tell: the hub's
+    # unionfs numbers each path afresh after a reboot.
+    if (-not ($DropbearCopies.Contains($DropbearDest) -and $DropbearLinks.Contains($RootToolDropbear))) { return $false }
+    if ($DropbearLinks[$RootToolDropbear] -ne 1) { return $false }
+    # And only while ours is a working Dropbear: never trade the root tool's
+    # copy for a damaged one.
+    if (-not ($Probe.Contains($DropbearDest) -and ($DropbearBuilds.Keys -ccontains [string]$Probe[$DropbearDest]["md5"]))) { return $false }
     $wrapper = $Candidates | Where-Object { $_.Dest -eq "/usr/sbin/dropbear" } | Select-Object -First 1
     if ($null -eq $wrapper -or -not $Probe.Contains("/usr/sbin/dropbear")) { return $false }
     if ($Probe["/usr/sbin/dropbear"]["md5"] -cne $wrapper.Md5) { return $false }
@@ -1042,7 +1087,13 @@ function Get-LeftoverCredit() {
     foreach ($s in $RootToolStages) { $credit += [long][Math]::Floor($s.Bytes * 3 / 5) }
     if (Test-RootToolDropbearRemovable) {
         $dropbear = $Candidates | Where-Object { $_.Dest -eq $DropbearDest } | Select-Object -First 1
-        if ($null -ne $dropbear) { $credit += $dropbear.FlashBytes }
+        if ($null -ne $dropbear -and $dropbear.Bytes -gt 0) {
+            # Scaled to the root tool's copy, which may be the smaller build.
+            # (Its stripped .pdr compressed well, so this errs low: safe.)
+            $size = [long]$dropbear.Bytes
+            if ($Probe.Contains($RootToolDropbear) -and $Probe[$RootToolDropbear]["size"]) { $size = [long]$Probe[$RootToolDropbear]["size"] }
+            $credit += [long][Math]::Floor($dropbear.FlashBytes * $size / $dropbear.Bytes)
+        }
     }
     return $credit
 }
@@ -1251,7 +1302,7 @@ function Show-FlashReport() {
     foreach ($cand in (Get-ActiveCandidates)) {
         if ($cand.LinkSource) {
             KV "flash_link dest=$($cand.Dest) source=$($cand.LinkSource)"
-            Info "$($cand.Dest): harmony-hub-root's identical copy at $($cand.LinkSource) is reused as a hard link, so it takes no extra flash."
+            Info "$($cand.Dest): harmony-hub-root's copy of the same Dropbear at $($cand.LinkSource) is reused as a hard link, so it takes no extra flash."
         }
     }
     $leftovers = @()
@@ -1440,13 +1491,14 @@ function Remove-NewCopies() {
 }
 
 function Add-NewCopyLink($Cand, [string]$New) {
-    # Hard-link an identical file already on the hub as <dest>.codex-new.
+    # Hard-link an identical (or equivalent) file already on the hub as <dest>.codex-new.
     $cmd = "ln $(Remote-Quote $Cand.LinkSource) $(Remote-Quote $New) && " +
         "chmod $(Remote-Quote $Cand.Mode) $(Remote-Quote $New) && md5sum $(Remote-Quote $New)"
     $r = Invoke-RemoteRc $cmd $null 60000
     $last = ($r.Out.Trim() -split "`n")[-1].Trim()
-    if (($r.Code -eq 0) -and ($last -cmatch '^[0-9a-f]{32}  .+$') -and (($last -split "  ", 2)[0] -ceq $Cand.Md5)) {
+    if (($r.Code -eq 0) -and ($last -cmatch '^[0-9a-f]{32}  .+$') -and (($last -split "  ", 2)[0] -ceq $Cand.LinkMd5)) {
         Info "linked dest=$New to $($Cand.LinkSource) (no extra flash)"
+        $Cand.Linked = $true
         return $true
     }
     Invoke-RemoteRc ("rm -f " + (Remote-Quote $New)) $null 30000 | Out-Null
@@ -1490,7 +1542,9 @@ function Install-Sequence() {
         if ($r.Code -ne 0) { throw "rename failed for $($cand.Dest): $($r.Err.Trim())" }
         $NewCopies.Remove($new)
         foreach ($item in $Changed) { if ($item.Dest -eq $cand.Dest) { $item.Done = $true } }
-        Info "installed dest=$($cand.Dest) mode=$($cand.Mode) bytes=$($cand.Bytes)"
+        $shown = $cand.Bytes
+        if ($cand.Linked) { $shown = $cand.LinkBytes }
+        Info "installed dest=$($cand.Dest) mode=$($cand.Mode) bytes=$shown"
     }
 }
 
@@ -1500,13 +1554,16 @@ function Test-Installed() {
     $states = Get-FileStatus @($active | ForEach-Object { $_.Dest })
     foreach ($cand in $active) {
         $state = $states[$cand.Dest]
+        # A linked Dropbear is the root tool's copy, which may be the other build.
+        $wantBytes = $cand.Bytes; $wantMd5 = $cand.Md5
+        if ($cand.Linked) { $wantBytes = $cand.LinkBytes; $wantMd5 = $cand.LinkMd5 }
         if ($state["kind"] -cne "regular") {
             throw "post-install verification failed for $($cand.Dest): kind=$($state['kind'])"
         }
-        if ([long]$state["size"] -ne [long]$cand.Bytes) {
-            throw "post-install byte mismatch for $($cand.Dest): expected $($cand.Bytes) got $($state['size'])"
+        if ([long]$state["size"] -ne [long]$wantBytes) {
+            throw "post-install byte mismatch for $($cand.Dest): expected $wantBytes got $($state['size'])"
         }
-        if ($state["md5"] -cne $cand.Md5) {
+        if ($state["md5"] -cne $wantMd5) {
             throw "post-install checksum mismatch for $($cand.Dest)"
         }
         if ($state["mode"] -cne $cand.Mode) {
