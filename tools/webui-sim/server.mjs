@@ -19,6 +19,7 @@ import {
   validateDeviceSettings,
 } from "./public/js/views/device-settings-model.js";
 import { LIMITS, isSafeLabel } from "./public/js/views/ir-model.js";
+import { MAX_ACTIVITIES, isRestrictableId, normalizeWindows, restrictedAt } from "./public/js/views/restrictions-model.js";
 
 const SIM_DIR = path.dirname(fileURLToPath(import.meta.url));
 const PUBLIC_DIR = path.join(SIM_DIR, "public");
@@ -350,6 +351,21 @@ function handleActivityRun(res, params) {
   }
   if (activityId !== "-1" && !activityExists(activityId)) {
     sendError(res, 404, `unknown activityId ${activityId}`);
+    return;
+  }
+  // Like the hub: a start inside the activity's time restrictions is refused
+  // (engine code 568, answered 409); the running activity always passes.
+  const now = new Date();
+  if (activityId !== String(state.currentActivityId) &&
+      restrictedAt(simRestrictions[activityId], now.getDay(), now.getHours() * 60 + now.getMinutes())) {
+    logEvent({ kind: "activity-run", activityId, message: "refused: time restrictions" });
+    sendJson(res, 409, {
+      ok: false,
+      restricted: true,
+      error: "This activity can't be started now: it has time restrictions.",
+      activityId,
+      reply: JSON.stringify({ cmd: "harmony.engine?startActivity", code: "568", msg: "Activity is restricted at this time", data: `activityId=${state.currentActivityId}` })
+    });
     return;
   }
   state.currentActivityId = activityId;
@@ -734,6 +750,36 @@ function handleUsbEthSet(res, params) {
   if (want) simUsbEthEhciBound = true; // Like the hub: stop leaves EHCI registered.
   logEvent({ kind: "usb-eth", message: `USB Ethernet ${want ? "on" : "off"}` });
   sendJson(res, 200, simUsbEthState());
+}
+
+/* Activity time restrictions, like codex_webui's /api/activity-restrictions:
+   activity id -> its windows; an activity with none has no entry. */
+let simRestrictions = {};
+
+function handleRestrictionsSet(res, params) {
+  const activityId = typeof params.activityId === "string" ? params.activityId : "";
+  if (!isRestrictableId(activityId)) {
+    sendJson(res, 400, { ok: false, error: "Give the activity's id." });
+    return;
+  }
+  const { windows, error } = normalizeWindows(params.windows);
+  if (error) {
+    sendJson(res, 400, { ok: false, error });
+    return;
+  }
+  const next = { ...simRestrictions };
+  if (windows.length) {
+    if (!(activityId in next) && Object.keys(next).length >= MAX_ACTIVITIES) {
+      sendJson(res, 409, { ok: false, error: `Up to ${MAX_ACTIVITIES} activities can have time restrictions.` });
+      return;
+    }
+    next[activityId] = windows;
+  } else {
+    delete next[activityId];
+  }
+  simRestrictions = next;
+  logEvent({ kind: "restrictions", message: `Time restrictions for activity ${activityId}: ${windows.length || "none"}` });
+  sendJson(res, 200, { ok: true, activities: simRestrictions });
 }
 
 function simRfInfo() {
@@ -1533,7 +1579,8 @@ const EXPORTS = {
   "/export/devices": { file: "DeviceList.json", resource: () => state.deviceList },
   "/export/automation": { file: "AutomationConfig.json", resource: () => ({}) },
   "/export/mqtt": { file: "mqtt.json", resource: () => ({}) },
-  "/export/wifi": { file: "wifi.json", resource: () => ({}) }
+  "/export/wifi": { file: "wifi.json", resource: () => ({}) },
+  "/export/restrictions": { file: "activity-restrictions.json", resource: () => ({ version: 1, activities: simRestrictions }) }
 };
 
 function handleExport(res, pathname) {
@@ -1565,7 +1612,8 @@ function handleExport(res, pathname) {
       "MapList.json": state.mapList,
       "FunctionList.json": state.functionList,
       "DeviceList.json": state.deviceList,
-      "AutomationConfig.json": {}
+      "AutomationConfig.json": {},
+      "activity-restrictions.json": { version: 1, activities: simRestrictions }
     }, { "Content-Disposition": 'attachment; filename="harmony-owner-bundle.json"' });
     return;
   }
@@ -1582,7 +1630,7 @@ function handleExport(res, pathname) {
 /* Like codex_webui's request_same_origin_json(): the routes that change the
    radio or reboot the hub take only application/json, and a browser's Origin,
    when sent, must be this host. */
-const SAME_ORIGIN_JSON_ROUTES = new Set(["POST /api/multi-remote", "POST /api/remote-unpair", "POST /api/usb-eth"]);
+const SAME_ORIGIN_JSON_ROUTES = new Set(["POST /api/multi-remote", "POST /api/remote-unpair", "POST /api/usb-eth", "POST /api/activity-restrictions"]);
 const SAME_ORIGIN_JSON_ERROR =
   "This change takes a JSON request (Content-Type: application/json) from the hub's own web app.";
 
@@ -1771,6 +1819,12 @@ async function handleApi(req, res, pathname, url) {
       return;
     case "GET /api/multi-remote":
       sendJson(res, 200, simMultiRemoteState());
+      return;
+    case "GET /api/activity-restrictions":
+      sendJson(res, 200, { ok: true, activities: simRestrictions });
+      return;
+    case "POST /api/activity-restrictions":
+      handleRestrictionsSet(res, params);
       return;
     case "POST /api/multi-remote":
       handleMultiRemoteSet(res, params);

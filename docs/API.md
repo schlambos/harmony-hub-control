@@ -52,7 +52,10 @@ Invoke-RestMethod "http://<hub-ip>:8080/api/activity-run" -Method Post -Body @{
 
 `/api/activity-run` takes the form field `activityId`. Use `-1` as the
 activity ID to run `PowerOff`. An invalid ID gives `400`; an engine failure
-gives `502`.
+gives `502`. A start the hub refuses because of the activity's
+[time restrictions](#activity-time-restrictions) gives `409` with
+`"ok": false, "restricted": true`, an `error` text, and the engine's own
+answer (code `568`) in `reply`.
 
 Save the three activity resources as one transaction
 (`render_activity_save_json()`):
@@ -111,6 +114,55 @@ plugin restores all three previous resources and their metadata. The web
 endpoint performs a second semantic read-back and requests another local
 compensation if needed. Successful responses include `activityChanged`,
 `mapChanged`, `functionChanged`, `localOnly: true` and `remoteRefreshed`.
+
+### Activity time restrictions
+
+Times when an activity can't be started. They are kept in
+`/data/codex/activity-restrictions.json`, and `netservicestarter.lua`
+refuses a start inside one of an activity's times, whatever sent it (the
+paired remote, the Touch, this API, MQTT, the apps). An activity that is
+already on when a time begins keeps running, PowerOff is never refused,
+and nothing is refused while the hub's clock or time zone is unknown. A
+refused start answers with engine code `568`, which `/api/activity-run`
+turns into `409` with `"restricted": true`.
+
+```powershell
+Invoke-RestMethod "http://<hub-ip>:8080/api/activity-restrictions"
+```
+
+```json
+{
+  "ok": true,
+  "activities": {
+    "32923238": [
+      { "days": ["sat", "sun"], "start": "06:00", "end": "09:00" },
+      { "days": ["fri"], "start": "22:00", "end": "02:00" }
+    ]
+  }
+}
+```
+
+`POST /api/activity-restrictions` replaces one activity's times and answers
+with every activity's restrictions in the same shape:
+
+```powershell
+Invoke-RestMethod "http://<hub-ip>:8080/api/activity-restrictions" -Method Post `
+  -ContentType "application/json" `
+  -Body '{"activityId":"32923238","windows":[{"days":["sat","sun"],"start":"06:00","end":"09:00"}]}'
+```
+
+- `days`: any of `mon` `tue` `wed` `thu` `fri` `sat` `sun`, at least one.
+- `start`, `end`: `HH:MM` in the hub's time zone. `end` is exclusive and
+  may be `24:00`; an `end` before `start` runs past midnight and belongs to
+  the day it starts. `start` and `end` can't be equal.
+- Up to 8 times per activity and 64 activities. An empty `windows` list
+  lifts the activity's restrictions; with none left the file is removed.
+- The activity id is digits (PowerOff, `-1`, can't be restricted).
+- Like the radio routes, the POST takes only `application/json`, and a
+  browser `Origin`, when sent, must be the hub itself (else `403`). A bad
+  request answers `400` with an `error` naming the time that is wrong, and
+  leaves the file alone. The file is always rewritten from the checked
+  values, never stored as sent.
 
 ### Activity map identity rules
 
@@ -1133,7 +1185,8 @@ the underlying `connect.statedigest?get`.
 
 Every export is a GET handled by `send_file_download()`,
 `send_bundle_download()`, `send_cloud_download()`,
-`send_timezone_download()` or `send_bt_devices_download()`:
+`send_timezone_download()`, `send_bt_devices_download()` or
+`send_restrictions_download()`:
 
 ```text
 GET /export/bundle
@@ -1148,6 +1201,7 @@ GET /export/wifi
 GET /export/cloud
 GET /export/timezone
 GET /export/bluetooth
+GET /export/restrictions
 ```
 
 Exports are for backups and debugging. Do not share files containing local
@@ -1176,6 +1230,16 @@ empty when no time zone is stored.
 
 `/export/bluetooth` returns the saved Bluetooth device store as
 `bt-devices.json`; it returns an empty device list when no store exists.
+
+`/export/restrictions` returns the activity time restrictions as
+`activity-restrictions.json` (`{"version":1,"activities":{...}}`, see
+[Activity time restrictions](#activity-time-restrictions)); `activities` is
+empty when none are set. The bundle carries the same file under
+`activity-restrictions.json`, always, so restoring a bundle restores the
+restrictions exactly, lifting any set since. Bundles from before time
+restrictions have no such entry and leave them unchanged. An import (the
+`restrictions` target or a bundle) is checked like the POST above, all or
+nothing, and rewritten in the same shape.
 
 ## Software version and updates
 
@@ -1248,7 +1312,7 @@ carries.
 | POST | `/mqtt` | `handle_mqtt()` | `enabled`, `haDiscovery`, `host`, `port`, `username`, `password`, `keep_password`, `baseTopic`, `discoveryPrefix`, `clientId`, `name`, `pollSeconds`, `keepAlive` | Saves the MQTT bridge configuration and requests discovery. |
 | POST | `/wifi` | `handle_wifi()` | `ssid`, `password`, `keep_password`, `hidden`, `open`, `apply` | Saves the Wi-Fi configuration; `apply=reboot` reboots. An empty SSID, or a secured network with no password, is refused in the page message. |
 | POST | `/system` | `handle_system()` | `action` plus the fields for that action | `reboot`; `cloud`/`cloud_reboot` with `cloudBlocker`; `auth` with `authEnabled`, `authUsername`, `authPassword`; `timezone` with `timezone`, `tzPosix`; `rediscover`. |
-| POST | `/import` | `handle_import()` | `target`, `payload` | Imports one target: `bundle`, `devices`, `functions`, `protocols`, `activities`, `maps`, `automation`, `mqtt`, `wifi`, `cloud`, `bluetooth`. The payload is validated for its target before anything is written. |
+| POST | `/import` | `handle_import()` | `target`, `payload` | Imports one target: `bundle`, `devices`, `functions`, `protocols`, `activities`, `maps`, `automation`, `mqtt`, `wifi`, `cloud`, `bluetooth`, `restrictions`. The payload is validated for its target before anything is written. |
 | POST | `/ir/send` | `handle_ir_send()` | `deviceId`, `command` | Sends one saved IR command. |
 | POST | `/ir/device` | `handle_ir_device()` | `deviceId`, `name`, `manufacturer`, `model`, `type` | Updates a device's details. |
 | POST | `/ir/new-device` | `handle_ir_new_device()` | `name`, `manufacturer`, `model`, `type` | Creates a device. |
@@ -1272,6 +1336,7 @@ carries.
 | GET | `/api/activity-state` | `render_activity_state_json()` |
 | POST | `/api/activity-run` | `render_activity_run_json()` |
 | POST | `/api/activity-save` | `render_activity_save_json()` |
+| GET, POST | `/api/activity-restrictions` | `render_activity_restrictions_json()`, `render_activity_restrictions_set_json()` |
 | POST | `/api/device-settings` | `render_device_settings_json()` |
 | POST | `/api/ha-devices` | `render_ha_devices_json()` |
 | GET, POST | `/api/ha-state` | `render_ha_state_get_json()`, `render_ha_state_post_json()` |

@@ -1639,6 +1639,18 @@ select option {
   font-size: var(--fs-body-sm);
 }
 
+/* The clock after a name: this activity has time restrictions. */
+.act-row-restricted {
+  display: inline-block;
+  margin-left: 6px;
+  color: var(--on-surface-variant);
+  vertical-align: -2px;
+}
+
+.run-card .act-row-restricted {
+  color: inherit;
+}
+
 .act-row-warn {
   display: flex;
   align-items: center;

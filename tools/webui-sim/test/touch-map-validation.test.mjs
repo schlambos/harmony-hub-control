@@ -112,3 +112,18 @@ describe("netservicestarter.lua Touch Sync guards (LuaJIT)", () => {
     assert.match(out, /12\/12 checks passed/);
   });
 });
+
+describe("netservicestarter.lua activity time restrictions (LuaJIT)", () => {
+  it("refuses starts inside a restricted window and lets everything else through", (t) => {
+    const probe = spawnSync("luajit", ["-v"], { encoding: "utf8" });
+    if (probe.error || probe.status !== 0) {
+      t.skip("luajit is not available");
+      return;
+    }
+    const out = execFileSync("luajit", ["tools/touch-validator/netservicestarter-restrictions-test.lua"], {
+      cwd: new URL("../../../", import.meta.url).pathname,
+      encoding: "utf8",
+    });
+    assert.match(out, /40\/40 checks passed/);
+  });
+});
