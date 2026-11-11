@@ -382,6 +382,7 @@ sh tools/androidtv/wol_test.sh                    # codex_androidtv's Wake-on-LA
 luajit tools/touch-validator/codexactivity-validate-test.lua tools/webui-sim/fixtures/touch-maplist.json
 luajit tools/touch-validator/netservicestarter-guards-test.lua   # offline sync guards
 luajit tools/touch-validator/netservicestarter-restrictions-test.lua   # activity time restrictions
+luajit tools/touch-validator/netservicestarter-lan-advertise-test.lua   # discovery address and SSDP group on the USB Ethernet cable
 (cd Android && ./gradlew :core-protocol:test)    # Android protocol and graph tests
 node --test desktop/test/*.test.mjs               # macOS app units (after npm ci in desktop/)
 (cd desktop && npm run test:e2e)                  # macOS app end-to-end, against the simulator

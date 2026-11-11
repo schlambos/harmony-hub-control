@@ -135,6 +135,17 @@ hub with no Wi-Fi address at all, the cable's own default route counts.)
    host route goes the same way. The guard checks first that the interface
    still has a route on the gateway's subnet, the clock sync that it still has
    a route, and both use Wi-Fi otherwise.
+   **Discovery** follows too (`netservicestarter.lua`, every 5 s and on each
+   address change): the cable joins the SSDP group 239.255.255.250, and the
+   hub's address (the SSDP reply's `LOCATION`, `getNetworkAttribute("ipaddr")`
+   and the session address) becomes the cable's. Stock firmware joins the
+   group only on the interface its route named at boot (Wi-Fi) and always
+   advertises Wi-Fi's address, which Wi-Fi keeps while disconnected. Home
+   Assistant's Harmony integration takes a known hub's address from SSDP, so
+   without this it followed the Wi-Fi address and lost the hub whenever
+   Wi-Fi was off. With it, Home Assistant moves to the wired address at its
+   next SSDP scan (a few minutes) and stays there. The MAC address that's
+   reported stays Wi-Fi's.
 3. **The internet, with the cloud blocker off.** Once the cable has a default
    route of its own (from DHCP, or the static settings' gateway), Wi-Fi's
    default route moves to metric 20 as well. With the blocker on, the guard

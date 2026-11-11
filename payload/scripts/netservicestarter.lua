@@ -402,6 +402,125 @@ local function lanDev()
   return "ath0"
 end
 
+-- The hub's address for discovery and the rest of the engine (session.getIp:
+-- the SSDP reply's LOCATION, among others). Stock sets it to the address of
+-- the last netlink "newaddr", Wi-Fi's in practice, and clears it on any
+-- "deladdr". While a USB Ethernet adapter carries local traffic, that's the
+-- cable's address instead, and the cable joins the SSDP group too: the stock
+-- responder (transport/ssdpdiscovery.lua) joins 239.255.255.250 once, on the
+-- interface its route named at boot (Wi-Fi), so with Wi-Fi off the hub
+-- wasn't discoverable, and Home Assistant, which takes a known hub's address
+-- from SSDP, moved to the Wi-Fi address and lost the hub when Wi-Fi went off.
+-- Joining from our own socket is enough for the responder's socket to get
+-- the datagrams from the cable too (IP_MULTICAST_ALL, on by default). The
+-- reply's LOCATION (and every other stock "the hub's address": discovery
+-- info, Sonos and LIFX callbacks, the state digest) comes from
+-- getNetworkAttribute("ipaddr"), which common/config.lua answers with ath0's
+-- address, kept even while Wi-Fi is disconnected: while the cable carries
+-- local traffic it answers with the cable's.
+local SSDP_GROUP = "239.255.255.250"
+local addrByLabel = {}
+local lanAdvert = { ip = nil, sock = nil }
+local advertisedIp
+
+-- Modules are shared by the engine's tasks (see installCloudHttpGuard), so
+-- this covers the stock callers. Only "ipaddr", only while the cable carries
+-- local traffic; the MAC address and the rest stay Wi-Fi's.
+local function installNetworkAttributeOverride()
+  for _, name in ipairs({ "common.config", "works.system" }) do
+    local ok, mod = pcall(require, name)
+    if ok and type(mod) == "table" and type(mod.getNetworkAttribute) == "function" and not mod.__codexLanAddr then
+      local stock = mod.getNetworkAttribute
+      mod.getNetworkAttribute = function(attribute, ...)
+        if attribute == "ipaddr" and advertisedIp then
+          return advertisedIp
+        end
+        return stock(attribute, ...)
+      end
+      mod.__codexLanAddr = true
+    end
+  end
+end
+
+local function ifaceAddr(dev)
+  if addrByLabel[dev] then
+    return addrByLabel[dev]
+  end
+  -- An address the netlink loop didn't see (it takes one event per batch).
+  local p = io.popen("ifconfig " .. dev .. " 2>/dev/null")
+  if not p then
+    return nil
+  end
+  local out = p:read("*a") or ""
+  p:close()
+  -- Kept until a netlink event for it says otherwise: no fork every pass.
+  addrByLabel[dev] = string.match(out, "inet addr:(%d+%.%d+%.%d+%.%d+)")
+  return addrByLabel[dev]
+end
+
+local function ssdpJoin(ip)
+  if lanAdvert.ip == ip and lanAdvert.sock then
+    return
+  end
+  if lanAdvert.sock then
+    pcall(function() lanAdvert.sock:close() end)
+    lanAdvert.sock, lanAdvert.ip = nil, nil
+  end
+  if not ip then
+    return
+  end
+  local udp = socket.udp()
+  if not udp then
+    return
+  end
+  local ok = udp:setoption("ip-add-membership", { multiaddr = SSDP_GROUP, interface = ip })
+  if ok then
+    lanAdvert.sock, lanAdvert.ip = udp, ip
+    log.notice("codex lan advertise: SSDP group joined on", ip)
+  else
+    udp:close()
+  end
+end
+
+-- Puts the session address and the SSDP membership where local traffic goes.
+-- With Wi-Fi carrying it, only a missing address (after a "deladdr") or one
+-- on another interface (an adapter that isn't carrying local traffic) is
+-- corrected, to Wi-Fi's.
+local function lanAdvertSync()
+  local dev = lanDev()
+  local want
+  if dev ~= "ath0" then
+    want = ifaceAddr(dev)
+    ssdpJoin(want)
+  else
+    ssdpJoin(nil)
+  end
+  advertisedIp = want
+  if not want then
+    want = ifaceAddr("ath0")
+  end
+  if want and session.getIp() ~= want then
+    log.notice("codex lan advertise: hub address", want, "on", want == lanAdvert.ip and dev or "ath0")
+    session.setIp(want)
+  end
+end
+
+local lanAdvertTask
+local function startLanAdvertise()
+  if lanAdvertTask and system.taskStatus(lanAdvertTask) ~= "dead" then
+    return
+  end
+  lanAdvertTask = system.addTask("codex lan advertise", function()
+    while true do
+      local ok, err = pcall(lanAdvertSync)
+      if not ok then
+        log.error("codex lan advertise:", err)
+      end
+      system.sleep(5000)
+    end
+  end)
+end
+
 local function hasDefaultRoute()
   local f = io.open("/proc/net/route", "r")
   if not f then
@@ -1207,7 +1326,9 @@ local function handleEvent(event)
   if event.msgtype == "newaddr" then
     log.notice(event.label .. ":newaddr", event.address)
     if event.label ~= "lo" then
+      addrByLabel[event.label] = event.address
       session.setIp(event.address)
+      pcall(lanAdvertSync)
     end
 
     local uuid = system.uniqueId()
@@ -1254,7 +1375,11 @@ local function handleEvent(event)
   elseif event.msgtype == "deladdr" then
     log.notice(event.label .. ":deladdr", event.address)
     if event.label ~= "lo" then
+      if addrByLabel[event.label] == event.address then
+        addrByLabel[event.label] = nil
+      end
       session.setIp(nil)
+      pcall(lanAdvertSync)
       local usageLog = require("tasks.crashlog.apihandler.usagelog")
       logWifiEvent("disconnect wifi", usageLog.getUniqueId("wifi"))
     end
@@ -1265,8 +1390,10 @@ if not melodiousOff() then
   installCloudHttpGuard()
   installOfflineApiGuards()
   installActivityRestrictions()
+  installNetworkAttributeOverride()
+  startLanAdvertise()
 else
-  log.notice("codex melodious off: skipping offline guards and activity restrictions")
+  log.notice("codex melodious off: skipping offline guards, activity restrictions and LAN advertise")
 end
 
 if mfgData.hasNetwork == true then
