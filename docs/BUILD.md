@@ -20,13 +20,13 @@ exact SHA-256 digests and sizes are:
 
 | Binary | Size | SHA-256 |
 | --- | --- | --- |
-| `codex_webui` | 1284836 | `4448a527240d2b2e566c21d9edf5feed3b62f1ddcae7f671582d5cd388bb9a1d` |
-| `codex_dhcpd` | 58328 | `e9db51f4691511f1ae10182143518e758fc7aca0a84994fe9be602be37957592` |
-| `codex_portal` | 76724 | `1596f6cac03dad4ce0254ac118de5527c41789f10c7bc95357860d0d96c61b5f` |
+| `codex_webui` | 1243704 | `9c9b88e44bbd093c8409c029eca0595ea5d113a7250cca20b999a520141a572f` |
+| `codex_dhcpd` | 31464 | `749161a5cd140cb72a73619c61d77c4beeb4a71f31ca87810ead4575b8f1ce81` |
+| `codex_portal` | 48680 | `4cf21f469d3ff4ef0c37b00bc40d14e1a143713d3777b7bd7e19c4b2ff0b4c33` |
 | `dropbearmulti` | 577296 | `e2ea632aed8b31dc5ea56b9673cbd983ec83260a97d33f891a0cebf51d5c6c8d` |
-| `codex_hbus` | 74660 | `4be9e6ac2e09e7eb052f9c47e81480d1e32aee7190bedb6ef7f932cf07aab8f9` |
-| `codex_androidtv` | 270516 | `0955c9eeb6820cfbbba4ff09c81a5fdd996c2c67789c9c48ce54f141b5f90e99` |
-| `codex_usbeth` | 85684 | `ca4e5db04a367acf2077c32158e6589ed81fb97651f7c06389dc6f31129b9624` |
+| `codex_hbus` | 47160 | `5d649e9455c93badf6843b7f973d526ac2be7313465525ca81f5b24b85ff8b74` |
+| `codex_androidtv` | 218568 | `5dbbdbc8bad9440e553e45fe9ae6b161b66d3fa860c05b7eced137c6ad003c53` |
+| `codex_usbeth` | 57736 | `f45949f5cab0fdbda3394e8024d8b5bda8d706c502a43b7d6e1e04ae23c81a90` |
 
 The remaining binaries (`codex_bt_pair_agent`, `codex_bthid_keyboard`,
 `codex_hal_ltcp`) are pinned by their MD5 digests in
@@ -35,7 +35,7 @@ in `build/build_harmony_tools_kali.sh`, which also pins every binary above.
 
 ## Toolchain — official Zig 0.16.0
 
-All eight Zig-built binaries use the official Zig 0.16.0 tarball (clang/LLD
+All the Zig-built binaries use the official Zig 0.16.0 tarball (clang/LLD
 21.1.0, executable SHA-256
 `e6cd688d25664983833aae272f501d4bceeae304875b8f1741209d15fd13a4ec`). The build
 script keeps separate `WEBUI_ZIG` and `OFFICIAL_ZIG` variables; both carry
@@ -52,7 +52,7 @@ Verified 2026-10-27 on macOS (aarch64):
   `e6cd688d25664983833aae272f501d4bceeae304875b8f1741209d15fd13a4ec`,
   `zig version` 0.16.0, `zig cc --version` `clang version 21.1.0`
 
-With it, all eight Zig-built binaries rebuild byte-for-byte, and a repeat
+With it, all ten Zig-built binaries rebuild byte-for-byte, and a repeat
 `codex_webui` build is identical.
 
 Use this toolchain, not whatever `zig` is on `PATH`. The `codex_webui` built
@@ -65,6 +65,27 @@ Box `codex_webui` builds up to 2026-10-20 (946744 bytes, SHA-256
 `6061b907bde87592dce5f7e4fd74233b8f97666d1509eb43ae7125a780f020a4`) used Homebrew Zig 0.16.0_1 (clang 21.1.8), which Homebrew no longer
 serves. Official Zig 0.16.0 rebuilds that binary with identical code and
 data; only the 20-byte `.comment` compiler stamp differs.
+
+### No `.pdr` section
+
+Every Zig-built binary in `payload/bin/` and `payload/helpers/` links with
+`-Wl,-T,build/discard-mips-pdr.ld` (not the fixed-address `hal_remotes` code,
+which has its own layout). clang's MIPS backend writes a `.pdr` section
+(procedure descriptors, an old debugging aid) for every function. Nothing
+loads it, and `-s` doesn't remove it, yet it was 26-52 KB of each binary:
+310 KB across the nine in `payload/bin/` and `codex_flash_free`, and as much RAM in each installer's staging area. The
+script uses `INSERT`, so lld keeps its default layout and the loaded image is
+unchanged. `tools/elf_load_cmp.py` checks that: it compares the entry point,
+the program headers and the bytes of every segment of two ELF files, ignoring
+only the section table that the loader never reads.
+
+`dropbearmulti` keeps its `.pdr` on purpose. The installers hard-link the
+copy harmony-hub-root leaves on the hub when it is byte-identical, which saves
+far more flash than the section's 41 KB.
+
+```sh
+python3 tools/elf_load_cmp.py old/codex_webui payload/bin/codex_webui
+```
 
 ### codex_webui
 
@@ -81,43 +102,42 @@ Pinned source blobs:
 - `payload/source/remote_skin_jpg.h` — `419611c5ff0713f1f5de2dd684d699f6d77238d5`
 
 ```sh
-"$WEBUI_ZIG" cc -target mips-linux-musleabi -Os -static -s \
+"$WEBUI_ZIG" cc -target mips-linux-musleabi -Os -static -s -Wl,-T,build/discard-mips-pdr.ld \
   -I payload/source \
   -o payload/bin/codex_webui \
   payload/source/codex_webui.c
 ```
 
 Result must be `ELF 32-bit MSB executable, MIPS, MIPS32 rel2, statically
-linked, stripped`, size 1284836, SHA-256
-`4448a527240d2b2e566c21d9edf5feed3b62f1ddcae7f671582d5cd388bb9a1d`.
+linked, stripped`, size 1243704, SHA-256
+`9c9b88e44bbd093c8409c029eca0595ea5d113a7250cca20b999a520141a572f`.
 
-To compare against a Homebrew-built box binary, strip the compiler stamp from
-both first:
+To compare against a Homebrew-built box binary, compare what loads: the
+`.comment` compiler stamp differs, and box binaries still carry `.pdr`
+(see *No `.pdr` section* above), and neither is loaded.
 
 ```sh
-llvm-objcopy --remove-section=.comment build/output/codex_webui a.nc
-llvm-objcopy --remove-section=.comment box_codex_webui b.nc
-cmp a.nc b.nc
+python3 tools/elf_load_cmp.py box_codex_webui build/output/codex_webui
 ```
 
 ### codex_hbus (Official Zig, `-mcpu=mips32`)
 
 ```sh
-"$OFFICIAL_ZIG" cc -target mips-linux-musleabi -mcpu=mips32 -Os -static -s \
+"$OFFICIAL_ZIG" cc -target mips-linux-musleabi -mcpu=mips32 -Os -static -s -Wl,-T,build/discard-mips-pdr.ld \
   -o build/output/codex_hbus payload/source/codex_hbus.c
 ```
 
-Result must be size 74660, SHA-256
-`4be9e6ac2e09e7eb052f9c47e81480d1e32aee7190bedb6ef7f932cf07aab8f9`.
+Result must be size 47160, SHA-256
+`5d649e9455c93badf6843b7f973d526ac2be7313465525ca81f5b24b85ff8b74`.
 
 ### Bluetooth trio (Official Zig)
 
 ```sh
-"$OFFICIAL_ZIG" cc -target mips-linux-musleabi -Os -static -s \
+"$OFFICIAL_ZIG" cc -target mips-linux-musleabi -Os -static -s -Wl,-T,build/discard-mips-pdr.ld \
   -o build/output/codex_bt_pair_agent payload/source/codex_bt_pair_agent.c
-"$OFFICIAL_ZIG" cc -target mips-linux-musleabi -Os -static -s \
+"$OFFICIAL_ZIG" cc -target mips-linux-musleabi -Os -static -s -Wl,-T,build/discard-mips-pdr.ld \
   -o build/output/codex_bthid_keyboard payload/source/codex_bthid_keyboard.c
-"$OFFICIAL_ZIG" cc -target mips-linux-musleabi -Os -static -s \
+"$OFFICIAL_ZIG" cc -target mips-linux-musleabi -Os -static -s -Wl,-T,build/discard-mips-pdr.ld \
   -o build/output/codex_hal_ltcp payload/source/codex_hal_ltcp.c
 ```
 
@@ -133,7 +153,7 @@ with the file list sorted (the link order, and so the output, depends on it):
 
 ```sh
 cd build/tmp
-"$OFFICIAL_ZIG" cc -target mips-linux-musleabi -Os -static -s \
+"$OFFICIAL_ZIG" cc -target mips-linux-musleabi -Os -static -s -Wl,-T,../discard-mips-pdr.ld \
   -ffunction-sections -fdata-sections -Wl,--gc-sections \
   -Ibearssl-0.6/inc -Ibearssl-0.6/src \
   -o ../../payload/bin/codex_androidtv ../../payload/source/codex_androidtv.c \
@@ -141,8 +161,8 @@ cd build/tmp
 ```
 
 Result must be `ELF 32-bit MSB executable, MIPS, MIPS32 rel2`, statically
-linked, stripped, size 270516, SHA-256
-`0955c9eeb6820cfbbba4ff09c81a5fdd996c2c67789c9c48ce54f141b5f90e99`
+linked, stripped, size 218568, SHA-256
+`5dbbdbc8bad9440e553e45fe9ae6b161b66d3fa860c05b7eced137c6ad003c53`
 (`payload/source/codex_androidtv.c` blob `6d0591b872986ebdc6fa176363477840974a634c`).
 The output doesn't depend on where the tree or BearSSL is unpacked. For the
 fake-TV smoke test, build the same way with `-target x86_64-linux-musl` (or
@@ -156,13 +176,13 @@ delete it with the folder. It lives in `payload/helpers/`, not `payload/bin/`,
 because it is never installed on the hub.
 
 ```sh
-"$OFFICIAL_ZIG" cc -target mips-linux-musleabi -mcpu=mips32 -Os -static -s \
+"$OFFICIAL_ZIG" cc -target mips-linux-musleabi -mcpu=mips32 -Os -static -s -Wl,-T,build/discard-mips-pdr.ld \
   -o payload/helpers/codex_flash_free payload/source/codex_flash_free.c
 ```
 
 Result must be `ELF 32-bit MSB executable, MIPS, MIPS32`, statically linked,
-stripped, size 54424, SHA-256
-`82f398eff425562494dc9153b9aff2b903ad7af29d791b7f1efde70fa8e06379`.
+stripped, size 27912, SHA-256
+`749c055e9fdc5cea50d3f48d0775441bd758f6811ee32f625c5b423121854177`.
 
 ### hal_remotes (the two-screen `hal` edits, Official Zig, `-mcpu=mips32r2`)
 
@@ -189,9 +209,9 @@ Bootlin GCC builds). The build script verifies them fail-closed against
 `DHCPD_EXPECT_SHA256` / `PORTAL_EXPECT_SHA256` (see the table above):
 
 ```sh
-"$OFFICIAL_ZIG" cc -target mips-linux-musleabi -Os -static -s \
+"$OFFICIAL_ZIG" cc -target mips-linux-musleabi -Os -static -s -Wl,-T,build/discard-mips-pdr.ld \
   -o build/output/codex_dhcpd payload/source/codex_dhcpd.c
-"$OFFICIAL_ZIG" cc -target mips-linux-musleabi -Os -static -s \
+"$OFFICIAL_ZIG" cc -target mips-linux-musleabi -Os -static -s -Wl,-T,build/discard-mips-pdr.ld \
   -o build/output/codex_portal payload/source/codex_portal.c
 ```
 
