@@ -1,10 +1,12 @@
 import { serializeForm, extractMsgDiv } from "./setup-parsers.js";
 
 export class ApiError extends Error {
-  constructor(message, status) {
+  // data: the hub's JSON answer, when it sent one (e.g. { restricted: true }).
+  constructor(message, status, data = null) {
     super(message);
     this.name = "ApiError";
     this.status = status;
+    this.data = data;
   }
 }
 
@@ -40,7 +42,7 @@ async function request(path, { method = "GET", body, form } = {}) {
 
   if (!response.ok || (json && json.ok === false)) {
     const message = (json && (json.error || json.message)) || `HTTP ${response.status}`;
-    throw new ApiError(message, response.status);
+    throw new ApiError(message, response.status, json);
   }
   return json ?? { ok: true };
 }
@@ -79,6 +81,20 @@ export function saveActivity({ baseRevision, activityList, mapList, functionList
   return request("/api/activity-save", {
     method: "POST",
     body: { baseRevision, activityList, mapList, functionList, syncRemote },
+  });
+}
+
+// Every activity's time restrictions: { activities: { "<id>": [{ days, start, end }] } }.
+export function getActivityRestrictions() {
+  return request("/api/activity-restrictions");
+}
+
+// Replace one activity's windows; an empty list lifts its restrictions.
+// Answers with every activity's restrictions after the save.
+export function saveActivityRestrictions({ activityId, windows }) {
+  return request("/api/activity-restrictions", {
+    method: "POST",
+    body: { activityId: String(activityId), windows },
   });
 }
 

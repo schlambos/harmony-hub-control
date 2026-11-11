@@ -852,7 +852,13 @@ static void arp_lookup(const char *host, char *mac, size_t cap) {
 /* Wake-on-LAN goes to each interface's own broadcast address (e.g. 192.168.1.255) as well
  * as 255.255.255.255. The limited broadcast needs a route: with the cloud blocker on, the
  * egress guard deletes the default route, and sending to 255.255.255.255 then fails with
- * ENETUNREACH. The subnet's broadcast address always has its connected route. */
+ * ENETUNREACH. The subnet's broadcast address always has its connected route.
+ *
+ * Each subnet broadcast is sent bound to its interface, and only on interfaces that are
+ * running. With wired Ethernet (usb_eth_service.sh) Wi-Fi and the adapter share one subnet and
+ * so one broadcast address, and the kernel picks one of their broadcast routes whatever the
+ * routing table prefers. With Wi-Fi switched off that was Wi-Fi's: the send succeeded, and
+ * the packet was dropped by the disconnected radio. */
 static int wol_sendto(int fd, const unsigned char *pkt, size_t len, struct in_addr dst) {
 	struct sockaddr_in sa;
 	memset(&sa, 0, sizeof sa);
@@ -867,6 +873,18 @@ static int wol_sendto(int fd, const unsigned char *pkt, size_t len, struct in_ad
 	return sent;
 }
 
+/* One interface's broadcast. Without SO_BINDTODEVICE (not root) it goes unbound. */
+static int wol_send_on(const char *ifname, const unsigned char *pkt, size_t len, struct in_addr dst) {
+	int fd = socket(AF_INET, SOCK_DGRAM, 0);
+	if (fd < 0) return 0;
+	int one = 1;
+	setsockopt(fd, SOL_SOCKET, SO_BROADCAST, &one, sizeof one);
+	setsockopt(fd, SOL_SOCKET, SO_BINDTODEVICE, ifname, (socklen_t)strlen(ifname) + 1);
+	int sent = wol_sendto(fd, pkt, len, dst);
+	close(fd);
+	return sent;
+}
+
 static void send_wol(const char *mac) {
 	unsigned m[6];
 	if (sscanf(mac, "%x:%x:%x:%x:%x:%x", &m[0], &m[1], &m[2], &m[3], &m[4], &m[5]) != 6) return;
@@ -877,17 +895,18 @@ static void send_wol(const char *mac) {
 	if (fd < 0) return;
 	int one = 1;
 	setsockopt(fd, SOL_SOCKET, SO_BROADCAST, &one, sizeof one);
-	char via[160] = "";
+	char via[200] = "";
 	size_t used = 0;
 	struct ifaddrs *ifs = NULL;
 	if (getifaddrs(&ifs) == 0) {
 		for (struct ifaddrs *a = ifs; a; a = a->ifa_next) {
-			if (!a->ifa_addr || a->ifa_addr->sa_family != AF_INET || !a->ifa_broadaddr) continue;
-			if (!(a->ifa_flags & IFF_UP) || !(a->ifa_flags & IFF_BROADCAST) || (a->ifa_flags & IFF_LOOPBACK)) continue;
+			if (!a->ifa_name || !a->ifa_addr || a->ifa_addr->sa_family != AF_INET || !a->ifa_broadaddr) continue;
+			if (!(a->ifa_flags & IFF_UP) || !(a->ifa_flags & IFF_RUNNING) || !(a->ifa_flags & IFF_BROADCAST) ||
+			    (a->ifa_flags & IFF_LOOPBACK)) continue;
 			struct in_addr b = ((struct sockaddr_in *)a->ifa_broadaddr)->sin_addr;
 			if (b.s_addr == htonl(INADDR_BROADCAST) || b.s_addr == 0) continue;
-			if (wol_sendto(fd, pkt, sizeof pkt, b) && used + 20 < sizeof via)
-				used += (size_t)snprintf(via + used, sizeof via - used, "%s%s", used ? ", " : "", inet_ntoa(b));
+			if (wol_send_on(a->ifa_name, pkt, sizeof pkt, b) && used + 40 < sizeof via)
+				used += (size_t)snprintf(via + used, sizeof via - used, "%s%s (%.15s)", used ? ", " : "", inet_ntoa(b), a->ifa_name);
 		}
 		freeifaddrs(ifs);
 	}

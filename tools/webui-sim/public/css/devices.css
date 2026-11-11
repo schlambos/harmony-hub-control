@@ -741,3 +741,34 @@ input.androidtv-code {
   text-transform: uppercase;
 }
 .androidtv-status { margin: 4px 0 12px; }
+
+/* -- Time restrictions (Activities ⋮ menu) ------------------------------------ */
+
+.rs-window {
+  display: grid;
+  gap: var(--space-3);
+  padding: var(--space-3);
+  border: 1px solid var(--outline-variant);
+  border-radius: var(--shape-md);
+}
+
+.rs-window legend {
+  padding: 0 var(--space-1);
+}
+
+.rs-times {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: var(--space-3);
+}
+
+.rs-window-foot {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-2);
+}
+
+.rs-window-foot .m-field-hint {
+  margin: 0;
+}

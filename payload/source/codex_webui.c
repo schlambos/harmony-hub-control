@@ -35,9 +35,19 @@
    responses while web UI sign-in is off. Restoring a file that contains it
    keeps the secret already stored on the hub. */
 #define REDACTED_SECRET "__REDACTED__"
+#ifndef HUB_ID_FILE
 #define HUB_ID_FILE "/data/codex/hub_id"
+#endif
 #define CLOUD_BLOCKER_CONFIG "/data/codex/cloud_blocker.conf"
 #define TIMEZONE_CONFIG "/data/codex/timezone.conf"
+/* Activity time restrictions, read by netservicestarter.lua (see
+   restriction_entry for the shape). */
+#ifndef ACTIVITY_RESTRICTIONS
+#define ACTIVITY_RESTRICTIONS "/data/codex/activity-restrictions.json"
+#endif
+#ifndef ACTIVITY_RESTRICTIONS_LOCK
+#define ACTIVITY_RESTRICTIONS_LOCK "/var/run/codex-activity-restrictions.lock"
+#endif
 #define WEBUI_AUTH_CONFIG "/data/codex/webui_auth.conf"
 #define DEVICE_LIST "/data/resources/DeviceList.json"
 #define FUNCTION_LIST "/data/resources/FunctionList.json"
@@ -47,7 +57,9 @@
 #define AUTOMATION_CONFIG "/data/resources/AutomationConfig.json"
 #define OFFLINE_EGRESS_GUARD "/data/codex/offline_egress_guard.sh"
 #define RESOURCE_RELOAD_FLAG "/data/codex/reload_resources"
+#ifndef RESOURCE_BACKUP_DIR
 #define RESOURCE_BACKUP_DIR "/data/codex/resource-backups"
+#endif
 #define ACTIVITY_REQUEST_FILE "/var/volatile/codex-activity-request.json"
 #define ACTIVITY_RESPONSE_FILE "/var/volatile/codex-activity-response.json"
 #define ACTIVITY_LOCK_FILE "/var/volatile/codex-activity.lock"
@@ -2184,12 +2196,20 @@ static void backup_resources(void) {
 }
 
 static void backup_settings(void) {
-    char cmd[512];
+    char cmd[640];
     snprintf(cmd, sizeof(cmd),
         "mkdir -p " RESOURCE_BACKUP_DIR "; d=" RESOURCE_BACKUP_DIR "/settings_$(date +%%Y%%m%%d_%%H%%M%%S); "
-        "mkdir -p \"$d\"; cp " MQTT_CONFIG " " WPA_CONFIG " " CLOUD_BLOCKER_CONFIG " " BT_DEVICE_STORE " \"$d\" 2>/dev/null");
+        "mkdir -p \"$d\"; cp " MQTT_CONFIG " " WPA_CONFIG " " CLOUD_BLOCKER_CONFIG " " BT_DEVICE_STORE " "
+        ACTIVITY_RESTRICTIONS " \"$d\" 2>/dev/null");
     system(cmd);
 }
+
+/* Activity time restrictions in backups; defined with their API further down. */
+static void bundle_restrictions(FILE *f);
+static void send_restrictions_download(int fd);
+static int import_restrictions(const char *payload, int save, char *msg, size_t msglen);
+/* Room for the largest file the limits allow (64 activities x 8 times). */
+#define RESTRICTIONS_IMPORT_MAX (128 * 1024)
 
 static void bundle_value(FILE *f, const char *key, const char *path, int comma) {
     char *data;
@@ -2242,6 +2262,7 @@ static void send_bundle_download(int fd) {
     bundle_value_secret(f, "mqtt-config.json", MQTT_CONFIG, 1, 1);
     bundle_value_secret(f, "wpa_supplicant.conf", WPA_CONFIG, 1, 0);
     bundle_value(f, "bt-devices.json", BT_DEVICE_STORE, 1);
+    bundle_restrictions(f);
     fputc(',', f);
     json_write_string(f, "cloud-blocker.conf");
     fputc(':', f);
@@ -3904,6 +3925,13 @@ static void render_activity_state_json(int fd) {
     fclose(f);
 }
 
+static int engine_reply_code(const char *reply);
+
+/* netservicestarter.lua answers a start inside the activity's time
+ * restrictions with code 568 from its startactivity handler, in place of the
+ * stock 200, so it is the answer codex_hbus prints. */
+#define ENGINE_CODE_RESTRICTED 568
+
 static void render_activity_run_json(int fd, const struct request *req) {
     char activity_id[64], params[192], reply[8192];
     int rc;
@@ -3920,6 +3948,18 @@ static void render_activity_run_json(int fd, const struct request *req) {
         "{\"activityId\":\"%s\",\"timestamp\":%ld000}",
         activity_id, (long)time(NULL));
     rc = harmony_hbus_call("harmony.engine?startactivity", params, reply, sizeof(reply));
+    if (rc == 0 && engine_reply_code(reply) == ENGINE_CODE_RESTRICTED) {
+        f = send_json_start(fd, "409 Conflict");
+        if (!f) return;
+        fputs("{\"ok\":false,\"restricted\":true,\"error\":"
+            "\"This activity can't be started now: it has time restrictions.\",\"activityId\":", f);
+        json_write_string(f, activity_id);
+        fputs(",\"reply\":", f);
+        json_write_string(f, reply);
+        fputs("}\n", f);
+        fclose(f);
+        return;
+    }
     f = send_json_start(fd, rc == 0 ? "200 OK" : "502 Bad Gateway");
     if (!f) return;
     fprintf(f, "{\"ok\":%s,\"activityId\":", rc == 0 ? "true" : "false");
@@ -8305,6 +8345,7 @@ static const char *import_path_for_target(const char *target) {
     if (strcmp(target, "wifi") == 0) return WPA_CONFIG;
     if (strcmp(target, "cloud") == 0) return CLOUD_BLOCKER_CONFIG;
     if (strcmp(target, "bluetooth") == 0) return BT_DEVICE_STORE;
+    if (strcmp(target, "restrictions") == 0) return ACTIVITY_RESTRICTIONS;
     return NULL;
 }
 
@@ -8320,6 +8361,7 @@ static const char *import_label_for_target(const char *target) {
     if (strcmp(target, "wifi") == 0) return "Wi-Fi config";
     if (strcmp(target, "cloud") == 0) return "cloud blocker setting";
     if (strcmp(target, "bluetooth") == 0) return "Bluetooth devices";
+    if (strcmp(target, "restrictions") == 0) return "time restrictions";
     return "import";
 }
 
@@ -8350,6 +8392,7 @@ static int validate_import_payload(const char *target, const char *payload, char
         snprintf(msg, msglen, "Bluetooth devices import must be a JSON object with a devices list.");
         return -1;
     }
+    if (strcmp(target, "restrictions") == 0) return import_restrictions(payload, 0, msg, msglen);
     if (!looks_like_json_object(payload)) {
         snprintf(msg, msglen, "%s import must be a JSON object.", import_label_for_target(target));
         return -1;
@@ -8394,7 +8437,7 @@ static void handle_import_bundle(int fd, const char *payload) {
     char cloud[32] = "";
     char *cloud_value;
     char *devices, *functions, *protocols, *activities, *maps, *automation;
-    char *mqtt, *wifi, *bluetooth;
+    char *mqtt, *wifi, *bluetooth, *restrictions;
     char *mqtt_restored = NULL, *wifi_restored = NULL;
     const char *mqtt_out = NULL, *wifi_out = NULL;
     int is_v2 = strstr(payload, "harmony-owner-bundle-v2") != NULL;
@@ -8407,8 +8450,9 @@ static void handle_import_bundle(int fd, const char *payload) {
     mqtt = (char *)malloc(MAX_REQUEST_BODY);
     wifi = (char *)malloc(MAX_REQUEST_BODY);
     bluetooth = (char *)malloc(MAX_REQUEST_BODY);
+    restrictions = (char *)malloc(RESTRICTIONS_IMPORT_MAX);
     if (!devices || !functions || !protocols || !activities || !maps || !automation ||
-        !mqtt || !wifi || !bluetooth) {
+        !mqtt || !wifi || !bluetooth || !restrictions) {
         snprintf(msg, sizeof(msg), "Not enough memory to import bundle.");
         goto done;
     }
@@ -8416,6 +8460,7 @@ static void handle_import_bundle(int fd, const char *payload) {
     maps[0] = 0;
     automation[0] = 0;
     bluetooth[0] = 0;
+    restrictions[0] = 0;
     if (bundle_extract(payload, "DeviceList.json", devices, MAX_REQUEST_BODY, msg, sizeof(msg)) != 0 ||
         bundle_extract(payload, "FunctionList.json", functions, MAX_REQUEST_BODY, msg, sizeof(msg)) != 0 ||
         bundle_extract(payload, "ProtocolList.json", protocols, MAX_REQUEST_BODY, msg, sizeof(msg)) != 0 ||
@@ -8444,6 +8489,11 @@ static void handle_import_bundle(int fd, const char *payload) {
     }
     json_string(payload, "bt-devices.json", bluetooth, MAX_REQUEST_BODY);
     if (bluetooth[0] && validate_import_payload("bluetooth", bluetooth, msg, sizeof(msg)) != 0) {
+        goto done;
+    }
+    /* Bundles from before time restrictions have no entry and leave them as they are. */
+    json_string(payload, "activity-restrictions.json", restrictions, RESTRICTIONS_IMPORT_MAX);
+    if (restrictions[0] && validate_import_payload("restrictions", restrictions, msg, sizeof(msg)) != 0) {
         goto done;
     }
     json_string(payload, "cloud-blocker.conf", cloud, sizeof(cloud));
@@ -8477,6 +8527,10 @@ static void handle_import_bundle(int fd, const char *payload) {
         goto done;
     }
     if (bluetooth[0]) chmod(BT_DEVICE_STORE, 0644);
+    if (restrictions[0] && import_restrictions(restrictions, 1, msg, sizeof(msg)) != 0) {
+        snprintf(msg, sizeof(msg), "Bundle imported most files, but failed to save the time restrictions.");
+        goto done;
+    }
     if (cloud_value[0] && save_cloud_blocker(cloud_value_enabled(cloud_value)) != 0) {
         snprintf(msg, sizeof(msg), "Bundle imported most files, but failed to save the cloud blocker setting.");
         goto done;
@@ -8488,7 +8542,7 @@ done:
     render_page(fd, msg[0] ? msg : "Bundle import failed.");
     free(devices); free(functions); free(protocols);
     free(activities); free(maps); free(automation);
-    free(mqtt); free(wifi); free(bluetooth);
+    free(mqtt); free(wifi); free(bluetooth); free(restrictions);
     free(mqtt_restored); free(wifi_restored);
 }
 
@@ -8521,6 +8575,14 @@ static void handle_import(int fd, const struct request *req) {
     }
     if (strcmp(target, "bundle") == 0) {
         handle_import_bundle(fd, payload);
+        free(payload_buf);
+        return;
+    }
+    if (strcmp(target, "restrictions") == 0) {
+        /* Rewritten from the parsed values, never stored as uploaded. */
+        backup_settings();
+        render_page(fd, import_restrictions(payload, 1, msg, sizeof(msg)) == 0
+            ? "Time restrictions imported. They apply from the next activity start." : msg);
         free(payload_buf);
         return;
     }
@@ -9406,6 +9468,410 @@ static void render_usb_eth_set_json(int fd, const struct request *req) {
     if (!f) return;
     write_usb_eth_json(f, &st);
     fclose(f);
+}
+
+/* Activity time restrictions: when an activity can't be started.
+ * netservicestarter.lua reads ACTIVITY_RESTRICTIONS on every start and
+ * refuses a start inside one of an activity's windows. The file is always
+ * written here, in one fixed shape, from parsed and checked values:
+ *   {"version":1,"activities":{"<id>":[{"days":["sat","sun"],"start":"06:00","end":"09:00"}]}}
+ * An activity with no windows has no entry; with none at all there is no file. */
+#define RESTRICTION_MAX_WINDOWS 8
+#define RESTRICTION_MAX_ACTIVITIES 64
+
+static const char *const restriction_days[7] = {"mon", "tue", "wed", "thu", "fri", "sat", "sun"};
+
+struct restriction_window {
+    int days; /* bit i = restriction_days[i] */
+    char start[6];
+    char end[6];
+};
+
+struct restriction_entry {
+    char id[24];
+    int count;
+    struct restriction_window windows[RESTRICTION_MAX_WINDOWS];
+};
+
+/* A plain (unescaped) JSON string node equal to s. */
+static int restriction_node_is(const struct semantic_json_doc *doc, int node, const char *s) {
+    const struct semantic_json_node *n = &doc->nodes[node];
+    size_t len = strlen(s);
+    return n->type == SEMANTIC_JSON_STRING && n->end - n->start == len &&
+        memcmp(doc->text + n->start, s, len) == 0;
+}
+
+/* Copy a string node made only of the characters in allowed. */
+static int restriction_node_copy(const struct semantic_json_doc *doc, int node, const char *allowed,
+                                 char *out, size_t outlen) {
+    const struct semantic_json_node *n = &doc->nodes[node];
+    size_t len = n->end - n->start, i;
+    if (n->type != SEMANTIC_JSON_STRING || len == 0 || len >= outlen) return -1;
+    for (i = 0; i < len; i++) {
+        char c = doc->text[n->start + i];
+        if (!isdigit((unsigned char)c) && !strchr(allowed, c)) return -1;
+    }
+    memcpy(out, doc->text + n->start, len);
+    out[len] = 0;
+    return 0;
+}
+
+/* The value node of key in an object node, or -1. */
+static int restriction_member(const struct semantic_json_doc *doc, int object, const char *key) {
+    int k;
+    if (doc->nodes[object].type != SEMANTIC_JSON_OBJECT) return -1;
+    for (k = doc->nodes[object].first_child; k >= 0; k = doc->nodes[doc->nodes[k].next_sibling].next_sibling) {
+        if (restriction_node_is(doc, k, key)) return doc->nodes[k].next_sibling;
+    }
+    return -1;
+}
+
+/* An activity id: digits only (PowerOff, -1, is never restricted). */
+static int restriction_id_ok(const char *id) {
+    size_t i, n = strlen(id);
+    if (n == 0 || n > 20) return 0;
+    for (i = 0; i < n; i++) {
+        if (!isdigit((unsigned char)id[i])) return 0;
+    }
+    return 1;
+}
+
+/* "HH:MM" to minutes; 24:00 only as an end. */
+static int restriction_clock(const char *s, int is_end) {
+    int minutes;
+    if (strlen(s) != 5 || !isdigit((unsigned char)s[0]) || !isdigit((unsigned char)s[1]) || s[2] != ':' ||
+        !isdigit((unsigned char)s[3]) || !isdigit((unsigned char)s[4])) return -1;
+    if ((s[3] - '0') > 5) return -1;
+    minutes = ((s[0] - '0') * 10 + (s[1] - '0')) * 60 + (s[3] - '0') * 10 + (s[4] - '0');
+    if (minutes < 1440 || (is_end && minutes == 1440)) return minutes;
+    return -1;
+}
+
+static int restriction_parse_window(const struct semantic_json_doc *doc, int node, struct restriction_window *w,
+                                    char *err, size_t errlen, int number) {
+    int days = restriction_member(doc, node, "days");
+    int start = restriction_member(doc, node, "start");
+    int end = restriction_member(doc, node, "end");
+    int d, i, from, to;
+    memset(w, 0, sizeof(*w));
+    if (days < 0 || doc->nodes[days].type != SEMANTIC_JSON_ARRAY) {
+        snprintf(err, errlen, "Time %d needs its days.", number);
+        return -1;
+    }
+    for (d = doc->nodes[days].first_child; d >= 0; d = doc->nodes[d].next_sibling) {
+        for (i = 0; i < 7 && !restriction_node_is(doc, d, restriction_days[i]); i++) {}
+        if (i == 7) {
+            snprintf(err, errlen, "Time %d has a day that isn't mon, tue, wed, thu, fri, sat or sun.", number);
+            return -1;
+        }
+        w->days |= 1 << i;
+    }
+    if (!w->days) {
+        snprintf(err, errlen, "Pick at least one day for time %d.", number);
+        return -1;
+    }
+    if (start < 0 || end < 0 ||
+        restriction_node_copy(doc, start, ":", w->start, sizeof(w->start)) != 0 ||
+        restriction_node_copy(doc, end, ":", w->end, sizeof(w->end)) != 0 ||
+        (from = restriction_clock(w->start, 0)) < 0 || (to = restriction_clock(w->end, 1)) < 0) {
+        snprintf(err, errlen, "Time %d needs a start and an end, as HH:MM.", number);
+        return -1;
+    }
+    if (from == to) {
+        snprintf(err, errlen, "Time %d starts and ends at the same time.", number);
+        return -1;
+    }
+    return 0;
+}
+
+static int restriction_parse_windows(const struct semantic_json_doc *doc, int node, struct restriction_entry *e,
+                                     char *err, size_t errlen) {
+    int w;
+    e->count = 0;
+    if (node < 0 || doc->nodes[node].type != SEMANTIC_JSON_ARRAY) {
+        snprintf(err, errlen, "Send the activity's times as a list.");
+        return -1;
+    }
+    for (w = doc->nodes[node].first_child; w >= 0; w = doc->nodes[w].next_sibling) {
+        if (e->count == RESTRICTION_MAX_WINDOWS) {
+            snprintf(err, errlen, "An activity can have up to %d times.", RESTRICTION_MAX_WINDOWS);
+            return -1;
+        }
+        if (restriction_parse_window(doc, w, &e->windows[e->count], err, errlen, e->count + 1) != 0) return -1;
+        e->count++;
+    }
+    return 0;
+}
+
+/* A restrictions file's activities. Lenient (the hub's own file): what can't
+ * be read is skipped, as the hub fails open the same way. Strict (an import):
+ * the first problem is an error in err and the result is -1. An activity with
+ * an empty list has no entry either way. */
+static int parse_restrictions(const char *data, size_t len, struct restriction_entry *entries, int strict,
+                              char *err, size_t errlen) {
+    struct semantic_json_doc doc;
+    char werr[160];
+    int root, activities, k, a, count = 0;
+    root = semantic_json_parse(&doc, data, len);
+    if (root < 0) {
+        snprintf(err, errlen, "Time restrictions import must be a JSON object.");
+        return strict ? -1 : 0;
+    }
+    activities = restriction_member(&doc, root, "activities");
+    if (activities < 0 || doc.nodes[activities].type != SEMANTIC_JSON_OBJECT) {
+        free(doc.nodes);
+        snprintf(err, errlen, "Time restrictions import must contain an activities object.");
+        return strict ? -1 : 0;
+    }
+    for (k = doc.nodes[activities].first_child; k >= 0; k = doc.nodes[doc.nodes[k].next_sibling].next_sibling) {
+        struct restriction_entry *e = &entries[count];
+        if (count == RESTRICTION_MAX_ACTIVITIES) {
+            if (!strict) break;
+            snprintf(err, errlen, "Up to %d activities can have time restrictions.", RESTRICTION_MAX_ACTIVITIES);
+            free(doc.nodes);
+            return -1;
+        }
+        if (restriction_node_copy(&doc, k, "", e->id, sizeof(e->id)) != 0 || !restriction_id_ok(e->id)) {
+            if (!strict) continue;
+            snprintf(err, errlen, "Time restrictions import has an activity id that isn't digits.");
+            free(doc.nodes);
+            return -1;
+        }
+        for (a = 0; a < count && strcmp(entries[a].id, e->id) != 0; a++) {}
+        if (a < count) {
+            if (!strict) continue;
+            snprintf(err, errlen, "Time restrictions import lists activity %s twice.", e->id);
+            free(doc.nodes);
+            return -1;
+        }
+        if (restriction_parse_windows(&doc, doc.nodes[k].next_sibling, e, werr, sizeof(werr)) != 0) {
+            if (!strict) continue;
+            snprintf(err, errlen, "Activity %s: %s", e->id, werr);
+            free(doc.nodes);
+            return -1;
+        }
+        if (e->count) count++;
+    }
+    free(doc.nodes);
+    return count;
+}
+
+/* Every activity's windows from the hub's file; missing or unreadable counts
+ * as no restriction. */
+static int load_restrictions(struct restriction_entry *entries) {
+    char err[160];
+    size_t len = 0;
+    char *data = read_file_alloc(ACTIVITY_RESTRICTIONS, 256 * 1024, &len);
+    int count;
+    if (!data) return 0;
+    count = parse_restrictions(data, len, entries, 0, err, sizeof(err));
+    free(data);
+    return count;
+}
+
+static void send_restrictions_error(int fd, const char *status, const char *error) {
+    FILE *f = send_json_start(fd, status);
+    if (!f) return;
+    fputs("{\"ok\":false,\"error\":", f);
+    json_write_string(f, error);
+    fputs("}\n", f);
+    fclose(f);
+}
+
+/* The activities object. Every value in it was checked (digits, day names,
+ * HH:MM), so nothing needs escaping. */
+static int restrictions_json(struct sbuf *sb, const struct restriction_entry *entries, int count) {
+    char part[64];
+    int a, w, d, first;
+    if (sbuf_append(sb, "{", 1) != 0) return -1;
+    for (a = 0; a < count; a++) {
+        snprintf(part, sizeof(part), "%s\"%s\":[", a ? "," : "", entries[a].id);
+        if (sbuf_append(sb, part, strlen(part)) != 0) return -1;
+        for (w = 0; w < entries[a].count; w++) {
+            const struct restriction_window *win = &entries[a].windows[w];
+            snprintf(part, sizeof(part), "%s{\"days\":[", w ? "," : "");
+            if (sbuf_append(sb, part, strlen(part)) != 0) return -1;
+            for (d = 0, first = 1; d < 7; d++) {
+                if (!(win->days & (1 << d))) continue;
+                snprintf(part, sizeof(part), "%s\"%s\"", first ? "" : ",", restriction_days[d]);
+                if (sbuf_append(sb, part, strlen(part)) != 0) return -1;
+                first = 0;
+            }
+            snprintf(part, sizeof(part), "],\"start\":\"%s\",\"end\":\"%s\"}", win->start, win->end);
+            if (sbuf_append(sb, part, strlen(part)) != 0) return -1;
+        }
+        if (sbuf_append(sb, "]", 1) != 0) return -1;
+    }
+    return sbuf_append(sb, "}", 1);
+}
+
+/* The whole file: {"version":1,"activities":{...}}. */
+static int restrictions_file_text(struct sbuf *sb, const struct restriction_entry *entries, int count) {
+    if (sbuf_append(sb, "{\"version\":1,\"activities\":", 26) != 0 ||
+        restrictions_json(sb, entries, count) != 0) return -1;
+    return sbuf_append(sb, "}", 1);
+}
+
+static int save_restrictions(const struct restriction_entry *entries, int count) {
+    struct sbuf sb = {0};
+    int rc = -1;
+    if (count == 0) {
+        if (unlink(ACTIVITY_RESTRICTIONS) != 0 && errno != ENOENT) return -1;
+        sync();
+        return 0;
+    }
+    if (restrictions_file_text(&sb, entries, count) == 0) {
+        rc = write_file_atomic(ACTIVITY_RESTRICTIONS, sb.buf, sb.len);
+        if (rc == 0) chmod(ACTIVITY_RESTRICTIONS, 0644);
+    }
+    free(sb.buf);
+    return rc;
+}
+
+/* The file as a backup carries it: always the full shape, so restoring a
+ * backup taken without restrictions lifts the ones set since. */
+static char *restrictions_backup_text(void) {
+    struct sbuf sb = {0};
+    struct restriction_entry *entries = calloc(RESTRICTION_MAX_ACTIVITIES, sizeof(*entries));
+    if (!entries) return NULL;
+    if (restrictions_file_text(&sb, entries, load_restrictions(entries)) != 0) {
+        free(sb.buf);
+        sb.buf = NULL;
+    }
+    free(entries);
+    return sb.buf;
+}
+
+static void bundle_restrictions(FILE *f) {
+    char *text = restrictions_backup_text();
+    fputc(',', f);
+    json_write_string(f, "activity-restrictions.json");
+    fputc(':', f);
+    json_write_string(f, text ? text : "{\"version\":1,\"activities\":{}}");
+    free(text);
+}
+
+static void send_restrictions_download(int fd) {
+    char hdr[512];
+    char *text = restrictions_backup_text();
+    const char *body = text ? text : "{\"version\":1,\"activities\":{}}";
+    snprintf(hdr, sizeof(hdr),
+        "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: %lu\r\n"
+        "Cache-Control: no-store\r\nContent-Disposition: attachment; filename=\"activity-restrictions.json\"\r\nConnection: close\r\n\r\n",
+        (unsigned long)strlen(body));
+    send_all(fd, hdr, strlen(hdr));
+    send_all(fd, body, strlen(body));
+    free(text);
+}
+
+/* Check a restrictions file from a backup; with save, also replace the hub's
+ * file with it (rewritten in the one shape). */
+static int import_restrictions(const char *payload, int save, char *msg, size_t msglen) {
+    struct restriction_entry *entries = calloc(RESTRICTION_MAX_ACTIVITIES, sizeof(*entries));
+    int count, lock_fd, rc = 0;
+    if (!entries) {
+        snprintf(msg, msglen, "Not enough memory to import time restrictions.");
+        return -1;
+    }
+    count = parse_restrictions(payload, strlen(payload), entries, 1, msg, msglen);
+    if (count < 0) {
+        free(entries);
+        return -1;
+    }
+    if (save) {
+        lock_fd = open(ACTIVITY_RESTRICTIONS_LOCK, O_RDWR | O_CREAT, 0600);
+        if (lock_fd >= 0) flock(lock_fd, LOCK_EX);
+        rc = save_restrictions(entries, count);
+        if (lock_fd >= 0) close(lock_fd);
+        if (rc != 0) snprintf(msg, msglen, "Failed to import time restrictions.");
+    }
+    free(entries);
+    return rc;
+}
+
+static void send_restrictions(int fd, const struct restriction_entry *entries, int count) {
+    struct sbuf sb = {0};
+    FILE *f;
+    if (restrictions_json(&sb, entries, count) != 0) {
+        free(sb.buf);
+        send_restrictions_error(fd, "500 Internal Server Error", "The hub is out of memory.");
+        return;
+    }
+    f = send_json_start(fd, "200 OK");
+    if (f) {
+        fprintf(f, "{\"ok\":true,\"activities\":%s}\n", sb.buf);
+        fclose(f);
+    }
+    free(sb.buf);
+}
+
+static void render_activity_restrictions_json(int fd) {
+    struct restriction_entry *entries = calloc(RESTRICTION_MAX_ACTIVITIES, sizeof(*entries));
+    if (!entries) {
+        send_restrictions_error(fd, "500 Internal Server Error", "The hub is out of memory.");
+        return;
+    }
+    send_restrictions(fd, entries, load_restrictions(entries));
+    free(entries);
+}
+
+/* Replace one activity's windows: {"activityId":"<id>","windows":[...]}.
+ * An empty list lifts its restrictions. */
+static void render_activity_restrictions_set_json(int fd, const struct request *req) {
+    struct semantic_json_doc doc;
+    struct restriction_entry *entries, update;
+    char err[160];
+    int root, id_node, lock_fd, count, a;
+    memset(&update, 0, sizeof(update));
+    root = req->body ? semantic_json_parse(&doc, req->body, req->body_len) : -1;
+    if (root < 0) {
+        send_restrictions_error(fd, "400 Bad Request", "Send {\"activityId\": \"<id>\", \"windows\": [...]}.");
+        return;
+    }
+    id_node = restriction_member(&doc, root, "activityId");
+    if (id_node < 0 || restriction_node_copy(&doc, id_node, "", update.id, sizeof(update.id)) != 0 ||
+        !restriction_id_ok(update.id)) {
+        free(doc.nodes);
+        send_restrictions_error(fd, "400 Bad Request", "Give the activity's id.");
+        return;
+    }
+    if (restriction_parse_windows(&doc, restriction_member(&doc, root, "windows"), &update, err, sizeof(err)) != 0) {
+        free(doc.nodes);
+        send_restrictions_error(fd, "400 Bad Request", err);
+        return;
+    }
+    free(doc.nodes);
+    entries = calloc(RESTRICTION_MAX_ACTIVITIES, sizeof(*entries));
+    if (!entries) {
+        send_restrictions_error(fd, "500 Internal Server Error", "The hub is out of memory.");
+        return;
+    }
+    lock_fd = open(ACTIVITY_RESTRICTIONS_LOCK, O_RDWR | O_CREAT, 0600);
+    if (lock_fd >= 0) flock(lock_fd, LOCK_EX);
+    count = load_restrictions(entries);
+    for (a = 0; a < count && strcmp(entries[a].id, update.id) != 0; a++) {}
+    if (update.count) {
+        if (a == count && count == RESTRICTION_MAX_ACTIVITIES) {
+            if (lock_fd >= 0) close(lock_fd);
+            free(entries);
+            send_restrictions_error(fd, "409 Conflict", "Up to 64 activities can have time restrictions.");
+            return;
+        }
+        entries[a] = update;
+        if (a == count) count++;
+    } else if (a < count) {
+        memmove(&entries[a], &entries[a + 1], (size_t)(count - a - 1) * sizeof(*entries));
+        count--;
+    }
+    if (save_restrictions(entries, count) != 0) {
+        if (lock_fd >= 0) close(lock_fd);
+        free(entries);
+        send_restrictions_error(fd, "500 Internal Server Error", "The hub couldn't save the time restrictions.");
+        return;
+    }
+    if (lock_fd >= 0) close(lock_fd);
+    send_restrictions(fd, entries, count);
+    free(entries);
 }
 
 /* Unpair the remote in one radio slot (rf.unpair). Refused while a pairing
@@ -11574,6 +12040,11 @@ static void handle_client(int client) {
     } else if (strcmp(req.method, "POST") == 0 && strcmp(req.path, "/api/remote-unpair") == 0) {
         if (request_same_origin_json(&req)) render_remote_unpair_json(client, &req);
         else send_cross_site_refused(client);
+    } else if (strcmp(req.method, "GET") == 0 && strcmp(req.path, "/api/activity-restrictions") == 0) {
+        render_activity_restrictions_json(client);
+    } else if (strcmp(req.method, "POST") == 0 && strcmp(req.path, "/api/activity-restrictions") == 0) {
+        if (request_same_origin_json(&req)) render_activity_restrictions_set_json(client, &req);
+        else send_cross_site_refused(client);
     } else if (strcmp(req.method, "GET") == 0 && strcmp(req.path, "/api/multi-remote") == 0) {
         render_multi_remote_json(client);
     } else if (strcmp(req.method, "POST") == 0 && strcmp(req.path, "/api/multi-remote") == 0) {
@@ -11634,6 +12105,8 @@ static void handle_client(int client) {
         send_timezone_download(client);
     } else if (strcmp(req.method, "GET") == 0 && strcmp(req.path, "/export/bluetooth") == 0) {
         send_bt_devices_download(client);
+    } else if (strcmp(req.method, "GET") == 0 && strcmp(req.path, "/export/restrictions") == 0) {
+        send_restrictions_download(client);
     } else if (strcmp(req.method, "POST") == 0 && strcmp(req.path, "/mqtt") == 0) {
         handle_mqtt(client, &req);
     } else if (strcmp(req.method, "POST") == 0 && strcmp(req.path, "/wifi") == 0) {

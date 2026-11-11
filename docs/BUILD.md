@@ -20,12 +20,12 @@ exact SHA-256 digests and sizes are:
 
 | Binary | Size | SHA-256 |
 | --- | --- | --- |
-| `codex_webui` | 1265444 | `e073c8aa7e01c6f8fc3d47f075fc872e91422b312e580c17824dff8177d75ca7` |
+| `codex_webui` | 1284836 | `4448a527240d2b2e566c21d9edf5feed3b62f1ddcae7f671582d5cd388bb9a1d` |
 | `codex_dhcpd` | 58328 | `e9db51f4691511f1ae10182143518e758fc7aca0a84994fe9be602be37957592` |
 | `codex_portal` | 76724 | `1596f6cac03dad4ce0254ac118de5527c41789f10c7bc95357860d0d96c61b5f` |
 | `dropbearmulti` | 577296 | `e2ea632aed8b31dc5ea56b9673cbd983ec83260a97d33f891a0cebf51d5c6c8d` |
 | `codex_hbus` | 74660 | `4be9e6ac2e09e7eb052f9c47e81480d1e32aee7190bedb6ef7f932cf07aab8f9` |
-| `codex_androidtv` | 270324 | `581aac3133080aa6a57f76ad5f6cb23e52408a57313c5d75ce5853c06f06eb04` |
+| `codex_androidtv` | 270516 | `0955c9eeb6820cfbbba4ff09c81a5fdd996c2c67789c9c48ce54f141b5f90e99` |
 | `codex_usbeth` | 85604 | `1a52b531e57eabf73a2017856cfc4d69a9676d38ca37bf5f8fa433942c4f5931` |
 
 The remaining binaries (`codex_bt_pair_agent`, `codex_bthid_keyboard`,
@@ -75,8 +75,8 @@ Both regenerators reproduce the committed headers byte-for-byte.
 
 Pinned source blobs:
 
-- `payload/source/codex_webui.c` — `b7632da65779bf69b6b4bb3d8da880ebbff85988`
-- `payload/source/harmony_shell_assets.h` — `a245737f6632e2f073c2e55b19b013a9fc254e51`
+- `payload/source/codex_webui.c` — `8f7840243dee97daace31128f4ef6cc429fa5e77`
+- `payload/source/harmony_shell_assets.h` — `4667f242645bda5713b96bde5d92783b2f12f5a6`
 - `payload/source/activity_ui_assets.h` — `f68a2bce58e71242b2480b2d483f405484c036da`
 - `payload/source/remote_skin_jpg.h` — `419611c5ff0713f1f5de2dd684d699f6d77238d5`
 
@@ -88,8 +88,8 @@ Pinned source blobs:
 ```
 
 Result must be `ELF 32-bit MSB executable, MIPS, MIPS32 rel2, statically
-linked, stripped`, size 1262948, SHA-256
-`7a95f09180fe360f1946055f4a91ad3e224cdb14dddbde1ec92acd487d269b1a`.
+linked, stripped`, size 1284836, SHA-256
+`4448a527240d2b2e566c21d9edf5feed3b62f1ddcae7f671582d5cd388bb9a1d`.
 
 To compare against a Homebrew-built box binary, strip the compiler stamp from
 both first:
@@ -141,9 +141,9 @@ cd build/tmp
 ```
 
 Result must be `ELF 32-bit MSB executable, MIPS, MIPS32 rel2`, statically
-linked, stripped, size 270324, SHA-256
-`581aac3133080aa6a57f76ad5f6cb23e52408a57313c5d75ce5853c06f06eb04`
-(`payload/source/codex_androidtv.c` blob `cd3590bd93c4bd6fb13c7672b219ff5e273932f2`).
+linked, stripped, size 270516, SHA-256
+`0955c9eeb6820cfbbba4ff09c81a5fdd996c2c67789c9c48ce54f141b5f90e99`
+(`payload/source/codex_androidtv.c` blob `6d0591b872986ebdc6fa176363477840974a634c`).
 The output doesn't depend on where the tree or BearSSL is unpacked. For the
 fake-TV smoke test, build the same way with `-target x86_64-linux-musl` (or
 your host) into `build/output/codex_androidtv-native`.
@@ -319,8 +319,10 @@ for t in barrier device-screens ha-devices androidtv-devices touch-controls; do
   luajit tools/touch-validator/codexactivity-$t-test.lua
 done                                              # the hub's writer: barrier, screens, Home Assistant, network TVs, press modes
 python3 tools/androidtv/androidtv_smoke.py --codex-androidtv build/output/codex_androidtv-native   # codex_androidtv against a fake TV
+sh tools/androidtv/wol_test.sh                    # codex_androidtv's Wake-on-LAN, with fake interfaces (needs BearSSL)
 luajit tools/touch-validator/codexactivity-validate-test.lua tools/webui-sim/fixtures/touch-maplist.json
 luajit tools/touch-validator/netservicestarter-guards-test.lua   # offline sync guards
+luajit tools/touch-validator/netservicestarter-restrictions-test.lua   # activity time restrictions
 (cd Android && ./gradlew :core-protocol:test)    # Android protocol and graph tests
 node --test desktop/test/*.test.mjs               # macOS app units (after npm ci in desktop/)
 (cd desktop && npm run test:e2e)                  # macOS app end-to-end, against the simulator

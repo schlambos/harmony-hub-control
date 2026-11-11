@@ -1,9 +1,11 @@
 /* Activities tab (#activities): the app's ActivitiesScreen. The running
    activity sits in a card with On-screen buttons, Open remote and Turn off;
    every other activity is a row with Start and a ⋮ menu (edit, set up
-   buttons, the Touch's on-screen buttons, try the buttons, the advanced
-   editor, reorder, delete). Setup goes through the wizard (#wizard). */
+   buttons, the Touch's on-screen buttons, try the buttons, time
+   restrictions, the advanced editor, reorder, delete). Setup goes through
+   the wizard (#wizard). */
 
+import { getActivityRestrictions } from "../api.js";
 import * as hub from "../state.js";
 import { deleteActivityGraph, reorderActivityGraph } from "../wizard-model.js";
 import {
@@ -20,6 +22,8 @@ import {
   vibrate,
 } from "../ui/shell.js";
 import { activityIconName, activityKeys, deviceNamesFor } from "./remote-model.js";
+import { describeRestrictions, isRestrictableId, startFailureText } from "./restrictions-model.js";
+import { openRestrictionsSheet } from "./restrictions-sheet.js";
 
 /* Fewer keys than this and the row warns, as the app does. */
 const FEW_BUTTONS = 5;
@@ -29,6 +33,7 @@ export function createActivitiesHomeView(section) {
   let busy = false; // a delete or reorder is saving
   let counted = null; // the config the button counts below were made from
   let counts = new Map();
+  let restrictions = {}; // activity id -> its time restrictions, from the hub
 
   section.innerHTML = `<div class="page" id="activitiesRoot"></div>`;
   const root = section.querySelector("#activitiesRoot");
@@ -72,7 +77,7 @@ export function createActivitiesHomeView(section) {
           ${iconTile(activityIconName(a), { size: 52, tone: "primary" })}
           <div class="run-card-text">
             <p class="run-card-over">Running now</p>
-            <h3 class="run-card-name">${escapeHtml(name)}</h3>
+            <h3 class="run-card-name">${escapeHtml(name)}${restrictedMark(id)}</h3>
             <p class="run-card-meta">${escapeHtml(deviceNamesFor(a, devices).join(" · "))}</p>
           </div>
           <a class="icon-btn" href="#touch/${encodeURIComponent(id)}" aria-label="On-screen buttons for ${escapeHtml(name)}" title="On-screen buttons">${icon("tune_outlined")}</a>
@@ -85,6 +90,11 @@ export function createActivitiesHomeView(section) {
           </button>
         </div>
       </section>`;
+  }
+
+  function restrictedMark(id) {
+    const text = describeRestrictions(restrictions[id]);
+    return text ? `<span class="act-row-restricted" title="${escapeHtml(text)}">${icon("schedule", { size: 16, label: text })}</span>` : "";
   }
 
   function row(a, devices) {
@@ -100,7 +110,7 @@ export function createActivitiesHomeView(section) {
     return `<div class="act-row">
         ${iconTile(activityIconName(a), { size: 48, tone: "activity" })}
         <div class="act-row-text">
-          <span class="act-row-name">${escapeHtml(name)}</span>
+          <span class="act-row-name">${escapeHtml(name)}${restrictedMark(id)}</span>
           ${meta}
         </div>
         ${start}
@@ -165,7 +175,7 @@ export function createActivitiesHomeView(section) {
     location.hash = "#remote";
     await hub.setRunning(id);
     const err = hub.state.runError;
-    if (err) snackbar(`Couldn't start ${hub.activityName(hub.activityById(id))} — ${err.message || "hub error"}`, { error: true });
+    if (err) snackbar(startFailureText(hub.activityName(hub.activityById(id)), err), { error: true });
   }
 
   async function turnOff() {
@@ -223,6 +233,32 @@ export function createActivitiesHomeView(section) {
     mutate((ctx) => deleteActivityGraph({ ...ctx, id }), { done: `Deleted “${name}”`, failed: `Couldn't delete “${name}”` });
   }
 
+  /* The rows' clock marks come from here; an older hub without the route just
+     shows none. */
+  async function loadRestrictions() {
+    try {
+      restrictions = (await getActivityRestrictions()).activities ?? {};
+    } catch {
+      restrictions = {};
+    }
+    shown = "";
+    render();
+  }
+
+  function editRestrictions(id, name) {
+    openRestrictionsSheet({
+      activityId: id,
+      name,
+      onSaved: (all) => {
+        restrictions = all;
+        shown = "";
+        render();
+      },
+    }).dialog.addEventListener("close", () => {
+      root.querySelector(`[data-menu-for="${CSS.escape(id)}"]`)?.focus();
+    });
+  }
+
   function openRowMenu(anchor) {
     const id = anchor.dataset.menuFor;
     const name = hub.activityName(hub.activityById(id));
@@ -235,6 +271,7 @@ export function createActivitiesHomeView(section) {
         { id: "buttons", label: "Set up buttons", icon: "tune_outlined" },
         { id: "touch", label: "On-screen buttons", icon: "tune_outlined" },
         { id: "try", label: "Try the buttons", icon: "settings_remote_outlined" },
+        { id: "restrictions", label: "Time restrictions", icon: "schedule", disabled: !isRestrictableId(id) },
         { id: "editor", label: "Advanced editor", icon: "build_outlined" },
         { id: "up", label: "Move up", icon: "keyboard_arrow_up", disabled: !neighbour(id, -1) },
         { id: "down", label: "Move down", icon: "keyboard_arrow_down", disabled: !neighbour(id, 1) },
@@ -245,6 +282,7 @@ export function createActivitiesHomeView(section) {
         else if (choice === "buttons") location.hash = `#wizard/${path}/buttons`;
         else if (choice === "touch") location.hash = `#touch/${path}`;
         else if (choice === "try") location.hash = `#remote/${path}`;
+        else if (choice === "restrictions") editRestrictions(id, name);
         else if (choice === "editor") location.hash = "#editor";
         else if (choice === "up") move(id, -1);
         else if (choice === "down") move(id, 1);
@@ -278,6 +316,7 @@ export function createActivitiesHomeView(section) {
       shown = "";
       hub.ensureConfig();
       render();
+      loadRestrictions();
     },
     onHide() {
       shown = "";
