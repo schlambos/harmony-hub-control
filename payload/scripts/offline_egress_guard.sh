@@ -13,7 +13,7 @@ LOG=/cache/codex-init.log
 PRIVATE_ROUTES="10.0.0.0/255.0.0.0 172.16.0.0/255.240.0.0 192.168.0.0/255.255.0.0"
 
 blocker_enabled() {
-  [ -f "$BLOCKER" ] && [ "$(sed -n '1p' "$BLOCKER")" = "1" ]
+  [ ! -f /etc/melodious-off ] && [ -f "$BLOCKER" ] && [ "$(sed -n '1p' "$BLOCKER")" = "1" ]
 }
 
 default_gateway() {

@@ -333,6 +333,647 @@ VERDICT_VALIDATION = "BLOCKED_VALIDATION_FAILURE"
 
 MD5_LINE_RE = re.compile(r"^([0-9a-f]{32})  (.+)$")
 
+TURN_OFF_SCRIPT_PATH = "/var/volatile/codex-turn-off.sh"
+MELODIOUS_OFF_MARKER = "/etc/melodious-off"
+LEGACY_MELODIOUS_OFF_MARKER = "/data/codex/melodious-off"
+MELODIOUS_OFF_REFUSAL = "Melodious is turned off on this hub. Run with --turn-on to turn it back on first."
+MELODIOUS_OFF_CHECK_CMD = (
+    f"if [ -f {MELODIOUS_OFF_MARKER} ] || [ -f {LEGACY_MELODIOUS_OFF_MARKER} ]; then echo off; fi"
+)
+
+GATE_SCRIPT_SPECS: list[tuple[str, str, str, Path]] = [
+    ("/etc/init.d/rcS.local", "755", "runtime", PAYLOAD / "scripts" / "rcS.local"),
+    (
+        "/opt/luaworks/tasks/connectserver/netservicestarter.lua",
+        "644",
+        "runtime",
+        PAYLOAD / "scripts" / "netservicestarter.lua",
+    ),
+    ("/data/codex/init.sh", "755", "runtime", PAYLOAD / "scripts" / "init.sh"),
+    (
+        "/data/codex/offline_egress_guard.sh",
+        "755",
+        "runtime",
+        PAYLOAD / "scripts" / "offline_egress_guard.sh",
+    ),
+    ("/data/codex/usb_eth_service.sh", "755", "runtime", PAYLOAD / "scripts" / "usb_eth_service.sh"),
+    ("/data/codex/androidtv_service.sh", "755", "runtime", PAYLOAD / "scripts" / "androidtv_service.sh"),
+    ("/data/codex/recovery_ap.sh", "755", "runtime", PAYLOAD / "scripts" / "recovery_ap.sh"),
+    ("/pkg/codexactivity/codexactivity.lua", "644", "plugin", PAYLOAD / "activity" / "codexactivity.lua"),
+    ("/pkg/codexmqtt/codexmqtt.lua", "644", "plugin", PAYLOAD / "mqtt" / "codexmqtt.lua"),
+]
+
+# Runs on the hub. install_webui.ps1 carries an identical copy
+# (tools/installer_contract_smoke.py checks byte-for-byte parity).
+TURN_OFF_SCRIPT = r"""#!/bin/sh
+# Single-state Melodious off/on helper, run ON THE HUB by install_webui.py
+# (--turn-off / --turn-on) and install_webui.ps1 (-TurnOff / -TurnOn).
+#
+# One marker file, /etc/melodious-off, gates rcS.local, netservicestarter.lua,
+# init.sh, the *_service.sh wrappers, and the /pkg Lua plugins. No Melodious
+# configs, plugins, or patched hal copies are moved or edited.
+#
+#   sh turn_off.sh check [--force]         preflight + current state for --turn-off
+#   sh turn_off.sh apply [--force]         write /etc/melodious-off, restore WAN
+#                                          route, reconnect Wi-Fi if suspended
+#   sh turn_off.sh verify-off              post-reboot verification for --turn-off
+#   sh turn_off.sh check-on                preflight + hal load-check for --turn-on
+#   sh turn_off.sh apply-on                unlink /etc/melodious-off (+ legacy)
+#   sh turn_off.sh verify-on <hal-kind>    post-reboot verification for --turn-on
+#
+# BusyBox 1.13 on the hub: no stat, mktemp, rmdir, head, tail, sort, df or grep -E.
+
+set -u
+R=${CODEX_OFF_ROOT:-}
+PATH=${CODEX_OFF_PATH:-/data/codex/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin}
+export PATH
+
+MARKER=/etc/melodious-off
+LEGACY_MARKER=/data/codex/melodious-off
+HOSTS=/etc/hosts
+PROBE_MARK="# codex: Harmony Touch sync probe"
+WPA_CONF=/etc/wpa_supplicant.conf
+PREFS=/data/luaworks/provision/preferences
+WIFI_OFF_STATE=/var/run/codex-usb-eth-wifi-off
+MULTI_PENDING=/var/run/codex-multi-remote-pending
+HAL_PATH=/usr/bin/hal
+HAL_REMOTES=/data/codex/bin/hal_remotes
+HAL_MULTI=/data/codex/bin/hal_multiremote
+HAL_GATES=/var/run/codex_hal_gates
+TWO_SCREEN_CONF=/data/codex/two_screen.conf
+MULTI_REMOTE_CONF=/data/codex/multi_remote.conf
+USB_ETH_CONF=/data/codex/usb_eth.conf
+WIFI_WAIT=${CODEX_WIFI_WAIT:-15}
+
+BOOTSTRAP_ALWAYS="/etc/init.d/rcS.local /opt/luaworks/tasks/connectserver/netservicestarter.lua"
+BOOTSTRAP_IF_PRESENT="/data/codex/init.sh /data/codex/offline_egress_guard.sh /data/codex/usb_eth_service.sh /data/codex/androidtv_service.sh /data/codex/recovery_ap.sh /pkg/codexactivity/codexactivity.lua /pkg/codexmqtt/codexmqtt.lua"
+
+die() { echo "error=$*"; exit 1; }
+
+ps_out() {
+  if [ -n "${CODEX_OFF_PS_FILE:-}" ]; then
+    cat "$CODEX_OFF_PS_FILE" 2>/dev/null || true
+  elif [ -n "$R" ]; then
+    cat "$R/proc/codex_ps" 2>/dev/null || true
+  else
+    ps 2>/dev/null || true
+  fi
+}
+
+pid_alive() {
+  [ -f "$1" ] || return 1
+  _p=$(sed -n '1p' "$1" 2>/dev/null)
+  case "$_p" in *[!0-9]*|"") return 1 ;; esac
+  if [ -n "$R" ]; then
+    ps_out | awk -v p="$_p" '$1 == p { f = 1 } END { exit !f }'
+  else
+    kill -0 "$_p" 2>/dev/null
+  fi
+}
+
+route_out() {
+  if [ -n "$R" ] && [ -f "$R/proc/codex_route" ]; then
+    cat "$R/proc/codex_route" 2>/dev/null || true
+  else
+    route -n 2>/dev/null || true
+  fi
+}
+
+emit_boot_stamp() {
+  _bid=$(sed -n '1p' "$R/proc/sys/kernel/random/boot_id" 2>/dev/null || true)
+  _bt=$(awk '$1 == "btime" { print $2; exit }' "$R/proc/stat" 2>/dev/null || true)
+  _up=$(awk '{ print int($1); exit }' "$R/proc/uptime" 2>/dev/null || true)
+  echo "boot_id=$_bid"
+  echo "btime=$_bt"
+  echo "uptime_s=$_up"
+}
+
+wifi_ipv4() {
+  ifconfig ath0 2>/dev/null | sed -n 's/.*inet addr:\([0-9.]*\).*/\1/p' | sed -n '1p'
+}
+
+wired_ipv4s() {
+  {
+    if [ -x "$R/data/codex/bin/codex_usbeth" ]; then
+      "$R/data/codex/bin/codex_usbeth" status 2>/dev/null | sed -n 's/^ipv4=\([0-9.]*\)$/\1/p'
+    fi
+    ifconfig 2>/dev/null | awk '
+      /^[A-Za-z0-9]/ { iface = $1 }
+      iface != "" && iface != "lo" && iface != "ath0" && iface != "ath1" && /inet addr:/ {
+        s = $0; sub(/^.*inet addr:/, "", s); sub(/[^0-9.].*$/, "", s)
+        if (s != "") print s
+      }'
+  } | awk '!seen[$0]++'
+}
+
+wifi_off_active() {
+  [ -f "$R$WIFI_OFF_STATE" ] && return 0
+  if grep '^WIFI_OFF=1$' "$R$USB_ETH_CONF" >/dev/null 2>&1; then
+    if wpa_cli -i ath0 status 2>/dev/null | grep '^wpa_state=DISCONNECTED$' >/dev/null 2>&1; then
+      return 0
+    fi
+  fi
+  return 1
+}
+
+emit_network_state() {
+  if route_out | awk '$1 == "0.0.0.0" && $4 ~ /G/ { f = 1 } END { exit !f }'; then
+    echo "internet_route=yes"
+  else
+    echo "internet_route=no"
+  fi
+  if wifi_off_active; then
+    echo "wifi_off_active=yes"
+  else
+    echo "wifi_off_active=no"
+  fi
+  echo "wifi_ip=$(wifi_ipv4)"
+  for _wip in $(wired_ipv4s); do
+    echo "wired_ip=$_wip"
+  done
+}
+
+check_bootstrap_targets() {
+  _need=no
+  for _p in $BOOTSTRAP_ALWAYS; do
+    if [ ! -f "$R$_p" ] || ! grep -F "$MARKER" "$R$_p" >/dev/null 2>&1; then
+      _need=yes
+      echo "bootstrap_target=$_p"
+    fi
+  done
+  for _p in $BOOTSTRAP_IF_PRESENT; do
+    if [ -f "$R$_p" ] && ! grep -F "$MARKER" "$R$_p" >/dev/null 2>&1; then
+      _need=yes
+      echo "bootstrap_target=$_p"
+    fi
+  done
+  echo "bootstrap_needed=$_need"
+}
+
+report_off() {
+  emit_boot_stamp
+  _reasons=""
+  add_reason() { _reasons="${_reasons:+$_reasons, }$1"; }
+
+  if [ -f "$R$MARKER" ]; then
+    echo "marker=present"
+  else
+    echo "marker=absent"
+    add_reason "marker=absent"
+  fi
+  if [ -f "$R$LEGACY_MARKER" ]; then
+    echo "legacy_marker=present"
+    add_reason "legacy_marker=present"
+  else
+    echo "legacy_marker=absent"
+  fi
+
+  _boot_out=$(check_bootstrap_targets)
+  echo "$_boot_out"
+  if echo "$_boot_out" | grep '^bootstrap_needed=yes$' >/dev/null 2>&1; then
+    add_reason "bootstrap_needed=yes"
+  fi
+
+  _ps=$(ps_out)
+  if echo "$_ps" | grep '[c]odex_webui' >/dev/null 2>&1; then
+    echo "webui=running"
+    add_reason "webui=running"
+  else
+    echo "webui=stopped"
+  fi
+  if echo "$_ps" | grep '[o]ffline_egress_guard.sh' >/dev/null 2>&1 ||
+     pid_alive "$R/var/run/codex-offline-egress.pid"; then
+    echo "egress_guard=running"
+    add_reason "egress_guard=running"
+  else
+    echo "egress_guard=stopped"
+  fi
+  if echo "$_ps" | grep '[u]sb_eth_service.sh' >/dev/null 2>&1 ||
+     pid_alive "$R/var/run/codex-usb-eth-worker.pid"; then
+    echo "usb_eth_worker=running"
+    add_reason "usb_eth_worker=running"
+  else
+    echo "usb_eth_worker=stopped"
+  fi
+  if echo "$_ps" | grep '[c]odex_androidtv' >/dev/null 2>&1 ||
+     echo "$_ps" | grep '[a]ndroidtv_service.sh' >/dev/null 2>&1; then
+    echo "androidtv=running"
+    add_reason "androidtv=running"
+  else
+    echo "androidtv=stopped"
+  fi
+  if echo "$_ps" | grep '[c]odex_bt_pair_agent' >/dev/null 2>&1 ||
+     echo "$_ps" | grep '[c]odex_bthid_keyboard' >/dev/null 2>&1 ||
+     echo "$_ps" | grep '[r]ecovery_ap.sh' >/dev/null 2>&1 ||
+     echo "$_ps" | grep '[c]odex_portal' >/dev/null 2>&1 ||
+     echo "$_ps" | grep '[c]odex_dhcpd' >/dev/null 2>&1; then
+    echo "other_codex_daemons=running"
+    add_reason "other_codex_daemons=running"
+  else
+    echo "other_codex_daemons=stopped"
+  fi
+
+  if grep " $HAL_PATH " "$R/proc/mounts" >/dev/null 2>&1; then
+    echo "hal_mount=bound"
+    add_reason "hal_mount=bound"
+  else
+    echo "hal_mount=stock"
+  fi
+  if grep -F "$PROBE_MARK" "$R$HOSTS" >/dev/null 2>&1; then
+    echo "touch_probe=present"
+    add_reason "touch_probe=present"
+  else
+    echo "touch_probe=absent"
+  fi
+
+  emit_network_state
+  if [ -z "$_reasons" ]; then
+    echo "active_off=yes"
+  else
+    echo "active_off=no"
+    echo "still_active=$_reasons"
+  fi
+}
+
+inspect_ssh() {
+  [ -f "$R/etc/init.d/rcS" ] &&
+    grep -F tdeenable "$R/etc/init.d/rcS" >/dev/null 2>&1 &&
+    grep -F /usr/sbin/dropbear "$R/etc/init.d/rcS" >/dev/null 2>&1 ||
+    die "The hub's boot script (/etc/init.d/rcS) doesn't start Dropbear, so SSH wouldn't come back after the reboot."
+  [ -r "$R/etc/tdeenable" ] ||
+    die "/etc/tdeenable is missing or unreadable, so SSH wouldn't start after the reboot."
+  [ -x "$R/usr/sbin/dropbear" ] ||
+    die "/usr/sbin/dropbear is missing or not executable, so SSH wouldn't start after the reboot."
+  if [ "$(sed -n 1p "$R/usr/sbin/dropbear" 2>/dev/null)" = "#!/bin/sh" ]; then
+    target=$(sed -n 's/^exec \([^ ]*\).*/\1/p' "$R/usr/sbin/dropbear")
+    if [ -z "$target" ] || [ ! -x "$R$target" ]; then
+      die "/usr/sbin/dropbear runs ${target:-nothing}, which is missing or not executable, so SSH wouldn't start after the reboot."
+    fi
+  fi
+  if [ ! -r "$R/home/root/.ssh/authorized_keys" ] ||
+     ! grep '[^ 	]' "$R/home/root/.ssh/authorized_keys" >/dev/null 2>&1; then
+    die "/home/root/.ssh/authorized_keys is missing or empty, so SSH key login wouldn't work after the reboot."
+  fi
+  if [ -r "$R/etc/dropbear/dropbear_rsa_host_key" ] && [ -s "$R/etc/dropbear/dropbear_rsa_host_key" ]; then
+    :
+  elif [ ! -e "$R/etc/dropbear/dropbear_rsa_host_key" ] && [ -x "$R/usr/sbin/dropbearkey" ]; then
+    if [ "$(sed -n 1p "$R/usr/sbin/dropbearkey" 2>/dev/null)" = "#!/bin/sh" ]; then
+      key_target=$(sed -n 's/^exec \([^ ]*\).*/\1/p' "$R/usr/sbin/dropbearkey")
+      if [ -z "$key_target" ] || [ ! -x "$R$key_target" ]; then
+        die "/etc/dropbear/dropbear_rsa_host_key is missing and /usr/sbin/dropbearkey runs ${key_target:-nothing}, which is missing, so SSH wouldn't start after the reboot."
+      fi
+    fi
+  else
+    die "/etc/dropbear/dropbear_rsa_host_key is missing or empty and /usr/sbin/dropbearkey isn't executable, so SSH wouldn't start after the reboot."
+  fi
+}
+
+inspect_remotes() {
+  _force=$1
+  if ps_out | grep '[r]f.pairing' >/dev/null 2>&1; then
+    if [ "$_force" = "1" ]; then
+      echo "warning=A remote pairing window is open on the hub (--force)."
+      echo "rf_check=forced"
+      return 0
+    fi
+    die "A remote pairing window is open on the hub; close it and try again (or pass --force)."
+  fi
+  if [ ! -x "$R/data/codex/bin/codex_hal_ltcp" ]; then
+    if grep " $HAL_PATH " "$R/proc/mounts" >/dev/null 2>&1; then
+      if [ "$_force" = "1" ]; then
+        echo "warning=Patched hal is mounted and codex_hal_ltcp is missing (--force)."
+        echo "rf_check=forced"
+        return 0
+      fi
+      die "A patched hal is running and /data/codex/bin/codex_hal_ltcp is missing, so paired remotes couldn't be checked."
+    fi
+    echo "rf_check=skipped"
+    return 0
+  fi
+  _rf=$("$R/data/codex/bin/codex_hal_ltcp" rf.info '{}' 8 2>&1) || true
+  _parsed=$(echo "$_rf" | awk '
+    { line = line " " $0 }
+    END {
+      if (line !~ /"code"[ \t]*:[ \t]*200/) { print "INVALID"; exit }
+      n = split(line, parts, "{")
+      for (i = 1; i <= n; i++) {
+        obj = parts[i]
+        sub(/\}.*$/, "", obj)
+        if (obj ~ /"DeviceIndex"/) {
+          eq = ""; idx = "?"
+          if (match(obj, /"EquadID"[ \t]*:[ \t]*"?[0-9]+"?/)) {
+            s = substr(obj, RSTART, RLENGTH)
+            sub(/^.*:[ \t]*"?/, "", s); sub(/"?$/, "", s); eq = s
+          }
+          if (match(obj, /"DeviceIndex"[ \t]*:[ \t]*"?[0-9]+"?/)) {
+            s = substr(obj, RSTART, RLENGTH)
+            sub(/^.*:[ \t]*"?/, "", s); sub(/"?$/, "", s); idx = s
+          }
+          if (eq != "") {
+            cnt[eq]++
+            slots[eq] = (cnt[eq] > 1 ? slots[eq] ", " idx : idx)
+          }
+        }
+      }
+      dups = ""
+      split("16414 16422 16423", noscr, " ")
+      for (k = 1; k <= 3; k++) {
+        m = noscr[k]
+        if (cnt[m] > 1) dups = (dups != "" ? dups "; " : "") m " (slots " slots[m] ")"
+      }
+      print "DUPS=" dups
+      if (cnt["16417"] > 1) print "SCREEN=" slots["16417"]
+    }')
+  if [ "$_parsed" = "INVALID" ]; then
+    if [ "$_force" = "1" ]; then
+      echo "warning=The hub radio didn't list its paired remotes (--force); if duplicate remotes without a screen are paired, the stock hal will hang."
+      echo "rf_check=forced"
+      return 0
+    fi
+    die "The hub's radio didn't list its paired remotes (rf.info failed); pass --force to turn off without checking."
+  fi
+  _dups=$(echo "$_parsed" | sed -n 's/^DUPS=//p')
+  _scr=$(echo "$_parsed" | sed -n 's/^SCREEN=//p')
+  if [ -n "$_scr" ]; then
+    echo "warning=Two remotes with a screen (EquadID 16417, slots $_scr) are paired; the stock hal serves one of them at a time."
+  fi
+  if [ -n "$_dups" ]; then
+    if [ "$_force" = "1" ]; then
+      echo "warning=Duplicate remotes without a screen are paired (EquadID $_dups); the stock hal hangs on them (--force)."
+      echo "rf_check=forced"
+      return 0
+    fi
+    die "More than one remote without a screen of the same model is paired (EquadID $_dups). The stock hal hangs on duplicate remotes; unpair the extra ones in Settings -> Remotes first (or pass --force)."
+  fi
+  echo "rf_check=ok"
+}
+
+inspect_wifi() {
+  _force=$1
+  if [ ! -r "$R$WPA_CONF" ] || ! grep '^[ 	]*network[ 	]*=[ 	]*{' "$R$WPA_CONF" >/dev/null 2>&1; then
+    if [ "$_force" = "1" ]; then
+      echo "warning=/etc/wpa_supplicant.conf has no network={ block (--force); USB Ethernet won't start when Melodious is off, so the hub may be unreachable."
+      echo "wifi_check=forced"
+      return 0
+    fi
+    die "/etc/wpa_supplicant.conf has no network={ block. USB Ethernet doesn't run when Melodious is off, so the hub wouldn't join Wi-Fi after the reboot (configure Wi-Fi first, or pass --force)."
+  fi
+  echo "wifi_check=ok"
+}
+
+inspect_provision() {
+  _force=$1
+  _state=unprovisioned
+  if [ -r "$R$PREFS" ] && [ -s "$R$PREFS" ]; then
+    _state=$(awk '
+      { line = line " " $0 }
+      END {
+        if (line !~ /"mode"[ \t]*:[ \t]*[23]/ || line !~ /"accountId"[ \t]*:[ \t]*"[^"]+"/ || line !~ /"authToken"[ \t]*:[ \t]*"[^"]+"/) {
+          print "unprovisioned"
+        } else if (line ~ /"authToken"[ \t]*:[ \t]*"local"/) {
+          print "local_account"
+        } else {
+          print "cloud"
+        }
+      }' "$R$PREFS")
+  fi
+  echo "provision_state=$_state"
+  if [ "$_state" = "local_account" ] || [ "$_state" = "unprovisioned" ]; then
+    _msg="This hub is $_state (/data/luaworks/provision/preferences); re-provisioning it in the Harmony app runs cleanDataFolder(\"/data\") and wipes root SSH and /data/codex."
+    if [ "$_force" = "1" ]; then
+      echo "warning=$_msg (--force)"
+      return 0
+    fi
+    die "$_msg Pass --force only if you intend to wipe /data/codex and root SSH."
+  fi
+}
+
+check_off() {
+  _force=$1
+  [ -d "$R/data/codex" ] || die "Melodious isn't installed on this hub: /data/codex is missing."
+  inspect_ssh
+  _rep=$(report_off)
+  if echo "$_rep" | grep '^active_off=yes$' >/dev/null 2>&1; then
+    echo "$_rep"
+    return 0
+  fi
+  inspect_remotes "$_force"
+  inspect_wifi "$_force"
+  inspect_provision "$_force"
+  echo "$_rep"
+}
+
+apply_off() {
+  _force=$1
+  [ -d "$R/data/codex" ] || die "Melodious isn't installed on this hub: /data/codex is missing."
+  inspect_ssh
+  inspect_remotes "$_force"
+  inspect_wifi "$_force"
+  inspect_provision "$_force"
+  for _p in $BOOTSTRAP_ALWAYS; do
+    if [ ! -f "$R$_p" ] || ! grep -F "$MARKER" "$R$_p" >/dev/null 2>&1; then
+      die "$_p does not yet support $MARKER; bootstrap gate scripts first."
+    fi
+  done
+
+  trap '' HUP PIPE
+  stamp=$(date -u +%Y%m%d-%H%M%S)
+  mkdir -p "$R/etc" || die "Couldn't access /etc."
+  if ! { echo "off $stamp" > "$R$MARKER.codex-new" &&
+         chmod 644 "$R$MARKER.codex-new" &&
+         mv -f "$R$MARKER.codex-new" "$R$MARKER"; }; then
+    rm -f "$R$MARKER.codex-new"
+    die "Couldn't write $MARKER; nothing changed."
+  fi
+  rm -f "$R$LEGACY_MARKER"
+
+  if grep " $HAL_PATH " "$R/proc/mounts" >/dev/null 2>&1; then
+    mkdir -p "$R/var/run" 2>/dev/null || true
+    touch "$R$MULTI_PENDING" 2>/dev/null || true
+  fi
+
+  if [ -x "$R/data/codex/offline_egress_guard.sh" ]; then
+    "$R/data/codex/offline_egress_guard.sh" >/dev/null 2>&1 || true
+  fi
+
+  if wifi_off_active; then
+    wpa_cli -i ath0 reconnect >/dev/null 2>&1 || true
+    rm -f "$R$WIFI_OFF_STATE" "$R$WIFI_OFF_STATE.failed"
+    echo "wifi_reconnected=yes"
+    _w=0
+    while [ "$_w" -lt "$WIFI_WAIT" ] && [ -z "$(wifi_ipv4)" ]; do
+      sleep 1
+      _w=$((_w + 1))
+    done
+  fi
+
+  emit_boot_stamp
+  emit_network_state
+  echo "result=off"
+}
+
+expected_hal_kind() {
+  _two=$(cat "$R$TWO_SCREEN_CONF" 2>/dev/null || true)
+  case "$_two" in
+    1|once|serial|serial-once)
+      if [ -f "$R$HAL_REMOTES" ]; then
+        echo "two-screen"
+        return 0
+      fi
+      ;;
+  esac
+  if [ "$(cat "$R$MULTI_REMOTE_CONF" 2>/dev/null || true)" = "1" ] && [ -f "$R$HAL_MULTI" ]; then
+    echo "multi-remote"
+    return 0
+  fi
+  echo "stock"
+}
+
+hal_matches_expected() {
+  _want=$1
+  _want_md5=${2:-}
+  _bound=no
+  grep " $HAL_PATH " "$R/proc/mounts" >/dev/null 2>&1 && _bound=yes
+  _md5=$(md5sum "$R$HAL_PATH" 2>/dev/null | awk '{ print $1 }')
+  case "$_want" in
+    two-screen)
+      _exp=${_want_md5:-$(md5sum "$R$HAL_REMOTES" 2>/dev/null | awk '{ print $1 }')}
+      [ "$_bound" = "yes" ] && [ -n "$_exp" ] && [ "$_md5" = "$_exp" ]
+      ;;
+    multi-remote)
+      _exp=${_want_md5:-$(md5sum "$R$HAL_MULTI" 2>/dev/null | awk '{ print $1 }')}
+      [ "$_bound" = "yes" ] && [ -n "$_exp" ] && [ "$_md5" = "$_exp" ]
+      ;;
+    *) [ "$_bound" = "no" ] ;;
+  esac
+}
+
+check_two_screen_load() {
+  _out=$("$R$HAL_REMOTES" -h 2>&1; rc=$?; echo; echo "rc=$rc")
+  if echo "$_out" | grep 'Usage:' >/dev/null 2>&1 &&
+     echo "$_out" | grep '^rc=1$' >/dev/null 2>&1; then
+    echo "two_screen_load_check=ok"
+    return 0
+  fi
+  echo "two_screen_load_check=failed"
+  die "The hub could not start $HAL_REMOTES; Melodious was left off and the hub was not restarted."
+}
+
+check_on() {
+  [ -d "$R/data/codex" ] || die "Melodious isn't installed on this hub: /data/codex is missing."
+  emit_boot_stamp
+  _want=$(expected_hal_kind)
+  echo "expected_hal=$_want"
+  if [ "$_want" = "two-screen" ]; then
+    check_two_screen_load
+  fi
+  _marker=absent
+  [ -f "$R$MARKER" ] && _marker=present
+  _legacy=absent
+  [ -f "$R$LEGACY_MARKER" ] && _legacy=present
+  echo "marker=$_marker"
+  echo "legacy_marker=$_legacy"
+  _webui=stopped
+  ps_out | grep '[c]odex_webui' >/dev/null 2>&1 && _webui=running
+  echo "webui=$_webui"
+  if [ "$_marker" = "absent" ] && [ "$_legacy" = "absent" ] &&
+     [ "$_webui" = "running" ] && hal_matches_expected "$_want"; then
+    echo "already_on=yes"
+  else
+    echo "already_on=no"
+  fi
+}
+
+apply_on() {
+  [ -d "$R/data/codex" ] || die "Melodious isn't installed on this hub: /data/codex is missing."
+  _want=$(expected_hal_kind)
+  if [ "$_want" = "two-screen" ]; then
+    check_two_screen_load
+  fi
+  trap '' HUP PIPE
+  emit_boot_stamp
+  rm -f "$R$MARKER" "$R$LEGACY_MARKER" || die "Couldn't remove $MARKER."
+  if [ -e "$R$MARKER" ] || [ -e "$R$LEGACY_MARKER" ]; then
+    die "Couldn't remove $MARKER."
+  fi
+  echo "expected_hal=$_want"
+  echo "result=on"
+}
+
+verify_on() {
+  _want=${1:-stock}
+  emit_boot_stamp
+  _missing=""
+  add_missing() { _missing="${_missing:+$_missing, }$1"; }
+  if [ -f "$R$MARKER" ]; then
+    echo "marker=present"
+    add_missing "marker=present"
+  else
+    echo "marker=absent"
+  fi
+  if [ -f "$R$LEGACY_MARKER" ]; then
+    echo "legacy_marker=present"
+    add_missing "legacy_marker=present"
+  else
+    echo "legacy_marker=absent"
+  fi
+  if ps_out | grep '[c]odex_webui' >/dev/null 2>&1; then
+    echo "webui=running"
+  else
+    echo "webui=stopped"
+    add_missing "webui=stopped"
+  fi
+  if grep " $HAL_PATH " "$R/proc/mounts" >/dev/null 2>&1; then
+    echo "hal_mount=bound"
+  else
+    echo "hal_mount=stock"
+  fi
+  _md5=$(md5sum "$R$HAL_PATH" 2>/dev/null | awk '{ print $1 }')
+  echo "hal_md5=$_md5"
+  echo "hal_gates=$(cat "$R$HAL_GATES" 2>/dev/null || true)"
+  if ! hal_matches_expected "$_want" "${2:-}"; then
+    add_missing "hal!=$_want"
+  fi
+  if [ -z "$_missing" ]; then
+    echo "active_on=yes"
+  else
+    echo "active_on=no"
+    echo "missing_on=$_missing"
+  fi
+}
+
+MODE=${1:-}
+FORCE=0
+[ "${2:-}" = "--force" ] && FORCE=1
+
+case "$MODE" in
+  check) check_off "$FORCE" ;;
+  apply) apply_off "$FORCE" ;;
+  verify-off) report_off ;;
+  check-on) check_on ;;
+  apply-on) apply_on ;;
+  verify-on) verify_on "${2:-stock}" "${3:-}" ;;
+  *) echo "usage: $0 {check|apply} [--force] | verify-off | check-on | apply-on | verify-on <hal>" >&2; exit 2 ;;
+esac
+"""
+
+
+def boot_changed(before: dict[str, list[str]], after: dict[str, list[str]]) -> bool:
+    """True when post-reboot boot_id, btime, or uptime proves a reboot happened."""
+    b_id = (before.get("boot_id") or [""])[0].strip()
+    a_id = (after.get("boot_id") or [""])[0].strip()
+    if b_id and a_id:
+        return a_id != b_id
+    b_bt = (before.get("btime") or [""])[0].strip()
+    a_bt = (after.get("btime") or [""])[0].strip()
+    if b_bt.isdigit() and a_bt.isdigit() and a_bt != b_bt:
+        return True
+    b_up = (before.get("uptime_s") or [""])[0].strip()
+    a_up = (after.get("uptime_s") or [""])[0].strip()
+    if b_up.isdigit() and a_up.isdigit() and int(a_up) < int(b_up):
+        return True
+    return False
+
 
 def step(text: str) -> None:
     print(f"\n== {text} ==")
@@ -2030,10 +2671,251 @@ class Installer:
         # The engine loads /pkg plugins once at start; only a reboot restarts it.
         return any(c.kind == "plugin" for c in self.active_candidates())
 
+    # ------------------------------------------------------- turn off / on
+
+    def check_not_turned_off(self) -> None:
+        out = self.run_remote(MELODIOUS_OFF_CHECK_CMD, timeout=30, quiet=True).strip()
+        if out == "off":
+            raise RuntimeError(MELODIOUS_OFF_REFUSAL)
+
+    def run_turn_off_script(self, mode: str, *extra: str) -> dict[str, list[str]]:
+        """Upload TURN_OFF_SCRIPT into volatile RAM, execute it, and parse key=value output."""
+        self.run_remote(f"cat > {TURN_OFF_SCRIPT_PATH}", TURN_OFF_SCRIPT.encode("utf-8"), timeout=30, quiet=True)
+        arg_str = " ".join([remote_quote(mode), *(remote_quote(a) for a in extra)])
+        try:
+            code, out, err = self.run_remote_rc(f"sh {TURN_OFF_SCRIPT_PATH} {arg_str}", timeout=120)
+        finally:
+            self.run_remote_rc(f"rm -f {TURN_OFF_SCRIPT_PATH}", timeout=30)
+        values: dict[str, list[str]] = {}
+        for line in out.splitlines():
+            stripped = line.strip()
+            key, sep, value = stripped.partition("=")
+            if sep and key:
+                values.setdefault(key, []).append(value)
+                kv(stripped)
+                if key == "warning":
+                    info(f"WARNING: {value}")
+        if "error" in values:
+            raise RuntimeError(values["error"][0])
+        if code != 0:
+            raise RuntimeError(f"the turn-off helper exited with {code}: {err.strip()}")
+        return values
+
+    def bootstrap_gate_scripts(self, targets: list[str]) -> None:
+        """Update older installs' text scripts/plugins to gate-aware versions
+        (.codex-new + MD5 verify + webui-handoff-<stamp> backup, HANDOFF_KEEP=3)
+        before writing /etc/melodious-off."""
+        step("Bootstrapping gate-aware scripts for /etc/melodious-off")
+        wanted = set(targets)
+        candidates = [
+            Candidate(dest, mode, kind, local=local)
+            for dest, mode, kind, local in GATE_SCRIPT_SPECS
+            if dest in wanted
+        ]
+        for cand in candidates:
+            cand.prepare()
+        self.candidates = candidates
+
+        self.create_stage()
+        self.upload_candidates()
+        self.verify_stage_md5()
+        self.probe_destinations()
+        for cand in self.candidates:
+            state = self.probe.get(cand.dest, {})
+            exists = state.get("kind") == "regular"
+            if exists and state.get("mode") == cand.mode and state.get("md5") == cand.md5:
+                cand.action = "unchanged"
+            elif exists:
+                cand.action = "replace"
+            else:
+                cand.action = "create"
+        self.ram_status()
+        rollback_bytes = sum(
+            int(self.probe[c.dest].get("size", "0")) for c in self.candidates if c.action == "replace"
+        )
+        if self.ram_free_bytes < rollback_bytes + RAM_MARGIN_BYTES:
+            self.cleanup_stage()
+            raise RuntimeError(
+                f"free RAM {self.ram_free_bytes} < rollback copies + margin {rollback_bytes + RAM_MARGIN_BYTES}"
+            )
+        self.count_backup_generations()
+        if not self.active_candidates():
+            self.cleanup_stage()
+            return
+        try:
+            self.stage_rollback_copies()
+            self.create_handoff()
+            self.prune_handoffs()
+            self.ensure_parent_dirs()
+            self.write_new_copies()
+            self.install_sequence()
+            self.verify_installed()
+        except CapacityAbort as exc:
+            self.cleanup_stage()
+            raise RuntimeError(f"not enough free flash to bootstrap gate scripts: {exc}") from exc
+        except InstallFailure as exc:
+            self.rollback_changes(str(exc))
+            raise RuntimeError(f"gate-script bootstrap failed and was rolled back: {exc}") from exc
+        except Exception as exc:
+            if self.new_copies or any(item["done"] for item in self.changed):
+                self.rollback_changes(str(exc))
+                raise RuntimeError(f"gate-script bootstrap failed and was rolled back: {exc}") from exc
+            self.cleanup_stage()
+            raise
+        self.cleanup_stage()
+
+    def wait_post_reboot_verify(
+        self,
+        before: dict[str, list[str]],
+        verify_mode: str,
+        *verify_args: str,
+        wait_webui: bool = False,
+    ) -> dict[str, list[str]]:
+        """Wait for SSH (and Web UI if requested), confirm the reboot actually
+        happened via boot_id/btime/uptime, and return the post-reboot probe."""
+        time.sleep(8)
+        wait_for_port(self.args.hub_host, self.args.port, 180, "SSH")
+        after: dict[str, list[str]] = {}
+        confirmed = False
+        for attempt in range(15):
+            try:
+                after = self.run_turn_off_script(verify_mode, *verify_args)
+            except Exception:
+                if attempt == 14:
+                    raise
+                time.sleep(2)
+                continue
+            if boot_changed(before, after):
+                confirmed = True
+                break
+            time.sleep(2)
+        kv(f"reboot_confirmed={'yes' if confirmed else 'no'}")
+        if not confirmed:
+            raise RuntimeError(
+                "the hub did not restart (boot_id, btime, and uptime did not reset); refusing to report success"
+            )
+        if wait_webui:
+            wait_for_port(self.args.hub_host, 8080, 180, "Web UI")
+            if after.get("active_on") != ["yes"]:
+                after = self.run_turn_off_script(verify_mode, *verify_args)
+        return after
+
+    def turn_off(self) -> int:
+        step("Checking SSH")
+        identity = self.run_remote("id; uname -a", timeout=30)
+        print(identity.strip())
+
+        step("Checking preflight gates for turning Melodious off")
+        extra = ("--force",) if self.args.force else ()
+        before = self.run_turn_off_script("check", *extra)
+        if before.get("active_off") == ["yes"]:
+            step("Done")
+            info("Melodious is already off on this hub.")
+            return 0
+        if self.args.preflight_only:
+            step("Done")
+            info("Preflight only: nothing was changed.")
+            return 0
+        if not self.args.no_prompt:
+            info("The hub goes back to Logitech's cloud and the Harmony app. Melodious stops running.")
+            answer = input("Turn Melodious off and restart the hub? [y/N]: ").strip().lower()
+            if answer not in ("y", "yes"):
+                info("Nothing was changed.")
+                return 1
+
+        if before.get("bootstrap_needed") == ["yes"]:
+            self.bootstrap_gate_scripts(before.get("bootstrap_target", []))
+
+        step("Turning Melodious off")
+        applied = self.run_turn_off_script("apply", *extra)
+        if applied.get("result") != ["off"]:
+            raise RuntimeError("the turn-off helper did not confirm /etc/melodious-off")
+
+        wifi_ip = (applied.get("wifi_ip") or [""])[0].strip()
+        wired_ips = [ip.strip() for ip in applied.get("wired_ip", []) if ip.strip()]
+        switched_to_wifi = False
+        step("Restarting the hub")
+        self.run_remote("(/bin/sleep 2; /sbin/reboot || reboot) >/dev/null 2>&1 & echo rebooting", timeout=30, quiet=True)
+        if self.args.hub_host in wired_ips and wifi_ip and wifi_ip != self.args.hub_host:
+            kv(f"post_reboot_host={wifi_ip}")
+            info(
+                f"Connected over USB Ethernet ({self.args.hub_host}); USB Ethernet stays off after the restart, "
+                f"so waiting for SSH on Wi-Fi IP {wifi_ip}."
+            )
+            self.args.hub_host = wifi_ip
+            switched_to_wifi = True
+
+        step("Checking the hub after the restart")
+        after = self.wait_post_reboot_verify(applied, "verify-off")
+        if after.get("active_off") != ["yes"]:
+            reasons = (after.get("still_active") or ["unknown"])[0]
+            raise RuntimeError(f"after the restart some of Melodious is still active ({reasons})")
+
+        step("Done")
+        info("Melodious is off (/etc/melodious-off): stock hal and Logitech's cloud tasks run; Melodious services, plugins, and restrictions are off.")
+        if switched_to_wifi:
+            info(f"Hub Wi-Fi IP: {wifi_ip}")
+        info("Next, open the Harmony app on the same Wi-Fi network and Sync the hub to 100%.")
+        info("The Harmony app's cloud setup replaces local-only devices and activities.")
+        if after.get("internet_route") == ["no"]:
+            info("The hub has no internet route yet; it gets one as soon as Wi-Fi DHCP finishes.")
+        info("To turn Melodious back on later, run this installer with --turn-on.")
+        return 0
+
+    def turn_on(self) -> int:
+        step("Checking SSH")
+        identity = self.run_remote("id; uname -a", timeout=30)
+        print(identity.strip())
+
+        step("Checking preflight gates for turning Melodious on")
+        before = self.run_turn_off_script("check-on")
+        expected_hal = (before.get("expected_hal") or ["stock"])[0]
+        if before.get("already_on") == ["yes"]:
+            step("Done")
+            info("Melodious is already on.")
+            return 0
+        if self.args.preflight_only:
+            step("Done")
+            info("Preflight only: nothing was changed.")
+            return 0
+        if not self.args.no_prompt:
+            info("Melodious will start again at boot, with the cloud blocker and your saved settings restored.")
+            answer = input("Turn Melodious back on and restart the hub? [y/N]: ").strip().lower()
+            if answer not in ("y", "yes"):
+                info("Nothing was changed.")
+                return 1
+
+        step("Turning Melodious on")
+        applied = self.run_turn_off_script("apply-on")
+        if applied.get("result") != ["on"]:
+            raise RuntimeError("the turn-on helper did not confirm removing /etc/melodious-off")
+        expected_hal = (applied.get("expected_hal") or [expected_hal])[0]
+
+        step("Restarting the hub")
+        self.run_remote("(/bin/sleep 2; /sbin/reboot || reboot) >/dev/null 2>&1 & echo rebooting", timeout=30, quiet=True)
+
+        step("Checking the hub after the restart")
+        expected_md5 = (
+            HAL_REMOTES_MD5
+            if expected_hal == "two-screen"
+            else (HAL_MULTI_MD5 if expected_hal == "multi-remote" else "")
+        )
+        verify_args = (expected_hal, expected_md5) if expected_md5 else (expected_hal,)
+        after = self.wait_post_reboot_verify(applied, "verify-on", *verify_args, wait_webui=True)
+        if after.get("active_on") != ["yes"]:
+            reasons = (after.get("missing_on") or ["unknown"])[0]
+            raise RuntimeError(f"after the restart Melodious did not come back cleanly ({reasons})")
+
+        step("Done")
+        info(f"Melodious is back on (hal: {expected_hal}).")
+        info(f"Web UI: http://{self.args.hub_host}:8080/")
+        return 0
+
     def run(self) -> int:
         step("Checking SSH")
         identity = self.run_remote("id; uname -a", timeout=30)
         print(identity.strip())
+        self.check_not_turned_off()
 
         step("Resolving hub id")
         self.resolve_hub_id()
@@ -2244,7 +3126,35 @@ def parse_args(argv: list[str]) -> argparse.Namespace:
     parser.add_argument("--mqtt-discovery-prefix", default=None, help="Home Assistant MQTT discovery prefix")
     parser.add_argument("--mqtt-client-id", default=None, help="MQTT client ID")
     parser.add_argument("--mqtt-disabled", action="store_true", default=None, help="Install with MQTT disabled")
-    parser.add_argument("--skip-cloud-suppression", action="store_true", help="Do not replace netservicestarter.lua")
+    parser.add_argument(
+        "--skip-cloud-suppression",
+        action="store_true",
+        help=(
+            "Do not replace netservicestarter.lua (with --clean-install, also write the cloud blocker as off). "
+            "This does not undo an existing install; use --turn-off for that"
+        ),
+    )
+    parser.add_argument(
+        "--turn-off",
+        action="store_true",
+        help=(
+            "Turn Melodious off via /etc/melodious-off and restart the hub so Logitech's cloud and the Harmony app "
+            "can manage it again. Keeps Melodious's files, configs, and root SSH intact; supports --preflight-only"
+        ),
+    )
+    parser.add_argument(
+        "--turn-on",
+        action="store_true",
+        help=(
+            "Turn Melodious back on by removing /etc/melodious-off and restarting the hub, restoring the cloud "
+            "blocker and saved settings; supports --preflight-only"
+        ),
+    )
+    parser.add_argument(
+        "--force",
+        action="store_true",
+        help="With --turn-off, bypass preflight refusals for duplicate remotes, missing Wi-Fi config, or a local-account hub",
+    )
     parser.add_argument("--no-apply-cloud-restart", action="store_true", help="Do not reboot after the Logitech cloud blocker files, engine plugins or multi-remote setting change")
     parser.add_argument(
         "--multi-remote",
@@ -2318,10 +3228,24 @@ def parse_args(argv: list[str]) -> argparse.Namespace:
     return args
 
 
+def validate_mode_args(args: argparse.Namespace) -> None:
+    if args.turn_off and args.turn_on:
+        raise RuntimeError("--turn-off and --turn-on cannot be used together")
+    if args.force and not args.turn_off:
+        raise RuntimeError("--force can only be used with --turn-off")
+    if args.turn_off or args.turn_on:
+        flag = "--turn-off" if args.turn_off else "--turn-on"
+        if args.clean_install:
+            raise RuntimeError(f"{flag} cannot be combined with --clean-install")
+        if args.no_apply_cloud_restart:
+            raise RuntimeError(f"{flag} cannot be combined with --no-apply-cloud-restart")
+
+
 def main(argv: list[str]) -> int:
     installer: Installer | None = None
     try:
         args = parse_args(argv)
+        validate_mode_args(args)
         args.hub_host = prompt_if_missing(args.hub_host, "Harmony hub IP address", True, args.no_prompt)
 
         if not args.key_path:
@@ -2334,6 +3258,12 @@ def main(argv: list[str]) -> int:
         if not key_path.is_file():
             raise RuntimeError(f"SSH key not found: {key_path}")
         args.key_path = str(key_path)
+        if args.turn_off:
+            installer = Installer(args)
+            return installer.turn_off()
+        if args.turn_on:
+            installer = Installer(args)
+            return installer.turn_on()
         mqtt_cli_supplied = any(
             value is not None
             for value in (

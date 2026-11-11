@@ -422,12 +422,18 @@ staging, ~0.5 MB each — the usual full-flash fix), `--skip-flash-check`. `--he
 - **Update:** re-run the installer, or macOS Settings → Updates → **Update hub…** (checksum-checked
   download, SSH install with rollback, finishes on-hub if the Mac disconnects; settings unchanged).
   Android only notifies — it never holds the SSH key.
-- **Roll back:** `.\restore_backup.ps1 -HubHost <hub-ip> -KeyPath "$env:USERPROFILE\.ssh\<key>"`
-  restores boot script, cloud blocker, SSH wrappers, Hub ID and MQTT from the newest handoff, then
-  reboot.
+- **Turn off:** `python3 install_webui.py --hub-host <hub-ip> --turn-off` (`-TurnOff` in PowerShell)
+  sets `/etc/melodious-off`, restores the internet route and reboots into stock `hal` + Logitech's
+  cloud so the Harmony app can sync the hub again; root SSH and all Melodious files/configs stay put.
+- **Turn back on:** `python3 install_webui.py --hub-host <hub-ip> --turn-on` (`-TurnOn`) unlinks
+  `/etc/melodious-off` (zero flash needed) and reboots back into Melodious with the cloud blocker on
+  (normal installer runs and macOS **Update hub…** refuse while turned off).
+- **Roll back an update:** `.\restore_backup.ps1 -HubHost <hub-ip> -KeyPath "$env:USERPROFILE\.ssh\<key>"`
+  goes back one update from the newest handoff backup (boot script, `netservicestarter.lua`, SSH
+  wrappers, Hub ID and MQTT), then reboot; use `--turn-off` to stop running Melodious.
 - **Docker/Unraid:** same installer via env vars, then a small proxy — [UNRAID.md](UNRAID.md).
 
-Full walkthrough, all flags and flash-full help: **[docs/INSTALL.md](docs/INSTALL.md)**.
+Full walkthrough, `--turn-off`/`--turn-on` gates, all flags and flash-full help: **[docs/INSTALL.md](docs/INSTALL.md)**.
 
 ## How it works
 
@@ -463,7 +469,7 @@ Logitech cloud ✕  cloud tasks not started, hosts refused, WAN route removed
   sync, clock).
 - **Transactional saves:** validate → back up → write → read back → reload → publish revision;
   failure restores prior files. Backups kept: 5 resource / 3 handoff
-  ([docs/INSTALL.md](docs/INSTALL.md#rolling-back)). The remote *pulls* revisions, answered locally
+  ([docs/INSTALL.md](docs/INSTALL.md#rolling-back-an-update)). The remote *pulls* revisions, answered locally
   — [docs/TOUCH_EDITOR.md](docs/TOUCH_EDITOR.md).
 - **HA path:** IP commands POST to the integration webhook (instant 200, service after); back the
   other way, a `remote` entity drives the hub API and live state lands in RAM-only `/api/ha-state`
@@ -509,7 +515,7 @@ tools/shipped_copy_hygiene.mjs`. Full test list and rebuilding `codex_webui` (Zi
 
 | Document | What it covers |
 | --- | --- |
-| [docs/INSTALL.md](docs/INSTALL.md) | Installing, updating and rolling back: the full installer walkthrough, every flag, and flash-full troubleshooting |
+| [docs/INSTALL.md](docs/INSTALL.md) | Installing, updating, turning Melodious off/on, and rolling back: the full installer walkthrough, every flag, and flash-full troubleshooting |
 | [docs/API.md](docs/API.md) | The hub's HTTP API, and the activity rules the paired remote needs |
 | [docs/HOME_ASSISTANT.md](docs/HOME_ASSISTANT.md) | Home Assistant entities as hub devices, webhook rules, press and hold behaviour, and setup |
 | [docs/ANDROID_TV.md](docs/ANDROID_TV.md) | Android TV and Google TV sets over the network: pairing, commands, power, codex_androidtv |

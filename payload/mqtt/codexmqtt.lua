@@ -12,6 +12,7 @@ local digest = require("tasks.harmonywebservices.core.statedigest"):instance()
 local CONFIG_FILE = "/data/codexmqtt/config.json"
 local RESOURCE_RELOAD_FLAG = "/data/codex/reload_resources"
 local IR_EVENT_LOG = "/data/codex/ir-events.log"
+local MELODIOUS_OFF_FILE = "/etc/melodious-off"
 local DEFAULT_BASE_TOPIC = "harmony/hub"
 local DEFAULT_DISCOVERY_PREFIX = "homeassistant"
 local DEFAULT_CLIENT_ID = "harmony-codexmqtt"
@@ -668,8 +669,17 @@ local function handlePublish(sock, cfg, pkt)
   end
 end
 
+local function melodiousOff()
+  local f = io.open(MELODIOUS_OFF_FILE, "r")
+  if not f then
+    return false
+  end
+  f:close()
+  return true
+end
+
 local function mqttLoop()
-  while not stopRequested do
+  while not stopRequested and not melodiousOff() do
     local cfg = readConfig()
     if not cfg.enabled or not cfg.broker or not cfg.broker.host then
       log.notice("codexmqtt disabled or missing broker host")
@@ -757,6 +767,9 @@ end
 -- A task that dies on an error keeps its handle, so check its status rather
 -- than the handle; monitor() calls this every minute to restart it.
 local function start()
+  if melodiousOff() then
+    return false
+  end
   stopRequested = false
   if not taskAlive() then
     if mqttTask then
@@ -768,6 +781,9 @@ local function start()
 end
 
 function discover(self)
+  if melodiousOff() then
+    return {}
+  end
   start()
   return {
     ["codex-mqtt"] = {
@@ -783,10 +799,13 @@ function pair(self, gatewayId, gateway)
 end
 
 function monitor(self)
+  if melodiousOff() then
+    return
+  end
   start()
-  while not stopRequested do
+  while not stopRequested and not melodiousOff() do
     system.sleep(60000)
-    if not stopRequested then
+    if not stopRequested and not melodiousOff() then
       start()
     end
   end

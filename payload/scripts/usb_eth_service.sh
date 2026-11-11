@@ -15,6 +15,7 @@
 # The USBETH_* environment overrides exist for the off-hub tests in
 # tools/usb-eth-test/; the defaults are the hub paths.
 PATH=${USBETH_PATH:-/data/codex/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin}
+OFF_MARKER=${USBETH_OFF_MARKER:-/etc/melodious-off}
 CONF=${USBETH_CONF:-/data/codex/usb_eth.conf}
 HELPER=${USBETH_HELPER:-/data/codex/bin/codex_usbeth}
 MOD_DIR=${USBETH_MOD_DIR:-/data/codex/modules/usb-net}
@@ -59,6 +60,7 @@ state_field() {
 }
 
 is_enabled() {
+  [ ! -f "$OFF_MARKER" ] || return 1
   [ -f "$CONF" ] || return 1
   grep '^ENABLED=1$' "$CONF" >/dev/null 2>&1 && return 0
   [ "$(cat "$CONF" 2>/dev/null)" = "1" ] && return 0
@@ -435,6 +437,10 @@ worker_main() {
 }
 
 start_usb_eth() {
+  if [ -f "$OFF_MARKER" ]; then
+    log "start skipped ($OFF_MARKER present)"
+    return 0
+  fi
   if [ "$1" != "--force" ] && ! is_enabled; then
     log "start skipped (disabled in $CONF)"
     return 0

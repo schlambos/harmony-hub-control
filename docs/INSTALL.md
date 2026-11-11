@@ -1,8 +1,8 @@
-# Install, update and roll back
+# Install, update, turn off and roll back
 
 The full reference for installing Melodious on a rooted Harmony Hub,
-updating it, and rolling back. The [README](../README.md#quick-start)
-has the short version.
+updating it, turning it off and back on, and rolling back an update.
+The [README](../README.md#quick-start) has the short version.
 
 ## Before you start
 
@@ -84,7 +84,10 @@ Each run:
 | `--no-prompt` | `-NoPrompt` | Fails instead of asking for a missing value. |
 | `--mqtt-broker`, `--mqtt-port`, `--mqtt-user`, `--mqtt-password`, `--mqtt-base-topic`, `--mqtt-discovery-prefix`, `--mqtt-client-id`, `--mqtt-disabled` | `-MqttBroker` … `-MqttDisabled` | Set up the MQTT bridge. Without them, an upgrade keeps the hub's MQTT settings. |
 | `--no-apply-cloud-restart` | `-NoApplyCloudRestart` | Skips the reboot after the cloud-blocker files or an engine plugin (`codexactivity.lua`, `codexmqtt.lua`) change. Without that reboot the engine keeps running the old plugin. |
-| `--skip-cloud-suppression` | `-SkipCloudSuppression` | Leaves the hub's `netservicestarter.lua` as it is. With a clean install, it also writes the cloud blocker as off. |
+| `--skip-cloud-suppression` | `-SkipCloudSuppression` | Leaves the hub's `netservicestarter.lua` as it is. With a clean install, it also writes the cloud blocker as off. It doesn't undo an existing install; use `--turn-off` for that. |
+| `--turn-off` | `-TurnOff` | Writes `/etc/melodious-off`, restores the internet route, and restarts the hub into Logitech's stock runtime so the Harmony app can manage it again. Supports `--preflight-only`. See [Turn Melodious off and on](#turn-melodious-off-and-on). |
+| `--turn-on` | `-TurnOn` | Removes `/etc/melodious-off` and restarts the hub back into Melodious with the cloud blocker and your saved settings restored. Supports `--preflight-only`. |
+| `--force` | `-Force` | With `--turn-off`, overrides the preflight refusals for duplicate remotes without a screen, a missing Wi-Fi `network={` block, or a local-account / unprovisioned hub. Never overrides the SSH survival check. |
 | `--remove-root-tool-leftovers` | `-RemoveRootToolLeftovers` | Deletes what harmony-hub-root left behind before installing (see below). |
 | `--skip-flash-check` | `-SkipFlashCheck` | Installs even when the measured free flash looks too small. If flash really runs out, the install still stops with nothing in use changed. |
 | `--multi-remote on` / `off` / `force-off` | `-MultiRemote on` / `off` / `force-off` | Lets the hub keep more than one remote without a screen of the same model, such as two Smart Controls; they share one button setup. `off` restores the stock one-per-model rule. It's refused while two remotes of one model are paired (unpair the extra ones first), and together with `--no-apply-cloud-restart` while the multi-remote `hal` runs. `force-off` (`-MultiRemote force-off`) turns it off without asking the radio, for a radio that stopped answering. The installer reboots when the files change or the running `hal` isn't the one asked for, then checks it. The web app's Settings → Experimental switch does the same. Without it, an upgrade leaves the setting as it is. See [MULTI_REMOTE.md](MULTI_REMOTE.md). |
@@ -151,10 +154,115 @@ itself only when you tap Install, after checking the checksum and the
 signing key. Nothing updates until you opt in and confirm. See
 [SECURITY.md](SECURITY.md) for how downloads are checked.
 
-## Rolling back
+## Turn Melodious off and on
+
+To hand the hub back to Logitech's cloud and the Harmony app without
+touching firmware or erasing Melodious's files, turn Melodious off:
+
+```bash
+python3 install_webui.py --hub-host <hub-ip> --turn-off
+```
+
+```powershell
+.\install_webui.ps1 -HubHost <hub-ip> -TurnOff
+```
+
+Before you do, download a backup on the Backup page (**Download full
+backup**): the Harmony app's cloud copy of your setup replaces what is
+on the hub at the next sync, so devices and activities you added only in
+Melodious go away. Add `--preflight-only` (`-PreflightOnly`) to inspect
+every gate without writing anything.
+
+### What `--turn-off` checks and does
+
+Melodious uses a single state file, `/etc/melodious-off`, checked at the
+top of the boot script (`rcS.local`) and the Lua network starter
+(`netservicestarter.lua`), with defense-in-depth guards in every service
+script and `/pkg` plugin. None of your Melodious settings
+(`cloud_blocker.conf`, `two_screen.conf`, `multi_remote.conf`,
+`usb_eth.conf`, `timezone.conf`, `activity-restrictions.json`), `/pkg`
+plugins, or patched `hal` copies are deleted or edited.
+
+1. **Preflight safety gates (before any write):**
+   - **SSH survival (always enforced):** checks `/etc/init.d/rcS`,
+     `/etc/tdeenable`, `/usr/sbin/dropbear` and its target binary, a
+     non-empty `/home/root/.ssh/authorized_keys`, and either a readable
+     non-empty `/etc/dropbear/dropbear_rsa_host_key` or a working
+     `dropbearkey`.
+   - **Paired remotes:** queries `rf.info`. Refuses (unless `--force`) if
+     two remotes without a screen of the same model (`16414`, `16422`,
+     `16423`) are paired, because the stock `hal` hangs its radio on
+     duplicates — unpair the extra remote in Settings → Remotes first.
+     Warns if two remotes with a screen (`16417`) are paired (the stock
+     `hal` serves one at a time).
+   - **Wi-Fi survival:** refuses (unless `--force`) if
+     `/etc/wpa_supplicant.conf` has no `network={` block, since USB
+     Ethernet stays off when Melodious is off. If wired Wi-Fi-off mode is
+     active, `--turn-off` reconnects `ath0` before restarting; if you
+     connected to `--hub-host` over the USB Ethernet address, it switches
+     to the hub's Wi-Fi IP after the restart and prints that address.
+   - **Local-account / unprovisioned hubs:** inspects
+     `/data/luaworks/provision/preferences` and refuses (unless
+     `--force`) if the hub is unprovisioned or uses a local account
+     (`"authToken": "local"` from [FRESH_HUB_ACTIVATION.md](FRESH_HUB_ACTIVATION.md)).
+     Re-provisioning a hub onto a Logitech account in the Harmony app
+     runs stock `cleanDataFolder("/data")`, which wipes `/data/codex` and
+     root SSH; keeping the marker at `/etc/melodious-off` avoids
+     stranding the hub cloud-blocked, and the gate warns before you lose
+     root SSH.
+2. **Older-install bootstrap:** if the hub runs an older Melodious build
+   whose `rcS.local` and `netservicestarter.lua` don't check
+   `/etc/melodious-off` yet, `--turn-off` updates those gate-aware text
+   scripts first (verified `.codex-new` copies + a `webui-handoff-*`
+   backup, newest 3 kept). On an already-current hub it writes only
+   `/etc/melodious-off` (~25 bytes).
+3. **Restart and verification:** restores the default internet route
+   through `offline_egress_guard.sh`, restarts the hub, confirms the
+   reboot happened (`boot_id` / `btime` / uptime), and verifies that
+   `/etc/melodious-off` is present, `codex_webui`, the egress guard, the
+   USB Ethernet worker and `codex_androidtv` are all stopped,
+   `/usr/bin/hal` is not bind-mounted (stock `hal`), and the Touch sync
+   probe line is gone from `/etc/hosts`.
+
+### Taking the hub back in the Harmony app
+
+1. Put your phone on the same Wi-Fi network as the hub and open the
+   official Harmony app, signed into the Logitech account the hub was
+   set up under.
+2. Connect to the hub when it appears on the local network.
+3. Run **Sync** in the Harmony app (Menu → Harmony Setup → Sync, or the
+   remote's Sync) and let it finish to **100%**, then start an activity
+   to confirm the cloud configuration reconciled cleanly.
+
+### Turning Melodious back on
+
+While `/etc/melodious-off` exists, a normal installer run and the macOS
+app's **Update hub…** both refuse to run, so automated setups (such as
+Docker with `INSTALL_MODE=always`) cannot turn Melodious back on by
+accident. Pass `--turn-on` (`-TurnOn`) explicitly:
+
+```bash
+python3 install_webui.py --hub-host <hub-ip> --turn-on
+```
+
+```powershell
+.\install_webui.ps1 -HubHost <hub-ip> -TurnOn
+```
+
+`--turn-on` checks that any configured two-screen `hal` copy still loads
+on the hub, unlinks `/etc/melodious-off` (which needs zero free flash),
+restarts the hub, waits for SSH (`:22`) and the web app (`:8080`), and
+confirms `codex_webui` and the expected `hal` are running. The cloud
+blocker and all your saved Melodious settings take effect again on that
+boot; if the Harmony app overwrote your setup while Melodious was off,
+restore your saved bundle on the Backup page.
+
+## Rolling back an update
 
 In PowerShell, `restore_backup.ps1` restores these from the newest
-handoff backup, then tells you to reboot the hub:
+handoff backup (what the last installer run replaced), then tells you to
+reboot the hub. It goes back one update; to stop running Melodious and
+go back to the Harmony app, use `--turn-off` above instead:
 
 - the boot script;
 - `netservicestarter.lua`;

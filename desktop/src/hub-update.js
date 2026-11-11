@@ -187,6 +187,7 @@ async function updateHub({
   authHeader = null,
   keyPath,
   sshPort = 22,
+  sshPath = "/usr/bin/ssh",
   knownHosts = null,
   fetchImpl,
   allowUrl,
@@ -199,7 +200,7 @@ async function updateHub({
   if (!keyPath) throw new HubUpdateError("No hub SSH key found. Melodious uses the installer's key, ~/.ssh/harmony_owner_….");
   const zipName = `melodious-hub-${release.version}.zip`;
   const work = fs.mkdtempSync(path.join(os.tmpdir(), "melodious-hubzip-"));
-  const ssh = createSsh({ host, keyPath, port: sshPort, knownHosts });
+  const ssh = createSsh({ host, keyPath, port: sshPort, sshPath, knownHosts });
   try {
     onStep("Downloading the hub software from GitHub…");
     const zip = await downloadVerified({ release, name: zipName, dir: work, fetchImpl, allowUrl, userAgent });
@@ -218,6 +219,10 @@ async function updateHub({
     if (!/^hub_id yes$/m.test(status)) {
       await ssh(`rm -rf ${stage}`).catch(() => {});
       throw new HubUpdateError("This hub has no Melodious setup yet. Install it once with the installer.");
+    }
+    if (/^melodious off$/m.test(status)) {
+      await ssh(`rm -rf ${stage}`).catch(() => {});
+      throw new HubUpdateError("Melodious is turned off on this hub. Run with --turn-on to turn it back on first.");
     }
     const current = new Map();
     for (const m of status.matchAll(/^file (\S+) (\S+)$/gm)) current.set(m[2], m[1]);

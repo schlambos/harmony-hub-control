@@ -3,7 +3,7 @@
 # pimento initialization
 TDE=$(cat /sys/class/input/input0/tde)
 
-if [ ${TDE:0:1} == "1" ] && [ -x /data/codex/recovery_ap.sh ]; then
+if [ ${TDE:0:1} == "1" ] && [ ! -f /etc/melodious-off ] && [ -x /data/codex/recovery_ap.sh ]; then
 	echo "*** Codex recovery AP bootmode ***"
 	load_modules /etc/modules.wlan
 	/data/codex/recovery_ap.sh boot-tde &
@@ -69,6 +69,15 @@ if [ -e /etc/memtester ]; then
 	while true; do sleep 60; done
 fi
 
+if [ -f /etc/melodious-off ] || [ ! -d /data/codex ]; then
+	if grep -F '# codex: Harmony Touch sync probe' /etc/hosts > /dev/null 2>&1; then
+		(grep -v -F '# codex: Harmony Touch sync probe' /etc/hosts || [ $? -eq 1 ]) > /etc/hosts.codex-new &&
+			chmod 644 /etc/hosts.codex-new &&
+			{ mv -f /etc/hosts.codex-new /etc/hosts 2>/dev/null || cat /etc/hosts.codex-new > /etc/hosts; }
+		rm -f /etc/hosts.codex-new
+	fi
+	echo "$(date) codex melodious off: skipping boot" >> /cache/codex-init.log
+else
 # Two remotes with a screen (optional, see docs/TWO_SCREEN_REMOTES.md). When
 # two_screen.conf asks for it and both files are exactly the builds it was made
 # for, a copy of hal that keeps HOT (the link to remotes with a screen) per
@@ -165,6 +174,7 @@ fi
 
 if [ -x /data/codex/init.sh ]; then
 	/data/codex/init.sh &
+fi
 fi
 
 # here be dragons ..
