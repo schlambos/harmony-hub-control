@@ -340,6 +340,14 @@ MELODIOUS_OFF_REFUSAL = "Melodious is turned off on this hub. Run with --turn-on
 MELODIOUS_OFF_CHECK_CMD = (
     f"if [ -f {MELODIOUS_OFF_MARKER} ] || [ -f {LEGACY_MELODIOUS_OFF_MARKER} ]; then echo off; fi"
 )
+# EXPERIMENTAL turn-off/on disclaimer, printed as a banner before any action.
+# install_webui.ps1 carries an identical copy ($ExperimentalTurnOffWarning;
+# tools/installer_contract_smoke.py checks byte-for-byte parity).
+EXPERIMENTAL_TURN_OFF_WARNING = (
+    "EXPERIMENTAL: turning Melodious off/on has NOT been validated on live hardware.\n"
+    "Whether the Harmony app fully reclaims the hub is unproven.\n"
+    "Back up first (Web UI -> Download full backup). Proceed at your own risk."
+)
 
 GATE_SCRIPT_SPECS: list[tuple[str, str, str, Path]] = [
     ("/etc/init.d/rcS.local", "755", "runtime", PAYLOAD / "scripts" / "rcS.local"),
@@ -985,6 +993,16 @@ def info(text: str) -> None:
 
 def kv(text: str) -> None:
     print(text)
+
+
+def warn_experimental_turn_off_on() -> None:
+    """Prominent EXPERIMENTAL banner for --turn-off/--turn-on, before any action."""
+    line = "!" * 78
+    print("")
+    print(line)
+    for text_line in EXPERIMENTAL_TURN_OFF_WARNING.split("\n"):
+        print(f"!! {text_line}")
+    print(line)
 
 
 def fail(message: str) -> None:
@@ -2818,7 +2836,9 @@ class Installer:
             return 0
         if not self.args.no_prompt:
             info("The hub goes back to Logitech's cloud and the Harmony app. Melodious stops running.")
-            answer = input("Turn Melodious off and restart the hub? [y/N]: ").strip().lower()
+            answer = input(
+                "EXPERIMENTAL, not validated on live hardware. Turn Melodious off and restart the hub? [y/N]: "
+            ).strip().lower()
             if answer not in ("y", "yes"):
                 info("Nothing was changed.")
                 return 1
@@ -2880,7 +2900,9 @@ class Installer:
             return 0
         if not self.args.no_prompt:
             info("Melodious will start again at boot, with the cloud blocker and your saved settings restored.")
-            answer = input("Turn Melodious back on and restart the hub? [y/N]: ").strip().lower()
+            answer = input(
+                "EXPERIMENTAL, not validated on live hardware. Turn Melodious back on and restart the hub? [y/N]: "
+            ).strip().lower()
             if answer not in ("y", "yes"):
                 info("Nothing was changed.")
                 return 1
@@ -3138,15 +3160,18 @@ def parse_args(argv: list[str]) -> argparse.Namespace:
         "--turn-off",
         action="store_true",
         help=(
-            "Turn Melodious off via /etc/melodious-off and restart the hub so Logitech's cloud and the Harmony app "
-            "can manage it again. Keeps Melodious's files, configs, and root SSH intact; supports --preflight-only"
+            "EXPERIMENTAL (not yet validated on live hardware): turn Melodious off via "
+            "/etc/melodious-off and restart the hub so Logitech's cloud and the Harmony app "
+            "can manage it again. Keeps Melodious's files, configs, and root SSH intact; "
+            "supports --preflight-only"
         ),
     )
     parser.add_argument(
         "--turn-on",
         action="store_true",
         help=(
-            "Turn Melodious back on by removing /etc/melodious-off and restarting the hub, restoring the cloud "
+            "EXPERIMENTAL (not yet validated on live hardware): turn Melodious back on by "
+            "removing /etc/melodious-off and restarting the hub, restoring the cloud "
             "blocker and saved settings; supports --preflight-only"
         ),
     )
@@ -3154,6 +3179,15 @@ def parse_args(argv: list[str]) -> argparse.Namespace:
         "--force",
         action="store_true",
         help="With --turn-off, bypass preflight refusals for duplicate remotes, missing Wi-Fi config, or a local-account hub",
+    )
+    parser.add_argument(
+        "--i-understand-experimental",
+        action="store_true",
+        help=(
+            "With --turn-off/--turn-on, acknowledge the EXPERIMENTAL warning that turning "
+            "Melodious off/on has not been validated on live hardware; required for "
+            "--no-prompt (scripted) runs"
+        ),
     )
     parser.add_argument("--no-apply-cloud-restart", action="store_true", help="Do not reboot after the Logitech cloud blocker files, engine plugins or multi-remote setting change")
     parser.add_argument(
@@ -3233,6 +3267,8 @@ def validate_mode_args(args: argparse.Namespace) -> None:
         raise RuntimeError("--turn-off and --turn-on cannot be used together")
     if args.force and not args.turn_off:
         raise RuntimeError("--force can only be used with --turn-off")
+    if args.i_understand_experimental and not (args.turn_off or args.turn_on):
+        raise RuntimeError("--i-understand-experimental can only be used with --turn-off or --turn-on")
     if args.turn_off or args.turn_on:
         flag = "--turn-off" if args.turn_off else "--turn-on"
         if args.clean_install:
@@ -3241,11 +3277,26 @@ def validate_mode_args(args: argparse.Namespace) -> None:
             raise RuntimeError(f"{flag} cannot be combined with --no-apply-cloud-restart")
 
 
+def warn_and_gate_experimental(args: argparse.Namespace) -> None:
+    """Print the EXPERIMENTAL banner before any action, and in non-interactive
+    runs require the explicit acknowledgment flag so the warning can never be
+    silently bypassed. --preflight-only prints the banner without the ack."""
+    warn_experimental_turn_off_on()
+    if args.no_prompt and not args.preflight_only and not args.i_understand_experimental:
+        flag = "--turn-off" if args.turn_off else "--turn-on"
+        raise RuntimeError(
+            f"{flag} is experimental and has not been validated on live hardware; "
+            "non-interactive runs must pass --i-understand-experimental to acknowledge the warning"
+        )
+
+
 def main(argv: list[str]) -> int:
     installer: Installer | None = None
     try:
         args = parse_args(argv)
         validate_mode_args(args)
+        if args.turn_off or args.turn_on:
+            warn_and_gate_experimental(args)
         args.hub_host = prompt_if_missing(args.hub_host, "Harmony hub IP address", True, args.no_prompt)
 
         if not args.key_path:

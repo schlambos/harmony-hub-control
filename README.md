@@ -422,12 +422,16 @@ staging, ~0.5 MB each — the usual full-flash fix), `--skip-flash-check`. `--he
 - **Update:** re-run the installer, or macOS Settings → Updates → **Update hub…** (checksum-checked
   download, SSH install with rollback, finishes on-hub if the Mac disconnects; settings unchanged).
   Android only notifies — it never holds the SSH key.
-- **Turn off:** `python3 install_webui.py --hub-host <hub-ip> --turn-off` (`-TurnOff` in PowerShell)
-  sets `/etc/melodious-off`, restores the internet route and reboots into stock `hal` + Logitech's
-  cloud so the Harmony app can sync the hub again; root SSH and all Melodious files/configs stay put.
-- **Turn back on:** `python3 install_webui.py --hub-host <hub-ip> --turn-on` (`-TurnOn`) unlinks
-  `/etc/melodious-off` (zero flash needed) and reboots back into Melodious with the cloud blocker on
-  (normal installer runs and macOS **Update hub…** refuse while turned off).
+- **Turn off (experimental):** `python3 install_webui.py --hub-host <hub-ip> --turn-off` (`-TurnOff` in
+  PowerShell) sets `/etc/melodious-off`, restores the internet route and reboots into stock `hal` +
+  Logitech's cloud so the Harmony app can sync the hub again; root SSH and all Melodious files/configs
+  stay put. **Experimental — not yet validated on live hardware:** fully tested off-hub, but whether
+  the Harmony app fully reclaims the hub after `--turn-off` is unproven; back up first (Web UI →
+  **Download full backup**), and scripted `--no-prompt` runs must pass `--i-understand-experimental`
+  (`-IUnderstandExperimental`).
+- **Turn back on (experimental, same caveat):** `python3 install_webui.py --hub-host <hub-ip> --turn-on`
+  (`-TurnOn`) unlinks `/etc/melodious-off` (zero flash needed) and reboots back into Melodious with the
+  cloud blocker on (normal installer runs and macOS **Update hub…** refuse while turned off).
 - **Roll back an update:** `.\restore_backup.ps1 -HubHost <hub-ip> -KeyPath "$env:USERPROFILE\.ssh\<key>"`
   goes back one update from the newest handoff backup (boot script, `netservicestarter.lua`, SSH
   wrappers, Hub ID and MQTT), then reboot; use `--turn-off` to stop running Melodious.

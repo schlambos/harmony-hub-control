@@ -42,12 +42,18 @@
 .PARAMETER MqttPassword
   MQTT password (never printed in preflight or logs).
 .PARAMETER TurnOff
-  Turn Melodious off via /etc/melodious-off and restart the hub so Logitech's
-  cloud and the Harmony app can manage it again. Keeps Melodious's files,
-  configs, and root SSH intact; supports -PreflightOnly.
+  EXPERIMENTAL (not yet validated on live hardware): turn Melodious off via
+  /etc/melodious-off and restart the hub so Logitech's cloud and the Harmony
+  app can manage it again. Keeps Melodious's files, configs, and root SSH
+  intact; supports -PreflightOnly.
 .PARAMETER TurnOn
-  Turn Melodious back on by removing /etc/melodious-off and restarting the hub,
-  restoring the cloud blocker and saved settings; supports -PreflightOnly.
+  EXPERIMENTAL (not yet validated on live hardware): turn Melodious back on by
+  removing /etc/melodious-off and restarting the hub, restoring the cloud
+  blocker and saved settings; supports -PreflightOnly.
+.PARAMETER IUnderstandExperimental
+  With -TurnOff/-TurnOn, acknowledge the EXPERIMENTAL warning that turning
+  Melodious off/on has not been validated on live hardware; required for
+  -NoPrompt (scripted) runs.
 .PARAMETER Force
   With -TurnOff, bypass preflight refusals for duplicate remotes, missing Wi-Fi
   config, or a local-account hub.
@@ -90,7 +96,9 @@ param(
     # -TurnOn: remove /etc/melodious-off and turn Melodious back on
     [switch]$TurnOn,
     # -Force: with -TurnOff, bypass preflight refusals for duplicate remotes, missing Wi-Fi config, or a local-account hub
-    [switch]$Force
+    [switch]$Force,
+    # -IUnderstandExperimental: acknowledge the EXPERIMENTAL -TurnOff/-TurnOn warning; required for -NoPrompt (scripted) runs
+    [switch]$IUnderstandExperimental
 )
 
 $ErrorActionPreference = "Stop"
@@ -221,6 +229,15 @@ $TurnOffScriptPath = "/var/volatile/codex-turn-off.sh"
 $MelodiousOffMarker = "/etc/melodious-off"
 $LegacyMelodiousOffMarker = "/data/codex/melodious-off"
 $MelodiousOffRefusal = "Melodious is turned off on this hub. Run with -TurnOn to turn it back on first."
+
+# EXPERIMENTAL turn-off/on disclaimer, printed as a banner before any action.
+# Byte-identical to EXPERIMENTAL_TURN_OFF_WARNING in install_webui.py
+# (tools/installer_contract_smoke.py checks byte-for-byte parity).
+$ExperimentalTurnOffWarning = @'
+EXPERIMENTAL: turning Melodious off/on has NOT been validated on live hardware.
+Whether the Harmony app fully reclaims the hub is unproven.
+Back up first (Web UI -> Download full backup). Proceed at your own risk.
+'@
 $MelodiousOffCheckCmd = @'
 if [ -f /etc/melodious-off ] || [ -f /data/codex/melodious-off ]; then echo off; fi
 '@
@@ -843,6 +860,16 @@ function Info($Text) {
 
 function KV($Text) {
     Write-Host $Text
+}
+
+function Warn-ExperimentalTurnOffOn {
+    $line = "!" * 78
+    Write-Host ""
+    Write-Host $line
+    foreach ($textLine in ($ExperimentalTurnOffWarning -split "`n")) {
+        Write-Host "!! $textLine"
+    }
+    Write-Host $line
 }
 
 function Prompt-IfMissing([string]$Value, [string]$Label, [switch]$Required) {
@@ -2526,7 +2553,7 @@ function Invoke-TurnOff() {
     }
     if (-not $NoPrompt) {
         Info "The hub goes back to Logitech's cloud and the Harmony app. Melodious stops running."
-        $answer = ([string](Read-Host "Turn Melodious off and restart the hub? [y/N]")).Trim().ToLowerInvariant()
+        $answer = ([string](Read-Host "EXPERIMENTAL, not validated on live hardware. Turn Melodious off and restart the hub? [y/N]")).Trim().ToLowerInvariant()
         if ($answer -ne "y" -and $answer -ne "yes") {
             Info "Nothing was changed."
             return 1
@@ -2595,7 +2622,7 @@ function Invoke-TurnOn() {
     }
     if (-not $NoPrompt) {
         Info "Melodious will start again at boot, with the cloud blocker and your saved settings restored."
-        $answer = ([string](Read-Host "Turn Melodious back on and restart the hub? [y/N]")).Trim().ToLowerInvariant()
+        $answer = ([string](Read-Host "EXPERIMENTAL, not validated on live hardware. Turn Melodious back on and restart the hub? [y/N]")).Trim().ToLowerInvariant()
         if ($answer -ne "y" -and $answer -ne "yes") {
             Info "Nothing was changed."
             return 1
@@ -2637,10 +2664,16 @@ function Invoke-TurnOn() {
 
 if ($TurnOff -and $TurnOn) { throw "-TurnOff and -TurnOn cannot be used together" }
 if ($Force -and -not $TurnOff) { throw "-Force can only be used with -TurnOff" }
+if ($IUnderstandExperimental -and -not ($TurnOff -or $TurnOn)) { throw "-IUnderstandExperimental can only be used with -TurnOff or -TurnOn" }
 if ($TurnOff -or $TurnOn) {
     $modeFlag = if ($TurnOff) { "-TurnOff" } else { "-TurnOn" }
     if ($CleanInstall) { throw "$modeFlag cannot be combined with -CleanInstall" }
     if ($NoApplyCloudRestart) { throw "$modeFlag cannot be combined with -NoApplyCloudRestart" }
+    # EXPERIMENTAL banner before any action; scripted runs must acknowledge it.
+    Warn-ExperimentalTurnOffOn
+    if ($NoPrompt -and -not $PreflightOnly -and -not $IUnderstandExperimental) {
+        throw "$modeFlag is experimental and has not been validated on live hardware; non-interactive runs must pass -IUnderstandExperimental to acknowledge the warning"
+    }
 }
 
 $HubHost = Prompt-IfMissing $HubHost "Harmony Hub IP address" -Required

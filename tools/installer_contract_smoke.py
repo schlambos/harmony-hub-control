@@ -3358,6 +3358,63 @@ class SingleStateTurnOffOnFlow(unittest.TestCase):
                 self.assertIn(needle, err)
                 self.assertEqual(self.hosts_contacted, [])
 
+    def test_experimental_banner_prints_and_noninteractive_requires_ack(self):
+        """[PYTHON BEHAVIORAL] --turn-off/--turn-on print the EXPERIMENTAL
+        banner before any action; non-interactive runs refuse without
+        --i-understand-experimental; --preflight-only prints the banner and
+        needs no ack; the interactive confirmation carries the warning."""
+        banner_first = INST.EXPERIMENTAL_TURN_OFF_WARNING.split("\n")[0]
+
+        # 1. --preflight-only prints the banner before any action, needs no ack,
+        #    and mutates nothing.
+        before = self.tree.snapshot()
+        code_pf, out_pf, err_pf = self.run_cli("--turn-off", "--preflight-only", "--no-prompt")
+        self.assertEqual(code_pf, 0, err_pf or out_pf)
+        self.assertIn(banner_first, out_pf)
+        self.assertLess(out_pf.index(banner_first), out_pf.index("== Checking SSH =="))
+        self.assertEqual(self.tree.snapshot(), before)
+        code_on_pf, out_on_pf, err_on_pf = self.run_cli("--turn-on", "--preflight-only", "--no-prompt")
+        self.assertEqual(code_on_pf, 0, err_on_pf or out_on_pf)
+        self.assertIn(banner_first, out_on_pf)
+        self.assertEqual(self.tree.snapshot(), before)
+
+        # 2. Non-interactive without the ack flag: refuses before contacting
+        #    the hub, pointing at the flag; nothing changes.
+        self.hosts_contacted.clear()
+        code, out, err = self.run_cli("--turn-off", "--no-prompt")
+        self.assertEqual(code, 1)
+        self.assertIn(banner_first, out)
+        self.assertIn("--i-understand-experimental", err)
+        self.assertEqual(self.hosts_contacted, [])
+        self.assertFalse(self.tree.exists("/etc/melodious-off"))
+        self.assertEqual(self.tree.snapshot(), before)
+
+        code_ton, out_ton, err_ton = self.run_cli("--turn-on", "--no-prompt")
+        self.assertEqual(code_ton, 1)
+        self.assertIn(banner_first, out_ton)
+        self.assertIn("--i-understand-experimental", err_ton)
+        self.assertEqual(self.hosts_contacted, [])
+        self.assertEqual(self.tree.snapshot(), before)
+
+        # 3. Interactive mode: the confirmation prompt itself carries the warning.
+        import builtins
+        prompts = []
+        old_input = builtins.input
+        builtins.input = lambda p="": (prompts.append(p), "n")[1]
+        self.addCleanup(setattr, builtins, "input", old_input)
+        code_no, _out_no, _err_no = self.run_cli("--turn-off")
+        self.assertEqual(code_no, 1)
+        self.assertEqual(self.tree.snapshot(), before)
+        self.assertTrue(any("EXPERIMENTAL" in p for p in prompts), prompts)
+
+        # 4. With the ack flag the banner still prints and the turn-off proceeds.
+        code_ack, out_ack, err_ack = self.run_cli(
+            "--turn-off", "--no-prompt", "--i-understand-experimental"
+        )
+        self.assertEqual(code_ack, 0, err_ack or out_ack)
+        self.assertIn(banner_first, out_ack)
+        self.assertTrue(self.tree.exists("/etc/melodious-off"))
+
     def test_normal_install_refuses_when_melodious_off_marker_exists(self):
         for marker in (INST.MELODIOUS_OFF_MARKER, INST.LEGACY_MELODIOUS_OFF_MARKER):
             with self.subTest(marker=marker):
@@ -3386,7 +3443,7 @@ class SingleStateTurnOffOnFlow(unittest.TestCase):
 
     def test_turn_off_current_hub_writes_only_marker_restores_wan_and_verifies_reboot(self):
         before = self.tree.snapshot()
-        code, out, err = self.run_cli("--turn-off", "--no-prompt")
+        code, out, err = self.run_cli("--turn-off", "--no-prompt", "--i-understand-experimental")
         self.assertEqual(code, 0, err or out)
         self.assertEqual(kv_value(out, "reboot_confirmed"), "yes")
         self.assertTrue(self.tree.exists("/etc/melodious-off"))
@@ -3413,7 +3470,7 @@ class SingleStateTurnOffOnFlow(unittest.TestCase):
 
         # Idempotent second --turn-off: already off, no second reboot.
         self.ports_waited.clear()
-        code2, out2, err2 = self.run_cli("--turn-off", "--no-prompt")
+        code2, out2, err2 = self.run_cli("--turn-off", "--no-prompt", "--i-understand-experimental")
         self.assertEqual(code2, 0, err2 or out2)
         self.assertIn("already off", out2)
         self.assertEqual(self.ports_waited, [])
@@ -3439,7 +3496,7 @@ class SingleStateTurnOffOnFlow(unittest.TestCase):
         self.assertEqual(kv_value(out_pf, "bootstrap_needed"), "yes")
         self.assertFalse(self.tree.exists("/etc/melodious-off"))
 
-        code, out, err = self.run_cli("--turn-off", "--no-prompt")
+        code, out, err = self.run_cli("--turn-off", "--no-prompt", "--i-understand-experimental")
         self.assertEqual(code, 0, err or out)
         self.assertIn("Bootstrapping gate-aware scripts", out)
         self.assertIn("handoff=/data/codex-backups/webui-handoff-", out)
@@ -3450,7 +3507,7 @@ class SingleStateTurnOffOnFlow(unittest.TestCase):
     def test_false_success_prevented_on_no_reboot_or_any_surviving_component(self):
         # 1. Reboot did not happen (boot_id/btime/uptime unchanged).
         self.tree.reboot_noops = True
-        code, out, err = self.run_cli("--turn-off", "--no-prompt")
+        code, out, err = self.run_cli("--turn-off", "--no-prompt", "--i-understand-experimental")
         self.assertEqual(code, 1)
         self.assertIn("did not restart", err)
         self.assertEqual(kv_value(out, "reboot_confirmed"), "no")
@@ -3472,19 +3529,19 @@ class SingleStateTurnOffOnFlow(unittest.TestCase):
                 self.tree._refresh_hal_helpers()
                 INST.HAL_REMOTES_MD5 = hashlib.md5(self.tree.read("/data/codex/bin/hal_remotes")).hexdigest()
                 t.post_boot_override = override
-                code, _out, err = self.run_cli("--turn-off", "--no-prompt")
+                code, _out, err = self.run_cli("--turn-off", "--no-prompt", "--i-understand-experimental")
                 self.assertEqual(code, 1, expected_reason)
                 self.assertIn(expected_reason, err)
 
     def test_duplicate_remote_gate_refuses_noscreen_dups_and_warns_two_screen(self):
         # Two Smart Controls (16414) -> refused without --force, allowed with --force.
         self.tree.rf_reply = RF_INFO_TWO_SMART
-        code, _out, err = self.run_cli("--turn-off", "--no-prompt")
+        code, _out, err = self.run_cli("--turn-off", "--no-prompt", "--i-understand-experimental")
         self.assertEqual(code, 1)
         self.assertIn("16414 (slots 1, 2)", err)
         self.assertFalse(self.tree.exists("/etc/melodious-off"))
 
-        code_f, out_f, err_f = self.run_cli("--turn-off", "--force", "--no-prompt")
+        code_f, out_f, err_f = self.run_cli("--turn-off", "--force", "--no-prompt", "--i-understand-experimental")
         self.assertEqual(code_f, 0, err_f or out_f)
         self.assertIn("WARNING:", out_f)
         self.assertTrue(self.tree.exists("/etc/melodious-off"))
@@ -3496,14 +3553,14 @@ class SingleStateTurnOffOnFlow(unittest.TestCase):
         t2.rf_reply = RF_INFO_TWO_SCREEN
         self.tree._refresh_hal_helpers()
         INST.HAL_REMOTES_MD5 = hashlib.md5(self.tree.read("/data/codex/bin/hal_remotes")).hexdigest()
-        code_s, out_s, err_s = self.run_cli("--turn-off", "--no-prompt")
+        code_s, out_s, err_s = self.run_cli("--turn-off", "--no-prompt", "--i-understand-experimental")
         self.assertEqual(code_s, 0, err_s or out_s)
         self.assertIn("EquadID 16417, slots 1, 2", out_s)
 
     def test_wifi_survival_gate_reconnects_wifi_off_and_switches_from_wired_ip(self):
         # 1. Pristine wpa_supplicant.conf without network={ -> refused unless --force.
         self.tree.put("/etc/wpa_supplicant.conf", "ctrl_interface=/var/run/wpa_supplicant\n")
-        code, _out, err = self.run_cli("--turn-off", "--no-prompt")
+        code, _out, err = self.run_cli("--turn-off", "--no-prompt", "--i-understand-experimental")
         self.assertEqual(code, 1)
         self.assertIn("wpa_supplicant.conf", err)
         self.assertFalse(self.tree.exists("/etc/melodious-off"))
@@ -3526,7 +3583,7 @@ class SingleStateTurnOffOnFlow(unittest.TestCase):
         # Apply reconnects ath0, obtains 192.0.2.10, and waits/verifies on 192.0.2.10 after reboot!
         self.ports_waited.clear()
         self.hosts_contacted.clear()
-        code_go, out_go, err_go = self.run_cli("--turn-off", "--no-prompt", host="192.0.2.50")
+        code_go, out_go, err_go = self.run_cli("--turn-off", "--no-prompt", "--i-understand-experimental", host="192.0.2.50")
         self.assertEqual(code_go, 0, err_go or out_go)
         self.assertIn("wpa_cli -i ath0 reconnect", self.tree.calls_log.read_text())
         self.assertEqual(kv_value(out_go, "post_reboot_host"), "192.0.2.10")
@@ -3538,7 +3595,7 @@ class SingleStateTurnOffOnFlow(unittest.TestCase):
     def test_fresh_hub_local_account_and_unprovisioned_refused_unless_force(self):
         # #130 local account
         self.tree.put("/data/luaworks/provision/preferences", LOCAL_PREFS_JSON)
-        code, _out, err = self.run_cli("--turn-off", "--no-prompt")
+        code, _out, err = self.run_cli("--turn-off", "--no-prompt", "--i-understand-experimental")
         self.assertEqual(code, 1)
         self.assertIn("local_account", err)
         self.assertIn("cleanDataFolder", err)
@@ -3546,12 +3603,12 @@ class SingleStateTurnOffOnFlow(unittest.TestCase):
 
         # Unprovisioned
         (self.tree.root / "data/luaworks/provision/preferences").unlink()
-        code_u, _out_u, err_u = self.run_cli("--turn-off", "--no-prompt")
+        code_u, _out_u, err_u = self.run_cli("--turn-off", "--no-prompt", "--i-understand-experimental")
         self.assertEqual(code_u, 1)
         self.assertIn("unprovisioned", err_u)
 
         # --force overrides with warning
-        code_f, out_f, err_f = self.run_cli("--turn-off", "--force", "--no-prompt")
+        code_f, out_f, err_f = self.run_cli("--turn-off", "--force", "--no-prompt", "--i-understand-experimental")
         self.assertEqual(code_f, 0, err_f or out_f)
         self.assertIn("WARNING:", out_f)
         self.assertTrue(self.tree.exists("/etc/melodious-off"))
@@ -3559,7 +3616,7 @@ class SingleStateTurnOffOnFlow(unittest.TestCase):
     def test_hardened_ssh_survival_checks_never_bypassed_by_force(self):
         # 1. Missing authorized_keys or whitespace-only authorized_keys
         self.tree.put("/home/root/.ssh/authorized_keys", "   \n")
-        code, _out, err = self.run_cli("--turn-off", "--force", "--no-prompt")
+        code, _out, err = self.run_cli("--turn-off", "--force", "--no-prompt", "--i-understand-experimental")
         self.assertEqual(code, 1)
         self.assertIn("authorized_keys", err)
         self.tree.put("/home/root/.ssh/authorized_keys", "ssh-ed25519 AAAAC3Nza owner\n")
@@ -3567,7 +3624,7 @@ class SingleStateTurnOffOnFlow(unittest.TestCase):
         # 2. Missing host key AND broken dropbearkey -> refused; working dropbearkey -> allowed!
         (self.tree.root / "etc/dropbear/dropbear_rsa_host_key").unlink()
         (self.tree.root / "data/codex/bin/dropbearkey").unlink()
-        code2, _out2, err2 = self.run_cli("--turn-off", "--force", "--no-prompt")
+        code2, _out2, err2 = self.run_cli("--turn-off", "--force", "--no-prompt", "--i-understand-experimental")
         self.assertEqual(code2, 1)
         self.assertIn("dropbearkey", err2)
 
@@ -3577,13 +3634,13 @@ class SingleStateTurnOffOnFlow(unittest.TestCase):
 
         # 3. Empty 0-byte host key file (rcS [ -r ] would skip dropbearkey and Dropbear would fail!)
         self.tree.put("/etc/dropbear/dropbear_rsa_host_key", "")
-        code4, _out4, err4 = self.run_cli("--turn-off", "--force", "--no-prompt")
+        code4, _out4, err4 = self.run_cli("--turn-off", "--force", "--no-prompt", "--i-understand-experimental")
         self.assertEqual(code4, 1)
         self.assertIn("dropbear_rsa_host_key", err4)
 
     def test_turn_on_checks_hal_load_unlinks_markers_and_verifies_reboot(self):
         # Turn off first.
-        code_off, out_off, err_off = self.run_cli("--turn-off", "--no-prompt")
+        code_off, out_off, err_off = self.run_cli("--turn-off", "--no-prompt", "--i-understand-experimental")
         self.assertEqual(code_off, 0, err_off or out_off)
         self.tree.put(INST.LEGACY_MELODIOUS_OFF_MARKER, "legacy\n")
 
@@ -3599,7 +3656,7 @@ class SingleStateTurnOffOnFlow(unittest.TestCase):
         self.tree._refresh_hal_helpers()
         INST.HAL_REMOTES_MD5 = hashlib.md5(self.tree.read("/data/codex/bin/hal_remotes")).hexdigest()
         self.ports_waited.clear()
-        code_bad, out_bad, err_bad = self.run_cli("--turn-on", "--no-prompt")
+        code_bad, out_bad, err_bad = self.run_cli("--turn-on", "--no-prompt", "--i-understand-experimental")
         self.assertEqual(code_bad, 1)
         self.assertEqual(kv_value(out_bad, "two_screen_load_check"), "failed")
         self.assertIn("left off", err_bad)
@@ -3611,7 +3668,7 @@ class SingleStateTurnOffOnFlow(unittest.TestCase):
         self.tree.hal_loads = True
         self.tree._refresh_hal_helpers()
         INST.HAL_REMOTES_MD5 = hashlib.md5(self.tree.read("/data/codex/bin/hal_remotes")).hexdigest()
-        code_on, out_on, err_on = self.run_cli("--turn-on", "--no-prompt")
+        code_on, out_on, err_on = self.run_cli("--turn-on", "--no-prompt", "--i-understand-experimental")
         self.assertEqual(code_on, 0, out_on + "\nERR:\n" + err_on + "\nLOG:\n" + self.tree.read("/cache/codex-init.log").decode())
         self.assertFalse(self.tree.exists(INST.MELODIOUS_OFF_MARKER))
         self.assertFalse(self.tree.exists(INST.LEGACY_MELODIOUS_OFF_MARKER))
@@ -3623,7 +3680,7 @@ class SingleStateTurnOffOnFlow(unittest.TestCase):
 
         # 4. Already on -> no-op.
         self.ports_waited.clear()
-        code_again, out_again, err_again = self.run_cli("--turn-on", "--no-prompt")
+        code_again, out_again, err_again = self.run_cli("--turn-on", "--no-prompt", "--i-understand-experimental")
         self.assertEqual(code_again, 0, err_again or out_again)
         self.assertIn("already on", out_again)
         self.assertEqual(self.ports_waited, [])
@@ -3982,6 +4039,26 @@ class PowerShellStaticContract(unittest.TestCase):
         self.assertIn("Invoke-TurnOffBootstrap", self.text)
         self.assertIn("post_reboot_host=$wifiIp", self.text)
         self.assertIn("reboot_confirmed=", self.text)
+
+        # EXPERIMENTAL disclaimer parity: identical banner bytes, printed
+        # before any action, with an explicit non-interactive acknowledgment
+        # gate and the warning folded into both confirmation prompts.
+        self.assertEqual(
+            self.ps_here_string("ExperimentalTurnOffWarning"), INST.EXPERIMENTAL_TURN_OFF_WARNING
+        )
+        self.assertIn("[switch]$IUnderstandExperimental", self.text)
+        self.assertIn("if ($IUnderstandExperimental -and -not ($TurnOff -or $TurnOn))", self.text)
+        banner_call = self.text.index("Warn-ExperimentalTurnOffOn\n")
+        ack_gate = self.text.index("if ($NoPrompt -and -not $PreflightOnly -and -not $IUnderstandExperimental)")
+        ssh_step = self.text.index('Step "Checking SSH"')
+        self.assertLess(banner_call, ssh_step, "the EXPERIMENTAL banner must print before any action")
+        self.assertLess(ack_gate, ssh_step, "the -NoPrompt ack gate must fire before any hub contact")
+        for prompt in (
+            "EXPERIMENTAL, not validated on live hardware. Turn Melodious off and restart the hub?",
+            "EXPERIMENTAL, not validated on live hardware. Turn Melodious back on and restart the hub?",
+        ):
+            self.assertIn(prompt, self.text)
+            self.assertIn(prompt, INST_SOURCE)
 
 
 @unittest.skipUnless(shutil.which("pwsh"),

@@ -85,8 +85,9 @@ Each run:
 | `--mqtt-broker`, `--mqtt-port`, `--mqtt-user`, `--mqtt-password`, `--mqtt-base-topic`, `--mqtt-discovery-prefix`, `--mqtt-client-id`, `--mqtt-disabled` | `-MqttBroker` … `-MqttDisabled` | Set up the MQTT bridge. Without them, an upgrade keeps the hub's MQTT settings. |
 | `--no-apply-cloud-restart` | `-NoApplyCloudRestart` | Skips the reboot after the cloud-blocker files or an engine plugin (`codexactivity.lua`, `codexmqtt.lua`) change. Without that reboot the engine keeps running the old plugin. |
 | `--skip-cloud-suppression` | `-SkipCloudSuppression` | Leaves the hub's `netservicestarter.lua` as it is. With a clean install, it also writes the cloud blocker as off. It doesn't undo an existing install; use `--turn-off` for that. |
-| `--turn-off` | `-TurnOff` | Writes `/etc/melodious-off`, restores the internet route, and restarts the hub into Logitech's stock runtime so the Harmony app can manage it again. Supports `--preflight-only`. See [Turn Melodious off and on](#turn-melodious-off-and-on). |
-| `--turn-on` | `-TurnOn` | Removes `/etc/melodious-off` and restarts the hub back into Melodious with the cloud blocker and your saved settings restored. Supports `--preflight-only`. |
+| `--turn-off` | `-TurnOff` | **Experimental** (not yet validated on live hardware): writes `/etc/melodious-off`, restores the internet route, and restarts the hub into Logitech's stock runtime so the Harmony app can manage it again. Supports `--preflight-only`. See [Turn Melodious off and on](#turn-melodious-off-and-on). |
+| `--turn-on` | `-TurnOn` | **Experimental** (not yet validated on live hardware): removes `/etc/melodious-off` and restarts the hub back into Melodious with the cloud blocker and your saved settings restored. Supports `--preflight-only`. |
+| `--i-understand-experimental` | `-IUnderstandExperimental` | Acknowledges the EXPERIMENTAL `--turn-off`/`--turn-on` warning. Required for scripted (`--no-prompt`) turn-off/on runs; interactive runs acknowledge it in the confirmation prompt. `--preflight-only` never needs it. |
 | `--force` | `-Force` | With `--turn-off`, overrides the preflight refusals for duplicate remotes without a screen, a missing Wi-Fi `network={` block, or a local-account / unprovisioned hub. Never overrides the SSH survival check. |
 | `--remove-root-tool-leftovers` | `-RemoveRootToolLeftovers` | Deletes what harmony-hub-root left behind before installing (see below). |
 | `--skip-flash-check` | `-SkipFlashCheck` | Installs even when the measured free flash looks too small. If flash really runs out, the install still stops with nothing in use changed. |
@@ -155,6 +156,15 @@ signing key. Nothing updates until you opt in and confirm. See
 [SECURITY.md](SECURITY.md) for how downloads are checked.
 
 ## Turn Melodious off and on
+
+> **EXPERIMENTAL — not yet validated on live hardware.** The off/on mechanism
+> is implemented and fully tested off-hub, but the round trip the feature
+> exists for — the stock Harmony app actually reclaiming the hub after
+> `--turn-off` — is unproven on a real hub. Back up first (**Download full
+> backup** below) and proceed at your own risk. Both installers print this
+> warning as a banner before doing anything, fold it into the interactive
+> confirmation, and refuse scripted `--no-prompt` runs without
+> `--i-understand-experimental` (`-IUnderstandExperimental`).
 
 To hand the hub back to Logitech's cloud and the Harmony app without
 touching firmware or erasing Melodious's files, turn Melodious off:
