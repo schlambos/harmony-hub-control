@@ -93,7 +93,7 @@ can back up, restore and edit account-free.
 | Harmony Hub | Rooted with [harmony-hub-root](https://github.com/Ripthulhu/harmony-hub-root). Melodious doesn't root hubs. |
 | SSH key | The root tool's private key, `harmony_owner_*`, in `~/.ssh` (`%USERPROFILE%\.ssh` on Windows). |
 | Hub ID | The numeric Hub ID the root tool prints. Don't guess it: Melodious sends it with every command to the hub's engine. |
-| Free flash | About 1.4 MB of the hub's 5 MB data flash for the first install (about 1 MB if the root tool's identical Dropbear can be reused); each later web app update needs about 0.65 MB. The installer measures it and stops before writing anything if there isn't enough — see [docs/INSTALL.md](docs/INSTALL.md#if-the-hubs-flash-is-full). |
+| Free flash | About 1.4 MB of the hub's 5 MB data flash for the first install (about 1 MB if the root tool's Dropbear can be reused); each later web app update needs about 0.65 MB. The installer measures it and stops before writing anything if there isn't enough — see [docs/INSTALL.md](docs/INSTALL.md#if-the-hubs-flash-is-full). |
 | Install computer | Windows with PowerShell, Linux or macOS with Python 3, or a Docker or Unraid host. The installer needs only `ssh`, not `scp` or `sftp`. |
 | Network | A trusted home network. The web app is plain HTTP. |
 | Home Assistant (optional) | Any recent Home Assistant with [HACS](https://hacs.xyz/), reachable from the hub over plain `http://`. An MQTT broker is needed only for the MQTT bridge. |

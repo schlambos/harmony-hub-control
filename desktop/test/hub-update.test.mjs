@@ -9,7 +9,7 @@ import test from "node:test";
 import { createRequire } from "node:module";
 
 const require = createRequire(import.meta.url);
-const { HUB_FILES, findHubKey, readHubPayload, updateHub } = require("../src/hub-update.js");
+const { DROPBEAR_BUILDS, HUB_FILES, changedFiles, findHubKey, readHubPayload, updateHub } = require("../src/hub-update.js");
 const ROOT = new URL("../..", import.meta.url).pathname;
 const mac = process.platform === "darwin";
 const md5 = (b) => crypto.createHash("md5").update(b).digest("hex");
@@ -43,6 +43,28 @@ test("the destination map matches tools/releases/release.py", () => {
     Object.fromEntries(Object.entries(HUB_FILES).map(([rel, [dest, mode]]) => [rel, [dest, mode]])),
     pyMap,
   );
+});
+
+test("another build of the same Dropbear counts as current, as in install_webui.py", () => {
+  const py = fs.readFileSync(path.join(ROOT, "install_webui.py"), "utf8");
+  const block = py.match(/^DROPBEAR_BUILDS = \{([\s\S]*?)^\}/m)[1];
+  const pyBuilds = new Map([...block.matchAll(/"([0-9a-f]{32})": "([^"]+)"/g)].map((m) => [m[1], m[2]]));
+  assert.deepEqual([...DROPBEAR_BUILDS].sort(), [...pyBuilds].sort());
+
+  const ours = md5(fs.readFileSync(path.join(ROOT, "payload/bin/dropbearmulti")));
+  assert.ok(DROPBEAR_BUILDS.has(ours));
+  const twin = [...DROPBEAR_BUILDS.keys()].find((m) => m !== ours && DROPBEAR_BUILDS.get(m) === DROPBEAR_BUILDS.get(ours));
+  assert.ok(twin, "another build of our Dropbear version is listed");
+  const dropbear = { dest: HUB_FILES["payload/bin/dropbearmulti"][0], md5: ours };
+  const webui = { dest: HUB_FILES["payload/bin/codex_webui"][0], md5: "a".repeat(32) };
+  const names = (current) => changedFiles([dropbear, webui], new Map(current)).map((f) => f.dest);
+  // The hub has the other build of our Dropbear (the root tool's, linked): nothing to send.
+  assert.deepEqual(names([[dropbear.dest, twin], [webui.dest, webui.md5]]), []);
+  // Some other Dropbear, or none: send ours.
+  assert.deepEqual(names([[dropbear.dest, "b".repeat(32)], [webui.dest, webui.md5]]), [dropbear.dest]);
+  assert.deepEqual(names([[webui.dest, webui.md5]]), [dropbear.dest]);
+  // Equivalence is only for Dropbear.
+  assert.deepEqual(names([[dropbear.dest, ours], [webui.dest, twin]]), [webui.dest]);
 });
 
 test("finds the installer's key: newest harmony_owner_* that isn't .pub", () => {

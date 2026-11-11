@@ -25,8 +25,9 @@ Changed files install as a two-phase commit:
      live file has changed (BLOCKED_CAPACITY);
   2. rename each .codex-new over its destination, codex_webui last.
 
-When harmony-hub-root already left an identical dropbearmulti on the hub,
-phase 1 hard-links it instead of writing a second copy. Its leftover staging
+When harmony-hub-root already left its dropbearmulti on the hub (the same
+build as ours, or the .pdr-stripped one: DROPBEAR_BUILDS), phase 1
+hard-links it instead of writing a second copy. Its leftover staging
 folders are reported, and removed with --remove-root-tool-leftovers.
 
 Originals are copied into RAM before phase 1, so any later failure restores
@@ -81,12 +82,24 @@ JFFS2_DIRENT_HEADER = 40
 FLASH_MARGIN_BYTES = 64 * 1024
 FLASH_MARGIN_PERCENT = 5
 
-# What harmony-hub-root leaves behind. Its dropbearmulti is the same build as
-# ours, and its staging folders hold about 0.5 MB of base64 chunks each.
+# What harmony-hub-root leaves behind. Its dropbearmulti is our Dropbear
+# (DROPBEAR_BUILDS), and its staging folders hold about 0.5 MB of base64
+# chunks each.
 DROPBEAR_DEST = "/data/codex/bin/dropbearmulti"
 ROOT_TOOL_DROPBEAR = "/data/rootssh/bin/dropbearmulti"
 ROOT_TOOL_FILES = ["/data/rootssh/bin/dropbearmulti", "/data/rootssh/bin/dropbear", "/data/rootssh/bin/dropbearkey"]
 ROOT_TOOL_STAGE_RE = re.compile(r"^/data/codexssh_[A-Za-z0-9_]+_stage$")
+# Known builds of Dropbear, by MD5: their version. For 2025.89 that is the
+# build build/build_harmony_tools_kali.sh makes, and the same file with the
+# unloaded MIPS .pdr section stripped, which is what harmony-hub-root ships
+# from its stripped release on. Builds of one version load the same image, so
+# either counts as the installed Dropbear and the root tool's copy is reused
+# whichever it is. A new Dropbear release gets its own version here, so it
+# still replaces the old one.
+DROPBEAR_BUILDS = {
+    "3733327fd04bca282dbf06f33da0bf6c": "2025.89",  # as built, 577296 bytes
+    "ceabc15471be6f67f1e13fccd20a9508": "2025.89",  # .pdr stripped, 535652 bytes
+}
 # The hub's ls has no -R; a root-tool stage holds files and a chunks/ folder.
 ROOT_TOOL_SCAN = (
     'for d in /data/codexssh_*_stage; do [ -d "$d" ] || continue; '
@@ -94,13 +107,23 @@ ROOT_TOOL_SCAN = (
     'echo "root_tool_stage bytes=$1 files=$2 path=$d"; done; '
     "for f in /data/rootssh/bin/dropbearmulti /data/codex/bin/dropbearmulti; do "
     '[ -f "$f" ] && [ ! -L "$f" ] || continue; set -- $(ls -il "$f"); '
-    'echo "dropbear_copy inode=$1 path=$f"; done'
+    'echo "dropbear_copy inode=$1 links=$3 path=$f"; done'
 )
 # Removes the root tool's Dropbear only while SSH runs ours.
 ROOT_TOOL_DROPBEAR_REMOVE = (
     "if [ -x /data/codex/bin/dropbear ] && grep /data/codex/bin/dropbear /usr/sbin/dropbear >/dev/null; then "
     "rm -f " + " ".join(ROOT_TOOL_FILES) + " && echo removed; fi"
 )
+
+
+def hub_copy_current(dest: str, have: str, want: str) -> bool:
+    """True when a file with MD5 `have` on the hub can stand for ours (`want`)
+    at `dest`: the same bytes, or at the Dropbear destination, another build
+    of the same Dropbear version (DROPBEAR_BUILDS)."""
+    if have == want:
+        return True
+    version = DROPBEAR_BUILDS.get(have)
+    return dest == DROPBEAR_DEST and version is not None and version == DROPBEAR_BUILDS.get(want)
 
 # Multiple remotes of one model (docs/MULTI_REMOTE.md). Stock hal keeps one
 # remote per model: it unpairs an older one after every pair, and its key
@@ -501,8 +524,12 @@ class Candidate:
         self.flash_bytes = 0
         self.action = "replace"  # replace | create | preserve | unchanged
         self.staged_name = ""
-        # An identical file already on the hub that phase 1 hard-links.
+        # An identical (or, for Dropbear, equivalent) file already on the hub
+        # that phase 1 hard-links, and the MD5 and size it has.
         self.link_source = ""
+        self.link_md5 = ""
+        self.link_bytes = 0
+        self.linked = False  # phase 1 linked it rather than copying the payload
 
     def data(self) -> bytes:
         if self.blob is not None:
@@ -639,6 +666,8 @@ class Installer:
         self.root_tool_stages: list[dict[str, object]] = []
         # Inode of each Dropbear copy, by path.
         self.dropbear_copies: dict[str, str] = {}
+        # Hard-link count of each, by path.
+        self.dropbear_links: dict[str, int] = {}
 
     # ------------------------------------------------------------------ ssh
 
@@ -1059,7 +1088,7 @@ class Installer:
             exists = state.get("kind") == "regular"
             if cand.condition == "if-missing" and exists and not self.args.clean_install:
                 cand.action = "preserve"
-            elif exists and state.get("md5") == cand.md5 and state.get("mode") == cand.mode:
+            elif exists and state.get("mode") == cand.mode and hub_copy_current(cand.dest, state.get("md5", ""), cand.md5):
                 cand.action = "unchanged"
             elif exists:
                 cand.action = "replace"
@@ -1076,21 +1105,26 @@ class Installer:
             )
 
     def plan_dropbear_link(self) -> None:
-        """Reuse harmony-hub-root's dropbearmulti when it is byte-identical."""
+        """Reuse harmony-hub-root's dropbearmulti when it is the same build
+        as ours, or another build of the same Dropbear (DROPBEAR_BUILDS)."""
         source = self.probe.get(ROOT_TOOL_DROPBEAR, {})
+        md5 = source.get("md5", "")
         for cand in self.candidates:
             if (
                 cand.dest == DROPBEAR_DEST
                 and cand.action in ("replace", "create")
                 and source.get("kind") == "regular"
-                and source.get("md5") == cand.md5
+                and hub_copy_current(cand.dest, md5, cand.md5)
             ):
                 cand.link_source = ROOT_TOOL_DROPBEAR
+                cand.link_md5 = md5
+                cand.link_bytes = int(source["size"])
 
     def scan_root_tool_leftovers(self) -> None:
         out = self.run_remote(ROOT_TOOL_SCAN, timeout=60, quiet=True)
         self.root_tool_stages = []
         self.dropbear_copies = {}
+        self.dropbear_links = {}
         for line in out.splitlines():
             line = line.strip()
             stage = re.match(r"^root_tool_stage bytes=(\d+) files=(\d+) path=(\S+)$", line)
@@ -1099,20 +1133,26 @@ class Installer:
                     {"path": stage.group(3), "bytes": int(stage.group(1)), "files": int(stage.group(2))}
                 )
                 continue
-            copy = re.match(r"^dropbear_copy inode=(\d+) path=(\S+)$", line)
-            if copy and copy.group(2) in (ROOT_TOOL_DROPBEAR, DROPBEAR_DEST):
-                self.dropbear_copies[copy.group(2)] = copy.group(1)
+            copy = re.match(r"^dropbear_copy inode=(\d+) links=(\d+) path=(\S+)$", line)
+            if copy and copy.group(3) in (ROOT_TOOL_DROPBEAR, DROPBEAR_DEST):
+                self.dropbear_copies[copy.group(3)] = copy.group(1)
+                self.dropbear_links[copy.group(3)] = int(copy.group(2))
 
     def root_tool_dropbear_removable(self) -> bool:
         """True when the root tool's Dropbear is a separate copy that SSH no
         longer uses and phase 1 won't link."""
-        ours = self.dropbear_copies.get(DROPBEAR_DEST)
-        theirs = self.dropbear_copies.get(ROOT_TOOL_DROPBEAR)
+        # Separate means its only name: with a second link (ours, or anything
+        # else), removing it frees nothing. Inode numbers can't tell: the hub's
+        # unionfs numbers each path afresh after a reboot.
+        separate = self.dropbear_links.get(ROOT_TOOL_DROPBEAR) == 1
+        # And only while ours is a working Dropbear: never trade the root
+        # tool's copy for a damaged one.
+        ours_ok = self.probe.get(DROPBEAR_DEST, {}).get("md5") in DROPBEAR_BUILDS
         wrapper = next((c for c in self.candidates if c.dest == "/usr/sbin/dropbear"), None)
         return bool(
-            ours
-            and theirs
-            and ours != theirs
+            DROPBEAR_DEST in self.dropbear_copies
+            and separate
+            and ours_ok
             and wrapper is not None
             and self.probe.get("/usr/sbin/dropbear", {}).get("md5") == wrapper.md5
             and not any(c.link_source == ROOT_TOOL_DROPBEAR for c in self.candidates)
@@ -1124,8 +1164,11 @@ class Installer:
         credit = sum(int(s["bytes"]) * 3 // 5 for s in self.root_tool_stages)
         if self.root_tool_dropbear_removable():
             dropbear = next((c for c in self.candidates if c.dest == DROPBEAR_DEST), None)
-            if dropbear is not None:
-                credit += dropbear.flash_bytes
+            if dropbear is not None and dropbear.bytes:
+                # Scaled to the root tool's copy, which may be the smaller build.
+                # (Its stripped .pdr compressed well, so this errs low: safe.)
+                size = int(self.probe.get(ROOT_TOOL_DROPBEAR, {}).get("size", dropbear.bytes))
+                credit += dropbear.flash_bytes * size // dropbear.bytes
         return credit
 
     def active_candidates(self) -> list[Candidate]:
@@ -1368,7 +1411,7 @@ class Installer:
             if cand.link_source:
                 kv(f"flash_link dest={cand.dest} source={cand.link_source}")
                 info(
-                    f"{cand.dest}: harmony-hub-root's identical copy at {cand.link_source} is reused "
+                    f"{cand.dest}: harmony-hub-root's copy of the same Dropbear at {cand.link_source} is reused "
                     "as a hard link, so it takes no extra flash."
                 )
         leftovers = [(str(s["path"]), int(s["bytes"]), int(s["files"])) for s in self.root_tool_stages]
@@ -1585,7 +1628,7 @@ class Installer:
         return failed
 
     def link_new_copy(self, cand: Candidate, new: str) -> bool:
-        """Hard-link an identical file already on the hub as <dest>.codex-new."""
+        """Hard-link an identical (or equivalent) file already on the hub as <dest>.codex-new."""
         code, out, err = self.run_remote_rc(
             f"ln {remote_quote(cand.link_source)} {remote_quote(new)} && "
             f"chmod {remote_quote(cand.mode)} {remote_quote(new)} && "
@@ -1594,8 +1637,9 @@ class Installer:
         )
         lines = out.strip().splitlines()
         match = MD5_LINE_RE.match(lines[-1]) if code == 0 and lines else None
-        if match and match.group(1) == cand.md5:
+        if match and match.group(1) == cand.link_md5:
             info(f"linked dest={new} to {cand.link_source} (no extra flash)")
+            cand.linked = True
             return True
         self.run_remote_rc(f"rm -f {remote_quote(new)}", timeout=30)
         info(f"could not link {cand.link_source} ({err.strip() or 'verification failed'}); copying instead")
@@ -1641,7 +1685,7 @@ class Installer:
             for item in self.changed:
                 if item["dest"] == cand.dest:
                     item["done"] = True
-            info(f"installed dest={cand.dest} mode={cand.mode} bytes={cand.bytes}")
+            info(f"installed dest={cand.dest} mode={cand.mode} bytes={cand.link_bytes if cand.linked else cand.bytes}")
 
     def verify_installed(self) -> None:
         step("Verifying installed bytes, hashes, and modes")
@@ -1649,14 +1693,16 @@ class Installer:
         states = self.file_status([c.dest for c in active])
         for cand in active:
             state = states[cand.dest]
+            # A linked Dropbear is the root tool's copy, which may be the other build.
+            want_bytes, want_md5 = (cand.link_bytes, cand.link_md5) if cand.linked else (cand.bytes, cand.md5)
             if state["kind"] != "regular":
                 raise InstallFailure(f"post-install verification failed for {cand.dest}: kind={state['kind']}")
-            if int(state["size"], 10) != cand.bytes:
+            if int(state["size"], 10) != want_bytes:
                 raise InstallFailure(
                     f"post-install byte mismatch for {cand.dest}: "
-                    f"expected {cand.bytes} got {state['size']}"
+                    f"expected {want_bytes} got {state['size']}"
                 )
-            if state["md5"] != cand.md5:
+            if state["md5"] != want_md5:
                 raise InstallFailure(f"post-install checksum mismatch for {cand.dest}")
             if state["mode"] != cand.mode:
                 raise InstallFailure(

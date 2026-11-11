@@ -54,6 +54,25 @@ const HUB_FILES = {
   "payload/scripts/netservicestarter.lua": ["/opt/luaworks/tasks/connectserver/netservicestarter.lua", "644", 1],
 };
 const HUB_INVENTORY_FILES = new Set(["payload/bin/MANIFEST.txt", "payload/bin/FILES"]);
+// Known builds of Dropbear, by MD5: version. Builds of one version are the
+// same program (2025.89 as built, and with the unloaded MIPS .pdr section
+// stripped, as harmony-hub-root ships it and the installer may have linked),
+// so either counts as current. Must match DROPBEAR_BUILDS in install_webui.py.
+const DROPBEAR_BUILDS = new Map([
+  ["3733327fd04bca282dbf06f33da0bf6c", "2025.89"],
+  ["ceabc15471be6f67f1e13fccd20a9508", "2025.89"],
+]);
+
+const DROPBEAR_DEST = HUB_FILES["payload/bin/dropbearmulti"][0];
+
+/** The payload files whose copy on the hub (md5 by destination) differs. */
+function changedFiles(files, current) {
+  return files.filter((f) => {
+    const have = current.get(f.dest);
+    const version = DROPBEAR_BUILDS.get(have);
+    return have !== f.md5 && !(f.dest === DROPBEAR_DEST && version !== undefined && version === DROPBEAR_BUILDS.get(f.md5));
+  });
+}
 
 class HubUpdateError extends Error {}
 
@@ -202,7 +221,7 @@ async function updateHub({
     }
     const current = new Map();
     for (const m of status.matchAll(/^file (\S+) (\S+)$/gm)) current.set(m[2], m[1]);
-    const changed = files.filter((f) => current.get(f.dest) !== f.md5);
+    const changed = changedFiles(files, current);
     if (!changed.length) {
       await ssh(`rm -rf ${stage}`).catch(() => {});
       return { ok: true, alreadyCurrent: true, message: `The hub already has Melodious ${release.version}'s software.` };
@@ -269,4 +288,4 @@ async function updateHub({
   }
 }
 
-module.exports = { HUB_FILES, HubUpdateError, findHubKey, readHubPayload, updateHub };
+module.exports = { DROPBEAR_BUILDS, HUB_FILES, HubUpdateError, changedFiles, findHubKey, readHubPayload, updateHub };
