@@ -64,6 +64,13 @@ These keep their own licences:
 - The libraries the Android app is built with (AndroidX and Jetpack Compose,
   Kotlin, kotlinx, OkHttp, JSch), declared in
   Android/gradle/libs.versions.toml: each under its own licence.
+- harmony-ng (https://github.com/iranl/harmony-ng), by iranl and
+  contributors: MIT License, Copyright (c) 2026 iranl and contributors.
+  The EHCI-registration mechanism, the AR9344 USB host-mode PHY finding,
+  and the big-endian checksum-offload finding used in
+  `payload/source/codex_usbeth.c` derive from this project. The MIT
+  permission notice in section 2 applies; the upstream license text is
+  in that project's LICENSE.
 
 
 4. Trademarks

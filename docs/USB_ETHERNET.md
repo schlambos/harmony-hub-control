@@ -167,3 +167,14 @@ See [`payload/modules/usb-net/README.md`](../payload/modules/usb-net/README.md)
 for the exact source versions, SHA-256 digests, validation status, and
 reproducible build recipe. The per-symbol layout audit behind the checksum
 adoption lives with the build scratch (`USBNET_LAYOUT_AUDIT.md`).
+
+USB host mode on this hub was first demonstrated by
+[iranl/harmony-ng](https://github.com/iranl/harmony-ng) (MIT). The
+EHCI-registration mechanism (a transient `sys_call_table` slot write
+invoking `platform_device_register` on the dormant `ar7240-ehci`
+device), the AR9344 `usbctrlr1` host-mode PHY setting, and the
+big-endian checksum-offload workaround used here derive from that
+project's published research. The implementation in
+`payload/source/codex_usbeth.c` and the service around it are
+Melodious's own; mechanism credit belongs to harmony-ng (see
+`LICENSE`, section 3).

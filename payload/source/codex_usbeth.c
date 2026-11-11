@@ -47,6 +47,15 @@
  *     name, link carrier, and IPv4 address.
  */
 
+/*
+ * Provenance: the EHCI-registration mechanism, the AR9344 USB host-mode
+ * PHY finding, and the big-endian checksum-offload finding used in this
+ * file derive from iranl/harmony-ng (MIT License, Copyright (c) 2026
+ * iranl and contributors; https://github.com/iranl/harmony-ng). This
+ * implementation is original to Melodious; the underlying research is
+ * credited to that project. See LICENSE, section 3.
+ */
+
 #include <arpa/inet.h>
 #include <dirent.h>
 #include <errno.h>
