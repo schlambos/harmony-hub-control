@@ -69,6 +69,70 @@ if [ -e /etc/memtester ]; then
 	while true; do sleep 60; done
 fi
 
+# Two remotes with a screen (optional, see docs/TWO_SCREEN_REMOTES.md). When
+# two_screen.conf asks for it and both files are exactly the builds it was made
+# for, a copy of hal that keeps HOT (the link to remotes with a screen) per
+# radio slot is bind-mounted over /usr/bin/hal. The copy carries the
+# multi-remote changes below as well and takes both settings from
+# /var/run/codex_hal_gates, written here: 1 or 0 for two-screen, multi-remote
+# and serial mode. hal reads nothing else; without that file it behaves as the
+# stock hal. "once" (and "serial-once") is for one boot: the setting is cleared
+# before the copy is bound, so the next boot of any kind starts the stock hal.
+# hal is watched by the watchdog, so a copy that died at start would restart
+# the hub with the setting still on: three boots in a row that didn't stay up
+# four minutes and the copy is left alone until the setting is saved again.
+codex_two=$(cat /data/codex/two_screen.conf 2>/dev/null)
+case "$codex_two" in
+1 | once | serial | serial-once) ;;
+*) codex_two= ;;
+esac
+if [ -z "$codex_two" ] && [ -f /data/codex/bin/hal_remotes ]; then
+	# Switched off: the copy is no longer needed (it can't be deleted while it is bound).
+	rm -f /data/codex/bin/hal_remotes /data/codex/hal_remotes.tries
+	echo "$(date) codex two-screen off: removed /data/codex/bin/hal_remotes" >> /cache/codex-init.log
+elif [ -n "$codex_two" ] && [ -f /data/codex/bin/hal_remotes ]; then
+	codex_hal_md5=$(md5sum /usr/bin/hal)
+	codex_hal_remotes_md5=$(md5sum /data/codex/bin/hal_remotes)
+	codex_tries=$(cat /data/codex/hal_remotes.tries 2>/dev/null)
+	case "$codex_tries" in
+	'' | *[!0-9]*) codex_tries=0 ;;
+	esac
+	codex_gates=10
+	if [ "$(cat /data/codex/multi_remote.conf 2>/dev/null)" = "1" ]; then
+		codex_gates=11
+	fi
+	case "$codex_two" in
+	serial*) codex_gates=${codex_gates}1 ;;
+	*) codex_gates=${codex_gates}0 ;;
+	esac
+	if [ "${codex_hal_md5%% *}" != "a3fdd823440c43f36e235fe51c45f008" ] ||
+		[ "${codex_hal_remotes_md5%% *}" != "904560dfaa3dc84a175524c2a80ec240" ]; then
+		echo "$(date) codex two-screen hal skipped (unexpected hal build)" >> /cache/codex-init.log
+	elif [ "$codex_tries" -ge 3 ]; then
+		echo "$(date) codex two-screen hal skipped (the last 3 boots with it didn't stay up; save the setting again to retry)" >> /cache/codex-init.log
+	else
+		case "$codex_two" in
+		*once) echo 0 > /data/codex/two_screen.conf ;;
+		esac
+		if { [ "${codex_two%once}" = "$codex_two" ] || [ "$(cat /data/codex/two_screen.conf 2>/dev/null)" = "0" ]; } &&
+			echo "$(expr $codex_tries + 1)" > /data/codex/hal_remotes.tries &&
+			echo "$codex_gates" > /var/run/codex_hal_gates &&
+			[ "$(cat /var/run/codex_hal_gates 2>/dev/null)" = "$codex_gates" ] &&
+			mount -o bind /data/codex/bin/hal_remotes /usr/bin/hal; then
+			echo "$(date) codex two-screen hal bound over /usr/bin/hal (setting $codex_two, gates $codex_gates)" >> /cache/codex-init.log
+			(
+				sleep 240
+				pidof hal > /dev/null 2>&1 && echo 0 > /data/codex/hal_remotes.tries
+			) &
+		else
+			rm -f /var/run/codex_hal_gates
+			echo "$(date) codex two-screen hal not bound (setting $codex_two: the setting, the gates or the mount failed)" >> /cache/codex-init.log
+		fi
+	fi
+	unset codex_hal_md5 codex_hal_remotes_md5 codex_tries codex_gates
+fi
+unset codex_two
+
 # Multiple remotes of one model (optional, see docs/MULTI_REMOTE.md). rcS
 # starts /usr/bin/hal after sourcing this file; when the owner switched it on
 # and both files are exactly the builds it was made for, a copy of hal that
@@ -78,7 +142,9 @@ if [ "$(cat /data/codex/multi_remote.conf 2>/dev/null)" != "1" ] && [ -f /data/c
 	# Switched off: the copy is no longer needed (it can't be deleted while it is bound).
 	rm -f /data/codex/bin/hal_multiremote
 	echo "$(date) codex multi-remote off: removed /data/codex/bin/hal_multiremote" >> /cache/codex-init.log
-elif [ "$(cat /data/codex/multi_remote.conf 2>/dev/null)" = "1" ] && [ -f /data/codex/bin/hal_multiremote ]; then
+elif [ "$(cat /data/codex/multi_remote.conf 2>/dev/null)" = "1" ] && [ -f /data/codex/bin/hal_multiremote ] &&
+	! grep ' /usr/bin/hal ' /proc/mounts > /dev/null 2>&1; then
+	# (not when the two-screen copy above is bound: it does this too)
 	codex_hal_md5=$(md5sum /usr/bin/hal)
 	codex_hal_multi_md5=$(md5sum /data/codex/bin/hal_multiremote)
 	if [ "${codex_hal_md5%% *}" = "a3fdd823440c43f36e235fe51c45f008" ] &&

@@ -164,6 +164,23 @@ Result must be `ELF 32-bit MSB executable, MIPS, MIPS32`, statically linked,
 stripped, size 54424, SHA-256
 `82f398eff425562494dc9153b9aff2b903ad7af29d791b7f1efde70fa8e06379`.
 
+### hal_remotes (the two-screen `hal` edits, Official Zig, `-mcpu=mips32r2`)
+
+Not a binary. `payload/helpers/hal_remotes_patch.json` holds the edits the
+installer applies to the hub's own `hal`
+([TWO_SCREEN_REMOTES.md](TWO_SCREEN_REMOTES.md)); `tools/build_hal_remotes.py`
+writes it from `payload/source/hal_remotes/` (freestanding C, no libc, linked
+at fixed addresses) and checks the compiled code against its rules.
+
+```bash
+HAL_REMOTES_ZIG=<zig 0.16.0> python3 tools/build_hal_remotes.py --stock <stock hal, firmware 4.15.600>
+```
+
+`--stock` pins the patched md5 (`904560dfaa3dc84a175524c2a80ec240`), which
+`payload/scripts/rcS.local` must name too. Without it the build keeps the
+pinned md5 when the edits come out unchanged. `--check` fails if the file
+differs from what the source builds. Needs `pyelftools`.
+
 ### dhcpd / portal (Official Zig)
 
 Since issue #88, `codex_dhcpd` and `codex_portal` build with the same pinned
@@ -294,7 +311,9 @@ The README's Development section has the short version. The full set:
 node --test tools/webui-sim/test/                 # web app models and hub contracts
 node tools/harmony_shell_smoke.mjs                # rebuilds the embedded web app and checks it (needs bun)
 node tools/shipped_copy_hygiene.mjs               # no personal names or IDs in shipped files
-python3 tools/installer_contract_smoke.py         # the installers' contract, with a fake hub
+python3 tools/installer_contract_smoke.py         # the installers' contract, with a fake hub; rcS.local's hal blocks under sh
+python3 tools/build_hal_remotes.py --check        # the two-screen hal edits are what their source builds (needs Zig 0.16.0)
+HAL_STOCK=<stock hal> python3 tools/hal_remotes/test_hal_remotes.py   # hal's own HOT code, patched, under Unicorn (needs unicorn, pyelftools)
 python3 -m unittest discover -s docker/tests      # the Docker manager
 for t in barrier device-screens ha-devices androidtv-devices touch-controls; do
   luajit tools/touch-validator/codexactivity-$t-test.lua
