@@ -63,8 +63,8 @@ Each run:
    last.
    - If harmony-hub-root left its `dropbearmulti` on the hub, the
      installer hard-links it instead of writing a second copy. Either
-     build of the same Dropbear counts: ours, or the one with the unloaded
-     `.pdr` section stripped that newer root tools ship.
+     build of the same Dropbear counts: the one Melodious ships, or the same binary with the unloaded
+     `.pdr` section stripped. Nothing ships the stripped build today; accepting it keeps the hard-link reuse working if the bundled root tool's copy is ever stripped to save flash.
    - If flash runs out anyway, it removes the copies and nothing in use
      changes.
    - If a later step fails, it puts the originals back in reverse order
