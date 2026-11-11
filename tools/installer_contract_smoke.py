@@ -2556,7 +2556,8 @@ def relocate_hub_script(text: str, root: Path) -> str:
         "/tmp",
         "/dev",
     )
-    pattern = re.compile(r"(?<![A-Za-z0-9_.-])(" + "|".join(re.escape(p) for p in prefixes) + r")(?=/|[\s\"';)&|]|$)")
+    # Also a ${VAR:-/path} default (offline_egress_guard.sh's GUARD_* paths).
+    pattern = re.compile(r"(?:(?<=:-)|(?<![A-Za-z0-9_.-]))(" + "|".join(re.escape(p) for p in prefixes) + r")(?=/|[\s\"';)&|}]|$)")
     body = pattern.sub(lambda m: str(root) + m.group(1), body)
     body = body.replace(sentinel, "/dev/null")
     return shebang + body
