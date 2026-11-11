@@ -243,7 +243,8 @@ def hal_load_check_command() -> str:
     """Run the installed copy with an option hal doesn't have: it prints its
     usage and exits before it opens anything. That the hub's kernel and loader
     start the copy at all is the one thing no test off the hub can show."""
-    return f"{HAL_REMOTES_DEST} -h 2>&1; echo rc=$?"
+    # hal's usage text ends without a newline: put the exit status on its own line.
+    return f"{HAL_REMOTES_DEST} -h 2>&1; rc=$?; echo; echo rc=$rc"
 
 
 def remotes_hal(data: bytes) -> bytes:
