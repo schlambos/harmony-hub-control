@@ -19,6 +19,10 @@ import release  # noqa: E402
 
 VERSION = "9.8.7"
 COMMIT = "0123456789abcdef0123456789abcdef01234567"
+TARBALL = b"fake busybox-1.37.0 source\n"
+TARBALL_NAME = "busybox-1.37.0.tar.bz2"
+README = ("| Upstream source | `https://busybox.net/downloads/busybox-1.37.0.tar.bz2`, SHA-256 `"
+          + hashlib.sha256(TARBALL).hexdigest() + "` (matches busybox.net's `.sha256`) |\n")
 
 
 def fake_apk(_path: Path) -> dict:
@@ -27,7 +31,7 @@ def fake_apk(_path: Path) -> dict:
 
 
 def write_hub_zip(path: Path, extra: dict | None = None, bad_md5: bool = False, helpers: bool = True,
-                  gpl_source: bool = True, gpl_source_omit: str = "") -> None:
+                  gpl_source: bool = True, gpl_source_omit: str = "", readme: str = README) -> None:
     files = {rel: f"content of {rel}\n".encode() for rel in release.HUB_FILES}
     if helpers:
         files.update({rel: f"helper {rel}\n".encode() for rel in release.HUB_INSTALLER_HELPERS})
@@ -46,7 +50,7 @@ def write_hub_zip(path: Path, extra: dict | None = None, bad_md5: bool = False, 
                     "third_party/busybox-1.37.0/" + f for f in release.BUSYBOX_SOURCE_FILES] + [
                     "third_party/busybox-1.37.0/patches/0001-fix.patch"]:
                 if rel != gpl_source_omit:
-                    z.writestr(top + rel, f"source {rel}\n")
+                    z.writestr(top + rel, readme if rel.endswith("/README.md") else f"source {rel}\n")
         for rel, data in files.items():
             z.writestr(top + rel, data)
 
@@ -61,7 +65,9 @@ class ReleaseToolTest(unittest.TestCase):
     def tearDown(self):
         self.tmp.cleanup()
 
-    def make_release(self, series="hub", **zip_args):
+    def make_release(self, series="hub", tarball: bytes | None = TARBALL, **zip_args):
+        if series == "hub" and tarball is not None:
+            (self.dir / TARBALL_NAME).write_bytes(tarball)
         for name in release.ordered_assets(series, VERSION):
             if name.startswith("melodious-hub-"):
                 write_hub_zip(self.dir / name, **zip_args)
@@ -70,7 +76,7 @@ class ReleaseToolTest(unittest.TestCase):
         manifest = release.build_manifest(self.dir, series, VERSION, "1.2.0",
                                           None if series == "hub" else COMMIT, apk_reader=fake_apk)
         (self.dir / release.MANIFEST_NAME).write_text(json.dumps(manifest, indent=2) + "\n")
-        release.write_sums(self.dir, release.ordered_assets(series, VERSION) + [release.MANIFEST_NAME])
+        release.write_sums(self.dir, release.release_assets(self.dir, series, VERSION) + [release.MANIFEST_NAME])
         return manifest
 
     def verify(self):
@@ -131,6 +137,37 @@ class ReleaseToolTest(unittest.TestCase):
             with self.subTest(omit=omit), self.assertRaisesRegex(release.ReleaseError, "missing BusyBox"):
                 self.make_release(gpl_source_omit=omit)
 
+    def test_hub_release_carries_busybox_upstream_source(self):
+        self.make_release()
+        sums = release.parse_sums((self.dir / release.SUMS_NAME).read_text())
+        self.assertEqual(sums[TARBALL_NAME], hashlib.sha256(TARBALL).hexdigest())
+        self.verify()
+        self.assertEqual(release.source_assets(self.dir, "desktop", VERSION), {})
+
+    def test_missing_busybox_tarball_is_rejected(self):
+        with self.assertRaisesRegex(release.ReleaseError, f"missing asset {TARBALL_NAME}"):
+            self.make_release(tarball=None)
+
+    def test_busybox_tarball_must_match_the_pin(self):
+        with self.assertRaisesRegex(release.ReleaseError, "differs from the pin"):
+            self.make_release(tarball=b"another tarball\n")
+        self.tearDown()
+        self.setUp()
+        self.make_release()
+        (self.dir / TARBALL_NAME).write_bytes(b"swapped\n")
+        self.assertRejected("SHA-256 does not match")
+
+    def test_busybox_tarball_left_out_of_sums_is_rejected(self):
+        self.make_release()
+        release.write_sums(self.dir, release.ordered_assets("hub", VERSION) + [release.MANIFEST_NAME])
+        self.assertRejected("not covered")
+
+    def test_readme_must_pin_the_tarball(self):
+        with self.assertRaisesRegex(release.ReleaseError, "doesn't name the upstream"):
+            self.make_release(readme="no pin here\n")
+        with self.assertRaisesRegex(release.ReleaseError, "another version"):
+            self.make_release(readme=README.replace("1.37.0", "1.36.1"))
+
     def test_payload_manifest_mismatch_is_rejected(self):
         with self.assertRaisesRegex(release.ReleaseError, "md5 for"):
             self.make_release(bad_md5=True)
@@ -158,7 +195,7 @@ class ReleaseToolTest(unittest.TestCase):
         data = json.loads(path.read_text())
         data["android"]["minHub"] = "1.0.0"
         path.write_text(json.dumps(data, indent=2) + "\n")
-        release.write_sums(self.dir, release.ordered_assets("hub", VERSION) + [release.MANIFEST_NAME])
+        release.write_sums(self.dir, release.release_assets(self.dir, "hub", VERSION) + [release.MANIFEST_NAME])
         self.assertRejected("does not match the assets")
 
 if __name__ == "__main__":

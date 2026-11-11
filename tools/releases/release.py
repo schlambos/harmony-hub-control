@@ -4,6 +4,8 @@
   manifest <dir>  Read the release assets in <dir>, write melodious-update.json
                   (versions, compatibility, and the SHA-256 of every hub payload
                   file) and SHA256SUMS.txt over all assets including that file.
+                  A hub release also carries BusyBox's upstream source tarball,
+                  checked against the pin in the hub zip.
   verify <dir>    Check every checksum, that nothing in <dir> is left out, and
                   that the manifest agrees with the assets.
 
@@ -77,6 +79,10 @@ HUB_GPL_SOURCE = {"LICENSE", "build/build_harmony_tools_kali.sh", "build/busybox
                   "build/busybox-zig-ar.sh", "build/discard-mips-pdr.ld"}
 BUSYBOX_SOURCE_DIR = re.compile(r"^third_party/busybox-[0-9.]+/")
 BUSYBOX_SOURCE_FILES = ("LICENSE", "README.md", "busybox.config")
+# The upstream tarball itself is a release asset beside the hub zip, so the
+# complete source comes from where the binary does (GPLv2 section 3(a)). The
+# README names it and pins its SHA-256.
+BUSYBOX_UPSTREAM = re.compile(r"\b(busybox-([0-9.]+)\.tar\.bz2)`?, SHA-256 `([0-9a-f]{64})`")
 VERSION_RE = re.compile(r"^\d+\.\d+\.\d+$")
 
 
@@ -104,6 +110,47 @@ def asset_names(series: str, version: str) -> dict:
     if series == "desktop":
         return {"mac": mac}
     return {"hub": f"melodious-hub-{version}.zip", "apk": f"melodious-{version}.apk", "mac": mac}
+
+
+def source_assets(folder: Path, series: str, version: str) -> dict[str, str]:
+    """GPL source tarballs a hub release carries beside its zip: name -> pinned SHA-256.
+
+    Read from the hub zip's third_party/busybox-<version>/README.md."""
+    if series != "hub":
+        return {}
+    zip_path = folder / asset_names(series, version)["hub"]
+    if not zip_path.is_file():
+        raise ReleaseError(f"missing asset {zip_path.name} in {folder}")
+    top = f"melodious-hub-{version}/"
+    with zipfile.ZipFile(zip_path) as z:
+        readmes = [n for n in z.namelist()
+                   if n.startswith(top) and BUSYBOX_SOURCE_DIR.match(n[len(top):])
+                   and n[len(top):].count("/") == 2 and n.endswith("/README.md")]
+        if len(readmes) != 1:
+            raise ReleaseError(f"{zip_path.name}: expected one third_party/busybox-<version>/README.md, found {len(readmes)}")
+        text = z.read(readmes[0]).decode("utf-8", "replace")
+    m = BUSYBOX_UPSTREAM.search(text)
+    readme = readmes[0][len(top):]
+    if not m:
+        raise ReleaseError(f"{zip_path.name}: {readme} doesn't name the upstream busybox-<version>.tar.bz2 and its SHA-256")
+    if readme != f"third_party/busybox-{m.group(2)}/README.md":
+        raise ReleaseError(f"{zip_path.name}: {readme} names {m.group(1)}, another version")
+    return {m.group(1): m.group(3)}
+
+
+def check_source_assets(folder: Path, sources: dict[str, str]) -> None:
+    for name, digest in sources.items():
+        path = folder / name
+        if not path.is_file():
+            raise ReleaseError(f"missing asset {name} in {folder}: BusyBox's upstream source, which a hub "
+                               "release carries for the GPL (download it from busybox.net; see docs/RELEASING.md)")
+        if sha256_file(path) != digest:
+            raise ReleaseError(f"{name}: SHA-256 differs from the pin in the hub zip's third_party README")
+
+
+def release_assets(folder: Path, series: str, version: str) -> list[str]:
+    """Every asset SHA256SUMS.txt covers, apart from the manifest."""
+    return ordered_assets(series, version) + sorted(source_assets(folder, series, version))
 
 
 def ordered_assets(series: str, version: str) -> list[str]:
@@ -252,6 +299,7 @@ def build_manifest(folder: Path, series: str, version: str, min_hub: str | None,
         if commit and zip_commit and commit != zip_commit:
             raise ReleaseError(f"--commit {commit} differs from the hub zip's commit {zip_commit}")
         manifest["commit"] = commit or zip_commit
+        check_source_assets(folder, source_assets(folder, series, version))
         info = apk_reader(folder / names["apk"])
         check_apk(info, version, names["apk"])
         manifest["android"] = {
@@ -313,7 +361,7 @@ def verify_release(folder: Path, apk_reader=apk_info) -> list[str]:
     series, version = manifest.get("series"), manifest.get("version", "")
     if series not in ("hub", "desktop"):
         raise ReleaseError(f"{MANIFEST_NAME}: unknown series {series!r}")
-    expected = set(ordered_assets(series, version)) | {MANIFEST_NAME}
+    expected = set(release_assets(folder, series, version)) | {MANIFEST_NAME}
     if set(sums) != expected:
         raise ReleaseError(f"{SUMS_NAME} covers {sorted(set(sums))}, expected {sorted(expected)}")
     min_hub = (manifest.get("android") if series == "hub" else manifest.get("macos", {})).get("minHub")
@@ -342,7 +390,7 @@ def main(argv: list[str]) -> int:
         if args.cmd == "manifest":
             manifest = build_manifest(args.dir, args.series, args.version, args.min_hub, args.commit)
             (args.dir / MANIFEST_NAME).write_text(json.dumps(manifest, indent=2) + "\n")
-            write_sums(args.dir, ordered_assets(args.series, args.version) + [MANIFEST_NAME])
+            write_sums(args.dir, release_assets(args.dir, args.series, args.version) + [MANIFEST_NAME])
             print(f"wrote {args.dir / MANIFEST_NAME} and {args.dir / SUMS_NAME}")
         else:
             for line in verify_release(args.dir):

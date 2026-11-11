@@ -543,7 +543,11 @@ tokens, hub backups, firmware dumps or rooting tools. Read [CONTRIBUTING.md](CON
 - **Third-party code:**
   - Material Icons (Apache-2.0), in [`third_party/material-icons/`](third_party/material-icons/);
   - Dropbear SSH, in [`third_party/dropbear-2025.89/`](third_party/dropbear-2025.89/), with its
-    licence.
+    licence;
+  - BusyBox 1.37.0 (GPL-2.0), built into `busybox-extra`, with its licence, patch, configuration
+    and how to rebuild it in [`third_party/busybox-1.37.0/`](third_party/busybox-1.37.0/);
+  - BearSSL 0.6 (MIT), built into `codex_androidtv`, in
+    [`third_party/bearssl-0.6/`](third_party/bearssl-0.6/).
 
 **Contributors.** Thank you to everyone who has contributed code, pull requests, testing and issue
 reports so far:

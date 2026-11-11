@@ -204,10 +204,13 @@ busybox.net's `.sha256`), applies `patches/*.patch`, and copies
 that file. Then, with `SOURCE_DATE_EPOCH=1727395200 TZ=UTC LC_ALL=C`:
 
 ```sh
-make -C build/tmp/busybox-1.37.0 O=build/tmp/busybox-out -j"$(nproc)" \
-  CC=build/busybox-zig-cc.sh AR=build/busybox-zig-ar.sh HOSTCC=cc \
+make -C "$PWD/build/tmp/busybox-1.37.0" O="$PWD/build/tmp/busybox-out" -j"$(nproc)" \
+  CC="$PWD/build/busybox-zig-cc.sh" AR="$PWD/build/busybox-zig-ar.sh" HOSTCC=cc \
   EXTRA_LDFLAGS="-s -Wl,-T,$PWD/build/discard-mips-pdr.ld" SKIP_STRIP=y busybox
 ```
+
+Run it from the repository root. The paths must be absolute: `make -C` runs
+in the source tree, so a relative `O`, `CC` or `AR` would resolve from there.
 
 `BUSYBOX_ZIG` must name the pinned Zig (the script uses `OFFICIAL_ZIG`). The
 compiler wrapper drops the GNU ld options BusyBox's `scripts/trylink` passes

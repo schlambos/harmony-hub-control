@@ -20,8 +20,10 @@ BusyBox is licensed under the GNU General Public License, version 2 only
 | Compiler | the official Zig 0.16.0 (clang/LLD 21.1.0, musl), pinned by executable SHA-256 in the build script |
 
 If you received the binary without the source, the files above are in this
-repository at the same commit as the binary. The upstream tarball is also
-published by the BusyBox project at the address above.
+repository at the same commit as the binary. Each Melodious release that ships
+the binary also carries the upstream tarball, `busybox-1.37.0.tar.bz2`, as a
+release asset (`tools/releases/release.py` checks it against the SHA-256
+above). The BusyBox project publishes it at the address above too.
 
 ## The patch
 
