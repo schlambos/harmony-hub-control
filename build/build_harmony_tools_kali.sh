@@ -35,9 +35,9 @@ STRIP=mips-buildroot-linux-uclibc-strip
 # ---------------------------------------------------------------------------
 # Zig-built binaries.  Official Zig 0.16.0 (clang/LLD 21.1.0), fail-closed
 # pinned by executable SHA-256, version, and clang/LLD fingerprint, builds
-# all eight: WEBUI_ZIG (codex_webui) and OFFICIAL_ZIG (pair-agent, bthid,
-# HAL, HBus, dhcpd, portal, codex_androidtv) are separate variables but carry
-# the same pin.
+# them all: WEBUI_ZIG (codex_webui) and OFFICIAL_ZIG (pair-agent, bthid,
+# HAL, HBus, dhcpd, portal, usbeth, codex_androidtv, codex_flash_free) are
+# separate variables but carry the same pin.
 #
 #   executable SHA-256
 #   e6cd688d25664983833aae272f501d4bceeae304875b8f1741209d15fd13a4ec
@@ -45,8 +45,8 @@ STRIP=mips-buildroot-linux-uclibc-strip
 # Box binaries up to 2026-10-20 (webui sha256 6061b907...) were built with
 # Homebrew Zig 0.16.0_1 (clang/LLD 21.1.8), which Homebrew no longer serves.
 # Official Zig 0.16.0 rebuilds them with identical code and data; only the
-# .comment compiler stamp differs, so compare such builds after
-# `llvm-objcopy --remove-section=.comment`.
+# .comment compiler stamp (and, since builds drop it, .pdr) differ, so
+# compare such builds with tools/elf_load_cmp.py.
 #
 # codex_webui 974fe544... (8231751) was built with Homebrew Zig 0.17.0
 # (clang/LLD 22.1.8). Its code and data differ, so it was replaced with the
@@ -57,24 +57,27 @@ STRIP=mips-buildroot-linux-uclibc-strip
 # ---------------------------------------------------------------------------
 
 #: expected output digests (fail closed on any mismatch)
-WEBUI_EXPECT_SHA256=4448a527240d2b2e566c21d9edf5feed3b62f1ddcae7f671582d5cd388bb9a1d
-WEBUI_EXPECT_SIZE=1284836
-PAIR_EXPECT_SHA256=ab89be44f8d1db48e95a12ec3673145edfb8eb761f5e8db03f4e61acb8b01d72
-PAIR_EXPECT_SIZE=112708
-BTHID_EXPECT_SHA256=099b8a1428c2f34fe0b3428d280f65402cc6a5fd1e8e5723c56b462cc8ec2a86
-BTHID_EXPECT_SIZE=119284
-HAL_EXPECT_SHA256=a0b29bf8b72418ad3f99355889d2a07a7fd031395e1871f4e114fbab721592c8
-HAL_EXPECT_SIZE=81636
-HBUS_EXPECT_SHA256=4be9e6ac2e09e7eb052f9c47e81480d1e32aee7190bedb6ef7f932cf07aab8f9
-HBUS_EXPECT_SIZE=74660
-DHCPD_EXPECT_SHA256=e9db51f4691511f1ae10182143518e758fc7aca0a84994fe9be602be37957592
-DHCPD_EXPECT_SIZE=58328
-PORTAL_EXPECT_SHA256=1596f6cac03dad4ce0254ac118de5527c41789f10c7bc95357860d0d96c61b5f
-PORTAL_EXPECT_SIZE=76724
-ANDROIDTV_EXPECT_SHA256=0955c9eeb6820cfbbba4ff09c81a5fdd996c2c67789c9c48ce54f141b5f90e99
-ANDROIDTV_EXPECT_SIZE=270516
-USBETH_EXPECT_SHA256=ca4e5db04a367acf2077c32158e6589ed81fb97651f7c06389dc6f31129b9624
-USBETH_EXPECT_SIZE=85684
+WEBUI_EXPECT_SHA256=9c9b88e44bbd093c8409c029eca0595ea5d113a7250cca20b999a520141a572f
+WEBUI_EXPECT_SIZE=1243704
+PAIR_EXPECT_SHA256=6d5c5f0056187c6029ff2ebc1226c81c6df69ef2edb80d20eca6963530cab816
+PAIR_EXPECT_SIZE=83160
+BTHID_EXPECT_SHA256=7e2498cacd94d93db912ac7e1e1fb90afe7e70218e7dc1ae932669879da09180
+BTHID_EXPECT_SIZE=89544
+HAL_EXPECT_SHA256=239327e3ff8d9ebfc3f11ed06d1cfba91de9207206958f142af9a2aa68783b62
+HAL_EXPECT_SIZE=53848
+HBUS_EXPECT_SHA256=5d649e9455c93badf6843b7f973d526ac2be7313465525ca81f5b24b85ff8b74
+HBUS_EXPECT_SIZE=47160
+DHCPD_EXPECT_SHA256=749161a5cd140cb72a73619c61d77c4beeb4a71f31ca87810ead4575b8f1ce81
+DHCPD_EXPECT_SIZE=31464
+PORTAL_EXPECT_SHA256=4cf21f469d3ff4ef0c37b00bc40d14e1a143713d3777b7bd7e19c4b2ff0b4c33
+PORTAL_EXPECT_SIZE=48680
+ANDROIDTV_EXPECT_SHA256=5dbbdbc8bad9440e553e45fe9ae6b161b66d3fa860c05b7eced137c6ad003c53
+ANDROIDTV_EXPECT_SIZE=218568
+USBETH_EXPECT_SHA256=f45949f5cab0fdbda3394e8024d8b5bda8d706c502a43b7d6e1e04ae23c81a90
+USBETH_EXPECT_SIZE=57736
+#: installer helper (payload/helpers): run from RAM staging, never installed
+FLASHFREE_EXPECT_SHA256=749c055e9fdc5cea50d3f48d0775441bd758f6811ee32f625c5b423121854177
+FLASHFREE_EXPECT_SIZE=27912
 
 #: BearSSL 0.6 source for codex_androidtv (bearssl.org publishes no checksum; this
 #: is the tarball's SHA-256 as downloaded on 2026-11-07)
@@ -136,6 +139,13 @@ check_zig() {
   esac
 }
 
+#: every Zig-built binary drops the unloaded MIPS .pdr section (why: see
+#: build/discard-mips-pdr.ld). -Wl, splits on commas, so refuse a path that has one.
+case $SCRIPT_DIR in
+  *,*) echo "error: the checkout path contains a comma, which -Wl, would split: $SCRIPT_DIR" >&2; exit 1 ;;
+esac
+PDR_LDFLAGS="-Wl,-T,$SCRIPT_DIR/discard-mips-pdr.ld"
+
 # ---------------------------------------------------------------------------
 # codex_webui — Official Zig 0.16.0 (clang/LLD 21.1.0), mips32r2.
 # ---------------------------------------------------------------------------
@@ -144,7 +154,7 @@ check_zig "WEBUI_ZIG" "$WEBUI_ZIG" "$WEBUI_ZIG_SHA256" "$WEBUI_ZIG_FINGERPRINT"
 
 (
   cd "$REPO_ROOT"
-  "$WEBUI_ZIG" cc -target mips-linux-musleabi -Os -static -s \
+  "$WEBUI_ZIG" cc -target mips-linux-musleabi -Os -static -s "$PDR_LDFLAGS" \
     -I payload/source \
     -o build/output/codex_webui \
     payload/source/codex_webui.c
@@ -165,27 +175,30 @@ check_zig "OFFICIAL_ZIG" "$OFFICIAL_ZIG" "$OFFICIAL_ZIG_SHA256" "$OFFICIAL_ZIG_F
 
 (
   cd "$REPO_ROOT"
-  "$OFFICIAL_ZIG" cc -target mips-linux-musleabi -Os -static -s \
+  "$OFFICIAL_ZIG" cc -target mips-linux-musleabi -Os -static -s "$PDR_LDFLAGS" \
     -o build/output/codex_bt_pair_agent \
     payload/source/codex_bt_pair_agent.c
-  "$OFFICIAL_ZIG" cc -target mips-linux-musleabi -Os -static -s \
+  "$OFFICIAL_ZIG" cc -target mips-linux-musleabi -Os -static -s "$PDR_LDFLAGS" \
     -o build/output/codex_bthid_keyboard \
     payload/source/codex_bthid_keyboard.c
-  "$OFFICIAL_ZIG" cc -target mips-linux-musleabi -Os -static -s \
+  "$OFFICIAL_ZIG" cc -target mips-linux-musleabi -Os -static -s "$PDR_LDFLAGS" \
     -o build/output/codex_hal_ltcp \
     payload/source/codex_hal_ltcp.c
-  "$OFFICIAL_ZIG" cc -target mips-linux-musleabi -mcpu=mips32 -Os -static -s \
+  "$OFFICIAL_ZIG" cc -target mips-linux-musleabi -mcpu=mips32 -Os -static -s "$PDR_LDFLAGS" \
     -o build/output/codex_hbus \
     payload/source/codex_hbus.c
-  "$OFFICIAL_ZIG" cc -target mips-linux-musleabi -Os -static -s \
+  "$OFFICIAL_ZIG" cc -target mips-linux-musleabi -Os -static -s "$PDR_LDFLAGS" \
     -o build/output/codex_dhcpd \
     payload/source/codex_dhcpd.c
-  "$OFFICIAL_ZIG" cc -target mips-linux-musleabi -Os -static -s \
+  "$OFFICIAL_ZIG" cc -target mips-linux-musleabi -Os -static -s "$PDR_LDFLAGS" \
     -o build/output/codex_portal \
     payload/source/codex_portal.c
-  "$OFFICIAL_ZIG" cc -target mips-linux-musleabi -Os -static -s \
+  "$OFFICIAL_ZIG" cc -target mips-linux-musleabi -Os -static -s "$PDR_LDFLAGS" \
     -o build/output/codex_usbeth \
     payload/source/codex_usbeth.c
+  "$OFFICIAL_ZIG" cc -target mips-linux-musleabi -mcpu=mips32 -Os -static -s "$PDR_LDFLAGS" \
+    -o build/output/codex_flash_free \
+    payload/source/codex_flash_free.c
 )
 
 PAIR_SHA256=$(sha256_of "$OUT/codex_bt_pair_agent")
@@ -230,6 +243,12 @@ if [ "$USBETH_SHA256" != "$USBETH_EXPECT_SHA256" ] || [ "$USBETH_SIZE" != "$USBE
   echo "error: codex_usbeth build is not exact (size $USBETH_SIZE, sha256 $USBETH_SHA256; expected size $USBETH_EXPECT_SIZE, sha256 $USBETH_EXPECT_SHA256)" >&2
   exit 1
 fi
+FLASHFREE_SHA256=$(sha256_of "$OUT/codex_flash_free")
+FLASHFREE_SIZE=$(wc -c < "$OUT/codex_flash_free" | tr -d ' ')
+if [ "$FLASHFREE_SHA256" != "$FLASHFREE_EXPECT_SHA256" ] || [ "$FLASHFREE_SIZE" != "$FLASHFREE_EXPECT_SIZE" ]; then
+  echo "error: codex_flash_free build is not exact (size $FLASHFREE_SIZE, sha256 $FLASHFREE_SHA256; expected size $FLASHFREE_EXPECT_SIZE, sha256 $FLASHFREE_EXPECT_SHA256)" >&2
+  exit 1
+fi
 
 # ---------------------------------------------------------------------------
 # codex_androidtv (network Android/Google TVs) — Official Zig 0.16.0 with BearSSL.
@@ -251,7 +270,7 @@ tar -C "$BUILD" -xzf "$BEARSSL_TARBALL"
 (
   cd "$BUILD"
   # shellcheck disable=SC2046
-  "$OFFICIAL_ZIG" cc -target mips-linux-musleabi -Os -static -s \
+  "$OFFICIAL_ZIG" cc -target mips-linux-musleabi -Os -static -s "$PDR_LDFLAGS" \
     -ffunction-sections -fdata-sections -Wl,--gc-sections \
     -Ibearssl-$BEARSSL_VERSION/inc -Ibearssl-$BEARSSL_VERSION/src \
     -o "$OUT/codex_androidtv" "$SRC/codex_androidtv.c" \

@@ -107,7 +107,7 @@ web app ──/api/androidtv/*──► codex_webui ──proxy──► codex_a
   5 s), answers the engine at once, and sends keys as soon as the TV is
   connected. It pairs new TVs (the "polo" pairing protocol on port 6467), finds
   them with mDNS (`_androidtvremote2._tcp`) and wakes them with Wake-on-LAN.
-  TLS is [BearSSL](https://bearssl.org/) 0.6. About 260 KB on flash and about
+  TLS is [BearSSL](https://bearssl.org/) 0.6. About 215 KB on flash and about
   200 KB of RAM with a TV connected.
 - **Identity.** On first start the hub makes one RSA-2048 key and a self-signed
   certificate (`/data/codex/androidtv/client.key.der`, `client.crt.der`, mode 0600)
