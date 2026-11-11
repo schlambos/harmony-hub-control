@@ -446,7 +446,7 @@ local function ifaceAddr(dev)
   if addrByLabel[dev] then
     return addrByLabel[dev]
   end
-  -- An address the netlink loop didn't see (it takes one event per batch).
+  -- An address no netlink event has reported since this script started.
   local p = io.popen("ifconfig " .. dev .. " 2>/dev/null")
   if not p then
     return nil
@@ -1386,6 +1386,27 @@ local function handleEvent(event)
   end
 end
 
+-- The stock loop below hands handleEvent one IPv4 event per batch. The
+-- address cache takes every one, so a batch with Wi-Fi's event first and the
+-- cable's after can't leave the cable's old address advertised.
+local function noteAddrEvents(events)
+  local changed = false
+  for _, e in ipairs(events) do
+    if e.family == "inet" and e.label and e.label ~= "lo" and e.label ~= "br-lan" and e.address then
+      if e.msgtype == "newaddr" and addrByLabel[e.label] ~= e.address then
+        addrByLabel[e.label] = e.address
+        changed = true
+      elseif e.msgtype == "deladdr" and addrByLabel[e.label] == e.address then
+        addrByLabel[e.label] = nil
+        changed = true
+      end
+    end
+  end
+  if changed then
+    pcall(lanAdvertSync)
+  end
+end
+
 if not melodiousOff() then
   installCloudHttpGuard()
   installOfflineApiGuards()
@@ -1421,6 +1442,7 @@ if mfgData.hasNetwork == true then
       if newEvent and not processEvent then
         handleEvent(newEvent)
       end
+      pcall(noteAddrEvents, events)
     end
   end
   netlink:close()

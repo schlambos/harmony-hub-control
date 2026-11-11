@@ -220,8 +220,7 @@ routes = { "ath0" }
 event("deladdr", "eth2", CABLE)
 check("an adapter's deladdr doesn't leave the hub without an address", sessionIp == WIFI, sessionIp)
 
--- An address the netlink loop never reported (it takes one event per batch):
--- found with ifconfig, once.
+-- An address no netlink event reported: found with ifconfig, once.
 ifconfigAddr.eth2 = CABLE
 routes = { "ath0", "eth2" }
 lanDevFile = "eth2"
@@ -242,6 +241,21 @@ check("a refused join keeps nothing", #joins == n, #joins)
 joinFails = false
 pass()
 check("a refused join is tried again", #joins == n + 1, #joins)
+
+-- A batch whose first IPv4 event is Wi-Fi's: the stock loop hands only that
+-- one to handleEvent, but the cable renumbering later in the batch counts.
+local CABLE2 = "192.168.1.51"
+ifconfigAddr.eth2 = CABLE2
+local okb, whyb = coroutine.resume(main, {
+  { family = "inet", msgtype = "newaddr", label = "ath0", address = WIFI },
+  { family = "inet", msgtype = "deladdr", label = "eth2", address = CABLE },
+  { family = "inet", msgtype = "newaddr", label = "eth2", address = CABLE2 },
+})
+assert(okb, whyb)
+pass()
+check("a mixed batch: the cable's new address is advertised", sessionIp == CABLE2, sessionIp)
+check("a mixed batch: the SSDP group follows it", joins[#joins] == "239.255.255.250@" .. CABLE2, joins[#joins])
+check("a mixed batch: getNetworkAttribute(ipaddr) follows it", config.getNetworkAttribute("ipaddr") == CABLE2)
 
 -- A bogus lan-dev name is ignored (same rule as the egress guard).
 lanDevFile = "br0; reboot"

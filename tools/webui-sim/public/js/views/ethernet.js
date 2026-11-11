@@ -148,7 +148,25 @@ export function createEthernetView(section) {
       </div>`;
   }
 
+  // Polls redraw the page every few seconds: note which control has the
+  // keyboard focus, and give it back to the same control afterwards.
+  const FOCUS_KEYS = ["data-act", "data-usb-ethernet", "data-wifi-off", "data-ip-mode", "data-ip-field"];
+  function focusedControl() {
+    const el = document.activeElement;
+    if (!el || el === root || !root.contains(el)) return null;
+    for (const name of FOCUS_KEYS) {
+      if (el.hasAttribute(name)) return `[${name}="${CSS.escape(el.getAttribute(name))}"]`;
+    }
+    return el.matches("[data-ip-form] [type=submit]") ? "[data-ip-form] [type=submit]" : null;
+  }
+
   function render() {
+    const focused = focusedControl();
+    draw();
+    if (focused) root.querySelector(focused)?.focus({ preventScroll: true });
+  }
+
+  function draw() {
     root.innerHTML = `${screenTitle("Wired Ethernet", {
         action: `<button type="button" class="btn btn-outlined" data-act="refresh"${busy ? " disabled" : ""}>Refresh</button>`,
       })}

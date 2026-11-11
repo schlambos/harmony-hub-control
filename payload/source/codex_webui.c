@@ -9654,6 +9654,24 @@ static void overview_fields(const char *line, const char *key, char *out, size_t
     }
 }
 
+/* The cable's link, from /sys/class/net/<iface>/carrier as codex_usbeth reads
+ * it. Unreadable (the kernel refuses it while the interface is down) is no
+ * link. "up" is only the administrative flag: an unplugged cable leaves it set. */
+static int overview_carrier(const char *iface) {
+    char path[64], v[4] = "";
+    const char *p;
+    FILE *cf;
+    if (!iface[0] || iface[0] == '.' || strlen(iface) > 15) return 0;
+    for (p = iface; *p; p++)
+        if (!isalnum((unsigned char)*p) && *p != '-' && *p != '_' && *p != '.') return 0;
+    snprintf(path, sizeof(path), "/sys/class/net/%s/carrier", iface);
+    cf = fopen(path, "r");
+    if (!cf) return 0;
+    if (!fgets(v, sizeof(v), cf)) v[0] = 0;
+    fclose(cf);
+    return v[0] == '1';
+}
+
 /* "iface=name|kind|ip|mask|mac|up|rx|tx|rxerr|txerr" as a JSON object body. */
 static void write_overview_iface(FILE *f, const char *line) {
     char copy[256], *field[10], *p;
@@ -9677,7 +9695,10 @@ static void write_overview_iface(FILE *f, const char *line) {
     json_write_opt_number(f, "rxErrors", field[8]);
     json_write_opt_number(f, "txErrors", field[9]);
     if (strcmp(field[1], "wired") == 0) {
-        usb_eth_link(field[0], &speed, &duplex);
+        int carrier = strcmp(field[5], "1") == 0 && overview_carrier(field[0]);
+        fprintf(f, ",\"carrier\":%s", carrier ? "true" : "false");
+        /* Without a link the driver may still report the last speed. */
+        if (carrier) usb_eth_link(field[0], &speed, &duplex);
         if (speed > 0) fprintf(f, ",\"speedMbps\":%d,\"fullDuplex\":%s", speed, duplex ? "true" : "false");
         else fputs(",\"speedMbps\":null,\"fullDuplex\":null", f);
     }

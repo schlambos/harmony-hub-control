@@ -160,7 +160,9 @@ export function wiredRows(overview) {
   const e = overview?.wired;
   if (!e) return [["Ethernet", "No adapter"]];
   const rows = [["Interface", e.interface]];
-  rows.push(["Link", !e.up ? "Down" : e.speedMbps ? `${e.speedMbps} Mb/s${e.fullDuplex ? ", full duplex" : e.fullDuplex === false ? ", half duplex" : ""}` : "Up"]);
+  // carrier: the cable's link ("up" is only the interface's flag). Hubs
+  // that don't report it show the flag, as before.
+  rows.push(["Link", !e.up ? "Down" : e.carrier === false ? "No link (check the cable)" : e.speedMbps ? `${e.speedMbps} Mb/s${e.fullDuplex ? ", full duplex" : e.fullDuplex === false ? ", half duplex" : ""}` : "Up"]);
   rows.push(["Address", `${addressText(e)}${e.ip ? ` · ${e.mode === "static" ? "static" : "DHCP"}` : ""}`]);
   const priority = priorityText(e, overview);
   if (priority) rows.push(["Priority", priority]);

@@ -1201,10 +1201,12 @@ from `usb_eth_service.sh overview`; read-only): `wifi` (`interface`, `ip`,
 `netmask`, `mac`, `up`, traffic and error counters, `ssid`, `state`, `bssid`,
 `security`, `cipher`, `standard`, `frequencyGhz`, `bitRate`, `quality`,
 `signalDbm`, `noiseDbm`, `txPowerDbm`, `suspended`), `wired` (the same
-interface fields plus `speedMbps`, `fullDuplex` and `mode`) or `null`, `routes`
-(each `destination`, `gateway`, `netmask`, `flags`, `metric`, `interface`),
-`dns`, `lanInterface`, `gateway` and `cloudBlocker`. `available` is false if
-the service isn't installed.
+interface fields plus `carrier`, the link from
+`/sys/class/net/<iface>/carrier`, false while the interface is down;
+`speedMbps` and `fullDuplex`, `null` without a link; and `mode`) or `null`,
+`routes` (each `destination`, `gateway`, `netmask`, `flags`, `metric`,
+`interface`), `dns`, `lanInterface`, `gateway` and `cloudBlocker`. `available`
+is false if the service isn't installed.
 
 ## State changes (cheap liveness)
 

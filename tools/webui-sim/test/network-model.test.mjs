@@ -85,6 +85,10 @@ describe("network overview model", () => {
   it("describes the adapter and what ties them together", () => {
     const rows = Object.fromEntries(wiredRows(overview));
     assert.equal(rows.Link, "100 Mb/s, full duplex");
+    // Unplugged: the interface stays up, and a retained speed isn't a link.
+    const unplugged = Object.fromEntries(wiredRows({ ...overview, wired: { ...overview.wired, carrier: false } }));
+    assert.equal(unplugged.Link, "No link (check the cable)");
+    assert.equal(Object.fromEntries(wiredRows({ ...overview, wired: { ...overview.wired, up: false } })).Link, "Down");
     assert.equal(rows.Address, "192.168.1.77/24 (mask 255.255.255.0) · DHCP");
     assert.equal(rows.Priority, "Preferred: carries local traffic (metric 0)");
     assert.equal(rows["MAC address"], "02:00:00:AA:BB:CC");

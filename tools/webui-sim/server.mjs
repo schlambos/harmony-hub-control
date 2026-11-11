@@ -823,7 +823,7 @@ function simNetworkOverview() {
       quality: "82/94", signalDbm: -66, noiseDbm: -95, txPowerDbm: 11, suspended: st.wifiSuspended
     },
     wired: st.ifname ? {
-      interface: st.ifname, ip: st.ipv4 || null, netmask: st.netmask, mac: "02:00:00:aa:bb:cc", up: st.carrier,
+      interface: st.ifname, ip: st.ipv4 || null, netmask: st.netmask, mac: "02:00:00:aa:bb:cc", up: true, carrier: st.carrier,
       rxBytes: st.rxBytes, txBytes: st.txBytes, rxErrors: 0, txErrors: 0,
       speedMbps: st.speedMbps, fullDuplex: st.fullDuplex, mode: st.ipMode
     } : null,
