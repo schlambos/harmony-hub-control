@@ -1,0 +1,193 @@
+{
+  "_about": "A hub that was never set up, as hardware showed it (hub firmware 4.15.600). `blank` is /api/activity-config once the five empty base resources exist and one IR device was added. `proven` is the setup the same hub ran its first activity from, started by a paired Smart Control's TV button: the wizard's first activity plus the 16414Root map, which had to be added by hand then.",
+  "blank": {
+    "activityList": {
+      "Activities": []
+    },
+    "mapList": {
+      "ButtonMaps": []
+    },
+    "functionList": {
+      "FunctionMaps": []
+    },
+    "deviceList": {
+      "DevicesWithFeatures": [
+        {
+          "Device": {
+            "DongleIndex": 0,
+            "InterDeviceDelay": 500,
+            "HoldInterKeyDelay": 100,
+            "DeviceType": 2,
+            "RegisterSection": null,
+            "ContentProfileKey": 93387741,
+            "DeviceOrder": 0,
+            "DeviceProfileUri": "",
+            "SetupState": 1,
+            "DeviceSearchType": -1,
+            "GlobalDeviceVersionId-": 0,
+            "DeviceTypeDisplayName": "Television",
+            "FriendlyName": null,
+            "Transport": 1,
+            "PressMinRepeats": 3,
+            "PrivateAddType": 1,
+            "RegionalCharset": null,
+            "Tokens": null,
+            "BTAddress": null,
+            "DongleRFID": 0,
+            "AutoDetectedDevice": null,
+            "GlobalLanguageVersionId-": 0,
+            "ParentDeviceId": null,
+            "DecodedEdid": null,
+            "DefaultPressMinRepeats": 3,
+            "ParentDeviceModel": "",
+            "RenewSection": null,
+            "IsMultiCode": false,
+            "GroupName": null,
+            "DefaultInterDeviceDelay": 0,
+            "ParentDevice-": 0,
+            "DeviceAddedDate": "/Date(1794387741000+0000)/",
+            "ParentDeviceManufacturer": "Test",
+            "AppLaunchConfigs": null,
+            "PictureId": null,
+            "IsKeyboardAssociated": false,
+            "IsScartCableSupported": false,
+            "Manufacturer": "Test",
+            "Icon": 2,
+            "Id-": 93387741,
+            "IsInterKeyDelayOptimized": false,
+            "SuggestedDisplay": "DEFAULT",
+            "ControlPort": 7,
+            "EncodedEdid": null,
+            "InterKeyDelay": 300,
+            "DeviceClassification": 0,
+            "DeviceCapabilitiesWithPriority": [],
+            "CopiedDeviceSource": -1,
+            "State": 1,
+            "HoldInterDeviceDelay": 0,
+            "Name": "Test TV",
+            "Model": "IR-1",
+            "ActivityIds": null,
+            "Characterization": 0,
+            "HoldMinRepeats": -1,
+            "DefaultInterKeyDelay": 0
+          },
+          "Commands": [
+            {
+              "Raw": null,
+              "Id-": 42387799,
+              "KeyCode": "G:Toshiba 32 Bit:(0x20DF10EF)(Repeat)():3",
+              "DateTaught": "/Date(1794387799000+0000)/",
+              "FunctionId": null,
+              "Parameters": null,
+              "Name": "Power",
+              "FunctionGroupId": 0,
+              "TransportType": 1,
+              "ProtocolId": 2,
+              "CommandTypeId": "",
+              "IsLearned": true
+            }
+          ],
+          "DeviceFeatures": []
+        }
+      ]
+    }
+  },
+  "proven": {
+    "activityList": {
+      "Activities": [
+        {
+          "DefaultStationName": null,
+          "IsTuningDefault": false,
+          "AccountId-": 0,
+          "Alternatives": [],
+          "Icon": null,
+          "EnterActions": [],
+          "IsDefault": false,
+          "LeaveActions": [],
+          "BaseImageUri": null,
+          "IsMultiZone": false,
+          "StartScreen": null,
+          "SuggestedDisplay": null,
+          "DefaultStation": null,
+          "ActivityGroup": 1,
+          "DateCreated": "/Date(1794387845732+0000)/",
+          "ActivityDisplayName": "Watch TV",
+          "Zones": [],
+          "ImageKey": null,
+          "State": 0,
+          "Id-": 1878029714,
+          "ActivityOrder": 0,
+          "Name": "Watch TV",
+          "Roles": [
+            {
+              "DeviceId-": 93387741,
+              "__type": "DisplayActivityRole",
+              "Id-": 1878029715,
+              "SelectedInput": null,
+              "PowerOnOrder": 1,
+              "NextDevicePowerOnDelay": 2500,
+              "PowerOffOrder": 1
+            }
+          ],
+          "DateModified": "/Date(1794387845732+0000)/",
+          "Type": 1,
+          "DefaultChannel": null
+        }
+      ]
+    },
+    "mapList": {
+      "ButtonMaps": [
+        {
+          "ButtonMapId-": 52944090,
+          "ActivityId-": 1878029714,
+          "Sequences": [],
+          "ButtonMapSurfaceId-": null,
+          "__type": "ActivityButtonMap",
+          "Buttons": [],
+          "ButtonMapIdentifier": "16414Activity1878029714",
+          "DateModified": "/Date(1794387845732+0000)/",
+          "RemoteId-": null,
+          "SurfaceId-": null
+        },
+        {
+          "ButtonMapId-": 52944091,
+          "Buttons": [
+            {
+              "ButtonLongPressAction": null,
+              "__type": "HardRemoteButton",
+              "ButtonKey": "WatchTVActivity",
+              "ButtonState": 1,
+              "FunctionGroupType": 0,
+              "ButtonDoublePressAction": null,
+              "ButtonAction": {
+                "__type": "ButtonActivityAction",
+                "ActivityId-": 1878029714,
+                "Order": 0,
+                "EventType": 1,
+                "Id": 0
+              },
+              "ButtonId": 1878029716
+            }
+          ],
+          "ButtonMapSurfaceId-": null,
+          "RemoteId-": null,
+          "Sequences": null,
+          "ButtonMapIdentifier": "16414Root",
+          "DateModified": "/Date(1794388107046+0000)/",
+          "__type": "RootButtonMap",
+          "SurfaceId-": null
+        }
+      ]
+    },
+    "functionList": {
+      "FunctionMaps": [
+        {
+          "UIModeName": "Functions.UserConfigurator.1878029714",
+          "__type": "ActivityFunctionMap",
+          "ActivityId-": 1878029714,
+          "FunctionGroups": []
+        }
+      ]
+    }
+  }
+}

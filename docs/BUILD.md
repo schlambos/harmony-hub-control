@@ -20,7 +20,7 @@ exact SHA-256 digests and sizes are:
 
 | Binary | Size | SHA-256 |
 | --- | --- | --- |
-| `codex_webui` | 1284836 | `4448a527240d2b2e566c21d9edf5feed3b62f1ddcae7f671582d5cd388bb9a1d` |
+| `codex_webui` | 1285956 | `ac4a7dfb4a32bec78213fb96759e581cda17aedb753cbc7457a8061d1d90ceec` |
 | `codex_dhcpd` | 58328 | `e9db51f4691511f1ae10182143518e758fc7aca0a84994fe9be602be37957592` |
 | `codex_portal` | 76724 | `1596f6cac03dad4ce0254ac118de5527c41789f10c7bc95357860d0d96c61b5f` |
 | `dropbearmulti` | 577296 | `e2ea632aed8b31dc5ea56b9673cbd983ec83260a97d33f891a0cebf51d5c6c8d` |
@@ -76,7 +76,7 @@ Both regenerators reproduce the committed headers byte-for-byte.
 Pinned source blobs:
 
 - `payload/source/codex_webui.c` — `8f7840243dee97daace31128f4ef6cc429fa5e77`
-- `payload/source/harmony_shell_assets.h` — `4667f242645bda5713b96bde5d92783b2f12f5a6`
+- `payload/source/harmony_shell_assets.h` — `79738e385878b5699c1a5ee53cfaa9d9bba99ed1`
 - `payload/source/activity_ui_assets.h` — `f68a2bce58e71242b2480b2d483f405484c036da`
 - `payload/source/remote_skin_jpg.h` — `419611c5ff0713f1f5de2dd684d699f6d77238d5`
 
@@ -88,8 +88,8 @@ Pinned source blobs:
 ```
 
 Result must be `ELF 32-bit MSB executable, MIPS, MIPS32 rel2, statically
-linked, stripped`, size 1284836, SHA-256
-`4448a527240d2b2e566c21d9edf5feed3b62f1ddcae7f671582d5cd388bb9a1d`.
+linked, stripped`, size 1285956, SHA-256
+`ac4a7dfb4a32bec78213fb96759e581cda17aedb753cbc7457a8061d1d90ceec`.
 
 To compare against a Homebrew-built box binary, strip the compiler stamp from
 both first:
@@ -315,7 +315,7 @@ python3 tools/installer_contract_smoke.py         # the installers' contract, wi
 python3 tools/build_hal_remotes.py --check        # the two-screen hal edits are what their source builds (needs Zig 0.16.0)
 HAL_STOCK=<stock hal> python3 tools/hal_remotes/test_hal_remotes.py   # hal's own HOT code, patched, under Unicorn (needs unicorn, pyelftools)
 python3 -m unittest discover -s docker/tests      # the Docker manager
-for t in barrier device-screens ha-devices androidtv-devices touch-controls; do
+for t in barrier device-screens ha-devices androidtv-devices touch-controls fresh-hub; do
   luajit tools/touch-validator/codexactivity-$t-test.lua
 done                                              # the hub's writer: barrier, screens, Home Assistant, network TVs, press modes
 python3 tools/androidtv/androidtv_smoke.py --codex-androidtv build/output/codex_androidtv-native   # codex_androidtv against a fake TV

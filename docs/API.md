@@ -39,6 +39,16 @@ Returns `200` with `revision`, `activityList`, `mapList`, `functionList`,
 `deviceList`, `haStateVersion` and `haState` (`version`, `stale`, `states`).
 A resource file that cannot be read gives `503`.
 
+A hub that was never set up has none of these resources. On such a hub the
+`codexactivity` plugin creates `ProtocolList`, `DeviceList`, `ActivityList`,
+`FunctionList` and `MapList` when it starts, each as its empty list
+(`{"Protocols":[]}`, `{"DevicesWithFeatures":[]}`, `{"Activities":[]}`,
+`{"FunctionMaps":[]}`, `{"ButtonMaps":[]}`), through the firmware's resource
+manager so each gets its index entry. It writes only when every one of the
+five is absent or already empty, in local mode (cloud blocker on) and with no
+sync running: a hub with any setup is left as it is, and a resource that
+exists is never rewritten.
+
 Read or start the current activity (`render_activity_state_json()`,
 `render_activity_run_json()`):
 
@@ -1104,7 +1114,13 @@ buttons (`WatchTVActivity`, `MovieActivity`, `MusicActivity`), each with a
 `ButtonActivityAction` on press (`EventType` 1) and long press
 (`EventType` 2), and answers keys while everything is off. So a Companion
 never reads `16414Root`. The engine adds `PowerOffActivity` to the root
-map itself. The web app's Remotes page edits each paired remote's activity
+map itself. With no root map the engine drops every press from that remote
+while nothing runs, so it can't start an activity. The web wizard makes a
+missing one when it saves an activity that has that remote's
+`<EquadID>Activity<id>` map, with that activity on the button for its kind
+(TV, Movie or Music; a game takes TV), and never changes one that exists. A
+remote with a screen (16417) has no activity buttons and gets no root map.
+The web app's Remotes page edits each paired remote's activity
 buttons (`#activitybuttons/<EquadID>`) and keys per activity
 (`#touch/<id>/<EquadID>`), all through `/api/activity-save`. A key edit
 writes every remote's map in one save unless the owner sets that key for

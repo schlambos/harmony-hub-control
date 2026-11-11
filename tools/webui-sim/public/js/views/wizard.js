@@ -5,6 +5,8 @@
    the fields the wizard doesn't show. */
 
 import * as hub from "../state.js";
+import { getRemotes } from "../api.js";
+import { parseRfInfo } from "./remotes-model.js";
 import {
   ACTIVITY_TYPES,
   BUTTON_SOURCE,
@@ -581,16 +583,30 @@ export function createWizardView(section) {
     else save();
   }
 
+  /* The paired remotes' EquadIDs, so a remote the hub has no maps for yet
+     gets its own; none when the radio can't say (a pairing window is open,
+     or hal didn't answer), which saves as it did before. */
+  async function pairedRemotes() {
+    try {
+      const reply = await getRemotes();
+      return (parseRfInfo(reply?.reply)?.remotes ?? []).map((r) => r.equadId);
+    } catch (_) {
+      return [];
+    }
+  }
+
   async function save() {
     saving = true;
     render();
     try {
+      const remotes = await pairedRemotes();
       const outcome = await saveDraft({
         config: hub.state.config,
         revision: hub.state.config?.revision,
         // A job must have a device; a broken one from old data is left out.
         draft: { ...draft, roles: draft.roles.filter((r) => r.deviceId) },
         editId: editId || null,
+        remotes,
       });
       dirty = false;
       await hub.reloadConfig();

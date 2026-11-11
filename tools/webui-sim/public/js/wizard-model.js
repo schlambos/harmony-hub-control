@@ -11,6 +11,8 @@
    on-screen buttons, number pad, gestures and sequences belong to the Touch
    editor. Every other ButtonMap (second surfaces, conditional 16420 keyboard
    HID maps, root/device maps, other activities) is preserved byte-for-byte.
+   The one map it adds beside those: a remote without a screen that has an
+   activity map and no <EquadID>Root gets one (see ensureRootMaps).
    When a KeyboardTextEntryActivityRole is present the wizard also ensures
    exactly one 16420Activity<ID> map exists, matching the advanced editor's
    reconcile/validate contract. */
@@ -800,6 +802,7 @@ export function sameButton(left, right) {
    EquadIDs. hal names their keys from the same table as the Smart Control's,
    so they take the wizard's 16414 keys as they are, number keys included. */
 export const COMPANION_REMOTES = Object.freeze(["16422", "16423"]);
+const SMART_CONTROL_REMOTE = "16414";
 
 /* A wizard key's name on remote `prefix`, or "" when that remote has no such key. */
 function keyNameOn(prefix, buttonKey) {
@@ -959,8 +962,58 @@ function seedOneTouchScreen({ target, activityId, draft, config, alloc }) {
   target.DateModified = harmonyDate();
 }
 
-/* Pure graph builder used by saveDraft and unit tests. Does not touch the network. */
-export function buildActivityGraph({ config, draft, editId }) {
+/* The three activity buttons of a remote without a screen, by the kind of
+   activity each is named for. A game, which has no button, takes TV's. */
+const ACTIVITY_BUTTON_BY_TYPE = { 1: "WatchTVActivity", 2: "MovieActivity", 4: "MusicActivity" };
+
+/* A remote without a screen answers its activity buttons, and every key
+   while nothing runs, from <EquadID>Root; with no such map the engine drops
+   those presses, so the remote can't start anything (seen on a fresh hub).
+   Logitech's setup made that map; a hub set up here has none until this
+   does. So each such remote that has a map for this activity and no root
+   map gets one, with this activity on its button. A root map that exists
+   is never touched: Settings > Remotes > Activity buttons edits those.
+   Screen remotes (16417) have no activity buttons, and Logitech gave them
+   no root map. Same shapes as remotes-model's buildActivityButtonsMapList. */
+function ensureRootMaps({ buttonMaps, activity, alloc }) {
+  const activityId = activity["Id-"];
+  for (const remote of [SMART_CONTROL_REMOTE, ...COMPANION_REMOTES]) {
+    const rootId = `${remote}Root`;
+    if (buttonMaps.some((m) => String(m?.ButtonMapIdentifier ?? "") === rootId)) continue;
+    const own = buttonMaps.find((m) => String(m?.ButtonMapIdentifier ?? "") === `${remote}Activity${activityId}`);
+    if (!own) continue;
+    buttonMaps.push({
+      "ButtonMapId-": alloc.mapId(),
+      Buttons: [{
+        ButtonId: alloc.id(),
+        __type: "HardRemoteButton",
+        ButtonAction: {
+          __type: "ButtonActivityAction",
+          "ActivityId-": Number(activityId),
+          Order: 0,
+          EventType: 1,
+          Id: 0,
+        },
+        ButtonDoublePressAction: null,
+        FunctionGroupType: 0,
+        ButtonState: 1,
+        ButtonKey: ACTIVITY_BUTTON_BY_TYPE[Number(activity.Type)] ?? ACTIVITY_BUTTON_BY_TYPE[1],
+        ButtonLongPressAction: null,
+      }],
+      "ButtonMapSurfaceId-": own["ButtonMapSurfaceId-"] ?? null,
+      "RemoteId-": own["RemoteId-"] ?? null,
+      "SurfaceId-": own["SurfaceId-"] ?? null,
+      __type: "RootButtonMap",
+      ButtonMapIdentifier: rootId,
+      DateModified: harmonyDate(),
+      Sequences: null,
+    });
+  }
+}
+
+/* Pure graph builder used by saveDraft and unit tests. Does not touch the network.
+   `remotes`: the EquadIDs of the remotes paired with the hub, when known. */
+export function buildActivityGraph({ config, draft, editId, remotes = [] }) {
   const alloc = createAllocator(config);
 
   const activityList = cloneJsonResource(config?.activityList ?? { Activities: [] });
@@ -1014,12 +1067,18 @@ export function buildActivityGraph({ config, draft, editId }) {
      running activity, and the surface copy above misses a Companion's map
      when it shares the Smart Control's surface ids (seen on a hub in #79).
      So each Companion the hub has maps for gets one, modelled on another
-     of its activity maps, and the mirror below fills it. */
+     of its activity maps, and the mirror below fills it. A paired Companion
+     the hub has no map for yet (a fresh hub) starts from the wizard's map. */
+  const paired = new Set((Array.isArray(remotes) ? remotes : []).map(String));
   for (const prefix of COMPANION_REMOTES) {
     const id = `${prefix}Activity${activityId}`;
     if (mergedMaps.some((m) => String(m?.ButtonMapIdentifier ?? "") === id)) continue;
-    const sibling = mergedMaps.find((m) => String(m?.ButtonMapIdentifier ?? "").startsWith(`${prefix}Activity`));
-    if (sibling) mergedMaps.push(cloneEmptySurfaceMap(sibling, activityId, alloc));
+    const sibling = mergedMaps.find((m) => String(m?.ButtonMapIdentifier ?? "").startsWith(`${prefix}Activity`))
+      ?? (paired.has(prefix) ? wizardMap : null);
+    if (!sibling) continue;
+    const made = cloneEmptySurfaceMap(sibling, activityId, alloc);
+    made.ButtonMapIdentifier = id;
+    mergedMaps.push(made);
   }
   for (const prefix of ["16417", ...COMPANION_REMOTES]) {
     mirrorHardButtons({ buttonMaps: mergedMaps, activityId, wizardMap, previousWizardMap, alloc, prefix });
@@ -1027,6 +1086,7 @@ export function buildActivityGraph({ config, draft, editId }) {
   if (!editId) {
     seedTouchOnScreenButtons({ buttonMaps: mergedMaps, activityId, draft, config, alloc });
   }
+  ensureRootMaps({ buttonMaps: mergedMaps, activity, alloc });
 
   const existingFunction = functionMaps.find((m) => isActivityFunctionMap(m, activityId));
   if (!existingFunction) {
@@ -1046,8 +1106,8 @@ export function buildActivityGraph({ config, draft, editId }) {
 /* Build the three replacement resources for the draft and POST them.
    editId: when set, that activity is updated in place and only its wizard-owned
    16414 map is replaced; otherwise a new activity is appended. */
-export async function saveDraft({ config, revision, draft, editId }) {
-  const graph = buildActivityGraph({ config, draft, editId });
+export async function saveDraft({ config, revision, draft, editId, remotes }) {
+  const graph = buildActivityGraph({ config, draft, editId, remotes });
   const payload = {
     baseRevision: revision,
     activityList: graph.activityList,

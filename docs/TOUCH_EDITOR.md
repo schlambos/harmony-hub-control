@@ -134,7 +134,12 @@ The activity wizard (web and Android) owns each activity's
 the web wizard also copies them to a Companion's `1642xActivity<id>` map
 (only the keys an edit changed, or every key when that map has none), and
 makes that map when the activity has none: without one the engine drops
-every press from the Companion in that activity.
+every press from the Companion in that activity. A paired Companion the hub
+has no map for at all (a hub that was never set up) gets its first one from
+the wizard's map. The web wizard also makes a missing `16414Root`,
+`16422Root` or `16423Root` for a remote whose activity map it saves, holding
+that activity on one activity button; a root map that exists is left to
+Settings → Remotes → Activity buttons.
 The Touch & HA Control Studio (`#touch/<id>`) owns the on-screen rows, hard
 keys and gestures of `16417Activity<id>` directly. Opened for a remote
 without a screen (`#touch/<id>/<EquadID>`, from Settings → Remotes), the

@@ -2772,10 +2772,96 @@ local function reloadRequestedResources()
   log.notice("codexactivity: reloaded resources requested by codex_webui")
 end
 
+-- A hub that was never set up has none of the base resources, and
+-- codex_webui answers /api/activity-config with 503 until all of them exist.
+-- These are the lists with nothing in them, in the stock reader's own keys
+-- (userconfigreader.lua). They are saved as text: json.encode can't tell an
+-- empty array from an empty object.
+local BASE_RESOURCE_DIR = "/data/resources/"
+local EMPTY_BASE_RESOURCES = {
+  {name = "ProtocolList", key = "Protocols", text = '{"Protocols":[]}'},
+  {name = "DeviceList", key = "DevicesWithFeatures", text = '{"DevicesWithFeatures":[]}'},
+  {name = "ActivityList", key = "Activities", text = '{"Activities":[]}'},
+  {name = "FunctionList", key = "FunctionMaps", text = '{"FunctionMaps":[]}'},
+  {name = "MapList", key = "ButtonMaps", text = '{"ButtonMaps":[]}'}
+}
+local blankHubChecked = false
+
+-- "absent": no file and no index entry. "empty": the list with nothing in
+-- it. "kept": anything else, which marks a hub that has been set up.
+local function baseResourceState(entry)
+  local status, _, resource = resources.getResource(entry.name)
+  if tostring(status or "") == "200" then
+    local list = type(resource) == "table" and resource[entry.key] or nil
+    if type(list) == "table" and next(list) == nil then
+      return "empty"
+    end
+    return "kept"
+  end
+  if readFile(BASE_RESOURCE_DIR .. entry.name .. ".json") ~= nil or
+      resources.getHubEtag(entry.name) ~= nil then
+    return "kept"
+  end
+  return "absent"
+end
+
+-- Give a blank hub its empty base resources, through the resource manager so
+-- each gets its index entry. Nothing is written unless every base resource is
+-- absent or empty, so a hub with any setup at all is left exactly as it is;
+-- a resource that exists is never rewritten. Only in local mode, like every
+-- other write here; it waits out a stock sync and runs once per boot.
+local function seedBlankHub()
+  if blankHubChecked then
+    return
+  end
+  if not blockerActive() or resources.isAnySyncInProgress() then
+    return
+  end
+  blankHubChecked = true
+  local absent = {}
+  for _, entry in ipairs(EMPTY_BASE_RESOURCES) do
+    local state = baseResourceState(entry)
+    if state == "kept" then
+      return
+    end
+    if state == "absent" then
+      table.insert(absent, entry)
+    end
+  end
+  if #absent == 0 then
+    return
+  end
+  local names = {}
+  for _, entry in ipairs(absent) do
+    local etag = localEtag()
+    tokenCounter = tokenCounter + 1
+    local ok, detail = resources.saveResource(
+      "application/json", etag, entry.text, entry.name, nil, localHetag()
+    )
+    if not ok or baseResourceState(entry) ~= "empty" then
+      log.warning("codexactivity: could not create an empty", entry.name,
+        tostring(detail or "verification failed"))
+      return
+    end
+    table.insert(names, entry.name)
+  end
+  -- The engine loads them through the reload codex_webui's own edits use.
+  local flag = io.open(RESOURCE_RELOAD_FLAG, "w")
+  if flag then
+    flag:write(table.concat(names, "\n"), "\n")
+    flag:close()
+  end
+  log.notice("codexactivity: blank hub; created empty", table.concat(names, ", "))
+end
+
 local function workerLoop()
   os.remove(REQUEST_FILE)
   os.remove(RESPONSE_FILE)
   while not stopRequested do
+    local seeded, seedError = pcall(seedBlankHub)
+    if not seeded then
+      log.error("codexactivity blank hub setup failed:", tostring(seedError))
+    end
     local raw = readFile(REQUEST_FILE)
     if raw then
       os.remove(REQUEST_FILE)
