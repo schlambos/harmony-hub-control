@@ -1668,10 +1668,17 @@ class PythonInstallerFlash(unittest.TestCase):
     def test_root_tool_dropbear_kept_while_ours_is_damaged(self):
         """[PYTHON BEHAVIORAL] while our Dropbear isn't a known build (a
         damaged copy), the root tool's working one is never offered for removal."""
+        # A root copy that isn't a listed build is never a link source, so
+        # only the known-build check on ours can keep it.
+        argv = self.harness.base_argv("--preflight-only", "--remove-root-tool-leftovers")
         prime_current_hub(self.hub)
-        self.hub.fs[INST.ROOT_TOOL_DROPBEAR] = {"data": self.DROPBEAR, "mode": "755"}
+        self.hub.fs[INST.ROOT_TOOL_DROPBEAR] = {"data": self.OTHER_BUILD, "mode": "755"}
+        code, stdout, stderr = self.harness.run(argv)
+        self.assertEqual(code, 0, stderr or stdout)
+        self.assertIn(f"root_tool_leftover bytes={len(self.OTHER_BUILD)} files=1 path={INST.ROOT_TOOL_DROPBEAR}", stdout)
+
         self.hub.fs[INST.DROPBEAR_DEST] = {"data": self.DROPBEAR[:4096], "mode": "755"}
-        code, stdout, stderr = self.harness.run(self.harness.base_argv("--preflight-only", "--remove-root-tool-leftovers"))
+        code, stdout, stderr = self.harness.run(argv)
         self.assertEqual(code, 0, stderr or stdout)
         self.assertNotIn(f"path={INST.ROOT_TOOL_DROPBEAR}", stdout)
         self.assertIn(INST.ROOT_TOOL_DROPBEAR, self.hub.fs)
