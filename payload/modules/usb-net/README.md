@@ -27,7 +27,7 @@ no chipset is claimed traffic-tested (see docs/USB_ETHERNET.md).
 `asix.ko` with this directory's `usbnet.ko` is **traffic-tested** on hub
 hardware with an AX88772C (TRENDnet TU2-ET100, `0b95:772b`): DHCP, wired
 traffic in both directions counter-verified on `eth2` (about 6,000 packets
-each way, 0 errors) while Wi-Fi sent 1 packet, 100 Mb/s full duplex. The same
+each way, 0 errors; `eth2`'s TX counter carried the replies), 100 Mb/s full duplex. The same
 driver code had run for over a day before with a `usbnet.ko` from its own
 tree (73 receive errors in 106,729 packets over 2.7 h, 0.07%); only the
 `usbnet_*` import CRCs differ in the shipped `asix.ko`. Of its other 35
