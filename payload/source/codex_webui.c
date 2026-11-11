@@ -4,6 +4,7 @@
 #include <errno.h>
 #include <limits.h>
 #include <fcntl.h>
+#include <net/if.h>
 #include <netdb.h>
 #include <netinet/in.h>
 #include <signal.h>
@@ -12,6 +13,7 @@
 #include <string.h>
 #include <strings.h>
 #include <sys/file.h>
+#include <sys/ioctl.h>
 #ifdef __linux__
 #include <sys/prctl.h>
 #endif
@@ -1130,6 +1132,24 @@ static const char *json_top_member(const char *json, const char *key) {
         }
     }
     return NULL;
+}
+
+/* A top-level member's value as a plain JSON string (no escapes): 1, with
+ * it in out; 0 if the member is missing; -1 if it isn't a plain string or
+ * doesn't fit. */
+static int json_top_string(const char *json, const char *key, char *out, size_t outlen) {
+    const char *v = json_top_member(json, key);
+    size_t n = 0;
+    if (outlen) out[0] = 0;
+    if (!v) return 0;
+    if (*v != '"') return -1;
+    for (v++; *v && *v != '"'; v++) {
+        if (*v == '\\' || n + 1 >= outlen) return -1;
+        out[n++] = *v;
+    }
+    if (*v != '"') return -1;
+    out[n] = 0;
+    return 1;
 }
 
 /* A top-level boolean member: 1, 0, or def when missing or not true/false. */
@@ -9312,6 +9332,12 @@ struct usb_eth_state {
     char service_state[32];
     char service_reason[48];
     char route_mode[16];
+    /* Using the cable (usb_eth_service.sh status). */
+    char lan_dev[16], wifi_ip[20], netmask[20], router[20], dns[128], ip_mode[8];
+    int wifi_off, wifi_suspended, wifi_watchdog, gateway_lost;
+    char wifi_off_blocked[16];
+    int speed, full_duplex;
+    char rx_bytes[24], tx_bytes[24];
 };
 
 static int usb_eth_conf_enabled(void) {
@@ -9322,15 +9348,66 @@ static int usb_eth_conf_enabled(void) {
     return 0;
 }
 
+/* A value with only safe characters kept (the service reads some from
+ * sysfs and usbfs). */
+static void usb_eth_sanitize(char *s) {
+    for (; *s; s++) {
+        unsigned char c = (unsigned char)*s;
+        if (!isalnum(c) && !strchr(" .:-_/()+,&", c)) *s = '?';
+    }
+}
+
+/* `KEY=` from text (usb_eth.conf or a key=value listing), sanitized. */
+static void usb_eth_value(const char *text, const char *key, char *out, size_t outlen) {
+    config_line_value(text, key, out, outlen);
+    usb_eth_sanitize(out);
+}
+
+/* Link speed and duplex from the driver (BusyBox has no ethtool); 0 when
+ * the driver doesn't say. */
+static void usb_eth_link(const char *iface, int *speed, int *full_duplex) {
+    struct {
+        unsigned int cmd, supported, advertising;
+        unsigned short speed;
+        unsigned char duplex, port, phy_address, transceiver, autoneg, mdio_support;
+        unsigned int maxtxpkt, maxrxpkt;
+        unsigned short speed_hi;
+        unsigned char eth_tp_mdix, reserved2;
+        unsigned int lp_advertising, reserved[2];
+    } ecmd;
+    struct ifreq ifr;
+    int s;
+    *speed = 0;
+    *full_duplex = 0;
+    if (!iface[0] || strlen(iface) >= sizeof(ifr.ifr_name)) return;
+    s = socket(AF_INET, SOCK_DGRAM, 0);
+    if (s < 0) return;
+    memset(&ecmd, 0, sizeof(ecmd));
+    memset(&ifr, 0, sizeof(ifr));
+    ecmd.cmd = 1; /* ETHTOOL_GSET */
+    snprintf(ifr.ifr_name, sizeof(ifr.ifr_name), "%s", iface);
+    ifr.ifr_data = (char *)&ecmd;
+    if (ioctl(s, 0x8946 /* SIOCETHTOOL */, &ifr) == 0 && ecmd.speed != 0xffff && ecmd.speed != 0) {
+        *speed = ecmd.speed | (ecmd.speed_hi << 16);
+        *full_duplex = ecmd.duplex == 1;
+    }
+    close(s);
+}
+
 static void read_usb_eth_state(struct usb_eth_state *st) {
-    char out[1024], *line, *save = NULL;
+    char out[2048], *line, *save = NULL, path[96], num[24];
+    const char *cmd;
     memset(st, 0, sizeof(*st));
     st->enabled = usb_eth_conf_enabled();
     if (access(USB_ETH_HELPER, X_OK) != 0) {
         snprintf(st->kernel, sizeof(st->kernel), "unknown");
         return;
     }
-    if (run_cmd(USB_ETH_HELPER " status 2>/dev/null", out, sizeof(out)) != 0 && !out[0]) {
+    /* The service's status is the helper's plus what the service knows
+     * (how the cable is used); the helper's alone if the service is gone. */
+    cmd = access(USB_ETH_SERVICE, X_OK) == 0 ? USB_ETH_SERVICE " status 2>/dev/null"
+                                              : USB_ETH_HELPER " status 2>/dev/null";
+    if (run_cmd(cmd, out, sizeof(out)) != 0 && !out[0]) {
         snprintf(st->kernel, sizeof(st->kernel), "unknown");
         return;
     }
@@ -9353,7 +9430,25 @@ static void read_usb_eth_state(struct usb_eth_state *st) {
         else if (strcmp(k, "ipv4") == 0) snprintf(st->ipv4, sizeof(st->ipv4), "%s", v);
         else if (strcmp(k, "platform_registered") == 0) st->platform_registered = atoi(v) != 0;
         else if (strcmp(k, "state") == 0) snprintf(st->helper_state, sizeof(st->helper_state), "%s", v);
+        else if (strcmp(k, "lan_dev") == 0) snprintf(st->lan_dev, sizeof(st->lan_dev), "%s", v);
+        else if (strcmp(k, "wifi_ip") == 0) snprintf(st->wifi_ip, sizeof(st->wifi_ip), "%s", v);
+        else if (strcmp(k, "netmask") == 0) snprintf(st->netmask, sizeof(st->netmask), "%s", v);
+        else if (strcmp(k, "router") == 0) snprintf(st->router, sizeof(st->router), "%s", v);
+        else if (strcmp(k, "dns") == 0) snprintf(st->dns, sizeof(st->dns), "%s", v);
+        else if (strcmp(k, "ip_mode") == 0) snprintf(st->ip_mode, sizeof(st->ip_mode), "%s", v);
+        else if (strcmp(k, "wifi_off") == 0) st->wifi_off = atoi(v) != 0;
+        else if (strcmp(k, "wifi_suspended") == 0) st->wifi_suspended = atoi(v) != 0;
+        else if (strcmp(k, "wifi_watchdog") == 0) st->wifi_watchdog = atoi(v) != 0;
+        else if (strcmp(k, "gateway_lost") == 0) st->gateway_lost = atoi(v) != 0;
+        else if (strcmp(k, "wifi_off_blocked") == 0) snprintf(st->wifi_off_blocked, sizeof(st->wifi_off_blocked), "%s", v);
     }
+    usb_eth_sanitize(st->usb_product);
+    usb_eth_sanitize(st->ifname);
+    usb_eth_sanitize(st->lan_dev);
+    usb_eth_sanitize(st->wifi_ip);
+    usb_eth_sanitize(st->netmask);
+    usb_eth_sanitize(st->router);
+    usb_eth_sanitize(st->dns);
     /* The service worker owns startup progress and failure reasons; the
      * helper state is the instantaneous hardware view. The service state
      * wins for display when it exists. */
@@ -9379,6 +9474,13 @@ static void read_usb_eth_state(struct usb_eth_state *st) {
                 snprintf(st->route_mode, sizeof(st->route_mode), "%s", eq + 1);
         }
     }
+    if (st->ifname[0] && strlen(st->ifname) < 32) {
+        snprintf(path, sizeof(path), "/sys/class/net/%s/statistics/rx_bytes", st->ifname);
+        if (read_text(path, num, sizeof(num)) > 0) { num[strcspn(num, "\r\n")] = 0; snprintf(st->rx_bytes, sizeof(st->rx_bytes), "%s", num); }
+        snprintf(path, sizeof(path), "/sys/class/net/%s/statistics/tx_bytes", st->ifname);
+        if (read_text(path, num, sizeof(num)) > 0) { num[strcspn(num, "\r\n")] = 0; snprintf(st->tx_bytes, sizeof(st->tx_bytes), "%s", num); }
+        if (st->carrier) usb_eth_link(st->ifname, &st->speed, &st->full_duplex);
+    }
 }
 
 /* Effective display state: service progress/failure when known, else the
@@ -9387,7 +9489,73 @@ static const char *usb_eth_effective_state(const struct usb_eth_state *st) {
     return st->service_state[0] ? st->service_state : st->helper_state;
 }
 
+static void json_write_opt_string(FILE *f, const char *name, const char *value) {
+    fprintf(f, ",\"%s\":", name);
+    if (value && value[0]) json_write_string(f, value);
+    else fputs("null", f);
+}
+
+/* A whole non-negative number as JSON, or null. */
+static void json_write_opt_number(FILE *f, const char *name, const char *value) {
+    const char *p = value;
+    fprintf(f, ",\"%s\":", name);
+    if (!p || !*p) { fputs("null", f); return; }
+    for (; *p; p++) if (!isdigit((unsigned char)*p)) { fputs("null", f); return; }
+    fputs(value, f);
+}
+
+/* An integer (maybe negative) as JSON, or null. */
+static void json_write_opt_int(FILE *f, const char *name, const char *value) {
+    const char *p = value;
+    fprintf(f, ",\"%s\":", name);
+    if (p && *p == '-') p++;
+    if (!p || !*p) { fputs("null", f); return; }
+    for (; *p; p++) if (!isdigit((unsigned char)*p)) { fputs("null", f); return; }
+    fputs(value, f);
+}
+
+/* A plain dotted quad (no leading zeros, nothing else) as a host-order number. */
+static int parse_ipv4_strict(const char *s, unsigned long *out) {
+    unsigned long v = 0;
+    int part, digits, i;
+    for (i = 0; i < 4; i++) {
+        part = 0;
+        digits = 0;
+        if (s[0] == '0' && isdigit((unsigned char)s[1])) return 0;
+        while (isdigit((unsigned char)*s)) {
+            part = part * 10 + (*s++ - '0');
+            if (++digits > 3 || part > 255) return 0;
+        }
+        if (!digits) return 0;
+        v = (v << 8) | (unsigned long)part;
+        if (i < 3 && *s++ != '.') return 0;
+    }
+    if (*s) return 0;
+    *out = v & 0xffffffffUL;
+    return 1;
+}
+
+/* Space-separated addresses as a JSON array of strings. Only whole dotted
+ * quads: a list cut short must not show "192.168". */
+static void json_write_address_list(FILE *f, const char *list) {
+    char copy[128], *tok, *save = NULL;
+    unsigned long ignored;
+    int first = 1;
+    snprintf(copy, sizeof(copy), "%s", list ? list : "");
+    fputc('[', f);
+    for (tok = strtok_r(copy, " ", &save); tok; tok = strtok_r(NULL, " ", &save)) {
+        if (!parse_ipv4_strict(tok, &ignored)) continue;
+        if (!first) fputc(',', f);
+        json_write_string(f, tok);
+        first = 0;
+    }
+    fputc(']', f);
+}
+
 static void write_usb_eth_json(FILE *f, const struct usb_eth_state *st) {
+    char conf[512], v[64];
+    const char *state = usb_eth_effective_state(st);
+    int operational = strcmp(state, "operational") == 0;
     fprintf(f,
         "{\"ok\":true,\"enabled\":%s,\"supported\":%s,\"kernel\":",
         st->enabled ? "true" : "false",
@@ -9405,13 +9573,48 @@ static void write_usb_eth_json(FILE *f, const struct usb_eth_state *st) {
     fprintf(f, ",\"carrier\":%s,\"ipv4\":", st->carrier ? "true" : "false");
     json_write_string(f, st->ipv4);
     fprintf(f, ",\"platformRegistered\":%s,\"operational\":%s,\"state\":",
-        st->platform_registered ? "true" : "false",
-        strcmp(usb_eth_effective_state(st), "operational") == 0 ? "true" : "false");
-    json_write_string(f, usb_eth_effective_state(st));
+        st->platform_registered ? "true" : "false", operational ? "true" : "false");
+    json_write_string(f, state);
     fputs(",\"reason\":", f);
     json_write_string(f, st->service_reason);
     fputs(",\"routeMode\":", f);
     json_write_string(f, st->route_mode);
+    /* Using the cable. */
+    if (st->speed > 0) fprintf(f, ",\"speedMbps\":%d,\"fullDuplex\":%s", st->speed, st->full_duplex ? "true" : "false");
+    else fputs(",\"speedMbps\":null,\"fullDuplex\":null", f);
+    json_write_opt_string(f, "netmask", st->netmask);
+    json_write_opt_string(f, "router", st->router);
+    fputs(",\"dns\":", f);
+    json_write_address_list(f, st->dns);
+    /* The saved address settings, for the form (kept while on DHCP too). */
+    if (read_text(USB_ETH_CONF, conf, sizeof(conf)) <= 0) conf[0] = 0;
+    fputs(",\"ipMode\":", f);
+    json_write_string(f, strcmp(st->ip_mode, "static") == 0 ? "static" : "dhcp");
+    fputs(",\"staticConfig\":{\"address\":", f);
+    usb_eth_value(conf, "IP_ADDRESS", v, sizeof(v)); json_write_string(f, v);
+    fputs(",\"netmask\":", f);
+    usb_eth_value(conf, "IP_NETMASK", v, sizeof(v)); json_write_string(f, v);
+    fputs(",\"gateway\":", f);
+    usb_eth_value(conf, "IP_GATEWAY", v, sizeof(v)); json_write_string(f, v);
+    fputs(",\"dns\":", f);
+    usb_eth_value(conf, "IP_DNS", v, sizeof(v)); json_write_address_list(f, v);
+    fputs("}", f);
+    /* Working, but on another network than the gateway: an extra address. */
+    fprintf(f, ",\"separateNetwork\":%s",
+        operational && st->ifname[0] && st->lan_dev[0] && strcmp(st->lan_dev, st->ifname) != 0 ? "true" : "false");
+    fprintf(f, ",\"gatewayUnreachable\":%s", st->gateway_lost ? "true" : "false");
+    json_write_opt_string(f, "wifiIp", st->wifi_ip);
+    fprintf(f, ",\"wifiOff\":%s,\"wifiSuspended\":%s,\"wifiNeedsRestart\":%s",
+        st->wifi_off ? "true" : "false", st->wifi_suspended ? "true" : "false",
+        st->wifi_off && !st->wifi_watchdog ? "true" : "false");
+    /* Wi-Fi off wanted but impossible as things are: "noRouter" (cloud
+     * blocker off and no default route through the cable). */
+    fputs(",\"wifiOffBlocked\":", f);
+    if (st->wifi_off && strcmp(st->wifi_off_blocked, "no_router") == 0) json_write_string(f, "noRouter");
+    else fputs("null", f);
+    json_write_opt_number(f, "rxBytes", st->rx_bytes);
+    json_write_opt_number(f, "txBytes", st->tx_bytes);
+    json_write_opt_string(f, "lanInterface", st->lan_dev);
     fputs("}\n", f);
 }
 
@@ -9425,49 +9628,330 @@ static void render_usb_eth_json(int fd) {
     fclose(f);
 }
 
-static void render_usb_eth_set_json(int fd, const struct request *req) {
-    struct usb_eth_state st;
-    char out[512];
-    int want, lock_fd;
+/* GET /api/network-overview: Wi-Fi, both interfaces, the routing table and
+ * DNS, from `usb_eth_service.sh overview` (read-only). Loaded by the Wired
+ * Ethernet page when shown and every few seconds while open, not on every
+ * status poll: it runs wpa_cli, iwconfig, ifconfig and route. */
+
+/* One line's value with control characters dropped (an SSID keeps every
+ * printable character; json_write_string escapes it). */
+static void overview_text(const char *line, char *out, size_t outlen) {
+    size_t n = 0;
+    for (; *line && *line != '\n' && n + 1 < outlen; line++) {
+        unsigned char c = (unsigned char)*line;
+        if (c >= 0x20 && c != 0x7f) out[n++] = (char)c;
+    }
+    out[n] = 0;
+}
+
+/* A "|"-separated overview line's value, with the usual safe characters. */
+static void overview_fields(const char *line, const char *key, char *out, size_t outlen) {
+    char *p;
+    config_line_value(line, key, out, outlen);
+    for (p = out; *p; p++) {
+        unsigned char c = (unsigned char)*p;
+        if (!isalnum(c) && !strchr(" .:-_/|", c)) *p = '?';
+    }
+}
+
+/* "iface=name|kind|ip|mask|mac|up|rx|tx|rxerr|txerr" as a JSON object body. */
+static void write_overview_iface(FILE *f, const char *line) {
+    char copy[256], *field[10], *p;
+    int i = 0, speed = 0, duplex = 0;
+    overview_fields(line, "iface", copy, sizeof(copy));
+    for (p = copy; i < 10; i++) {
+        field[i] = p;
+        p = strchr(p, '|');
+        if (!p) { i++; break; }
+        *p++ = 0;
+    }
+    for (; i < 10; i++) field[i] = "";
+    fputs("{\"interface\":", f);
+    json_write_string(f, field[0]);
+    json_write_opt_string(f, "ip", field[2]);
+    json_write_opt_string(f, "netmask", field[3]);
+    json_write_opt_string(f, "mac", field[4]);
+    fprintf(f, ",\"up\":%s", strcmp(field[5], "1") == 0 ? "true" : "false");
+    json_write_opt_number(f, "rxBytes", field[6]);
+    json_write_opt_number(f, "txBytes", field[7]);
+    json_write_opt_number(f, "rxErrors", field[8]);
+    json_write_opt_number(f, "txErrors", field[9]);
+    if (strcmp(field[1], "wired") == 0) {
+        usb_eth_link(field[0], &speed, &duplex);
+        if (speed > 0) fprintf(f, ",\"speedMbps\":%d,\"fullDuplex\":%s", speed, duplex ? "true" : "false");
+        else fputs(",\"speedMbps\":null,\"fullDuplex\":null", f);
+    }
+}
+
+static void render_network_overview_json(int fd) {
+    enum { OVERVIEW_BYTES = 8192 };
+    char *out = (char *)malloc(OVERVIEW_BYTES), v[160], ssid[160];
+    const char *line, *wifi_line = NULL, *wired_line = NULL;
+    static const char *wifi_text[][2] = {
+        { "wifi_state", "state" }, { "wifi_bssid", "bssid" }, { "wifi_security", "security" },
+        { "wifi_cipher", "cipher" }, { "wifi_standard", "standard" }, { "wifi_frequency", "frequencyGhz" },
+        { "wifi_bit_rate", "bitRate" }, { "wifi_quality", "quality" },
+    };
+    static const char *wifi_int[][2] = {
+        { "wifi_signal", "signalDbm" }, { "wifi_noise", "noiseDbm" }, { "wifi_tx_power", "txPowerDbm" },
+    };
+    size_t i;
+    int first;
     FILE *f;
-    want = req->body ? json_top_bool(req->body, "enabled", -1) : -1;
-    if (want < 0) {
-        send_multi_remote_error(fd, "400 Bad Request",
-            "Send {\"enabled\": true} or {\"enabled\": false}.", NULL, NULL);
+    if (!out) {
+        send_multi_remote_error(fd, "500 Internal Server Error", "Out of memory.", NULL, NULL);
         return;
     }
-    lock_fd = open(USB_ETH_LOCK, O_RDWR | O_CREAT, 0600);
+    if (access(USB_ETH_SERVICE, X_OK) != 0) {
+        free(out);
+        f = send_json_start(fd, "200 OK");
+        if (f) { fputs("{\"ok\":true,\"available\":false}\n", f); fclose(f); }
+        return;
+    }
+    run_cmd(USB_ETH_SERVICE " overview 2>/dev/null", out, OVERVIEW_BYTES);
+    for (line = out; line && *line; line = strchr(line, '\n') ? strchr(line, '\n') + 1 : NULL) {
+        if (strncmp(line, "iface=", 6) == 0) {
+            if (strstr(line, "|wifi|") && !wifi_line) wifi_line = line;
+            else if (strstr(line, "|wired|") && !wired_line) wired_line = line;
+        }
+    }
+    f = send_json_start(fd, "200 OK");
+    if (!f) { free(out); return; }
+    fputs("{\"ok\":true,\"available\":true,\"wifi\":", f);
+    if (wifi_line) {
+        write_overview_iface(f, wifi_line);
+        ssid[0] = 0;
+        for (line = out; line && *line; line = strchr(line, '\n') ? strchr(line, '\n') + 1 : NULL)
+            if (strncmp(line, "wifi_ssid=", 10) == 0) overview_text(line + 10, ssid, sizeof(ssid));
+        json_write_opt_string(f, "ssid", ssid);
+        for (i = 0; i < sizeof(wifi_text) / sizeof(wifi_text[0]); i++) {
+            usb_eth_value(out, wifi_text[i][0], v, sizeof(v));
+            json_write_opt_string(f, wifi_text[i][1], v);
+        }
+        for (i = 0; i < sizeof(wifi_int) / sizeof(wifi_int[0]); i++) {
+            usb_eth_value(out, wifi_int[i][0], v, sizeof(v));
+            json_write_opt_int(f, wifi_int[i][1], v);
+        }
+        usb_eth_value(out, "wifi_suspended", v, sizeof(v));
+        fprintf(f, ",\"suspended\":%s}", strcmp(v, "1") == 0 ? "true" : "false");
+    } else {
+        fputs("null", f);
+    }
+    fputs(",\"wired\":", f);
+    if (wired_line) {
+        write_overview_iface(f, wired_line);
+        usb_eth_value(out, "wired_mode", v, sizeof(v));
+        fputs(",\"mode\":", f);
+        json_write_string(f, strcmp(v, "static") == 0 ? "static" : "dhcp");
+        fputs("}", f);
+    } else {
+        fputs("null", f);
+    }
+    fputs(",\"routes\":[", f);
+    first = 1;
+    for (line = out; line && *line; line = strchr(line, '\n') ? strchr(line, '\n') + 1 : NULL) {
+        char copy[160], *field[6], *p;
+        int n = 0;
+        if (strncmp(line, "route=", 6) != 0) continue;
+        overview_fields(line, "route", copy, sizeof(copy));
+        for (p = copy; n < 6; n++) {
+            field[n] = p;
+            p = strchr(p, '|');
+            if (!p) { n++; break; }
+            *p++ = 0;
+        }
+        if (n < 6) continue;
+        fputs(first ? "{\"destination\":" : ",{\"destination\":", f);
+        first = 0;
+        json_write_string(f, field[0]);
+        fputs(",\"gateway\":", f); json_write_string(f, field[1]);
+        fputs(",\"netmask\":", f); json_write_string(f, field[2]);
+        fputs(",\"flags\":", f); json_write_string(f, field[3]);
+        json_write_opt_int(f, "metric", field[4]);
+        fputs(",\"interface\":", f); json_write_string(f, field[5]);
+        fputs("}", f);
+    }
+    fputs("],\"dns\":[", f);
+    first = 1;
+    for (line = out; line && *line; line = strchr(line, '\n') ? strchr(line, '\n') + 1 : NULL) {
+        if (strncmp(line, "dns=", 4) != 0) continue;
+        overview_text(line + 4, v, sizeof(v));
+        if (!v[0]) continue;
+        if (!first) fputc(',', f);
+        json_write_string(f, v);
+        first = 0;
+    }
+    fputs("]", f);
+    usb_eth_value(out, "lan_dev", v, sizeof(v));
+    json_write_opt_string(f, "lanInterface", v);
+    usb_eth_value(out, "gateway", v, sizeof(v));
+    json_write_opt_string(f, "gateway", v);
+    usb_eth_value(out, "cloud_blocker", v, sizeof(v));
+    fprintf(f, ",\"cloudBlocker\":%s}\n", strcmp(v, "1") == 0 ? "true" : "false");
+    fclose(f);
+    free(out);
+}
+
+/* Start a command detached from this request: its own session, no inherited
+ * descriptors (a long-lived child holding the listening socket would stop a
+ * restarted codex_webui from binding port 8080). Returns -1 if it couldn't
+ * fork, after a few tries (short on memory). */
+static int spawn_detached(const char *cmd) {
+    pid_t pid = -1;
+    int tries;
+    for (tries = 0; tries < 3; tries++) {
+        pid = fork();
+        if (pid >= 0) break;
+        sleep(1);
+    }
+    if (pid < 0) {
+        fprintf(stderr, "codex_webui: couldn't start: %s\n", cmd);
+        return -1;
+    }
+    if (pid == 0) {
+        int fd;
+        setsid();
+        for (fd = 3; fd < 256; fd++) close(fd);
+        fd = open("/dev/null", O_RDWR);
+        if (fd >= 0) {
+            dup2(fd, 0);
+            dup2(fd, 1);
+            dup2(fd, 2);
+            if (fd > 2) close(fd);
+        }
+        execl("/bin/sh", "sh", "-c", cmd, (char *)NULL);
+        _exit(127);
+    }
+    return 0;
+}
+
+/* Checks static settings the way usb_eth_service.sh's static_settings does.
+ * On a problem: the message and the field it's about. */
+static int usb_eth_static_ok(const char *address, const char *netmask, const char *gateway,
+        const char *dns1, const char *dns2, const char **error, const char **field) {
+    unsigned long a, m, g, d, net, bcast, host;
+    const char *dns[2];
+    int i, bits = 0;
+    if (!parse_ipv4_strict(address, &a)) { *error = "The address must be four numbers 0-255, like 192.168.1.20."; *field = "address"; return 0; }
+    if (!parse_ipv4_strict(netmask, &m)) { *error = "The subnet mask must be four numbers 0-255, like 255.255.255.0."; *field = "netmask"; return 0; }
+    host = ~m & 0xffffffffUL;
+    if ((host & (host + 1)) != 0) { *error = "That isn't a valid subnet mask."; *field = "netmask"; return 0; }
+    /* Bounded: for mask 0.0.0.0 host is all ones (host + 1 wraps on the
+     * hub's 32-bit unsigned long), and a shift by 32 is undefined; MIPS
+     * shifts by 0 instead, so an unbounded loop never ends. */
+    for (; bits < 32 && (host >> bits); bits++) {}
+    if (bits < 2 || bits > 24) { *error = "Use a subnet mask from 255.0.0.0 (/8) to 255.255.255.252 (/30)."; *field = "netmask"; return 0; }
+    net = a & m;
+    bcast = net | host;
+    if ((a >> 24) == 0 || (a >> 24) == 127 || (a >> 24) >= 224) { *error = "That address can't be used on a network."; *field = "address"; return 0; }
+    if (a == net || a == bcast) { *error = "That's the subnet's network or broadcast address; pick another."; *field = "address"; return 0; }
+    if (gateway[0]) {
+        if (!parse_ipv4_strict(gateway, &g)) { *error = "The router address must be four numbers 0-255."; *field = "gateway"; return 0; }
+        if ((g & m) != net || g == net || g == bcast) { *error = "The router must be on the same subnet as the address."; *field = "gateway"; return 0; }
+        if (g == a) { *error = "The router can't have the hub's own address."; *field = "gateway"; return 0; }
+    }
+    dns[0] = dns1; dns[1] = dns2;
+    for (i = 0; i < 2; i++) {
+        if (!dns[i][0]) continue;
+        if (!parse_ipv4_strict(dns[i], &d) || d == 0) { *error = "A DNS server must be four numbers 0-255."; *field = i ? "dns2" : "dns1"; return 0; }
+    }
+    return 1;
+}
+
+/* POST /api/usb-eth: any of "enabled" and "wifiOff" (top-level true/false)
+ * and "ipMode" ("dhcp", or "static" with "address", "netmask", "gateway",
+ * "dns1", "dns2"). The other settings in usb_eth.conf are kept; switching to
+ * DHCP keeps the static values, for the form. The worker reads WIFI_OFF and
+ * the address settings on its next pass; only "enabled" starts or stops it. */
+static void render_usb_eth_set_json(int fd, const struct request *req) {
+    struct usb_eth_state st;
+    char out[512], old[512], conf[512], ip_mode[16];
+    char en[8], woff[8], mode[16], address[20], netmask[20], gateway[20], dns[48], dns1[20], dns2[20];
+    const char *error = NULL, *field = NULL;
+    int want, wifi_off, has_mode, lock_fd, i;
+    FILE *f;
+    want = req->body ? json_top_bool(req->body, "enabled", -1) : -1;
+    wifi_off = req->body ? json_top_bool(req->body, "wifiOff", -1) : -1;
+    has_mode = req->body ? json_top_string(req->body, "ipMode", ip_mode, sizeof(ip_mode)) : 0;
+    if ((want < 0 && wifi_off < 0 && has_mode == 0) ||
+        (want < 0 && req->body && json_top_member(req->body, "enabled")) ||
+        (wifi_off < 0 && req->body && json_top_member(req->body, "wifiOff")) ||
+        has_mode < 0 || (has_mode && strcmp(ip_mode, "dhcp") != 0 && strcmp(ip_mode, "static") != 0)) {
+        send_multi_remote_error(fd, "400 Bad Request",
+            "Send {\"enabled\": true|false}, {\"wifiOff\": true|false} and/or {\"ipMode\": \"dhcp\"|\"static\", ...}.", NULL, NULL);
+        return;
+    }
+    if (has_mode && strcmp(ip_mode, "static") == 0) {
+        static const char *keys[] = { "address", "netmask", "gateway", "dns1", "dns2" };
+        char *vals[] = { address, netmask, gateway, dns1, dns2 };
+        for (i = 0; i < 5; i++) {
+            if (json_top_string(req->body, keys[i], vals[i], sizeof(address)) < 0) {
+                send_multi_remote_error(fd, "400 Bad Request", "Address fields must be plain strings.", "field", keys[i]);
+                return;
+            }
+        }
+        if (!usb_eth_static_ok(address, netmask, gateway, dns1, dns2, &error, &field)) {
+            send_multi_remote_error(fd, "400 Bad Request", error, "field", field);
+            return;
+        }
+    }
+    /* Close-on-exec, like the client socket below: the service's worker,
+     * started from here, lives on, and must hold neither (an inherited lock
+     * refuses every later change; an inherited socket never ends the reply). */
+    lock_fd = open(USB_ETH_LOCK, O_RDWR | O_CREAT | O_CLOEXEC, 0600);
     if (lock_fd < 0 || flock(lock_fd, LOCK_EX | LOCK_NB) != 0) {
         if (lock_fd >= 0) close(lock_fd);
         send_multi_remote_error(fd, "409 Conflict", "The hub is already changing this setting.", NULL, NULL);
         return;
     }
+    fcntl(fd, F_SETFD, FD_CLOEXEC);
     read_usb_eth_state(&st);
-    if (want && !st.kernel_compatible) {
+    if (want == 1 && !st.kernel_compatible) {
         close(lock_fd);
         send_multi_remote_error(fd, "409 Conflict",
             "This hub's kernel is not the build USB Ethernet was made for (2.6.31-g89d565c).",
             "kernel", st.kernel);
         return;
     }
-    if (write_file_atomic(USB_ETH_CONF, want ? "ENABLED=1\n" : "ENABLED=0\n", 10) != 0) {
+    /* The whole file, from what's there and what changes. */
+    if (read_text(USB_ETH_CONF, old, sizeof(old)) <= 0) old[0] = 0;
+    snprintf(en, sizeof(en), "%d", want >= 0 ? want : usb_eth_conf_enabled());
+    usb_eth_value(old, "WIFI_OFF", woff, sizeof(woff));
+    if (wifi_off >= 0) snprintf(woff, sizeof(woff), "%d", wifi_off);
+    if (strcmp(woff, "1") != 0) snprintf(woff, sizeof(woff), "0");
+    usb_eth_value(old, "IP_MODE", mode, sizeof(mode));
+    if (strcmp(mode, "static") != 0) snprintf(mode, sizeof(mode), "dhcp");
+    if (has_mode && strcmp(ip_mode, "static") == 0) {
+        snprintf(mode, sizeof(mode), "static");
+        snprintf(dns, sizeof(dns), "%s%s%s", dns1, (dns1[0] && dns2[0]) ? " " : "", dns2);
+    } else {
+        if (has_mode) snprintf(mode, sizeof(mode), "dhcp");
+        usb_eth_value(old, "IP_ADDRESS", address, sizeof(address));
+        usb_eth_value(old, "IP_NETMASK", netmask, sizeof(netmask));
+        usb_eth_value(old, "IP_GATEWAY", gateway, sizeof(gateway));
+        usb_eth_value(old, "IP_DNS", dns, sizeof(dns));
+    }
+    snprintf(conf, sizeof(conf), "ENABLED=%s\nWIFI_OFF=%s\nIP_MODE=%s\nIP_ADDRESS=%s\nIP_NETMASK=%s\nIP_GATEWAY=%s\nIP_DNS=%s",
+        en, woff, mode, address, netmask, gateway, dns);
+    if (write_file_atomic(USB_ETH_CONF, conf, strlen(conf)) != 0) {
         close(lock_fd);
         send_multi_remote_error(fd, "500 Internal Server Error", "The setting couldn't be saved.", NULL, NULL);
         return;
     }
-    if (access(USB_ETH_SERVICE, X_OK) == 0) {
-        if (want) {
-            run_cmd(USB_ETH_SERVICE " start --force >/dev/null 2>&1", out, sizeof(out));
-        } else {
-            run_cmd(USB_ETH_SERVICE " stop >/dev/null 2>&1", out, sizeof(out));
-        }
-    }
+    if (want == 1 && access(USB_ETH_SERVICE, X_OK) == 0)
+        run_cmd(USB_ETH_SERVICE " start --force >/dev/null 2>&1", out, sizeof(out));
     read_usb_eth_state(&st);
-    close(lock_fd);
     f = send_json_start(fd, "200 OK");
-    if (!f) return;
-    write_usb_eth_json(f, &st);
-    fclose(f);
+    if (f) {
+        write_usb_eth_json(f, &st);
+        fclose(f);
+    }
+    close(lock_fd);
+    /* After the reply: stopping removes the wired address, and a browser
+     * connected through it (with Wi-Fi off) would otherwise never get the
+     * answer. */
+    if (want == 0 && access(USB_ETH_SERVICE, X_OK) == 0)
+        (void)spawn_detached("sleep 2; " USB_ETH_SERVICE " stop-if-disabled");
 }
 
 /* Activity time restrictions: when an activity can't be started.
@@ -12052,6 +12536,8 @@ static void handle_client(int client) {
         else send_cross_site_refused(client);
     } else if (strcmp(req.method, "GET") == 0 && strcmp(req.path, "/api/usb-eth") == 0) {
         render_usb_eth_json(client);
+    } else if (strcmp(req.method, "GET") == 0 && strcmp(req.path, "/api/network-overview") == 0) {
+        render_network_overview_json(client);
     } else if (strcmp(req.method, "POST") == 0 && strcmp(req.path, "/api/usb-eth") == 0) {
         if (request_same_origin_json(&req)) render_usb_eth_set_json(client, &req);
         else send_cross_site_refused(client);

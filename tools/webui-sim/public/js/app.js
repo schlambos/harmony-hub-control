@@ -13,6 +13,7 @@ import { createRemotesView } from "./views/remotes.js";
 import { createActivityButtonsView } from "./views/activity-buttons.js";
 import { createMqttView } from "./views/mqtt.js";
 import { createWifiView } from "./views/wifi.js";
+import { createEthernetView } from "./views/ethernet.js";
 import { createBackupView } from "./views/backup.js";
 import { createSystemView } from "./views/system.js";
 
@@ -38,6 +39,7 @@ const ROUTES = {
   bluetooth: { parent: "settings", section: "view-bluetooth", factory: createBluetoothView, title: "Bluetooth" },
   mqtt: { parent: "settings", section: "view-mqtt", factory: createMqttView, title: "MQTT" },
   wifi: { parent: "settings", section: "view-wifi", factory: createWifiView, title: "Wi-Fi" },
+  ethernet: { parent: "settings", section: "view-ethernet", factory: createEthernetView, title: "Wired Ethernet" },
   backup: { parent: "settings", section: "view-backup", factory: createBackupView, title: "Backup" },
   system: { parent: "settings", section: "view-system", factory: createSystemView, title: "System" },
 };

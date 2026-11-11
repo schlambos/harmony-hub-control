@@ -2328,9 +2328,19 @@ function Invoke-PostWiring() {
 }
 
 function Start-Services() {
+    # A running egress guard keeps its old code until the hub restarts: stop it,
+    # and the next line (or init.sh's respawn loop) starts the new one. USB
+    # Ethernet's worker, if switched on, is replaced without touching the wired
+    # path (usb_eth_service.sh restart). Same as install_webui.py.
     $start = "killall codex_webui 2>/dev/null || true; killall codex_bthid_keyboard 2>/dev/null || true; " +
+        "gpid=`$(cat /var/run/codex-offline-egress.pid 2>/dev/null); " +
+        "case ""`$gpid"" in ''|*[!0-9]*) ;; *) kill ""`$gpid"" 2>/dev/null; sleep 1; " +
+        "kill -0 ""`$gpid"" 2>/dev/null && kill -9 ""`$gpid"" 2>/dev/null; " +
+        "[ ""`$(cat /var/run/codex-offline-egress.pid 2>/dev/null)"" = ""`$gpid"" ] && rm -f /var/run/codex-offline-egress.pid ;; esac; " +
         "if ! ps | grep '[o]ffline_egress_guard.sh monitor' >/dev/null 2>&1; then " +
         "/data/codex/offline_egress_guard.sh monitor >> /cache/codex-init.log 2>&1 & fi; " +
+        "if [ -x /data/codex/usb_eth_service.sh ] && grep '^ENABLED=1`$' /data/codex/usb_eth.conf >/dev/null 2>&1; then " +
+        "/data/codex/usb_eth_service.sh restart >/dev/null 2>&1 & fi; " +
         "if ! ps | grep '[d]ropbear' >/dev/null 2>&1; then /usr/sbin/dropbear -R -p 22; fi; " +
         "mkdir -p /cache/bin; ln -sf /data/codex/bin/codex_bthid_keyboard /cache/bin/bthid_keyboard; " +
         "/data/codex/bin/codex_webui 8080 >> /cache/codex-init.log 2>&1 & " +

@@ -1112,8 +1112,9 @@ one remote only.
 
 ### USB Ethernet (experimental)
 
-The Settings switch for [USB_ETHERNET.md](USB_ETHERNET.md)
-(`render_usb_eth_json()`, `render_usb_eth_set_json()`).
+The Settings switch and the Wired Ethernet page for
+[USB_ETHERNET.md](USB_ETHERNET.md) (`render_usb_eth_json()`,
+`render_usb_eth_set_json()`).
 
 ```powershell
 Invoke-RestMethod "http://<hub-ip>:8080/api/usb-eth"
@@ -1124,7 +1125,12 @@ Invoke-RestMethod "http://<hub-ip>:8080/api/usb-eth"
  "ehciBound":false,"driverLoaded":false,"gadgetLoaded":false,
  "usbDevice":"","usbProduct":"","ifname":"","carrier":false,"ipv4":"",
  "platformRegistered":false,"operational":false,"state":"platform_absent",
- "reason":"","routeMode":""}
+ "reason":"","routeMode":"","speedMbps":null,"fullDuplex":null,
+ "netmask":null,"router":null,"dns":[],"ipMode":"dhcp",
+ "staticConfig":{"address":"","netmask":"","gateway":"","dns":[]},
+ "separateNetwork":false,"gatewayUnreachable":false,"wifiIp":"192.168.1.50",
+ "wifiOff":false,"wifiSuspended":false,"wifiNeedsRestart":false,"wifiOffBlocked":null,
+ "rxBytes":null,"txBytes":null,"lanInterface":"ath0"}
 ```
 
 - `enabled`: `/data/codex/usb_eth.conf` has `ENABLED=1`.
@@ -1139,6 +1145,23 @@ Invoke-RestMethod "http://<hub-ip>:8080/api/usb-eth"
   `awaiting_carrier_dhcp`, `degraded_routing`, …), and `routeMode` is
   `policy` or `metric` once wired-path routing is applied. Poll `GET`
   after toggling; `POST` returns as soon as the worker is queued.
+  `gateway_unreachable` (reason `gateway_lost`): the gateway didn't answer
+  through the cable, so local traffic stays on Wi-Fi for now.
+- `speedMbps`/`fullDuplex`: the wired link, from the driver (`null` if it
+  doesn't say). `netmask`, `router` and `dns`: the wired address's mask, the
+  cable's default-route gateway (the static settings' in static mode) and the
+  DNS servers in `/etc/resolv.conf`. `rxBytes`/`txBytes`: wired traffic.
+- `ipMode`: `dhcp` or `static`. `staticConfig`: the saved static settings,
+  kept while on DHCP so the form remembers them.
+- `lanInterface`: where local traffic goes, the wired interface or `ath0`.
+  `separateNetwork`: operational, but on another network than the gateway's,
+  so the cable is only an extra address. `gatewayUnreachable`: as above.
+- `wifiOff`: "Turn Wi-Fi off while the cable works" is on. `wifiSuspended`:
+  Wi-Fi is off right now. `wifiNeedsRestart`: it's on, but the running egress
+  guard predates its Wi-Fi watchdog (after an upgrade), so Wi-Fi stays on until
+  the hub restarts. `wifiOffBlocked`: `"noRouter"` when it's on but can't
+  happen (cloud blocker off and no default route through the cable), else
+  `null`. `wifiIp`: Wi-Fi's address, if it has one.
 
 ```powershell
 Invoke-RestMethod "http://<hub-ip>:8080/api/usb-eth" -Method Post `
@@ -1148,9 +1171,36 @@ Invoke-RestMethod "http://<hub-ip>:8080/api/usb-eth" -Method Post `
 - Writes `/data/codex/usb_eth.conf` (`ENABLED=1` or `ENABLED=0`), runs
   `/data/codex/usb_eth_service.sh start --force` (or `stop`), and answers with
   the updated state object above.
-- Requires a same-origin `application/json` request (`403` otherwise), a
-  top-level boolean `enabled` (`400` otherwise), and kernel `2.6.31-g89d565c`
-  when enabling (`409` otherwise).
+- Also takes `{"wifiOff": true|false}` and `{"ipMode": "dhcp"}` or
+  `{"ipMode": "static", "address": "192.168.1.20", "netmask":
+  "255.255.255.0", "gateway": "192.168.1.1", "dns1": "1.1.1.1", "dns2": ""}`
+  (gateway and DNS optional), alone or together with `enabled`. They are stored
+  in `usb_eth.conf` (`WIFI_OFF`, `IP_MODE`, `IP_ADDRESS`, `IP_NETMASK`,
+  `IP_GATEWAY`, `IP_DNS`), keeping the other settings, and the worker reads
+  them on its next pass; only `enabled` starts or stops it. Switching to DHCP
+  keeps the static values. Static settings that aren't valid get `400` with
+  `error` and `field` (`address`, `netmask`, `gateway`, `dns1` or `dns2`).
+- Turning it off answers first and stops the service 2 s later
+  (`usb_eth_service.sh stop-if-disabled`, which keeps it running if it was
+  switched back on meanwhile), so a browser connected over the cable (with
+  Wi-Fi off) still gets the reply.
+- Requires a same-origin `application/json` request (`403` otherwise), at
+  least one of the members above with the right type (`400` otherwise), and
+  kernel `2.6.31-g89d565c` when enabling (`409` otherwise).
+
+```powershell
+Invoke-RestMethod "http://<hub-ip>:8080/api/network-overview"
+```
+
+The Wired Ethernet page's network overview (`render_network_overview_json()`,
+from `usb_eth_service.sh overview`; read-only): `wifi` (`interface`, `ip`,
+`netmask`, `mac`, `up`, traffic and error counters, `ssid`, `state`, `bssid`,
+`security`, `cipher`, `standard`, `frequencyGhz`, `bitRate`, `quality`,
+`signalDbm`, `noiseDbm`, `txPowerDbm`, `suspended`), `wired` (the same
+interface fields plus `speedMbps`, `fullDuplex` and `mode`) or `null`, `routes`
+(each `destination`, `gateway`, `netmask`, `flags`, `metric`, `interface`),
+`dns`, `lanInterface`, `gateway` and `cloudBlocker`. `available` is false if
+the service isn't installed.
 
 ## State changes (cheap liveness)
 
@@ -1355,6 +1405,8 @@ carries.
 | POST | `/api/led` | `render_led_json()` |
 | GET | `/api/remotes` | `render_remotes_json()` |
 | POST | `/api/remote-pair` | `render_remote_pair_json()` |
+| GET, POST | `/api/usb-eth` | `render_usb_eth_json()`, `render_usb_eth_set_json()` |
+| GET | `/api/network-overview` | `render_network_overview_json()` |
 | POST | `/api/ir-test-learned` | `render_ir_test_learned_json()` |
 | POST | `/api/ir-batch-send` | `render_ir_batch_send_json()` |
 | POST | `/api/ir-cancel` | `render_ir_cancel_json()` |

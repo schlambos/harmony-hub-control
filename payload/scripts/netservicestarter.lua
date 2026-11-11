@@ -40,6 +40,8 @@ local NTP_EPOCH_OFFSET = 2208988800 -- seconds from 1900 (NTP) to 1970 (Unix)
 local NTP_MIN_VALID = 1767225600 -- 2026-01-01; anything older is a bad reply
 local NTP_RESYNC_SECONDS = 6 * 60 * 60
 local GATEWAY_STATE = "/var/volatile/codex-default-gateway"
+-- Written by usb_eth_service.sh while a USB Ethernet adapter carries LAN traffic.
+local LAN_DEV_FILE = "/var/run/codex-lan-dev"
 local CLOUD_HOST_PATTERNS = {
   "myharmony%.com$",
   "logitech%.com$",
@@ -379,6 +381,27 @@ local function readFirstLine(path)
   return line
 end
 
+-- The interface LAN traffic goes through: Wi-Fi, or a USB Ethernet adapter.
+-- usb_eth_service.sh names the adapter only while its address is on the saved
+-- gateway's network; this also checks that it still has a route (an
+-- address), with the same name rule as offline_egress_guard.sh.
+local function lanDev()
+  local dev = readFirstLine(LAN_DEV_FILE)
+  if dev and (string.match(dev, "^eth%d%d?$") or string.match(dev, "^usb%d%d?$")) then
+    local f = io.open("/proc/net/route", "r")
+    if f then
+      for line in f:lines() do
+        if string.match(line, "^(%S+)") == dev then
+          f:close()
+          return dev
+        end
+      end
+      f:close()
+    end
+  end
+  return "ath0"
+end
+
 local function hasDefaultRoute()
   local f = io.open("/proc/net/route", "r")
   if not f then
@@ -447,8 +470,14 @@ local function ntpQueryRouted(ip)
   if not isIpv4(gateway) then
     return nil, "no saved gateway"
   end
-  local route = "-host " .. ip .. " gw " .. gateway .. " dev ath0"
-  os.execute("route add " .. route .. " >/dev/null 2>&1")
+  local route = "-host " .. ip .. " gw " .. gateway .. " dev " .. lanDev()
+  -- If the adapter can't reach the gateway after all (a stale codex-lan-dev),
+  -- Wi-Fi still can.
+  local added = os.execute("route add " .. route .. " >/dev/null 2>&1")
+  if added ~= 0 and added ~= true and not string.match(route, " dev ath0$") then
+    route = "-host " .. ip .. " gw " .. gateway .. " dev ath0"
+    os.execute("route add " .. route .. " >/dev/null 2>&1")
+  end
   local seconds, err = ntpQuery(ip)
   os.execute("route del " .. route .. " >/dev/null 2>&1")
   return seconds, err

@@ -3,15 +3,19 @@
    each opening as a sub-page, then Experimental: the switch for multiple
    remotes of one model (docs/MULTI_REMOTE.md). It can be turned on only when
    the hub's hal is exactly the build the change was made for, and turning it
-   on or off restarts the hub. The simulator also lists its recent events
+   on or off restarts the hub. Then the switch for Ethernet over a USB OTG
+   adapter (docs/USB_ETHERNET.md), whose row opens the Wired Ethernet page
+   (views/ethernet.js) for its status, Wi-Fi off and address settings, and
+   the network overview. The simulator also lists its recent events
    here (the old Home page's debug panel; gated on HARMONY_SIM so the
    production shell never calls a /sim/ route). */
 
 import * as api from "../api.js";
 import * as hub from "../state.js";
-import { confirmDialog, escapeHtml, iconTile, listRow, screenTitle, sectionLabel, snackbar } from "../ui/shell.js";
+import { confirmDialog, escapeHtml, icon, iconTile, listRow, screenTitle, sectionLabel, snackbar } from "../ui/shell.js";
 import { multiRemoteStatus, usbEthStatus } from "./remotes-model.js";
 import { parseTextStatus } from "./bluetooth-model.js";
+import { turnOffText, turnOnText } from "./ethernet-model.js";
 
 const SIM = globalThis.HARMONY_SIM === true;
 
@@ -117,12 +121,15 @@ export function createSettingsView(section) {
           <span class="m-row-text"><span class="ds-title">Multiple remotes of one model</span><span class="m-row-sub" data-multi-status>${escapeHtml(status)}</span></span>
           <input type="checkbox" role="switch" class="m-switch" data-multi-remote${multi?.enabled ? " checked" : ""}${disabled ? " disabled" : ""} aria-label="Multiple remotes of one model">
         </label>
-        <label class="m-row ds-switch">
-          <span class="m-row-text"><span class="ds-title">Ethernet (USB OTG)</span><span class="m-row-sub" data-usb-eth-status>${escapeHtml(ethStatus)}</span></span>
+        <div class="m-row ds-switch eth-row">
+          <a class="eth-row-link" href="#ethernet">
+            <span class="m-row-text"><span class="ds-title">Ethernet (USB OTG)</span><span class="m-row-sub" data-usb-eth-status>${escapeHtml(ethStatus)}</span></span>
+            ${icon("keyboard_arrow_right", { cls: "m-row-chevron" })}
+          </a>
           <input type="checkbox" role="switch" class="m-switch" data-usb-eth${usbEth?.enabled ? " checked" : ""}${ethDisabled ? " disabled" : ""} aria-label="Ethernet (USB OTG)">
-        </label>
+        </div>
       </div>
-      <p class="list-note">Multiple remotes lets the hub keep two or more remotes without a screen of the same model, such as two Smart Controls (turning it on or off restarts the hub). Ethernet uses a <strong>self-powered OTG micro-USB Ethernet adapter</strong> (Realtek RTL8152/RTL8153) with DHCP — the hub's micro-USB port cannot supply power, so the adapter must have its own power leg.</p>`;
+      <p class="list-note">Multiple remotes lets the hub keep two or more remotes without a screen of the same model, such as two Smart Controls (turning it on or off restarts the hub). Ethernet uses a <strong>self-powered OTG micro-USB Ethernet adapter</strong> with a supported chipset (see docs/USB_ETHERNET.md) — the hub's micro-USB port cannot supply power, so the adapter must have its own power leg. Open the row for its status, a static address, Wi-Fi off while the cable works, and a network overview.</p>`;
   }
 
   function render() {
@@ -180,9 +187,7 @@ export function createSettingsView(section) {
     }
     const ok = await confirmDialog({
       title: enabled ? "Turn on USB Ethernet?" : "Turn off USB Ethernet?",
-      text: enabled
-        ? "Requires a self-powered OTG micro-USB Ethernet adapter with a Realtek RTL8152 or RTL8153 chip (the hub's micro-USB port cannot supply power). While host mode is active, the micro-USB port cannot be used as a USB device port until the hub restarts with Ethernet off. The wired interface uses DHCP alongside Wi-Fi."
-        : "Stops DHCP and brings down the USB Ethernet interface. Wi-Fi stays connected.",
+      text: enabled ? turnOnText() : turnOffText(usbEth, location.hostname),
       confirmLabel: enabled ? "Turn on" : "Turn off",
     });
     if (!ok) return;
