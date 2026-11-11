@@ -26,7 +26,7 @@ exact SHA-256 digests and sizes are:
 | `dropbearmulti` | 577296 | `e2ea632aed8b31dc5ea56b9673cbd983ec83260a97d33f891a0cebf51d5c6c8d` |
 | `codex_hbus` | 74660 | `4be9e6ac2e09e7eb052f9c47e81480d1e32aee7190bedb6ef7f932cf07aab8f9` |
 | `codex_androidtv` | 270516 | `0955c9eeb6820cfbbba4ff09c81a5fdd996c2c67789c9c48ce54f141b5f90e99` |
-| `codex_usbeth` | 85604 | `1a52b531e57eabf73a2017856cfc4d69a9676d38ca37bf5f8fa433942c4f5931` |
+| `codex_usbeth` | 85684 | `ca4e5db04a367acf2077c32158e6589ed81fb97651f7c06389dc6f31129b9624` |
 
 The remaining binaries (`codex_bt_pair_agent`, `codex_bthid_keyboard`,
 `codex_hal_ltcp`) are pinned by their MD5 digests in

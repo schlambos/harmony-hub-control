@@ -2,7 +2,7 @@
 -rwxr-xr-x 1 codex codex 119284 Aug 19 10:05 codex_bthid_keyboard
 -rwxr-xr-x 1 codex codex 58328 Nov 08 14:12 codex_dhcpd
 -rwxr-xr-x 1 codex codex  270516 Nov  8 10:00 codex_androidtv
--rwxr-xr-x 1 codex codex 85604 Nov 10 06:45 codex_usbeth
+-rwxr-xr-x 1 codex codex 85684 Nov 10 06:45 codex_usbeth
 -rwxr-xr-x 1 codex codex  81636 Oct 30 23:27 codex_hal_ltcp
 -rwxr-xr-x 1 codex codex  74660 Aug 19 10:05 codex_hbus
 -rwxr-xr-x 1 codex codex 76724 Nov 08 14:12 codex_portal
@@ -12,7 +12,7 @@
 b1e8df4f56dee73684b09f1c469a347b  codex_portal
 e8e62d851417aafa9995f687277e8414  codex_hbus
 f080f37972b83f31feab3acbed55b350  codex_androidtv
-e00dec3e590b087e7c34813945f0be73  codex_usbeth
+e4d2e4df0128093d76c46749c6596132  codex_usbeth
 74edab8a6c57194776babac505b59159  codex_hal_ltcp
 a98b67354fdc833f0ce1c2de800cd3de  codex_bthid_keyboard
 a870a53fd9fd86cb22759153d5952f76  codex_bt_pair_agent
