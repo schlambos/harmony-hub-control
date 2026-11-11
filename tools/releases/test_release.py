@@ -26,7 +26,8 @@ def fake_apk(_path: Path) -> dict:
             "certs": [release.ANDROID_RELEASE_CERT]}
 
 
-def write_hub_zip(path: Path, extra: dict | None = None, bad_md5: bool = False, helpers: bool = True) -> None:
+def write_hub_zip(path: Path, extra: dict | None = None, bad_md5: bool = False, helpers: bool = True,
+                  gpl_source: bool = True, gpl_source_omit: str = "") -> None:
     files = {rel: f"content of {rel}\n".encode() for rel in release.HUB_FILES}
     if helpers:
         files.update({rel: f"helper {rel}\n".encode() for rel in release.HUB_INSTALLER_HELPERS})
@@ -40,6 +41,12 @@ def write_hub_zip(path: Path, extra: dict | None = None, bad_md5: bool = False, 
         z.comment = COMMIT.encode()
         z.writestr(top + "install_webui.py", "# installer\n")
         z.writestr(top + "payload/bin/MANIFEST.txt", manifest)
+        if gpl_source:
+            for rel in sorted(release.HUB_GPL_SOURCE) + [
+                    "third_party/busybox-1.37.0/" + f for f in release.BUSYBOX_SOURCE_FILES] + [
+                    "third_party/busybox-1.37.0/patches/0001-fix.patch"]:
+                if rel != gpl_source_omit:
+                    z.writestr(top + rel, f"source {rel}\n")
         for rel, data in files.items():
             z.writestr(top + rel, data)
 
@@ -114,6 +121,15 @@ class ReleaseToolTest(unittest.TestCase):
     def test_missing_installer_helper_is_rejected(self):
         with self.assertRaisesRegex(release.ReleaseError, "missing payload files payload/helpers/"):
             self.make_release(helpers=False)
+
+    def test_busybox_needs_its_licence_and_source_in_the_zip(self):
+        self.assertIn("payload/bin/busybox-extra", release.HUB_FILES)
+        with self.assertRaisesRegex(release.ReleaseError, "missing BusyBox licence/source files"):
+            self.make_release(gpl_source=False)
+        for omit in ("build/busybox-zig-cc.sh", "third_party/busybox-1.37.0/busybox.config",
+                     "third_party/busybox-1.37.0/patches/0001-fix.patch"):
+            with self.subTest(omit=omit), self.assertRaisesRegex(release.ReleaseError, "missing BusyBox"):
+                self.make_release(gpl_source_omit=omit)
 
     def test_payload_manifest_mismatch_is_rejected(self):
         with self.assertRaisesRegex(release.ReleaseError, "md5 for"):

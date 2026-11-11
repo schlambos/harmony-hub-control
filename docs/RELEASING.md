@@ -42,7 +42,13 @@ key, so losing that key means users uninstall and reinstall.
    - the hub zip carries the installers' flash probe,
      `payload/helpers/codex_flash_free`. Add `payload/helpers` to the
      `git archive` path list. The probe runs only from the hub's RAM, so
-     `melodious-update.json` doesn't list it.
+     `melodious-update.json` doesn't list it;
+   - the hub zip carries the GPL-2.0 BusyBox's corresponding source:
+     `LICENSE`, `third_party/busybox-1.37.0/` (licence, patch, `.config`,
+     and the README naming the upstream tarball) and the build scripts
+     (`build/build_harmony_tools_kali.sh`, `build/busybox-zig-cc.sh`,
+     `build/busybox-zig-ar.sh`, `build/discard-mips-pdr.ld`). Add them to the
+     `git archive` path list.
 3. **Verify** (the agent runs this):
 
    ```sh

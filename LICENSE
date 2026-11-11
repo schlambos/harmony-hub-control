@@ -65,6 +65,12 @@ These keep their own licences:
 
 - Dropbear SSH 2025.89, built into payload/bin/dropbearmulti:
   third_party/dropbear-2025.89/LICENSE.
+- BusyBox 1.37.0, built into payload/bin/busybox-extra: GNU General Public
+  License version 2, third_party/busybox-1.37.0/LICENSE. Its corresponding
+  source (the upstream release, our patch and configuration, and the build
+  scripts) is described in third_party/busybox-1.37.0/README.md. The GPL
+  applies to BusyBox only, not to the rest of this project, which runs it
+  as a separate program.
 - Material Icons, whose glyphs are embedded in the web app:
   Apache License 2.0, third_party/material-icons/LICENSE.
 - BearSSL 0.6, built into payload/bin/codex_androidtv: MIT License,

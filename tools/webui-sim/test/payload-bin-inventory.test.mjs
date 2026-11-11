@@ -19,6 +19,8 @@ describe("payload_bin_inventory", () => {
     assert.ok(inv.update.includes("codex_bt_pair_agent"));
     assert.ok(inv.install.includes("dropbearmulti"));
     assert.equal(inv.update.includes("dropbearmulti"), false);
+    assert.ok(inv.install.includes("busybox-extra"));
+    assert.equal(inv.update.includes("busybox-extra"), false);
     assert.ok(inv.restart.includes("codex_bt_pair_agent"));
   });
 

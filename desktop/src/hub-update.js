@@ -36,6 +36,7 @@ const HUB_FILES = {
   "payload/bin/codex_portal": ["/data/codex/bin/codex_portal", "755", 0],
   "payload/bin/codex_dhcpd": ["/data/codex/bin/codex_dhcpd", "755", 0],
   "payload/bin/dropbearmulti": ["/data/codex/bin/dropbearmulti", "755", 0],
+  "payload/bin/busybox-extra": ["/data/codex/bin/busybox-extra", "755", 0],
   "payload/scripts/dropbear": ["/usr/sbin/dropbear", "755", 0],
   "payload/scripts/dropbearkey": ["/usr/sbin/dropbearkey", "755", 0],
   "payload/scripts/init.sh": ["/data/codex/init.sh", "755", 1],

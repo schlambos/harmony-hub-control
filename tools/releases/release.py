@@ -47,6 +47,7 @@ HUB_FILES = {
     "payload/bin/codex_portal": ("/data/codex/bin/codex_portal", "755", 3),
     "payload/bin/codex_dhcpd": ("/data/codex/bin/codex_dhcpd", "755", 3),
     "payload/bin/dropbearmulti": ("/data/codex/bin/dropbearmulti", "755", 3),
+    "payload/bin/busybox-extra": ("/data/codex/bin/busybox-extra", "755", 3),
     "payload/scripts/dropbear": ("/usr/sbin/dropbear", "755", 3),
     "payload/scripts/dropbearkey": ("/usr/sbin/dropbearkey", "755", 3),
     "payload/scripts/init.sh": ("/data/codex/init.sh", "755", 3),
@@ -68,6 +69,14 @@ HUB_INVENTORY_FILES = {"payload/bin/MANIFEST.txt", "payload/bin/FILES"}
 # Run by the installers from the hub's RAM staging folder; never installed,
 # so no app update ships them.
 HUB_INSTALLER_HELPERS = {"payload/helpers/codex_flash_free"}
+# GPL-2.0 BusyBox ships as payload/bin/busybox-extra, so the hub zip must
+# carry its licence and the corresponding source this repository holds: the
+# build scripts, and one third_party/busybox-<version>/ folder with LICENSE,
+# README.md (which names the upstream tarball), busybox.config and patches/.
+HUB_GPL_SOURCE = {"LICENSE", "build/build_harmony_tools_kali.sh", "build/busybox-zig-cc.sh",
+                  "build/busybox-zig-ar.sh", "build/discard-mips-pdr.ld"}
+BUSYBOX_SOURCE_DIR = re.compile(r"^third_party/busybox-[0-9.]+/")
+BUSYBOX_SOURCE_FILES = ("LICENSE", "README.md", "busybox.config")
 VERSION_RE = re.compile(r"^\d+\.\d+\.\d+$")
 
 
@@ -122,6 +131,9 @@ def hub_zip_files(zip_path: Path, version: str) -> tuple[list[dict], str]:
             if not info.filename.startswith(top):
                 raise ReleaseError(f"{zip_path.name}: {info.filename} is outside {top}")
             rel = info.filename[len(top):]
+            if rel in HUB_GPL_SOURCE or (BUSYBOX_SOURCE_DIR.match(rel) and not info.is_dir()):
+                contents[rel] = z.read(info)
+                continue
             if info.is_dir() or not rel.startswith("payload/"):
                 continue
             data = z.read(info)
@@ -141,6 +153,16 @@ def hub_zip_files(zip_path: Path, version: str) -> tuple[list[dict], str]:
     missing = sorted(set(HUB_FILES) - seen) + sorted(HUB_INSTALLER_HELPERS - set(contents))
     if missing:
         raise ReleaseError(f"{zip_path.name}: missing payload files {', '.join(missing)}")
+    missing = sorted(HUB_GPL_SOURCE - set(contents))
+    dirs = sorted({BUSYBOX_SOURCE_DIR.match(rel).group(0) for rel in contents if BUSYBOX_SOURCE_DIR.match(rel)})
+    if len(dirs) != 1:
+        missing.append("third_party/busybox-<version>/ (found %d)" % len(dirs))
+    else:
+        missing += [dirs[0] + f for f in BUSYBOX_SOURCE_FILES if dirs[0] + f not in contents]
+        if not any(rel.startswith(dirs[0] + "patches/") and rel.endswith(".patch") for rel in contents):
+            missing.append(dirs[0] + "patches/*.patch")
+    if missing:
+        raise ReleaseError(f"{zip_path.name}: missing BusyBox licence/source files {', '.join(missing)}")
     check_bin_manifest(contents, zip_path.name)
     files.sort(key=lambda f: (f["tier"], f["path"]))
     return files, commit

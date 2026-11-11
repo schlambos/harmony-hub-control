@@ -14,6 +14,9 @@ payload/bin/MANIFEST.txt text eol=lf
 
 payload/bin/codex_* binary
 payload/bin/dropbearmulti binary
+payload/bin/busybox-extra binary
+# BusyBox's corresponding source stays byte-exact (the build cmp's the .config).
+third_party/busybox-1.37.0/** -text
 
 # Preserve the tag-pinned upstream license bytes, including two trailing spaces.
 third_party/dropbear-2025.89/LICENSE -whitespace
