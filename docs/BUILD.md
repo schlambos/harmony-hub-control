@@ -300,6 +300,7 @@ for t in barrier device-screens ha-devices androidtv-devices touch-controls; do
   luajit tools/touch-validator/codexactivity-$t-test.lua
 done                                              # the hub's writer: barrier, screens, Home Assistant, network TVs, press modes
 python3 tools/androidtv/androidtv_smoke.py --codex-androidtv build/output/codex_androidtv-native   # codex_androidtv against a fake TV
+sh tools/androidtv/wol_test.sh                    # codex_androidtv's Wake-on-LAN, with fake interfaces (needs BearSSL)
 luajit tools/touch-validator/codexactivity-validate-test.lua tools/webui-sim/fixtures/touch-maplist.json
 luajit tools/touch-validator/netservicestarter-guards-test.lua   # offline sync guards
 (cd Android && ./gradlew :core-protocol:test)    # Android protocol and graph tests
