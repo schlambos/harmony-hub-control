@@ -150,6 +150,8 @@ class FakeHub:
         self.rf_info = RF_INFO_ONE_SMART
         # The pending-restart guard can't be written.
         self.guard_fail = False
+        # rcS.local bound the two-screen test copy at the last boot.
+        self.two_screen_bound = False
         # Short md5sum responses: these paths emit no output line.
         self.md5sum_drop_paths: set[str] = set()
 
@@ -344,7 +346,19 @@ class FakeHub:
             # Like rcS.local at the next boot: bind the copy when the setting is 1.
             conf = self.fs.get(INST.MULTI_REMOTE_CONF, {}).get("data")
             self.hal_bound = conf == b"1\n" and INST.HAL_MULTI_DEST in self.fs and not self.reboot_keeps_hal
+            # The two-screen test copy: bound for one boot, the setting cleared first.
+            armed = self.fs.get(INST.TWO_SCREEN_CONF, {}).get("data") == b"1\n"
+            self.two_screen_bound = armed and INST.HAL_TWO_SCREEN_DEST in self.fs and not self.hal_bound
+            if armed:
+                self.fs[INST.TWO_SCREEN_CONF] = {"data": b"0\n", "mode": "644"}
+            elif INST.HAL_TWO_SCREEN_DEST in self.fs:
+                self.fs.pop(INST.HAL_TWO_SCREEN_DEST)
             return 0, "rebooting\n", ""
+
+        if c == INST.two_screen_probe_command():
+            conf = self.fs.get(INST.MULTI_REMOTE_CONF, {}).get("data", b"").decode().strip()
+            path = INST.HAL_TWO_SCREEN_DEST if self.two_screen_bound else INST.HAL_PATH
+            return 0, f"multi={conf}\n{md5_bytes(self.fs[path]['data'])}  {INST.HAL_PATH}\n", ""
 
         if c == INST.hal_bound_command():
             return 0, ("bound\n" if self.hal_bound else "stock\n"), ""
@@ -1940,6 +1954,140 @@ class PythonInstallerMultiRemote(unittest.TestCase):
         self.assertEqual(self.writes(hub), [])
         self.assertNotIn(("raw_read", INST.HAL_PATH), hub.events)
         self.assertFalse([e for e in hub.events if e[0] == "rm"])
+
+
+def fake_two_screen_stock_hal() -> bytes:
+    data = bytearray(fake_stock_hal())
+    for offset, old, _new in INST.HAL_TWO_SCREEN_PATCH:
+        data[offset : offset + len(old)] = old
+    return bytes(data)
+
+
+def fake_two_screen_hal() -> bytes:
+    data = bytearray(fake_two_screen_stock_hal())
+    for offset, _old, new in INST.HAL_TWO_SCREEN_PATCH:
+        data[offset : offset + len(new)] = new
+    return bytes(data)
+
+
+class PythonInstallerTwoScreenTest(unittest.TestCase):
+    """[PYTHON BEHAVIORAL] --two-screen-test arm|off: a developer test build of
+    hal, made from the hub's own stock file, bound for one boot only, never
+    together with the multi-remote copy."""
+
+    def setUp(self):
+        saved = (INST.HAL_STOCK_MD5, INST.HAL_TWO_SCREEN_MD5)
+        INST.HAL_STOCK_MD5 = md5_bytes(fake_two_screen_stock_hal())
+        INST.HAL_TWO_SCREEN_MD5 = md5_bytes(fake_two_screen_hal())
+
+        def restore():
+            INST.HAL_STOCK_MD5, INST.HAL_TWO_SCREEN_MD5 = saved
+
+        self.addCleanup(restore)
+
+    def current_hub(self) -> FakeHub:
+        hub = FakeHub()
+        prime_current_hub(hub)
+        hub.fs[INST.HAL_PATH] = {"data": fake_two_screen_stock_hal(), "mode": "755"}
+        return hub
+
+    def run_on(self, hub: FakeHub, *extra: str, restart: bool = True) -> tuple[int, str, str]:
+        harness = InstallerHarness(hub)
+        self.addCleanup(harness.close)
+        argv = harness.base_argv(*extra)
+        if restart:
+            argv = [a for a in argv if a != "--no-apply-cloud-restart"]
+        elif "--no-apply-cloud-restart" not in argv:
+            argv.append("--no-apply-cloud-restart")
+        return harness.run(argv)
+
+    def writes(self, hub: FakeHub) -> list[str]:
+        return [e[1] for e in hub.events if e[0] == "persistent_write"]
+
+    def test_real_patch_matches_rcs_local(self):
+        """[PYTHON BEHAVIORAL] the patch is the stock hal plus four words at
+        the same-model unpair, and the boot script binds only that build, only
+        after it cleared the setting."""
+        doc = json.loads(INST.HAL_TWO_SCREEN_PATCH_FILE.read_text(encoding="utf-8"))
+        multi = json.loads(INST.HAL_PATCH_FILE.read_text(encoding="utf-8"))
+        self.assertEqual(doc["stock_md5"], multi["stock_md5"])
+        self.assertEqual(doc["size"], multi["size"])
+        self.assertNotEqual(doc["patched_md5"], multi["patched_md5"])
+        table = {o: (old, new) for o, old, new in INST.HAL_TWO_SCREEN_PATCH}
+        self.assertEqual(sorted(table), [0x27CE8, 0x27CEC, 0x27CF4, 0x27CF8])
+        self.assertEqual(table[0x27CE8], (bytes.fromhex("24024021"), bytes.fromhex("24064021")))  # li a2, 16417
+        self.assertEqual(table[0x27CEC], (bytes.fromhex("14620004"), bytes.fromhex("1066ffd8")))  # beq v1, a2, 0x427c50 (skip)
+        self.assertEqual(table[0x27CF4], (bytes.fromhex("8fa30258"), bytes(4)))
+        self.assertEqual(table[0x27CF8], (bytes.fromhex("1460ffdc"), bytes(4)))
+        rcs = (INST.PAYLOAD / "scripts" / "rcS.local").read_text(encoding="utf-8")
+        stanza = rcs.split("# Two screen remotes, test build", 1)[1].split("\n# USB Ethernet", 1)[0]
+        for value in (doc["stock_md5"], doc["patched_md5"], INST.HAL_TWO_SCREEN_DEST, INST.TWO_SCREEN_CONF, INST.HAL_PATH):
+            self.assertIn(value, stanza)
+        # One boot only: the setting is cleared, and read back, before the mount.
+        self.assertLess(stanza.index(f"echo 0 > {INST.TWO_SCREEN_CONF} &&"), stanza.index("mount -o bind"))
+        self.assertIn(f"! grep ' {INST.HAL_PATH} ' /proc/mounts", stanza)
+
+    def test_patch_fails_closed(self):
+        """[PYTHON BEHAVIORAL] only the stock build is patched."""
+        self.assertEqual(INST.two_screen_test_hal(fake_two_screen_stock_hal()), fake_two_screen_hal())
+        with self.assertRaisesRegex(RuntimeError, "not the hal build"):
+            INST.two_screen_test_hal(fake_patched_hal())
+
+    def test_preflight_arm_writes_nothing(self):
+        hub = self.current_hub()
+        code, stdout, stderr = self.run_on(hub, "--preflight-only", "--two-screen-test", "arm")
+        self.assertEqual(code, 0, stderr or stdout)
+        self.assertEqual(kv_value(stdout, "two_screen_test"), "arm")
+        self.assertEqual(self.writes(hub), [])
+
+    def test_arm_binds_for_one_boot(self):
+        """[PYTHON BEHAVIORAL] arm: the copy and conf=1 go in, the hub reboots
+        into the test hal with the setting already cleared; the next reboot is
+        stock again and the copy is gone."""
+        hub = self.current_hub()
+        code, stdout, stderr = self.run_on(hub, "--two-screen-test", "arm")
+        self.assertEqual(code, 0, stderr or stdout)
+        self.assertIn(("service", "reboot"), hub.events)
+        self.assertEqual(kv_values(stdout, "two_screen_test_active"), ["no", "yes"])  # before, after the reboot
+        self.assertEqual(hub.fs[INST.HAL_TWO_SCREEN_DEST]["data"], fake_two_screen_hal())
+        self.assertEqual(hub.fs[INST.TWO_SCREEN_CONF]["data"], b"0\n")
+        self.assertEqual(hub.fs[INST.HAL_PATH]["data"], fake_two_screen_stock_hal())
+
+        hub.events.clear()
+        code, stdout, stderr = self.run_on(hub, "--two-screen-test", "off")
+        self.assertEqual(code, 0, stderr or stdout)
+        self.assertIn(("service", "reboot"), hub.events)
+        self.assertEqual(kv_values(stdout, "two_screen_test_active"), ["yes", "no"])
+        self.assertNotIn(INST.HAL_TWO_SCREEN_DEST, hub.fs)
+
+    def test_arm_without_restart_only_arms(self):
+        hub = self.current_hub()
+        code, stdout, stderr = self.run_on(hub, "--two-screen-test", "arm", restart=False)
+        self.assertEqual(code, 0, stderr or stdout)
+        self.assertNotIn(("service", "reboot"), hub.events)
+        self.assertEqual(hub.fs[INST.TWO_SCREEN_CONF]["data"], b"1\n")
+        self.assertIn("The next boot binds it", stdout)
+
+    def test_arm_refused_with_multi_remote_on(self):
+        hub = self.current_hub()
+        hub.fs[INST.MULTI_REMOTE_CONF] = {"data": b"1\n", "mode": "644"}
+        code, stdout, stderr = self.run_on(hub, "--two-screen-test", "arm")
+        self.assertNotEqual(code, 0)
+        self.assertIn("refused", stdout + stderr)
+        self.assertEqual(self.writes(hub), [])
+
+    def test_off_when_not_running_does_not_reboot(self):
+        hub = self.current_hub()
+        code, stdout, stderr = self.run_on(hub, "--two-screen-test", "off")
+        self.assertEqual(code, 0, stderr or stdout)
+        self.assertNotIn(("service", "reboot"), hub.events)
+
+    def test_leaving_the_flag_out_touches_nothing(self):
+        hub = self.current_hub()
+        code, stdout, stderr = self.run_on(hub)
+        self.assertEqual(code, 0, stderr or stdout)
+        self.assertEqual(self.writes(hub), [])
+        self.assertNotIn(("cmd", INST.two_screen_probe_command()), hub.events)
 
 
 class PowerShellStaticContract(unittest.TestCase):

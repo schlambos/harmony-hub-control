@@ -91,6 +91,32 @@ elif [ "$(cat /data/codex/multi_remote.conf 2>/dev/null)" = "1" ] && [ -f /data/
 	unset codex_hal_md5 codex_hal_multi_md5
 fi
 
+# Two screen remotes, test build (developer test only, see
+# docs/TWO_SCREEN_TEST.md): the stock hal with the same-model unpair lifted for
+# remotes with a screen. Armed for one boot: the setting is cleared before the
+# copy is bound, so the next boot of any kind (reboot, watchdog reset, power
+# cycle) starts the stock hal again and deletes the copy. Never bound together
+# with the multi-remote copy.
+if [ "$(cat /data/codex/two_screen_test.conf 2>/dev/null)" != "1" ] && [ -f /data/codex/bin/hal_twoscreen_test ]; then
+	rm -f /data/codex/bin/hal_twoscreen_test
+	echo "$(date) codex two-screen test off: removed /data/codex/bin/hal_twoscreen_test" >> /cache/codex-init.log
+elif [ "$(cat /data/codex/two_screen_test.conf 2>/dev/null)" = "1" ] && [ -f /data/codex/bin/hal_twoscreen_test ]; then
+	codex_hal_md5=$(md5sum /usr/bin/hal)
+	codex_hal_test_md5=$(md5sum /data/codex/bin/hal_twoscreen_test)
+	if ! grep ' /usr/bin/hal ' /proc/mounts >/dev/null 2>&1 &&
+		[ "${codex_hal_md5%% *}" = "a3fdd823440c43f36e235fe51c45f008" ] &&
+		[ "${codex_hal_test_md5%% *}" = "b6c34fbaa5e5fb4db0959278da754af3" ] &&
+		echo 0 > /data/codex/two_screen_test.conf &&
+		[ "$(cat /data/codex/two_screen_test.conf 2>/dev/null)" = "0" ]; then
+		mount -o bind /data/codex/bin/hal_twoscreen_test /usr/bin/hal &&
+			echo "$(date) codex two-screen test hal bound over /usr/bin/hal (this boot only)" >> /cache/codex-init.log
+	else
+		echo 0 > /data/codex/two_screen_test.conf
+		echo "$(date) codex two-screen test hal skipped (unexpected hal build, another copy bound, or the setting couldn't be cleared)" >> /cache/codex-init.log
+	fi
+	unset codex_hal_md5 codex_hal_test_md5
+fi
+
 # USB Ethernet over a self-powered OTG adapter (optional, see docs/USB_ETHERNET.md).
 if [ -x /data/codex/usb_eth_service.sh ] &&
 	grep '^ENABLED=1$' /data/codex/usb_eth.conf >/dev/null 2>&1; then

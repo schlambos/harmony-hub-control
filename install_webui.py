@@ -169,25 +169,50 @@ def load_hal_patch(path: Path = HAL_PATCH_FILE) -> tuple[str, str, list[tuple[in
 
 HAL_STOCK_MD5, HAL_MULTI_MD5, HAL_MULTI_PATCH = load_hal_patch()
 
+# Two screen remotes, test build (docs/TWO_SCREEN_TEST.md): a developer test,
+# not a feature. --two-screen-test arm makes a copy of the hub's stock hal with
+# the same-model unpair lifted for remotes with a screen (nothing else), and
+# sets it up for ONE boot: rcS.local clears the setting before it binds the
+# copy, so the next boot of any kind starts the stock hal again.
+HAL_TWO_SCREEN_DEST = "/data/codex/bin/hal_twoscreen_test"
+TWO_SCREEN_CONF = "/data/codex/two_screen_test.conf"
+HAL_TWO_SCREEN_PATCH_FILE = PAYLOAD / "helpers" / "hal_twoscreen_test_patch.json"
+_, HAL_TWO_SCREEN_MD5, HAL_TWO_SCREEN_PATCH = load_hal_patch(HAL_TWO_SCREEN_PATCH_FILE)
 
-def patched_hal(data: bytes) -> bytes:
-    """The multi-remote hal from the hub's own /usr/bin/hal; fails closed."""
+
+def two_screen_probe_command() -> str:
+    """The multi-remote setting and the md5 of the hal that runs."""
+    return f"echo multi=$(cat {MULTI_REMOTE_CONF} 2>/dev/null); md5sum {HAL_PATH}"
+
+
+def apply_hal_patch(data: bytes, what: str, patch: list[tuple[int, bytes, bytes]], patched_md5: str) -> bytes:
+    """A patched hal from the hub's own /usr/bin/hal; fails closed."""
     digest = hashlib.md5(data).hexdigest()
-    if digest == HAL_MULTI_MD5:
+    if digest == patched_md5:
         return data  # already the patched build (read while it is bind-mounted)
     if digest != HAL_STOCK_MD5:
         raise RuntimeError(
-            f"{HAL_PATH} on this hub is not the hal build multi-remote supports "
+            f"{HAL_PATH} on this hub is not the hal build {what} supports "
             f"(md5 {digest}, expected {HAL_STOCK_MD5} from firmware 4.15.600)"
         )
     out = bytearray(data)
-    for offset, old, new in HAL_MULTI_PATCH:
+    for offset, old, new in patch:
         if bytes(out[offset : offset + len(old)]) != old:
             raise RuntimeError(f"{HAL_PATH}: unexpected bytes at {offset:#x}")
         out[offset : offset + len(new)] = new
-    if hashlib.md5(out).hexdigest() != HAL_MULTI_MD5:
+    if hashlib.md5(out).hexdigest() != patched_md5:
         raise RuntimeError("the patched hal does not match its expected md5")
     return bytes(out)
+
+
+def patched_hal(data: bytes) -> bytes:
+    """The multi-remote hal from the hub's own /usr/bin/hal; fails closed."""
+    return apply_hal_patch(data, "multi-remote", HAL_MULTI_PATCH, HAL_MULTI_MD5)
+
+
+def two_screen_test_hal(data: bytes) -> bytes:
+    """The two-screen test hal from the hub's own /usr/bin/hal; fails closed."""
+    return apply_hal_patch(data, "the two-screen test", HAL_TWO_SCREEN_PATCH, HAL_TWO_SCREEN_MD5)
 
 
 HANDOFF_REQUIRED_PATHS = [
@@ -520,6 +545,8 @@ class Installer:
         self.candidates: list[Candidate] = []
         # Whether the multi-remote hal runs now; None until checked (--multi-remote only).
         self.hal_bound: bool | None = None
+        # Whether the two-screen test hal runs now (--two-screen-test only).
+        self.two_screen_running = False
         self.probe: dict[str, dict[str, str]] = {}
         self.handoff_estimate = 0
         self.forward_total = 0
@@ -873,6 +900,14 @@ class Installer:
         elif self.args.multi_remote == "off":
             # The copy itself goes after a successful install (post_install_wiring).
             candidates.append(Candidate(MULTI_REMOTE_CONF, "644", "config", text="0\n"))
+        # Two-screen test hal: only when asked. rcS.local deletes the copy at
+        # the first boot that finds the setting off.
+        if self.args.two_screen_test == "arm":
+            hal = two_screen_test_hal(self.read_remote_bytes(HAL_PATH))
+            candidates.append(Candidate(HAL_TWO_SCREEN_DEST, "755", "binary", blob=hal))
+            candidates.append(Candidate(TWO_SCREEN_CONF, "644", "config", text="1\n"))
+        elif self.args.two_screen_test == "off":
+            candidates.append(Candidate(TWO_SCREEN_CONF, "644", "config", text="0\n"))
         if clean or self.mqtt_explicit():
             candidates.append(
                 Candidate(
@@ -1734,6 +1769,53 @@ class Installer:
         cmd = "mkdir -p " + " ".join(remote_quote(d) for d in dirs)
         self.run_remote(cmd, timeout=30, quiet=True)
 
+    def probe_two_screen(self) -> tuple[str, str]:
+        """(multi-remote setting, md5 of the hal that runs)."""
+        out = self.run_remote(two_screen_probe_command(), timeout=30, quiet=True)
+        multi = re.search(r"^multi=(.*)$", out, re.M)
+        digest = re.search(r"^([0-9a-f]{32})\s", out, re.M)
+        if not multi or not digest:
+            raise RuntimeError(f"couldn't tell which hal runs: {out!r}")
+        return multi.group(1).strip(), digest.group(1)
+
+    def check_two_screen_test(self) -> None:
+        """--two-screen-test: the test copy is the stock hal plus four words, so
+        it can't run together with the multi-remote copy."""
+        if not self.args.two_screen_test:
+            return
+        multi, digest = self.probe_two_screen()
+        self.two_screen_running = digest == HAL_TWO_SCREEN_MD5
+        kv(f"two_screen_test={self.args.two_screen_test}")
+        kv(f"two_screen_test_active={'yes' if self.two_screen_running else 'no'}")
+        if self.args.two_screen_test != "arm":
+            return
+        if multi == "1" or digest == HAL_MULTI_MD5:
+            raise RuntimeError(
+                "--two-screen-test arm refused: multiple remotes of one model is on. "
+                "Turn it off first (--multi-remote off); the two copies of hal can't run together."
+            )
+
+    def two_screen_changed(self) -> bool:
+        # arm: the hub must boot once more to bind the copy. off: only a reboot
+        # swaps a running test hal for the stock one.
+        if self.args.two_screen_test == "arm":
+            return True
+        return self.args.two_screen_test == "off" and self.two_screen_running
+
+    def verify_two_screen_after_reboot(self) -> None:
+        if not self.args.two_screen_test:
+            return
+        want = self.args.two_screen_test == "arm"
+        active = self.probe_two_screen()[1] == HAL_TWO_SCREEN_MD5
+        kv(f"two_screen_test_active={'yes' if active else 'no'}")
+        if active != want:
+            info(
+                "WARNING: the hub restarted but " + ("did not bind" if want else "still runs")
+                + " the two-screen test hal; see /cache/codex-init.log on the hub"
+            )
+        elif want:
+            info("The two-screen test hal runs for this boot only; any restart returns to the stock hal.")
+
     def cloud_blocker_changed(self) -> bool:
         cloud = {"/opt/luaworks/tasks/connectserver/netservicestarter.lua", "/data/codex/cloud_blocker.conf"}
         return any(c.dest in cloud for c in self.active_candidates())
@@ -1755,6 +1837,7 @@ class Installer:
         wait_for_port(self.args.hub_host, self.args.port, 180, "SSH")
         wait_for_port(self.args.hub_host, 8080, 180, "Web UI")
         self.verify_multi_remote_after_reboot()
+        self.verify_two_screen_after_reboot()
 
     def verify_multi_remote_after_reboot(self) -> None:
         if self.args.multi_remote not in ("on", "off"):
@@ -1780,6 +1863,7 @@ class Installer:
         step("Resolving hub id")
         self.resolve_hub_id()
         self.check_multi_remote_off()
+        self.check_two_screen_test()
 
         step("Building candidate inventory")
         self.build_inventory()
@@ -1841,6 +1925,13 @@ class Installer:
                 self.reboot_and_wait()
                 step("Done")
                 info("The hub already matched this payload; it was restarted to apply the multi-remote setting.")
+                return 0
+            if self.two_screen_changed() and not self.args.no_apply_cloud_restart:
+                step("Restarting the hub")
+                info("The files already match; rebooting the hub to apply the two-screen test setting.")
+                self.reboot_and_wait()
+                step("Done")
+                info("The hub already matched this payload; it was restarted to apply the two-screen test setting.")
                 return 0
             step("Done")
             info("The hub already matches this payload; nothing was installed or restarted.")
@@ -1909,14 +2000,17 @@ class Installer:
 
         if (
             self.cloud_blocker_changed() or self.plugins_changed() or self.multi_remote_changed()
+            or self.two_screen_changed()
         ) and not self.args.no_apply_cloud_restart:
             step("Restarting the hub")
             if self.cloud_blocker_changed():
                 info("Rebooting the hub so Logitech cloud services restart in blocked mode.")
             elif self.plugins_changed():
                 info("Rebooting the hub so its engine loads the updated plugins.")
-            else:
+            elif self.multi_remote_changed():
                 info("Rebooting the hub so it starts the " + self.wanted_hal() + " hal.")
+            else:
+                info("Rebooting the hub to apply the two-screen test setting.")
             self.reboot_and_wait()
 
         step("Done")
@@ -1937,6 +2031,8 @@ class Installer:
                 + ("on (remotes without a screen)" if self.args.multi_remote == "on" else "off")
                 + (" and applied" if self.multi_remote_changed() else " (unchanged)")
             )
+        if self.args.two_screen_test == "arm" and self.args.no_apply_cloud_restart:
+            info("Two-screen test hal: armed. The next boot binds it, for that boot only.")
         info("If IR commands do not work, update /data/codex/hub_id with the correct hub id and restart codex_webui.")
         return 0
 
@@ -1987,6 +2083,16 @@ def parse_args(argv: list[str]) -> argparse.Namespace:
             "unchanged. See docs/MULTI_REMOTE.md"
         ),
     )
+    parser.add_argument(
+        "--two-screen-test",
+        choices=("arm", "off"),
+        default=None,
+        help=(
+            "Developer test, not a feature: 'arm' sets up a copy of the hub's hal that keeps a "
+            "second remote with a screen paired, for the next boot only; 'off' disarms it and "
+            "restarts a hub that runs it. Omitted: unchanged. See docs/TWO_SCREEN_TEST.md"
+        ),
+    )
     parser.add_argument("--no-prompt", action="store_true", help="Fail instead of asking for missing required values")
     parser.add_argument(
         "--remove-root-tool-leftovers",
@@ -2031,6 +2137,8 @@ def parse_args(argv: list[str]) -> argparse.Namespace:
     args.multi_remote_force = args.multi_remote == "force-off"
     if args.multi_remote_force:
         args.multi_remote = "off"
+    if args.two_screen_test and args.multi_remote:
+        parser.error("--two-screen-test can't be combined with --multi-remote")
     return args
 
 

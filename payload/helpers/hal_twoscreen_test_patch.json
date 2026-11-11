@@ -1,0 +1,29 @@
+{
+ "description": "TEST ONLY (two screen remotes, Phase 1): stock hal with the 16417 same-model unpair lifted. HOT is still a singleton.",
+ "file": "/usr/bin/hal",
+ "size": 363640,
+ "stock_md5": "a3fdd823440c43f36e235fe51c45f008",
+ "patched_md5": "b6c34fbaa5e5fb4db0959278da754af3",
+ "edits": [
+  {
+   "offset": "0x27ce8",
+   "stock": "24024021",
+   "patched": "24064021"
+  },
+  {
+   "offset": "0x27cec",
+   "stock": "14620004",
+   "patched": "1066ffd8"
+  },
+  {
+   "offset": "0x27cf4",
+   "stock": "8fa30258",
+   "patched": "00000000"
+  },
+  {
+   "offset": "0x27cf8",
+   "stock": "1460ffdc",
+   "patched": "00000000"
+  }
+ ]
+}
