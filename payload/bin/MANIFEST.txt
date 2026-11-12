@@ -6,7 +6,7 @@
 -rwxr-xr-x 1 codex codex  53848 Nov 11 08:00 codex_hal_ltcp
 -rwxr-xr-x 1 codex codex  47160 Nov 11 08:00 codex_hbus
 -rwxr-xr-x 1 codex codex 48680 Nov 11 08:00 codex_portal
--rwxr-xr-x 1 codex codex 1312168 Nov 12 08:46 codex_webui
+-rwxr-xr-x 1 codex codex 1315704 Nov 12 08:46 codex_webui
 -rwxr-xr-x 1 codex codex 577296 Aug 19 10:05 dropbearmulti
 -rwxr-xr-x 1 codex codex 418688 Nov 11 09:10 busybox-extra
 225897177e00a87d11765dcf75f29540  codex_dhcpd
@@ -17,6 +17,6 @@ f902638ca6e497a0809a6ccd40d27915  codex_usbeth
 2a179fc9ad064745a4ecf285feea080f  codex_hal_ltcp
 090476af39b3a246ea5bd25c69ca061d  codex_bthid_keyboard
 91baeb6d8d67bd6d3ffd9bc822a01b1d  codex_bt_pair_agent
-41aad28c8a90ccef87758f33bfc35397  codex_webui
+a1a1da234d41a2703df7b932f7aa859f  codex_webui
 3733327fd04bca282dbf06f33da0bf6c  dropbearmulti
 132ede57c5fc479a2bf94069a7f91f1c  busybox-extra

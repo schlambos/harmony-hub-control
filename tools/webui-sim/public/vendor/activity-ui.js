@@ -301,9 +301,16 @@
     });
   }
 
+  function activityMapRemotePrefix(map) {
+    const match = text(map && map.ButtonMapIdentifier).match(/^(.+?)Activity-?\d+$/);
+    return match ? match[1] : "";
+  }
+
   function activityMapSurfaceKey(map) {
     if (!map || typeof map !== "object") return "";
     if (isKeyboardHidActivityMap(map)) return "virtual|16420|ActivityButtonMap";
+    const prefix = activityMapRemotePrefix(map);
+    if (prefix) return `${prefix}|${text(map.__type)}`;
     const surface = map["SurfaceId-"] ?? map.SurfaceId;
     const buttonSurface = map["ButtonMapSurfaceId-"] ?? map.ButtonMapSurfaceId;
     if (surface == null && buttonSurface == null) return "";
@@ -313,6 +320,45 @@
       buttonSurface,
       map.__type
     ].map(text).join("|");
+  }
+
+  function remoteSurfaceTemplate(prefix) {
+    const maps = buttonMaps();
+    const hasSurface = (map) =>
+      map &&
+      (map["SurfaceId-"] ?? map.SurfaceId ?? map["ButtonMapSurfaceId-"] ?? map.ButtonMapSurfaceId) != null;
+    const pick = (predicate) => maps.find((map) => hasSurface(map) && predicate(map));
+    const id = (map) => text(map && map.ButtonMapIdentifier);
+    return (prefix && (
+      pick((map) => text(map.__type).includes("ActivityButtonMap") && id(map).startsWith(`${prefix}Activity`)) ||
+      pick((map) => id(map) === `${prefix}Root`) ||
+      pick((map) => id(map).startsWith(prefix))
+    )) ||
+      pick((map) => text(map.__type).includes("ActivityButtonMap")) ||
+      pick((map) => id(map).endsWith("Root")) ||
+      pick(() => true) ||
+      null;
+  }
+
+  function backfillMapSurfaceIds(map) {
+    if (!map || typeof map !== "object") return false;
+    const hasAll = ["ButtonMapSurfaceId-", "RemoteId-", "SurfaceId-"].every((key) => map[key] != null);
+    if (hasAll) return false;
+    const source = remoteSurfaceTemplate(activityMapRemotePrefix(map));
+    if (!source) return false;
+    let changed = false;
+    [
+      ["ButtonMapSurfaceId-", "ButtonMapSurfaceId"],
+      ["RemoteId-", "RemoteId"],
+      ["SurfaceId-", "SurfaceId"]
+    ].forEach(([key, alias]) => {
+      const value = source[key] ?? source[alias];
+      if (map[key] == null && value != null) {
+        map[key] = value;
+        changed = true;
+      }
+    });
+    return changed;
   }
 
   function isClientAction(action) {
@@ -406,6 +452,9 @@
 
   function sameRemoteSurface(left, right) {
     if (!left || !right) return false;
+    const leftPrefix = activityMapRemotePrefix(left);
+    const rightPrefix = activityMapRemotePrefix(right);
+    if (leftPrefix && rightPrefix) return leftPrefix === rightPrefix;
     return sameId(left["RemoteId-"] ?? left.RemoteId, right["RemoteId-"] ?? right.RemoteId) &&
       sameId(left["SurfaceId-"] ?? left.SurfaceId, right["SurfaceId-"] ?? right.SurfaceId) &&
       sameId(
@@ -531,17 +580,18 @@
         ButtonLongPressAction: null
       });
     });
+    const fallbackSurface = remoteSurfaceTemplate("16414") || {};
     const map = {
       "ButtonMapId-": newMapId(),
       "ActivityId-": numericValue(objectId(activity)),
       Buttons: buttons,
-      "ButtonMapSurfaceId-": source["ButtonMapSurfaceId-"] ?? source.ButtonMapSurfaceId,
-      "RemoteId-": source["RemoteId-"] ?? source.RemoteId,
+      "ButtonMapSurfaceId-": source["ButtonMapSurfaceId-"] ?? source.ButtonMapSurfaceId ?? fallbackSurface["ButtonMapSurfaceId-"] ?? fallbackSurface.ButtonMapSurfaceId ?? null,
+      "RemoteId-": source["RemoteId-"] ?? source.RemoteId ?? fallbackSurface["RemoteId-"] ?? fallbackSurface.RemoteId ?? null,
       __type: "ActivityButtonMap",
       ButtonMapIdentifier: `16420Activity${objectId(activity)}`,
       DateModified: harmonyDate(),
       Sequences: [],
-      "SurfaceId-": source["SurfaceId-"] ?? source.SurfaceId
+      "SurfaceId-": source["SurfaceId-"] ?? source.SurfaceId ?? fallbackSurface["SurfaceId-"] ?? fallbackSurface.SurfaceId ?? null
     };
     pruneActionlessButtons(map);
     return map;
@@ -810,7 +860,9 @@
     buttonMaps().forEach((map) => {
       const activityId = text(map && map["ActivityId-"]);
       if (!activityId || activityId === "-1" || !ids.has(activityId)) return;
-      if (!normalizeActivityMapIdentifiers(map, activityId)) return;
+      const normalized = normalizeActivityMapIdentifiers(map, activityId);
+      const backfilled = backfillMapSurfaceIds(map);
+      if (!normalized && !backfilled) return;
       if (Object.prototype.hasOwnProperty.call(map, "DateModified")) {
         map.DateModified = harmonyDate();
       }
@@ -1259,8 +1311,10 @@
 
   function mapLabel(map, index) {
     if (isKeyboardHidActivityMap(map)) return "Keyboard HID";
+    const prefix = activityMapRemotePrefix(map);
     const surface = map && (map["SurfaceId-"] ?? map["ButtonMapSurfaceId-"] ?? map.SurfaceId);
     const type = text(map && map.__type).replace("ButtonMap", "") || "Surface";
+    if (prefix) return `${type} ${prefix}${surface == null ? "" : ` (${surface})`}`;
     return `${type} ${surface == null ? index + 1 : surface}`;
   }
 
@@ -1768,6 +1822,7 @@
         .map((device) => device.id)
     );
     const mapIds = new Set();
+    const mapIdentifiers = new Set();
     const buttonIds = new Set();
     const activitySurfaces = new Map();
     const activityFunctionCounts = new Map();
@@ -1853,6 +1908,13 @@
       if (id && id !== "0") {
         if (mapIds.has(id)) throw new Error(`Button map ID ${id} is duplicated.`);
         mapIds.add(id);
+      }
+      const identifier = text(map && map.ButtonMapIdentifier);
+      if (identifier) {
+        if (mapIdentifiers.has(identifier)) {
+          throw new Error(`Button map identifier ${identifier} is duplicated.`);
+        }
+        mapIdentifiers.add(identifier);
       }
       if (map && Array.isArray(map.Buttons)) {
         map.Buttons.forEach((button) => {

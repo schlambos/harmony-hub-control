@@ -1,6 +1,8 @@
 #!/usr/bin/env node
 
 import fs from "node:fs";
+import path from "node:path";
+import { fileURLToPath } from "node:url";
 
 const ACTION_FIELDS = [
   "ButtonAction",
@@ -97,7 +99,14 @@ function parseArgs(argv) {
   return options;
 }
 
-const options = parseArgs(process.argv.slice(2));
+let options = {
+  baseUrl: "",
+  replacements: new Map(),
+  inputAliases: new Map(),
+  outputMap: "",
+  outputFunctions: "",
+  apply: false
+};
 const clone = (value) => JSON.parse(JSON.stringify(value));
 const idText = (value) => String(value == null ? "" : value);
 const idValue = (value) => (/^\d+$/.test(idText(value)) ? Number(value) : value);
@@ -266,13 +275,62 @@ function resolveCommand(commands, action) {
   return exactFunction.length === 1 ? exactFunction[0] : null;
 }
 
+function activityMapRemotePrefix(map) {
+  const match = String(map?.ButtonMapIdentifier || "").match(/^(.+?)Activity-?\d+$/);
+  return match ? match[1] : "";
+}
+
 function surfaceKey(map) {
+  if (!map || typeof map !== "object") return "";
+  const prefix = activityMapRemotePrefix(map);
+  if (prefix) return `${prefix}|${idText(map.__type)}`;
+  const surface = map["SurfaceId-"] ?? map.SurfaceId;
+  const buttonSurface = map["ButtonMapSurfaceId-"] ?? map.ButtonMapSurfaceId;
+  if (surface == null && buttonSurface == null) return "";
   return [
-    map?.["RemoteId-"] ?? map?.RemoteId,
-    map?.["SurfaceId-"] ?? map?.SurfaceId,
-    map?.["ButtonMapSurfaceId-"] ?? map?.ButtonMapSurfaceId,
-    map?.__type
+    map["RemoteId-"] ?? map.RemoteId,
+    surface,
+    buttonSurface,
+    map.__type
   ].map(idText).join("|");
+}
+
+function remoteSurfaceTemplate(buttonMaps, prefix) {
+  const hasSurface = (map) =>
+    map &&
+    (map["SurfaceId-"] ?? map.SurfaceId ?? map["ButtonMapSurfaceId-"] ?? map.ButtonMapSurfaceId) != null;
+  const pick = (predicate) => buttonMaps.find((map) => hasSurface(map) && predicate(map));
+  const id = (map) => String(map?.ButtonMapIdentifier || "");
+  return (prefix && (
+    pick((map) => String(map?.__type || "").includes("ActivityButtonMap") && id(map).startsWith(`${prefix}Activity`)) ||
+    pick((map) => id(map) === `${prefix}Root`) ||
+    pick((map) => id(map).startsWith(prefix))
+  )) ||
+    pick((map) => String(map?.__type || "").includes("ActivityButtonMap")) ||
+    pick((map) => id(map).endsWith("Root")) ||
+    pick(() => true) ||
+    null;
+}
+
+function backfillMapSurfaceIds(map, buttonMaps) {
+  if (!map || typeof map !== "object") return false;
+  const hasAll = ["ButtonMapSurfaceId-", "RemoteId-", "SurfaceId-"].every((key) => map[key] != null);
+  if (hasAll) return false;
+  const source = remoteSurfaceTemplate(buttonMaps, activityMapRemotePrefix(map));
+  if (!source) return false;
+  let changed = false;
+  [
+    ["ButtonMapSurfaceId-", "ButtonMapSurfaceId"],
+    ["RemoteId-", "RemoteId"],
+    ["SurfaceId-", "SurfaceId"]
+  ].forEach(([key, alias]) => {
+    const value = source[key] ?? source[alias];
+    if (map[key] == null && value != null) {
+      map[key] = value;
+      changed = true;
+    }
+  });
+  return changed;
 }
 
 function replaceActivityStrings(value, oldActivityId, newActivityId) {
@@ -481,6 +539,9 @@ function buttonIdentity(button) {
 
 function sameRemoteSurface(left, right) {
   if (!left || !right) return false;
+  const leftPrefix = activityMapRemotePrefix(left);
+  const rightPrefix = activityMapRemotePrefix(right);
+  if (leftPrefix && rightPrefix) return leftPrefix === rightPrefix;
   return idText(left["RemoteId-"] ?? left.RemoteId) ===
       idText(right["RemoteId-"] ?? right.RemoteId) &&
     idText(left["SurfaceId-"] ?? left.SurfaceId) ===
@@ -657,8 +718,15 @@ function repairPersistedActivityMaps(mapList, ledger) {
 // because 16414Root ships action-less shortcut buttons.
 function assertActivityMapIdentities(maps) {
   const owners = new Map();
+  const seenIdentifiers = new Set();
   for (const map of maps) {
     const identifier = idText(map?.ButtonMapIdentifier);
+    if (identifier) {
+      if (seenIdentifiers.has(identifier)) {
+        throw new Error(`post-repair ButtonMapIdentifier ${identifier} is duplicated`);
+      }
+      seenIdentifiers.add(identifier);
+    }
     const isActivityMap = String(map?.__type || "").includes("ActivityButtonMap");
     if (isActivityMap && !isAllocatedIdentity(map["ButtonMapId-"])) {
       throw new Error(`post-repair activity map ${identifier} has no ButtonMapId-`);
@@ -719,7 +787,11 @@ function identityTotals(repairs) {
   });
 }
 
-function repairGraph(config) {
+export function repairGraph(config, repairOptions = {}) {
+  const activeOptions = {
+    replacements: repairOptions.replacements || options.replacements || new Map(),
+    inputAliases: repairOptions.inputAliases || options.inputAliases || new Map()
+  };
   const next = clone(config);
   const devices = devicesFrom(next);
   const activityList = next.activityList;
@@ -761,7 +833,7 @@ function repairGraph(config) {
     for (const role of activity.Roles || []) {
       const oldId = idText(role?.["DeviceId-"]);
       if (!oldId || devices.has(oldId)) continue;
-      const newId = options.replacements.get(oldId);
+      const newId = activeOptions.replacements.get(oldId);
       if (!newId || !devices.has(newId)) {
         problems.push(`Activity ${activity.Name} role ${role.__type} references deleted device ${oldId}`);
         continue;
@@ -779,7 +851,7 @@ function repairGraph(config) {
       if (!oldInput) continue;
       const names = inputNames(devices.get(newId));
       const exact = names.find((name) => name.toLowerCase() === oldInput.toLowerCase());
-      const alias = options.inputAliases.get(`${oldId}\u0000${oldInput.toLowerCase()}`);
+      const alias = activeOptions.inputAliases.get(`${oldId}\u0000${oldInput.toLowerCase()}`);
       const target = exact || (alias && names.find((name) => name.toLowerCase() === alias.toLowerCase()));
       if (!target) {
         problems.push(
@@ -890,12 +962,13 @@ function repairGraph(config) {
     const mapActivityId = idText(map?.["ActivityId-"]);
     if (mapActivityId && mapActivityId !== "-1" && activityIds.has(mapActivityId)) {
       const changes = normalizeActivityMapIdentifiers(map, mapActivityId);
-      if (changes > 0) {
+      const backfilled = backfillMapSurfaceIds(map, mapList.ButtonMaps);
+      if (changes > 0 || backfilled) {
         summary.repairedActivityMenuIdentifiers.push({
           activityId: mapActivityId,
           mapId: map["ButtonMapId-"] ?? map.ButtonMapId ?? null,
           surfaceId: map["SurfaceId-"] ?? map["ButtonMapSurfaceId-"] ?? null,
-          changes
+          changes: changes + (backfilled ? 1 : 0)
         });
       }
     }
@@ -915,7 +988,7 @@ function repairGraph(config) {
         }
         const oldId = idText(action?.["DeviceId-"]);
         if (!oldId || devices.has(oldId)) continue;
-        const newId = options.replacements.get(oldId);
+        const newId = activeOptions.replacements.get(oldId);
         if (!newId || !devices.has(newId)) {
           problems.push(
             `Map ${map["ButtonMapId-"] ?? map.ButtonMapId} ${field} ${action.CommandName} references deleted device ${oldId}`
@@ -953,6 +1026,7 @@ function repairGraph(config) {
     if (!activityId || !activityIds.has(activityId) ||
         isKeyboardHidActivityMap(map)) continue;
     const key = surfaceKey(map);
+    if (!key) continue;
     if (!templatesBySurface.has(key)) templatesBySurface.set(key, []);
     templatesBySurface.get(key).push(map);
   }
@@ -963,7 +1037,8 @@ function repairGraph(config) {
         idText(map?.["ActivityId-"]) === activityId &&
         !isKeyboardHidActivityMap(map)
       )
-      .map(surfaceKey));
+      .map(surfaceKey)
+      .filter(Boolean));
     const roleDeviceIds = activityRoleDeviceIds(activity);
     for (const [key, templates] of templatesBySurface) {
       if (existing.has(key)) continue;
@@ -978,6 +1053,7 @@ function repairGraph(config) {
         continue;
       }
       const created = cloneAllocationMap(ranked[0].template, activity, ledger);
+      backfillMapSurfaceIds(created, mapList.ButtonMaps);
       mapList.ButtonMaps.push(created);
       existing.add(key);
       summary.createdActivityMaps.push({
@@ -1010,6 +1086,7 @@ function repairGraph(config) {
     const template = keyboardHidTemplate(mapList, activityId);
     const map = device && template &&
       composeKeyboardHidMap(template, device, ledger);
+    if (map) backfillMapSurfaceIds(map, mapList.ButtonMaps);
     if (!map) {
       problems.push(`Activity ${activity.Name} cannot create its 16420 keyboard HID map`);
       continue;
@@ -1062,7 +1139,7 @@ function repairGraph(config) {
       for (const action of group.Functions || []) {
         const oldId = idText(action?.["DeviceId-"]);
         if (!oldId || devices.has(oldId)) continue;
-        const newId = options.replacements.get(oldId);
+        const newId = activeOptions.replacements.get(oldId);
         if (!newId || !devices.has(newId)) {
           problems.push(
             `Function map ${map.UIModeName || map.__type} ${group.Name}/${action.Name} references deleted device ${oldId}`
@@ -1281,86 +1358,95 @@ function repairGraph(config) {
   return { next, summary };
 }
 
-const current = await fetchJson(`${options.baseUrl}/api/activity-config`);
-const { next, summary } = repairGraph(current);
-const identities = identityTotals(summary.identityRepairs);
-const condensed = {
-  revision: current.revision,
-  roleReplacements: summary.roleReplacements,
-  inputReplacements: summary.inputReplacements,
-  actionReplacementCount: summary.actionReplacements.length,
-  actionReplacementsByDevice: Object.values(summary.actionReplacements.reduce((groups, item) => {
-    const key = `${item.oldDeviceId}->${item.newDeviceId}`;
-    groups[key] ||= { replacement: key, count: 0 };
-    groups[key].count += 1;
-    return groups;
-  }, {})),
-  functionActionReplacementCount: summary.functionActionReplacements.length,
-  functionActionReplacementsByDevice: Object.values(
-    summary.functionActionReplacements.reduce((groups, item) => {
+export { surfaceKey, identityTotals };
+
+async function main() {
+  options = parseArgs(process.argv.slice(2));
+  const current = await fetchJson(`${options.baseUrl}/api/activity-config`);
+  const { next, summary } = repairGraph(current, options);
+  const identities = identityTotals(summary.identityRepairs);
+  const condensed = {
+    revision: current.revision,
+    roleReplacements: summary.roleReplacements,
+    inputReplacements: summary.inputReplacements,
+    actionReplacementCount: summary.actionReplacements.length,
+    actionReplacementsByDevice: Object.values(summary.actionReplacements.reduce((groups, item) => {
       const key = `${item.oldDeviceId}->${item.newDeviceId}`;
       groups[key] ||= { replacement: key, count: 0 };
       groups[key].count += 1;
       return groups;
-    }, {})
-  ),
-  removedOrphanActivityMaps: summary.removedOrphanActivityMaps,
-  removedDeletedDeviceMaps: summary.removedDeletedDeviceMaps,
-  removedOrphanActivityActions: summary.removedOrphanActivityActions,
-  repairedActivityMenuIdentifiers: summary.repairedActivityMenuIdentifiers,
-  createdBluetoothKeyboardRoles: summary.createdBluetoothKeyboardRoles,
-  createdActivityMaps: summary.createdActivityMaps,
-  routedButtonActionCount: summary.routedButtonActionCount,
-  createdKeyboardHidMaps: summary.createdKeyboardHidMaps,
-  removedKeyboardHidMaps: summary.removedKeyboardHidMaps,
-  removedOrphanActivityFunctionMaps: summary.removedOrphanActivityFunctionMaps,
-  removedDeletedDeviceFunctionMaps: summary.removedDeletedDeviceFunctionMaps,
-  createdActivityFunctionMaps: summary.createdActivityFunctionMaps,
-  allocatedMapIdCount: identities.allocatedMapIds,
-  allocatedButtonIdCount: identities.allocatedButtonIds,
-  buttonStateCorrectionCount: identities.buttonStateCorrections,
-  prunedActionlessButtonCount: identities.prunedActionlessButtons,
-  prunedActionlessMapCount: identities.prunedActionlessMaps,
-  migratedMapIdAliasCount: identities.migratedMapIdAliases,
-  normalizedSequenceCount: identities.normalizedSequences,
-  identityRepairs: summary.identityRepairs,
-  resultingMapCount: next.mapList.ButtonMaps.length,
-  resultingFunctionMapCount: next.functionList.FunctionMaps.length
-};
-console.log(JSON.stringify(condensed, null, 2));
+    }, {})),
+    functionActionReplacementCount: summary.functionActionReplacements.length,
+    functionActionReplacementsByDevice: Object.values(
+      summary.functionActionReplacements.reduce((groups, item) => {
+        const key = `${item.oldDeviceId}->${item.newDeviceId}`;
+        groups[key] ||= { replacement: key, count: 0 };
+        groups[key].count += 1;
+        return groups;
+      }, {})
+    ),
+    removedOrphanActivityMaps: summary.removedOrphanActivityMaps,
+    removedDeletedDeviceMaps: summary.removedDeletedDeviceMaps,
+    removedOrphanActivityActions: summary.removedOrphanActivityActions,
+    repairedActivityMenuIdentifiers: summary.repairedActivityMenuIdentifiers,
+    createdBluetoothKeyboardRoles: summary.createdBluetoothKeyboardRoles,
+    createdActivityMaps: summary.createdActivityMaps,
+    routedButtonActionCount: summary.routedButtonActionCount,
+    createdKeyboardHidMaps: summary.createdKeyboardHidMaps,
+    removedKeyboardHidMaps: summary.removedKeyboardHidMaps,
+    removedOrphanActivityFunctionMaps: summary.removedOrphanActivityFunctionMaps,
+    removedDeletedDeviceFunctionMaps: summary.removedDeletedDeviceFunctionMaps,
+    createdActivityFunctionMaps: summary.createdActivityFunctionMaps,
+    allocatedMapIdCount: identities.allocatedMapIds,
+    allocatedButtonIdCount: identities.allocatedButtonIds,
+    buttonStateCorrectionCount: identities.buttonStateCorrections,
+    prunedActionlessButtonCount: identities.prunedActionlessButtons,
+    prunedActionlessMapCount: identities.prunedActionlessMaps,
+    migratedMapIdAliasCount: identities.migratedMapIdAliases,
+    normalizedSequenceCount: identities.normalizedSequences,
+    identityRepairs: summary.identityRepairs,
+    resultingMapCount: next.mapList.ButtonMaps.length,
+    resultingFunctionMapCount: next.functionList.FunctionMaps.length
+  };
+  console.log(JSON.stringify(condensed, null, 2));
 
-if (options.outputMap) {
-  fs.writeFileSync(options.outputMap, `${JSON.stringify(next.mapList)}\n`, {
-    encoding: "utf8",
-    mode: 0o600
+  if (options.outputMap) {
+    fs.writeFileSync(options.outputMap, `${JSON.stringify(next.mapList)}\n`, {
+      encoding: "utf8",
+      mode: 0o600
+    });
+    console.log(`\nProposed MapList written to ${options.outputMap}.`);
+  }
+
+  if (options.outputFunctions) {
+    fs.writeFileSync(
+      options.outputFunctions,
+      `${JSON.stringify(next.functionList)}\n`,
+      { encoding: "utf8", mode: 0o600 }
+    );
+    console.log(`\nProposed FunctionList written to ${options.outputFunctions}.`);
+  }
+
+  if (!options.apply) {
+    console.log("\nDry run only; no Hub resources were changed.");
+    process.exit(0);
+  }
+
+  const result = await fetchJson(`${options.baseUrl}/api/activity-save`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({
+      baseRevision: current.revision,
+      syncRemote: false,
+      activityList: next.activityList,
+      mapList: next.mapList,
+      functionList: next.functionList
+    })
   });
-  console.log(`\nProposed MapList written to ${options.outputMap}.`);
+  console.log("\nHarmony response:");
+  console.log(JSON.stringify(result, null, 2));
 }
 
-if (options.outputFunctions) {
-  fs.writeFileSync(
-    options.outputFunctions,
-    `${JSON.stringify(next.functionList)}\n`,
-    { encoding: "utf8", mode: 0o600 }
-  );
-  console.log(`\nProposed FunctionList written to ${options.outputFunctions}.`);
+if (process.argv[1] && path.resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {
+  await main();
 }
-
-if (!options.apply) {
-  console.log("\nDry run only; no Hub resources were changed.");
-  process.exit(0);
-}
-
-const result = await fetchJson(`${options.baseUrl}/api/activity-save`, {
-  method: "POST",
-  headers: { "Content-Type": "application/json" },
-  body: JSON.stringify({
-    baseRevision: current.revision,
-    syncRemote: false,
-    activityList: next.activityList,
-    mapList: next.mapList,
-    functionList: next.functionList
-  })
-});
-console.log("\nHarmony response:");
-console.log(JSON.stringify(result, null, 2));
