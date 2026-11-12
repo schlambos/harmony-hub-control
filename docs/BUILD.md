@@ -331,6 +331,23 @@ Windows can deploy with PowerShell, and Linux/macOS can deploy with the Python
 installer. Use WSL, a Linux VM, or the existing build server for rebuilding MIPS
 binaries.
 
+## USB Ethernet modules
+
+`payload/modules/usb-net/README.md` lists every module with its source and
+digests. `asix.ko` is reproducible from published source only:
+
+```sh
+sh build/build_usb_eth_asix.sh
+```
+
+It downloads Logitech's Harmony Hub kernel tree and the Bootlin toolchain
+(both pinned by SHA-256), applies `third_party/linux-2.6.31-harmony/`'s config
+and patches, links `asix.ko` against the shipped `usbnet.ko`'s CRCs, and fails
+unless the result matches its pinned SHA-256. Needs Linux, perl, patch, unzip
+and a host C compiler; about 20 s on 24 cores after the downloads.
+[`third_party/linux-2.6.31-harmony/README.md`](../third_party/linux-2.6.31-harmony/README.md)
+explains the config and patches.
+
 ## Dropbear
 
 `dropbearmulti` is included so the web UI package can keep SSH reachable on a
