@@ -11,9 +11,11 @@ startup, and owned route/ARP setup + cleanup.
 
 Run via tools/usb-eth-test/run_tests.sh (or directly with python3).
 """
+import atexit
 import json
 import os
 import shutil
+import signal
 import subprocess
 import sys
 import tempfile
@@ -101,8 +103,12 @@ from pathlib import Path
 D = Path(os.environ["FAKE_DIR"])
 s = json.loads((D / "fake.json").read_text())
 def save():
-    (D / "fake.json").write_text(json.dumps(s))
-    (D / "proc_modules").write_text("".join(f"{m} 1000 0 - Live 0x0\n" for m in s["modules"]))
+    t = D / "fake.json.tmp"
+    t.write_text(json.dumps(s))
+    os.replace(t, D / "fake.json")
+    p = D / "proc_modules.tmp"
+    p.write_text("".join(f"{m} 1000 0 - Live 0x0\n" for m in s["modules"]))
+    os.replace(p, D / "proc_modules")
     with open(D / "calls.log", "a") as f:
         f.write(" ".join(sys.argv) + "\n")
 prog = Path(sys.argv[0]).name
@@ -155,7 +161,9 @@ if a and a[0] == s.get("iface", "eth2") and len(a) > 1:
         s["ipv4"] = a[1]
         if "netmask" in a:
             s["netmask"] = a[a.index("netmask") + 1]
-    (D / "fake.json").write_text(json.dumps(s))
+    _t = D / "fake.json.tmp"
+    _t.write_text(json.dumps(s))
+    os.replace(_t, D / "fake.json")
 '''
 
 # route: the fixture's connected routes, plus default and host routes that
@@ -195,7 +203,9 @@ elif a[0] == "del":
     if not hit:
         sys.exit(1)
     extra.remove(hit[0])
-(D / "fake.json").write_text(json.dumps(s))
+_t = D / "fake.json.tmp"
+_t.write_text(json.dumps(s))
+os.replace(_t, D / "fake.json")
 '''
 
 # ping: answers unless ping_fail is set, or ping_dead_dev names the
@@ -214,7 +224,9 @@ if s.get("ping_fail"):
 if s.get("ping_fail_first", 0) > 0:
     # Fail exactly this many pings, then answer (no race with the test).
     s["ping_fail_first"] -= 1
-    (D / "fake.json").write_text(json.dumps(s))
+    _t = D / "fake.json.tmp"
+    _t.write_text(json.dumps(s))
+    os.replace(_t, D / "fake.json")
     sys.exit(1)
 dead = s.get("ping_dead_dev", "")
 if dead:
@@ -241,14 +253,19 @@ with open(D / "calls.log", "a") as f:
 print("FAIL" if s.get("wpa_fail") else "OK")
 '''
 
-# codex_hal_ltcp: logs each command; refuses while hal_fail is set.
+# codex_hal_ltcp: logs each command; refuses while hal_fail is set. With a
+# hal_hang_fire file in FAKE_DIR, the next fire_command hangs (once).
 STUB_HAL = r'''#!PYTHON
-import json, os, sys
+import json, os, sys, time
 from pathlib import Path
 D = Path(os.environ["FAKE_DIR"])
 s = json.loads((D / "fake.json").read_text())
 with open(D / "calls.log", "a") as f:
     f.write("hal " + " ".join(sys.argv[1:3]) + "\n")
+hang = D / "hal_hang_fire"
+if "fire_command" in " ".join(sys.argv[2:3]) and hang.exists():
+    hang.unlink()
+    time.sleep(60)
 print('{"id":1,"code":500}' if s.get("hal_fail") else '{"id":1,"code":200}')
 '''
 
@@ -263,7 +280,28 @@ HUB_COMMANDS = ("[", "[[", "awk", "cat", "chmod", "cp", "cut", "date", "dirname"
 
 STUB_PLAIN = {
     "killall": '#!/bin/sh\nexit 0\n',
-    "sleep": '#!/bin/sh\nexec /bin/sleep 0.02\n',
+    # The service's lock is a mkdir that fails when the directory exists, as
+    # BusyBox's does. uutils' mkdir (/usr/bin/mkdir on Ubuntu 26.04, 0.10.0)
+    # checks before it creates, so two at once can both succeed and two
+    # starts both take the lock; this one is a single mkdir(2).
+    "mkdir": r'''#!/usr/bin/env python3
+import os, sys
+args = sys.argv[1:]
+parents = "-p" in args
+rc = 0
+for d in (a for a in args if a != "-p"):
+    try:
+        os.makedirs(d, exist_ok=True) if parents else os.mkdir(d)
+    except OSError as e:
+        print(f"mkdir: {d}: {e.strerror}", file=sys.stderr)
+        rc = 1
+sys.exit(rc)
+''',
+    # A real pause, if a short one, so a loop that outlives its test can't spin
+    # a core. And once the test process that made the sandbox has gone (it
+    # crashed, or was killed before it could clean up), the loop that called
+    # this is ended.
+    "sleep": '#!/bin/sh\nkill -0 "$FAKE_OWNER" 2>/dev/null || { kill -TERM "$PPID" 2>/dev/null; exit 1; }\nexec /bin/sleep 0.05\n',
     "udhcpc": r'''#!/usr/bin/env python3
 import json, os, subprocess, sys
 from pathlib import Path
@@ -273,7 +311,9 @@ with open(D / "calls.log", "a") as f:
 pidfile = sys.argv[sys.argv.index("-p") + 1]
 s = json.loads((D / "fake.json").read_text())
 s["wired_route"] = True  # configuring the address recreates its route
-(D / "fake.json").write_text(json.dumps(s))
+_tmp = D / "fake.json.tmp"
+_tmp.write_text(json.dumps(s))
+os.replace(_tmp, D / "fake.json")
 if s.get("udhcpc_slow_release"):
     # Like udhcpc -R: on TERM, release the lease and run deconfig (clear the
     # address) a moment later, then exit.
@@ -287,7 +327,9 @@ if s.get("udhcpc_slow_release"):
     child = subprocess.Popen([sys.executable, "-c", code, str(Path(sys.argv[0]).parent / "ifconfig"), s.get("iface", "eth2")])
 else:
     child = subprocess.Popen(["/bin/sleep", "60"])
-Path(pidfile).write_text(str(child.pid) + "\n")
+_ptmp = Path(str(pidfile) + ".tmp")
+_ptmp.write_text(str(child.pid) + "\n")
+os.replace(_ptmp, pidfile)
 ''',
     "route": r'''#!/usr/bin/env python3
 import json, os
@@ -303,9 +345,47 @@ if s.get("wired_route", True) and s.get("carrier"):
 }
 
 
+# Every sandbox not yet closed. The service backgrounds its worker (and the
+# worker its udhcpc) with "&", so they outlive the command that started them:
+# each test closes its sandboxes when it ends (SandboxCleanup), and whatever is
+# left is closed at exit or on SIGTERM.
+_SANDBOXES = []
+
+
+def close_all_sandboxes():
+    while _SANDBOXES:
+        _SANDBOXES[-1].close()
+
+
+atexit.register(close_all_sandboxes)
+if signal.getsignal(signal.SIGTERM) is signal.SIG_DFL:
+    signal.signal(signal.SIGTERM, lambda *_: (close_all_sandboxes(), os._exit(143)))
+
+
+def _kill_group(pgid, sig):
+    try:
+        os.killpg(pgid, sig)
+    except (ProcessLookupError, PermissionError):
+        pass
+
+
+class SandboxCleanup(unittest.TestCase):
+    """Closes every sandbox a test made, however the test ended."""
+
+    def run(self, result=None):
+        try:
+            return super().run(result)
+        finally:
+            close_all_sandboxes()
+
+
 class Sandbox:
     def __init__(self, fake):
         self.dir = Path(tempfile.mkdtemp(prefix="usbeth-svc-"))
+        self.pgids = set()
+        self.closed = False
+        self.owner = os.getpid()
+        _SANDBOXES.append(self)
         self.fake_dir = self.dir / "fake"
         self.fake_dir.mkdir()
         self.run_dir = self.dir / "run"
@@ -371,11 +451,23 @@ class Sandbox:
         self.log.write_text("")
 
     def write_fake(self, state):
-        (self.fake_dir / "fake.json").write_text(json.dumps(state))
-        (self.fake_dir / "proc_modules").write_text(
+        tmp = self.fake_dir / "fake.json.tmp"
+        tmp.write_text(json.dumps(state))
+        os.replace(tmp, self.fake_dir / "fake.json")
+        ptmp = self.fake_dir / "proc_modules.tmp"
+        ptmp.write_text(
             "".join(f"{m} 1000 0 - Live 0x0\n" for m in state["modules"]))
+        os.replace(ptmp, self.fake_dir / "proc_modules")
 
     def read_fake(self):
+        # The worker's stubs can rewrite fake.json concurrently (udhcpc sets
+        # wired_route, ifconfig sets ipv4, ...): an atomic rename means we
+        # never see a half-written file, but retry once on a torn read.
+        for _ in range(5):
+            try:
+                return json.loads((self.fake_dir / "fake.json").read_text())
+            except (json.JSONDecodeError, FileNotFoundError):
+                time.sleep(0.01)
         return json.loads((self.fake_dir / "fake.json").read_text())
 
     def patch_fake(self, **kw):
@@ -387,6 +479,7 @@ class Sandbox:
         env = dict(os.environ)
         env.update({
             "FAKE_DIR": str(self.fake_dir),
+            "FAKE_OWNER": str(self.owner),
             "USBETH_PATH": f"{self.bin}:/usr/bin:/bin",
             "USBETH_CONF": str(self.dir / "usb_eth.conf"),
             "USBETH_HELPER": str(self.bin / "codex_usbeth"),
@@ -417,15 +510,71 @@ class Sandbox:
         env.update({k: str(v) for k, v in over.items()})
         return env
 
+    def popen(self, args, **kw):
+        """Popen in a session of its own, killed as a group by close()."""
+        proc = subprocess.Popen(args, start_new_session=True, **kw)
+        self.pgids.add(proc.pid)
+        return proc
+
     def run(self, *args, **over):
-        return subprocess.run(["sh", str(SERVICE), *args],
-                              env=self.env(**over), capture_output=True,
-                              text=True, timeout=30)
+        proc = self.popen(["sh", str(SERVICE), *args], env=self.env(**over),
+                          stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
+        try:
+            out, err = proc.communicate(timeout=30)
+        except subprocess.TimeoutExpired:
+            _kill_group(proc.pid, signal.SIGKILL)
+            proc.communicate()
+            raise
+        return subprocess.CompletedProcess(proc.args, proc.returncode, out, err)
 
     def spawn_worker(self, **over):
-        return subprocess.Popen(["sh", str(SERVICE), "worker"],
-                                env=self.env(**over),
-                                stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        return self.popen(["sh", str(SERVICE), "worker"], env=self.env(**over),
+                          stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+
+    def _strays(self):
+        """Live processes started for this sandbox, found by their FAKE_DIR
+        (Linux; elsewhere the process groups and the fake sleep cover it)."""
+        mark = b"\0FAKE_DIR=" + str(self.fake_dir).encode() + b"\0"
+        found = []
+        try:
+            pids = [int(n) for n in os.listdir("/proc") if n.isdigit()]
+        except OSError:
+            return found
+        for pid in pids:
+            if pid == os.getpid():
+                continue
+            try:
+                with open(f"/proc/{pid}/environ", "rb") as f:
+                    if mark in b"\0" + f.read():
+                        found.append(pid)
+            except OSError:
+                pass
+        return found
+
+    def close(self):
+        """Kill everything this sandbox started, then remove it."""
+        if self.closed:
+            return
+        self.closed = True
+        for sig in (signal.SIGTERM, signal.SIGKILL):
+            for pgid in self.pgids:
+                _kill_group(pgid, sig)
+            deadline = time.time() + 2
+            while True:
+                strays = self._strays()
+                for pid in strays:
+                    try:
+                        os.kill(pid, sig)
+                    except (ProcessLookupError, PermissionError):
+                        pass
+                if not strays or time.time() > deadline:
+                    break
+                time.sleep(0.05)
+            if not strays:
+                break
+        shutil.rmtree(self.dir, ignore_errors=True)
+        if self in _SANDBOXES:
+            _SANDBOXES.remove(self)
 
     def state(self):
         out = {}
@@ -454,7 +603,7 @@ class Sandbox:
         raise AssertionError(f"state never became {want}/{reason}; last={self.state()}")
 
 
-class ServiceTests(unittest.TestCase):
+class ServiceTests(SandboxCleanup):
     def test_late_phy_then_operational_and_clean_stop(self):
         sb = Sandbox({"phy_ready_after": 3})
         proc = sb.spawn_worker()
@@ -524,16 +673,21 @@ class ServiceTests(unittest.TestCase):
 
     def test_concurrent_starts_spawn_one_worker_and_one_dhcp(self):
         sb = Sandbox({"phy_ready_after": 5})
-        procs = [subprocess.Popen(["sh", str(SERVICE), "start"],
-                                  env=sb.env(), stdout=subprocess.DEVNULL,
-                                  stderr=subprocess.DEVNULL) for _ in range(3)]
+        procs = [sb.popen(["sh", str(SERVICE), "start"],
+                          env=sb.env(), stdout=subprocess.DEVNULL,
+                          stderr=subprocess.DEVNULL) for _ in range(3)]
         for p in procs:
-            self.assertEqual(p.wait(timeout=15), 0)
-        sb.wait_state("operational")
+            self.assertEqual(p.wait(timeout=30), 0)
+        sb.wait_state("operational", timeout=20)
         self.assertEqual(sb.calls().count("udhcpc "), 1)
         rc = sb.run("start")  # repeated start is a no-op
         self.assertEqual(rc.returncode, 0)
-        time.sleep(0.3)
+        # Give a would-be second DHCP client time to appear if the lock
+        # failed: several worker passes, not wall-clock dependent.
+        deadline = time.time() + 2.0
+        while time.time() < deadline:
+            self.assertEqual(sb.calls().count("udhcpc "), 1)
+            time.sleep(0.05)
         self.assertEqual(sb.calls().count("udhcpc "), 1)
         sb.run("stop")
 
@@ -640,7 +794,7 @@ class ServiceTests(unittest.TestCase):
 
 
 
-class CableTests(unittest.TestCase):
+class CableTests(SandboxCleanup):
     """Using the cable (docs/USB_ETHERNET.md): the gateway check before the
     cable takes local traffic and every 30 s after, Wi-Fi off, the front
     LED, static addresses. The hub's clock is the sandbox's uptime file; the
@@ -660,8 +814,20 @@ class CableTests(unittest.TestCase):
                 p.wait(timeout=10)
             except subprocess.TimeoutExpired:
                 p.kill()
+                p.wait(timeout=10)
         for p in getattr(self, "guard", []):
-            p.kill()
+            try:
+                p.kill()
+            except (ProcessLookupError, OSError):
+                pass
+            try:
+                p.wait(timeout=10)
+            except subprocess.TimeoutExpired:
+                try:
+                    p.kill()
+                except (ProcessLookupError, OSError):
+                    pass
+                p.wait(timeout=10)
 
     def path(self):
         p = f"{self.sb.bin}:{self.sb.hubbin}"
@@ -669,8 +835,8 @@ class CableTests(unittest.TestCase):
 
     def start(self, **over):
         env = dict(self.path(), **over)
-        proc = subprocess.Popen(["sh", str(SERVICE), "worker"], env=self.sb.env(**env),
-                                stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        proc = self.sb.popen(["sh", str(SERVICE), "worker"], env=self.sb.env(**env),
+                             stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
         self.procs.append(proc)
         return proc
 
@@ -705,10 +871,10 @@ class CableTests(unittest.TestCase):
         self.write_atomic(self.sb.dir / "usb_eth.conf", "ENABLED=1\n" + text)
 
     def guard_with_watchdog(self):
-        g = subprocess.Popen(["/bin/sleep", "120"])
+        g = self.sb.popen(["/bin/sleep", "120"])
         self.guard = [g]
-        (self.sb.dir / "guard.pid").write_text(f"{g.pid}\n")
-        (self.sb.dir / "guard.caps").write_text("wifi-watchdog\n")
+        self.write_atomic(self.sb.dir / "guard.pid", f"{g.pid}\n")
+        self.write_atomic(self.sb.dir / "guard.caps", "wifi-watchdog\n")
 
     def suspended(self):
         # The state file is written just before the disconnect (so a stop in
@@ -717,6 +883,21 @@ class CableTests(unittest.TestCase):
 
     def led(self):
         return [c for c in self.calls() if c.startswith("hal ")]
+
+    def led_file(self):
+        f = self.sb.run_dir / "codex-usb-eth-led"
+        return f.read_text().strip() if f.exists() else ""
+
+    def cable_settled(self):
+        # The cable took local traffic and the worker finished that pass: the
+        # gateway checks and (with WIFI_OFF) the Wi-Fi-off minute were timed
+        # from the clock as it was, and the LED went last. Moving the clock
+        # before then starts those timers late, and the test waits forever.
+        if self.lan_dev() != "eth2" or self.led_file() != "1":
+            return False
+        if "WIFI_OFF=1" not in (self.sb.dir / "usb_eth.conf").read_text():
+            return True
+        return (self.sb.run_dir / "codex-usb-eth-wired-since").exists()
 
     EXT = 'hal sys.led {"action":"extender_mode"}'
     NONEXT = 'hal sys.led {"action":"non_extender_mode"}'
@@ -774,10 +955,14 @@ class CableTests(unittest.TestCase):
 
     def test_a_cable_that_stops_answering_gives_local_traffic_back(self):
         self.start()
-        self.assertTrue(self.wait(lambda: self.lan_dev() == "eth2"))
+        self.assertTrue(self.wait(self.cable_settled), self.led())
         self.sb.patch_fake(ping_dead_dev="eth2")
+        before_pings = self.calls().count("ping 192.168.0.1")
         self.clock(1031)  # first miss
-        time.sleep(1.0)
+        # Wait for the worker to have done its next gateway check (one miss)
+        # rather than sleeping a fixed time: the check must have run, but one
+        # miss must not be enough to hand back.
+        self.assertTrue(self.wait(lambda: self.calls().count("ping 192.168.0.1") > before_pings))
         self.assertEqual(self.lan_dev(), "eth2", "one missed ping was enough")
         self.clock(1062)  # second miss
         self.sb.wait_state("gateway_unreachable")
@@ -808,7 +993,7 @@ class CableTests(unittest.TestCase):
         self.conf("WIFI_OFF=1\n")
         self.guard_with_watchdog()
         self.start()
-        self.assertTrue(self.wait(lambda: self.lan_dev() == "eth2"))
+        self.assertTrue(self.wait(self.cable_settled), self.led())
         time.sleep(0.5)
         self.assertFalse(self.suspended(), "Wi-Fi went off before the minute")
         self.clock(1061)
@@ -824,7 +1009,7 @@ class CableTests(unittest.TestCase):
     def test_no_wifi_off_without_the_guards_watchdog(self):
         self.conf("WIFI_OFF=1\n")
         self.start()
-        self.assertTrue(self.wait(lambda: self.lan_dev() == "eth2"))
+        self.assertTrue(self.wait(self.cable_settled), self.led())
         self.clock(1100)
         time.sleep(1.0)
         self.assertFalse(self.suspended())
@@ -834,7 +1019,7 @@ class CableTests(unittest.TestCase):
         self.conf("WIFI_OFF=1\n")
         self.guard_with_watchdog()
         self.start()
-        self.assertTrue(self.wait(lambda: self.lan_dev() == "eth2"))
+        self.assertTrue(self.wait(self.cable_settled), self.led())
         self.clock(1061)
         self.assertTrue(self.wait(self.suspended))
         self.conf("WIFI_OFF=0\n")
@@ -844,7 +1029,7 @@ class CableTests(unittest.TestCase):
         self.conf("WIFI_OFF=1\n")
         self.guard_with_watchdog()
         self.start()
-        self.assertTrue(self.wait(lambda: self.lan_dev() == "eth2"))
+        self.assertTrue(self.wait(self.cable_settled), self.led())
         self.clock(1061)
         self.assertTrue(self.wait(self.suspended))
         self.sb.patch_fake(wpa_fail=True)
@@ -860,12 +1045,12 @@ class CableTests(unittest.TestCase):
         self.conf("WIFI_OFF=1\n")
         self.guard_with_watchdog()
         self.start()
-        self.assertTrue(self.wait(lambda: self.lan_dev() == "eth2"))
+        self.assertTrue(self.wait(self.cable_settled), self.led())
         self.clock(1061)
         self.assertTrue(self.wait(self.suspended))
         self.assertEqual(self.sb.run("stop", **self.path()).returncode, 0)
-        self.assertFalse(self.suspended())
-        self.assertEqual(self.lan_dev(), "ath0")
+        self.assertTrue(self.wait(lambda: not self.suspended()))
+        self.assertTrue(self.wait(lambda: self.lan_dev() == "ath0"))
 
     # --- the front LED ---
 
@@ -880,7 +1065,7 @@ class CableTests(unittest.TestCase):
         self.conf("WIFI_OFF=1\n")
         self.guard_with_watchdog()
         self.start()
-        self.assertTrue(self.wait(lambda: self.led() == [self.EXT, self.FIRE]), self.led())
+        self.assertTrue(self.wait(self.cable_settled), self.led())
         self.clock(1061)
         self.assertTrue(self.wait(self.suspended))
         time.sleep(0.5)
@@ -893,7 +1078,10 @@ class CableTests(unittest.TestCase):
         self.start()
         self.assertTrue(self.wait(lambda: self.EXT in self.led()))
         self.sb.patch_fake(hal_fail=False)
-        time.sleep(0.5)
+        # The worker must have had several passes to (incorrectly) retry
+        # before the 30 s are up: wait for real time, not wall-clock dependent
+        # beyond giving a slow runner a chance.
+        time.sleep(1.0)
         self.assertNotIn(self.FIRE, self.led(), "tried again before 30 s")
         self.clock(1031)
         self.assertTrue(self.wait(lambda: self.led()[-2:] == [self.EXT, self.FIRE]), self.led())
@@ -905,7 +1093,7 @@ class CableTests(unittest.TestCase):
         self.start()
         self.assertTrue(self.wait(lambda: self.led() == [self.EXT, self.FIRE]))
         self.sb.run("stop", **self.path())
-        self.assertEqual(self.led()[-2:], [self.NONEXT, self.FIRE])
+        self.assertTrue(self.wait(lambda: self.led()[-2:] == [self.NONEXT, self.FIRE]), self.led())
 
     # --- static address ---
 
@@ -947,7 +1135,7 @@ class CableTests(unittest.TestCase):
         self.conf("WIFI_OFF=1\n")
         self.guard_with_watchdog()
         self.sb.run("start", **self.path())
-        self.assertTrue(self.wait(lambda: self.lan_dev() == "eth2"))
+        self.assertTrue(self.wait(self.cable_settled), self.led())
         self.clock(1061)
         self.assertTrue(self.wait(self.suspended))
         old = (self.sb.run_dir / "codex-usb-eth-worker.pid").read_text().strip()
@@ -1083,7 +1271,7 @@ class CableTests(unittest.TestCase):
         self.conf("WIFI_OFF=1\n")
         self.guard_with_watchdog()
         self.sb.run("start", **self.path())
-        self.assertTrue(self.wait(lambda: self.lan_dev() == "eth2"))
+        self.assertTrue(self.wait(self.cable_settled), self.led())
         self.clock(1061)
         self.assertTrue(self.wait(self.suspended))
         self.sb.patch_fake(phy_ready_after=10**6)  # every phy-host read is now a sentinel
@@ -1132,7 +1320,7 @@ class CableTests(unittest.TestCase):
         self.guard_with_watchdog()
         self.sb.patch_fake(wpa_fail=True)
         self.start()
-        self.assertTrue(self.wait(lambda: self.lan_dev() == "eth2"))
+        self.assertTrue(self.wait(self.cable_settled), self.led())
         self.clock(1061)
         self.assertTrue(self.wait(lambda: "wpa_cli -i ath0 disconnect" in self.calls()))
         time.sleep(0.5)
@@ -1144,16 +1332,19 @@ class CableTests(unittest.TestCase):
         self.start()
         self.sb.wait_state("operational")
         lockdir = self.sb.run_dir / "codex-usb-eth-service.lock"
-        holder = subprocess.Popen(["/bin/sleep", "60"])
+        holder = self.sb.popen(["/bin/sleep", "60"])
         try:
             lockdir.mkdir()
-            (lockdir / "pid").write_text(f"{holder.pid}\n")
-            (self.sb.dir / "usb_eth.conf").write_text("ENABLED=0\n")
+            self.write_atomic(lockdir / "pid", f"{holder.pid}\n")
+            self.write_atomic(self.sb.dir / "usb_eth.conf", "ENABLED=0\n")
             time.sleep(1.0)  # the worker sees it off and waits for the lock
-            (self.sb.dir / "usb_eth.conf").write_text("ENABLED=1\n")
+            self.write_atomic(self.sb.dir / "usb_eth.conf", "ENABLED=1\n")
         finally:
-            holder.kill()
-            holder.wait()
+            try:
+                holder.kill()
+            except (ProcessLookupError, OSError):
+                pass
+            holder.wait(timeout=10)
             import shutil as _sh
             _sh.rmtree(lockdir, ignore_errors=True)
         time.sleep(1.5)
@@ -1197,7 +1388,7 @@ class CableTests(unittest.TestCase):
         self.conf("WIFI_OFF=1\n")
         self.guard_with_watchdog()
         self.start()
-        self.assertTrue(self.wait(lambda: self.lan_dev() == "eth2"))
+        self.assertTrue(self.wait(self.cable_settled), self.led())
         self.clock(1061)
         self.assertTrue(self.wait(self.suspended))
         self.sb.patch_fake(netmask="255.255.0.0")
@@ -1220,7 +1411,7 @@ class CableTests(unittest.TestCase):
         self.conf("WIFI_OFF=1\n")
         self.guard_with_watchdog()
         w = self.start()
-        self.assertTrue(self.wait(lambda: self.lan_dev() == "eth2"))
+        self.assertTrue(self.wait(self.cable_settled), self.led())
         self.clock(1061)
         self.assertTrue(self.wait(self.suspended))
         w.kill()
@@ -1240,6 +1431,20 @@ class CableTests(unittest.TestCase):
         again = self.sb.run("recover", **self.path())
         self.assertEqual((again.returncode, again.stdout.strip()), (0, ""))
 
+    def test_recover_resends_the_led_after_the_worker_died_halfway(self):
+        # Killed after hal took extender mode but before the blink that
+        # makes it use it: recover can't know which, so it sends it again.
+        (self.sb.fake_dir / "hal_hang_fire").write_text("")
+        w = self.start()
+        self.assertTrue(self.wait(lambda: self.led() == [self.EXT, self.FIRE]), self.led())
+        w.kill()
+        w.wait()
+        r = self.sb.run("recover", **self.path())
+        self.assertEqual(r.returncode, 0, r.stderr)
+        self.assertIn("recovered", r.stdout)
+        self.assertEqual(self.led()[-2:], [self.NONEXT, self.FIRE])
+        self.assertEqual(self.led_file(), "0")
+
     def test_recover_leaves_a_running_worker_alone(self):
         self.start()
         self.assertTrue(self.wait(lambda: self.lan_dev() == "eth2"))
@@ -1252,7 +1457,7 @@ class CableTests(unittest.TestCase):
         self.conf("WIFI_OFF=1\n")
         self.guard_with_watchdog()
         w = self.start()
-        self.assertTrue(self.wait(lambda: self.lan_dev() == "eth2"))
+        self.assertTrue(self.wait(self.cable_settled), self.led())
         self.clock(1061)
         self.assertTrue(self.wait(self.suspended))
         w.kill()
@@ -1268,8 +1473,21 @@ class CableTests(unittest.TestCase):
     def test_recover_waits_for_a_busy_lock(self):
         lock = self.sb.run_dir / "codex-usb-eth-service.lock"
         lock.mkdir()
-        holder = subprocess.Popen(["/bin/sleep", "30"])
-        self.addCleanup(holder.kill)
+        holder = self.sb.popen(["/bin/sleep", "30"])
+        def _cleanup_holder():
+            try:
+                holder.kill()
+            except (ProcessLookupError, OSError):
+                pass
+            try:
+                holder.wait(timeout=10)
+            except subprocess.TimeoutExpired:
+                try:
+                    holder.kill()
+                except (ProcessLookupError, OSError):
+                    pass
+                holder.wait(timeout=10)
+        self.addCleanup(_cleanup_holder)
         (lock / "pid").write_text(f"{holder.pid}\n")
         (self.sb.run_dir / "codex-lan-dev").write_text("eth2\n")
         r = self.sb.run("recover", **self.path())
