@@ -31,8 +31,11 @@ Nothing goes through Google or Logitech, and the cloud blocker stays on.
 3. The TV shows a 6-character code. Type it in. A mistyped code is caught on
    the hub before it reaches the TV, so you can correct it and the TV keeps
    showing the same code.
-4. Name the TV and tap **Add TV**. It opens on its own device page, with its
-   connection on top: *Network TV · Connected · On · 192.168.1.40*.
+4. Name the TV and tap **Add TV**. Its manufacturer and model are filled in
+   from what the TV reports once paired (change them if they're wrong); they're
+   saved with the device like any other's, and **Edit details** changes them
+   later. It opens on its own device page, with its connection on top:
+   *Network TV · Connected · On · 192.168.1.40*.
 
 Then use it in activities like any other device: the activity wizard offers its
 HDMI inputs, and its power uses PowerOn and PowerOff.
@@ -52,32 +55,124 @@ of them.
 | VolumeUp, VolumeDown, Mute | Volume keys. Holding a button repeats, as with any IP command |
 | ChannelUp, ChannelDown, PrevChannel | Channel keys |
 | Play, Pause, PlayPause, Stop, FastForward, Rewind, SkipForward, SkipBack, Record | Media keys |
-| InputHdmi1 to InputHdmi4, InputNext | HDMI 1-4 (see Inputs) and the input menu. The device's inputs HDMI 1-4 use them |
+| InputHdmi1 to InputHdmi4, Input5 to Input32 | The TV's inputs: what each opens is set in Settings → Inputs (see Inputs). The device has Input5 and up only while an input uses them |
+| InputNext | The input menu key |
 | Number0 to Number9, Red, Green, Yellow, Blue, Captions | Those keys |
 
 ## Inputs
 
-InputHdmi1 to InputHdmi4 send Android's HDMI input keys (KEYCODE_TV_INPUT_HDMI_1
-to 4), except on TVs known to ignore them (if the TV offers app links):
+TVs switch inputs in different ways, so each network TV says how in its
+**Settings → Inputs** (the button at the top right of its device page):
 
-| TV (vendor it reports) | InputHdmi<n> opens |
-|---|---|
-| Hisense | the TV's own input, `content://android.media.tv/passthrough/com.hisense.tv.hitvinput%2F.hdmi.HdmiTvInputService%2FHW<n+1>` |
+| Way | What the hub sends | Good for |
+|---|---|---|
+| Open each input directly | An app link to the input's TV-input passthrough URI, from a pattern (`…%2FHW{n}`) and a number per input, or a whole link per input | TVs that ignore the input keys, such as Hisense |
+| Android input keys | Android's TV input keys: HDMI 1-4 (KEYCODE_TV_INPUT_HDMI_1 to 4), AV, Component, VGA, Live TV | Many other TVs |
+| Input menu, then keys | The input menu key, Down to the input's place in the menu, Select, with a gap between keys | The last resort, when neither of the others works |
+| Don't switch inputs | Nothing | TVs whose sources switch them by HDMI-CEC |
 
-The TV names its vendor when it connects; the hub's log says
-`TV <id> is a <vendor> <model>`, and `/api/androidtv/status` shows it. These
-were checked on a Hisense 75U8H (Google TV): the HDMI keys do nothing, and the
-input URIs HW2, HW3 and HW4 switch to HDMI 1, 2 and 3. HDMI 4 as HW5 follows
-the same pattern but hasn't been checked on a TV yet. A TV can show an input
-this way even when nothing is plugged into it (its own menu greys those out).
-A Hisense TV that doesn't offer app links gets the HDMI keys.
+The same section lists the inputs: their names (what activities use), their
+order, and what each opens. **Add input** and ⋮ → **Remove** add and remove
+inputs, up to 32. Behind each input is one of the device's input commands
+(InputHdmi1-4, then Input5 and up), so renaming or reordering inputs doesn't
+change the activities and buttons that use them.
 
-If your TV ignores the keys and isn't listed, let a source switch it by
-HDMI-CEC, or use InputNext.
+The hub can't see the screen, and a TV doesn't say which input it shows (any
+passthrough link, even a wrong one, opens the TV's input app). So the page
+asks:
+
+- **▶ Try** on an input sends it (the TV's Home first, then the input) and asks
+  whether the TV switched to it. *Yes* marks it as working; *No* offers the next
+  number to try; *It showed a different input* swaps the two inputs' targets.
+  The TV has to be connected and on; the page can turn it on.
+- **Find my inputs…** steps through the candidates (input numbers, keys or menu
+  places) and asks what's on screen after each: one of your inputs, a new one
+  (name it), an input with no picture, or nothing. It stops when every input is
+  found or after three "nothing changed" answers in a row.
+- **Use the suggested setup** starts again from the suggestion for the TV's
+  brand. **Share this setup** shows yours as an entry for the presets file, to
+  paste into an issue so others with that TV can start from it.
+
+Nothing is saved until **Save**, which writes how the TV switches inputs to
+codex_androidtv, then the inputs to the device, and only when the inputs part
+changed: saving power or timing alone leaves a TV with nothing saved on the
+hub's built-in behaviour. Inputs set up before this with other commands (such
+as Home) are listed with the next free input command and "Was the Home
+command"; choose what each opens before saving the inputs.
+
+### Suggestions by brand
+
+`payload/androidtv/input-presets.json` (on the hub
+`/data/codex/androidtv-input-presets.json`) holds the suggested setups, by the
+device's manufacturer and model (filled in from what the TV reports when it is
+added: the hub's log says `TV <id> is a <vendor> <model>`, and
+`/api/androidtv/status` shows it while the TV is connected). A TV added before
+this, saved as "Android TV", gets a suggestion once **Edit details** sets its
+manufacturer; while it's connected, Settings offers to save the brand it
+reports with one tap. Changing or adding a brand is a change to
+that one file; nothing is rebuilt. When a TV is added, its brand's suggestion
+is saved for it (unless it uses an untested pattern), as a starting point for
+Try. A TV with nothing saved stays on the hub's built-in behaviour, and its
+device page says "Inputs not checked yet". If there is no suggestion for its
+manufacturer, Settings shows its inputs as "Built-in" with no way chosen and
+saves nothing for them until one is: the hub goes by the brand the TV reports,
+which the page doesn't guess.
+
+```json
+{
+  "version": 1,
+  "patterns": [{ "id": "hisense-hw", "label": "Hisense (HW numbers)", "uri": "content://…%2FHW{n}" }],
+  "presets": [{ "vendor": "Hisense", "model": "optional regular expression", "method": "link",
+                "pattern": "hisense-hw", "inputs": [{ "name": "HDMI 1", "n": 2 }],
+                "checked": { "model": "75U8H", "date": "2026-11-11", "inputs": ["HDMI 1"] } }],
+  "default": { "method": "keys", "inputs": [{ "name": "HDMI 1", "key": 243 }] }
+}
+```
+
+- `patterns`: link patterns with `{n}` once. `untested: true` marks one nobody
+  has confirmed yet: it's in the page's list, and a preset that uses it is
+  offered in Settings but never applied on its own when a TV is added.
+- `presets`: matched by vendor (a case-insensitive prefix), then `model` when
+  given; the first match wins, else `default`. `method` is `link`, `keys`,
+  `menu` or `none`. Each input has a `name` and `n` (a pattern number), `link`
+  (a whole link, for link without a pattern), `key` (a key code) or
+  `position` (a place in the input menu, with `gapMs` on the preset).
+- `checked`: on which model, when, and which inputs someone confirmed (kept
+  for whoever maintains the file; the page doesn't show it).
+
+The page checks the file and leaves out entries that don't hold, so a mistake
+in it can't break Settings; a missing file means no suggestions (the HDMI keys).
+
+Checked so far: a Hisense 75U8H (Google TV) ignores the HDMI keys, and the
+input URIs HW2, HW3 and HW4 open HDMI 1, 2 and 3 (HDMI 4 as HW5 follows the
+pattern but hasn't been confirmed). The MediaTek and `com.vt.source.external`
+patterns in the file did nothing on that TV; they are there, marked untested,
+for other brands. A TV can show an input this way even when nothing is plugged
+into it (its own menu greys those out).
+
+### What the hub stores
+
+codex_androidtv keeps each TV's setting in `inputs-<id>.tsv` beside its other
+files, one setting per line (tab-separated):
+
+```text
+method	link
+pattern	content://android.media.tv/passthrough/com.hisense.tv.hitvinput%2F.hdmi.HdmiTvInputService%2FHW{n}
+slot	1	2	works	2026-11-11
+slot	2	3	untested	-
+```
+
+`method` is `keys`, `link`, `menu` or `none`; `pattern` (link only) and `gap`
+(menu only, 100-2000 ms) follow. Each `slot` line is an input command (1-4 are
+InputHdmi1-4, n ≥ 5 is Input<n>), its value (a key code, a pattern number or a
+whole link, or a menu place), and the last Try's result and date. A TV without
+the file keeps the behaviour before this setting existed: the HDMI keys, except
+that a Hisense TV with app links gets the HW<n+1> links. Forgetting a TV removes
+its file.
 
 When an activity turns the TV on and then picks an input, the input waits until
 the TV reports that it is on (up to 8 s after the power key): a TV that is still
-waking up ignores it.
+waking up ignores it. A long press on an input opens it once.
 
 ## Power
 

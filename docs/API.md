@@ -457,14 +457,18 @@ See [ANDROID_TV.md](ANDROID_TV.md).
 
 | Method | Path | Body | Answer |
 | --- | --- | --- | --- |
-| GET | `/api/androidtv/status` | | `identity` (`ready`, `preparing` or `none`) and `tvs`: each `id`, `name`, `vendor`, `model` (as the TV reports them once connected; empty before), `host`, `mac`, `connected`, `on`, `volume`, `volumeMax`, `muted`, `keysSent`, `connects`, `error` |
+| GET | `/api/androidtv/status` | | `identity` (`ready`, `preparing` or `none`) and `tvs`: each `id`, `name`, `vendor`, `model` (as the TV reports them once connected; empty before), `host`, `mac`, `connected`, `on`, `volume`, `volumeMax`, `muted`, `keysSent`, `connects`, `appLinks` (the TV takes app links, so input links can work), `inputs` (how it switches inputs: `keys`, `link`, `menu`, `none`, or `builtin` when nothing has been saved), `error` |
 | GET | `/api/androidtv/discover` | | Starts a 2.5 s mDNS search and answers what has been found so far: `found`, each `name`, `host` and `paired` (the TV's id when the hub already has it). Ask again to see more |
 | POST | `/api/androidtv/pair-start` | `{"host":"192.168.1.40","name":"Den TV"}` | The pairing state (below). The TV shows a code once the state is `code` |
 | GET | `/api/androidtv/pair-status` | | `state`: `idle`, `preparing` (the hub is making its key, first time only), `connecting`, `code`, `checking`, `paired` (with `tvId`) or `failed` (with `error`) |
 | POST | `/api/androidtv/pair-finish` | `{"code":"A1B2C3"}` | The state, now `checking`; or a refusal when the code doesn't match. The hub checks the code against the TV's key first, so a typo never reaches the TV and can be corrected |
 | POST | `/api/androidtv/pair-cancel` | `{}` | Stops a pairing. The answer is the pairing state; its `tvId` names the TV when the pairing had already finished, so a caller can tidy up a pairing it no longer wants |
 | POST | `/api/androidtv/forget` | `{"id":"androidtv1a2b3c4d"}` | Unpairs a TV (its pinned certificate is deleted). Remove its device first |
-| POST | `/api/androidtv/devices` | `{"devices":[{"entity":"androidtv1a2b3c4d","name":"Den TV","manufacturer":"Sony","model":"XR-65A80L"}],"dryRun":false}` | Replaces the hub's whole set of network TV devices, like `/api/ha-devices` (same writer, `CommitAndroidTvDevices`, same reply). `entity` is the TV's id from pairing; `manufacturer` and `model` are optional. The commands, power and HDMI inputs are fixed |
+| POST | `/api/androidtv/devices` | `{"devices":[{"entity":"androidtv1a2b3c4d","name":"Den TV","manufacturer":"Sony","model":"XR-65A80L"}],"dryRun":false}` | Replaces the hub's whole set of network TV devices, like `/api/ha-devices` (same writer, `CommitAndroidTvDevices`, same reply). `entity` is the TV's id from pairing; `manufacturer` and `model` are optional. The commands and power are fixed. A device may also give `inputs` (`[{"name":"Shield","command":"InputHdmi2"}]`, each command an input slot, `InputHdmi1`-`4` or `Input5`-`Input32`; `[]` for no input switching) and `inputDelay` (ms); without `inputs` the TV keeps its current ones (a new TV gets HDMI 1-4). Input5 and up exist while an input uses them |
+| GET | `/api/androidtv/inputs?device=<id>` | | `profile`: how the TV switches inputs, codex_androidtv's `inputs-<id>.tsv` as text ([ANDROID_TV.md](ANDROID_TV.md#what-the-hub-stores)), or `null` for the built-in behaviour |
+| POST | `/api/androidtv/inputs` | `{"device":"androidtv1a2b3c4d","profile":"method\tkeys\nslot\t1\t243\tuntested\t-\n"}` | Checks and saves the profile; a refusal says which line. `""` goes back to the built-in behaviour. A JSON request from the hub's own web app only |
+| POST | `/api/androidtv/try` | `{"device":"androidtv1a2b3c4d","method":"link","pattern":"content://…{n}","value":"3","home":"1"}` | Sends one input target now, unsaved: Home first unless `home` is `"0"`, then the input 1.5 s later. `method` `keys`/`link`/`menu` with `value` (and `pattern` or `gap`), all strings; refused when the TV isn't connected or is off, or for links to a TV without app links. `{"method":"power","value":"on"}` turns the TV on. A JSON request from the hub's own web app only |
+| GET | `/api/androidtv/input-presets` | | The brand presets file (`/data/codex/androidtv-input-presets.json`) as it is, or `{"ok":false}` when there is none |
 
 Network TV devices carry `AutoDetectedDevice.Id` `melodious-androidtv-<deviceId>`
 and the `{d}` token of their TV id. When one runs, the engine posts
@@ -1307,7 +1311,7 @@ Invoke-RestMethod "http://<hub-ip>:8080/api/version"
 
 ```json
 {"ok":true,"product":"melodious","version":"1.3.0","api":1,"update":{"protocol":0},
- "features":["activity-save","activity-sync","androidtv-devices","catalog-import","device-commands",
+ "features":["activity-save","activity-sync","androidtv-devices","androidtv-inputs","catalog-import","device-commands",
              "device-screen","device-settings","ha-devices","ha-devices-v2",
              "ha-state","irdb-import","remote-pair"]}
 ```
@@ -1398,7 +1402,9 @@ carries.
 | GET, POST | `/api/ha-state` | `render_ha_state_get_json()`, `render_ha_state_post_json()` |
 | POST | `/api/androidtv/devices` | `render_androidtv_devices_json()` |
 | GET | `/api/androidtv/status`, `/api/androidtv/discover`, `/api/androidtv/pair-status` | `render_androidtv_proxy()` |
-| POST | `/api/androidtv/pair-start`, `/api/androidtv/pair-finish`, `/api/androidtv/pair-cancel`, `/api/androidtv/forget`, `/api/androidtv/rename` | `render_androidtv_proxy()` |
+| POST | `/api/androidtv/pair-start`, `/api/androidtv/pair-finish`, `/api/androidtv/pair-cancel`, `/api/androidtv/forget`, `/api/androidtv/rename`, `/api/androidtv/try` | `render_androidtv_proxy()` |
+| GET, POST | `/api/androidtv/inputs` | `render_androidtv_inputs_get()`, `render_androidtv_inputs_set()` |
+| GET | `/api/androidtv/input-presets` | `render_androidtv_presets()` |
 | POST | `/api/device-screen` | `render_device_screen_json()` |
 | POST | `/api/activity-sync` | `render_activity_sync_json()` |
 | GET | `/api/inventory` | `render_inventory_json()` |

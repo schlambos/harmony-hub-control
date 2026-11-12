@@ -1885,8 +1885,12 @@ local HA_REFERENCE_RESOURCES = {"ActivityList", "MapList", "FunctionList"}
 -- way as Home Assistant devices: TransportType 64 commands rendered into an
 -- HTTP POST, here to codex_androidtv on the hub itself, which turns each command
 -- into an Android TV Remote key. {d} is the TV's id in codex_androidtv (androidtv<hex>),
--- {c} the command name codex_androidtv knows. The command set is fixed, so a
--- request names only the TV, its name and model.
+-- {c} the command name codex_androidtv knows. The command set is fixed apart
+-- from the inputs: a request names the TV, its name and model, and may list its
+-- inputs (the device Settings page does). Each input is a slot command,
+-- InputHdmi1-4 or Input5-Input32; codex_androidtv's input profile for the TV
+-- says what the slot does. Without inputs a commit keeps the TV's current ones
+-- (a new TV gets HDMI 1-4), and an Input<n> command exists while an input uses it.
 local ANDROIDTV_INPUTS = {
   {name = "HDMI 1", command = "InputHdmi1"}, {name = "HDMI 2", command = "InputHdmi2"},
   {name = "HDMI 3", command = "InputHdmi3"}, {name = "HDMI 4", command = "InputHdmi4"}
@@ -1915,7 +1919,7 @@ local ANDROIDTV_FAMILY = {
   deviceType = 1, typeName = "Television", icon = 1,
   idPattern = "^androidtv[0-9a-f]+$", idHint = "a paired TV id such as androidtv1a2b3c4d",
   webhook = "http://127.0.0.1:8095/cmd",
-  commandNames = ANDROIDTV_COMMAND_NAMES, inputs = ANDROIDTV_INPUTS,
+  commandNames = ANDROIDTV_COMMAND_NAMES, inputs = ANDROIDTV_INPUTS, slotInputs = true,
   power = {on = "PowerOn", off = "PowerOff"}
 }
 
@@ -1986,6 +1990,56 @@ local function haAlias(value)
     return nil
   end
   return value
+end
+
+-- A network TV's input slot command: InputHdmi1-4, then Input5-Input32, in
+-- that spelling. nil for anything else.
+local function androidTvSlotCommand(name)
+  if type(name) ~= "string" then
+    return nil
+  end
+  local hdmi = string.match(string.lower(name), "^inputhdmi([1-4])$")
+  if hdmi then
+    return "InputHdmi" .. hdmi
+  end
+  local n = tonumber(string.match(string.lower(name), "^input(%d%d?)$"))
+  if n and n >= 5 and n <= MAX_INPUTS then
+    return "Input" .. n
+  end
+  return nil
+end
+
+-- A network TV's inputs from a request: nil when it lists none (keep the TV's
+-- current inputs), else names, order and one slot command each.
+local function androidTvInputsFrom(raw, label)
+  if raw == nil or raw == json.null then
+    return nil
+  end
+  local list = haList(raw)
+  if not list or #list > MAX_INPUTS then
+    return nil, label .. ": inputs must list at most " .. MAX_INPUTS .. " inputs"
+  end
+  local inputs, names, slots = {}, {}, {}
+  for i, input in ipairs(list) do
+    local name = type(input) == "table" and haLabel(input.name, 64)
+    if not name then
+      return nil, label .. ": input names must be 1-64 characters without quotes or backslashes"
+    end
+    if names[string.lower(name)] then
+      return nil, label .. ": input " .. name .. " is listed twice"
+    end
+    names[string.lower(name)] = true
+    local command = androidTvSlotCommand(input.command)
+    if not command then
+      return nil, label .. ": input " .. name .. " needs an input slot command (InputHdmi1-4, Input5-Input" .. MAX_INPUTS .. ")"
+    end
+    if slots[command] then
+      return nil, label .. ": two inputs use " .. command
+    end
+    slots[command] = true
+    inputs[i] = {name = name, command = command}
+  end
+  return inputs
 end
 
 local function haDeviceSpecFrom(raw, index, family)
@@ -2067,8 +2121,24 @@ local function haDeviceSpecFrom(raw, index, family)
       spec.commands[i] = {name = name, value = name}
     end
     spec.power = {type = 1, on = family.power.on, off = family.power.off}
-    for i, input in ipairs(family.inputs) do
-      spec.inputs[i] = {name = input.name, command = input.command}
+    if family.slotInputs then
+      local inputs, inputsError = androidTvInputsFrom(raw.inputs, label)
+      if inputsError then
+        return nil, inputsError
+      end
+      -- nil: keep the TV's current inputs; settled once the old device is known.
+      spec.inputs = inputs
+      if raw.inputDelay ~= nil and raw.inputDelay ~= json.null then
+        local delay = tonumber(raw.inputDelay)
+        if not delay or delay < 0 or delay > 60000 or delay % 1 ~= 0 then
+          return nil, label .. ": inputDelay must be 0-60000 ms"
+        end
+        spec.inputDelay = delay
+      end
+    else
+      for i, input in ipairs(family.inputs) do
+        spec.inputs[i] = {name = input.name, command = input.command}
+      end
     end
     return spec
   end
@@ -2278,6 +2348,52 @@ local function haDeviceTable(spec, deviceId, now, family)
   }
 end
 
+-- A network TV's inputs once the old device is known: the request's, or the
+-- device's current ones (input commands it still has), or HDMI 1-4 for a new
+-- TV; then every slot command an input uses joins the command list.
+local function androidTvResolveInputs(spec, family, old)
+  local feature = old and featureOf(old, "InputFeature")
+  if spec.inputs == nil then
+    spec.inputs = {}
+    if old then
+      local base = {}
+      for _, command in ipairs(spec.commands) do
+        base[string.lower(command.name)] = command.name
+      end
+      local current = {}
+      for _, input in ipairs(feature and type(feature.Inputs) == "table" and feature.Inputs or {}) do
+        local action = type(input) == "table" and type(input.Actions) == "table" and input.Actions[1]
+        local name = action and action.IRCommandName
+        local command = androidTvSlotCommand(name) or (type(name) == "string" and base[string.lower(name)])
+        if type(input.InputName) == "string" and command then
+          current[#current + 1] = {name = input.InputName, command = command, order = tonumber(input.InputOrder) or 0}
+        end
+      end
+      table.sort(current, function(a, b) return a.order < b.order end)
+      for i, input in ipairs(current) do
+        spec.inputs[i] = {name = input.name, command = input.command}
+      end
+    else
+      for i, input in ipairs(family.inputs) do
+        spec.inputs[i] = {name = input.name, command = input.command}
+      end
+    end
+  end
+  if spec.inputDelay == nil and feature then
+    spec.inputDelay = tonumber(feature.InputDelay)
+  end
+  local have = {}
+  for _, command in ipairs(spec.commands) do
+    have[string.lower(command.name)] = true
+  end
+  for _, input in ipairs(spec.inputs) do
+    if not have[string.lower(input.command)] then
+      spec.commands[#spec.commands + 1] = {name = input.command, value = input.command}
+      have[string.lower(input.command)] = true
+    end
+  end
+end
+
 -- Build one device entry from its spec, keeping the IDs, dates and timing
 -- an earlier commit or the device settings editor left on it.
 local function haDeviceEntry(spec, old, deviceId, protocolId, nextId, now, family)
@@ -2333,7 +2449,7 @@ local function haDeviceEntry(spec, old, deviceId, protocolId, nextId, now, famil
   local inputFeature = featureOf(entry, "InputFeature")
   applyInputs(entry, power, {
     type = #spec.inputs > 0 and "discrete" or "none",
-    delay = inputFeature and tonumber(inputFeature.InputDelay) or 0,
+    delay = spec.inputDelay or inputFeature and tonumber(inputFeature.InputDelay) or 0,
     list = spec.inputs
   })
   return entry
@@ -2493,6 +2609,9 @@ local function commitHaDevices(request, family)
           end
         end
       end
+    end
+    if family.slotInputs then
+      androidTvResolveInputs(spec, family, old)
     end
     local deviceId
     if old then
