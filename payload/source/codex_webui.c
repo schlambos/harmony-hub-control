@@ -3450,16 +3450,20 @@ static void render_androidtv_devices_json(int fd, const struct request *req) {
    /api/androidtv/... routes are relayed to it as they are; it answers JSON with
    HTTP 200, errors as {"ok":false,"error":...}. */
 #define ANDROIDTV_DAEMON_PORT 8095
-#define ANDROIDTV_REPLY_MAX 8192
+/* A TV's input profile comes back JSON-escaped: up to twice its 12 KB. */
+#define ANDROIDTV_REPLY_MAX 32768
+#define ANDROIDTV_PROFILE_MAX 12288
+#define ANDROIDTV_PRESETS_PATH "/data/codex/androidtv-input-presets.json"
+#define ANDROIDTV_PRESETS_MAX 65536
 
-static void render_androidtv_proxy(int fd, const struct request *req, const char *method, const char *path) {
+/* Send method+path (and body) to codex_androidtv and relay its JSON answer. */
+static void androidtv_relay(int fd, const char *method, const char *path, const char *req_body, size_t body_len) {
     struct sockaddr_in addr;
     struct timeval tv = {4, 0};
-    char head[256], *reply = NULL, *body;
-    size_t got = 0, body_len = req->body ? req->body_len : 0;
+    char head[384], *reply = NULL, *body;
+    size_t got = 0;
     int sock = -1, n;
     FILE *f;
-    if (body_len > 4096) body_len = 4096;
     reply = (char *)malloc(ANDROIDTV_REPLY_MAX + 1);
     if (!reply) goto unavailable;
     sock = socket(AF_INET, SOCK_STREAM, 0);
@@ -3474,8 +3478,9 @@ static void render_androidtv_proxy(int fd, const struct request *req, const char
     n = snprintf(head, sizeof(head),
         "%s %s HTTP/1.0\r\nHost: 127.0.0.1\r\nContent-Type: application/json\r\n"
         "Content-Length: %u\r\n\r\n", method, path, (unsigned)body_len);
+    if (n <= 0 || (size_t)n >= sizeof(head)) goto unavailable;
     if (send(sock, head, (size_t)n, MSG_NOSIGNAL) != n) goto unavailable;
-    if (body_len && send(sock, req->body, body_len, MSG_NOSIGNAL) != (ssize_t)body_len) goto unavailable;
+    if (body_len && send(sock, req_body, body_len, MSG_NOSIGNAL) != (ssize_t)body_len) goto unavailable;
     for (;;) {
         ssize_t r = recv(sock, reply + got, ANDROIDTV_REPLY_MAX - got, 0);
         if (r < 0 && errno == EINTR) continue;
@@ -3504,6 +3509,109 @@ unavailable:
             "Restart the hub; if it keeps happening, reinstall Melodious.\"}\n", f);
         fclose(f);
     }
+}
+
+static void render_androidtv_proxy(int fd, const struct request *req, const char *method, const char *path) {
+    size_t body_len = req->body ? req->body_len : 0;
+    if (body_len > 4096) body_len = 4096;
+    androidtv_relay(fd, method, path, req->body, body_len);
+}
+
+/* A codex_androidtv TV id: "androidtv" and hex digits. */
+static int androidtv_id_ok(const char *id) {
+    size_t i, n = strlen(id);
+    if (n < 10 || n > 23 || strncmp(id, "androidtv", 9) != 0) return 0;
+    for (i = 9; i < n; i++)
+        if (!isxdigit((unsigned char)id[i])) return 0;
+    return 1;
+}
+
+static void send_androidtv_error(int fd, const char *status, const char *message) {
+    FILE *f = send_json_start(fd, status);
+    if (!f) return;
+    fputs("{\"ok\":false,\"error\":", f);
+    json_write_string(f, message);
+    fputs("}\n", f);
+    fclose(f);
+}
+
+/* GET /api/androidtv/inputs?device=<id>: the TV's input profile. */
+static void render_androidtv_inputs_get(int fd, const struct request *req) {
+    char id[32] = "", path[64];
+    const char *q = strstr(req->path, "device=");
+    if (q) sscanf(q + 7, "%31[^&]", id);
+    if (!androidtv_id_ok(id)) {
+        send_androidtv_error(fd, "400 Bad Request", "device must be a network TV id such as androidtv1a2b3c4d");
+        return;
+    }
+    snprintf(path, sizeof(path), "/inputs?device=%s", id);
+    androidtv_relay(fd, "GET", path, NULL, 0);
+}
+
+/* POST /api/androidtv/inputs {"device":"<id>","profile":"<text>"}: save the
+   TV's input profile (codex_androidtv checks it; "" goes back to built-in). */
+static void render_androidtv_inputs_set(int fd, const struct request *req) {
+    char id[32] = "", path[64], *profile;
+    if (!req->body || req->body_truncated) {
+        send_androidtv_error(fd, "413 Payload Too Large", "the input settings are too long");
+        return;
+    }
+    json_string(req->body, "device", id, sizeof(id));
+    if (!androidtv_id_ok(id)) {
+        send_androidtv_error(fd, "400 Bad Request", "device must be a network TV id such as androidtv1a2b3c4d");
+        return;
+    }
+    profile = (char *)malloc(ANDROIDTV_PROFILE_MAX + 2);
+    if (!profile) {
+        send_androidtv_error(fd, "503 Service Unavailable", "out of memory");
+        return;
+    }
+    /* "profile":"" is the one way back to the built-in behaviour: a request
+       without the key is refused, not taken as a reset. */
+    if (!json_string(req->body, "profile", profile, ANDROIDTV_PROFILE_MAX + 2)) {
+        free(profile);
+        send_androidtv_error(fd, "400 Bad Request", "profile (the input settings as text, or \"\" for the built-in behaviour) is required");
+        return;
+    }
+    if (strlen(profile) > ANDROIDTV_PROFILE_MAX) {
+        free(profile);
+        send_androidtv_error(fd, "413 Payload Too Large", "the input settings are too long");
+        return;
+    }
+    snprintf(path, sizeof(path), "/inputs?device=%s", id);
+    androidtv_relay(fd, "POST", path, profile, strlen(profile));
+    free(profile);
+}
+
+/* GET /api/androidtv/input-presets: the brand presets file as it is; the web
+   app checks it. A missing file is {"ok":false,...}: no suggestions. */
+static void render_androidtv_presets(int fd) {
+    FILE *in = fopen(ANDROIDTV_PRESETS_PATH, "rb"), *f;
+    char *buf;
+    size_t n;
+    if (!in) {
+        send_androidtv_error(fd, "200 OK", "no input presets file on the hub");
+        return;
+    }
+    buf = (char *)malloc(ANDROIDTV_PRESETS_MAX + 1);
+    if (!buf) {
+        fclose(in);
+        send_androidtv_error(fd, "503 Service Unavailable", "out of memory");
+        return;
+    }
+    n = fread(buf, 1, ANDROIDTV_PRESETS_MAX + 1, in);
+    fclose(in);
+    if (n == 0 || n > ANDROIDTV_PRESETS_MAX || buf[0] != '{') {
+        free(buf);
+        send_androidtv_error(fd, "200 OK", "the input presets file isn't usable");
+        return;
+    }
+    f = send_json_start(fd, "200 OK");
+    if (f) {
+        fwrite(buf, 1, n, f);
+        fclose(f);
+    }
+    free(buf);
 }
 
 /* One device's Touch screen: {"deviceId":..,"remove":bool,"dryRun":bool}.
@@ -11611,6 +11719,7 @@ static void render_version_json(int fd) {
         "activity-save",
         "activity-sync",
         "androidtv-devices",
+        "androidtv-inputs",
         "catalog-import",
         "device-commands",
         "device-screen",
@@ -12512,6 +12621,17 @@ static void handle_client(int client) {
         render_androidtv_proxy(client, &req, "POST", "/forget");
     } else if (strcmp(req.method, "POST") == 0 && strcmp(req.path, "/api/androidtv/rename") == 0) {
         render_androidtv_proxy(client, &req, "POST", "/rename");
+    } else if (strcmp(req.method, "GET") == 0 && strncmp(req.path, "/api/androidtv/inputs", 21) == 0 &&
+        (req.path[21] == 0 || req.path[21] == '?')) {
+        render_androidtv_inputs_get(client, &req);
+    } else if (strcmp(req.method, "POST") == 0 && strcmp(req.path, "/api/androidtv/inputs") == 0) {
+        if (request_same_origin_json(&req)) render_androidtv_inputs_set(client, &req);
+        else send_cross_site_refused(client);
+    } else if (strcmp(req.method, "POST") == 0 && strcmp(req.path, "/api/androidtv/try") == 0) {
+        if (request_same_origin_json(&req)) render_androidtv_proxy(client, &req, "POST", "/try");
+        else send_cross_site_refused(client);
+    } else if (strcmp(req.method, "GET") == 0 && strcmp(req.path, "/api/androidtv/input-presets") == 0) {
+        render_androidtv_presets(client);
     } else if (strcmp(req.method, "POST") == 0 && strcmp(req.path, "/api/device-screen") == 0) {
         render_device_screen_json(client, &req);
     } else if (strcmp(req.method, "POST") == 0 && strcmp(req.path, "/api/activity-sync") == 0) {

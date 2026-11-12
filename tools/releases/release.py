@@ -56,6 +56,7 @@ HUB_FILES = {
     "payload/scripts/offline_egress_guard.sh": ("/data/codex/offline_egress_guard.sh", "755", 3),
     "payload/scripts/recovery_ap.sh": ("/data/codex/recovery_ap.sh", "755", 3),
     "payload/scripts/androidtv_service.sh": ("/data/codex/androidtv_service.sh", "755", 3),
+    "payload/androidtv/input-presets.json": ("/data/codex/androidtv-input-presets.json", "644", 3),
     "payload/scripts/usb_eth_service.sh": ("/data/codex/usb_eth_service.sh", "755", 3),
     "payload/modules/usb-net/r8152.ko": ("/data/codex/modules/usb-net/r8152.ko", "644", 3),
     "payload/modules/usb-net/usbnet.ko": ("/data/codex/modules/usb-net/usbnet.ko", "644", 3),
