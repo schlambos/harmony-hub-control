@@ -1,0 +1,21 @@
+From: Melodious (harmony-hub-control)
+Subject: [PATCH] libbb: xpipe: only a negative result is a failure
+
+Zig 0.16's libc returns the MIPS kernel's raw pipe() result: on success
+that is fd[0] (a positive number), not 0, although both descriptors are
+stored correctly. xpipe() treated any non-zero result as an error, so
+everything built on it ("tar z", for one) died with "can't create pipe"
+and no errno. POSIX only promises -1 on failure, so test for that.
+ash already does (`pipe(pip) < 0`). codex_webui.c has the same note.
+
+--- a/libbb/xfuncs_printf.c
++++ b/libbb/xfuncs_printf.c
+@@ -223,7 +223,7 @@
+ 
+ void FAST_FUNC xpipe(int *filedes)
+ {
+-	if (pipe(filedes))
++	if (pipe(filedes) < 0)
+ 		bb_simple_perror_msg_and_die("can't create pipe");
+ }
+ 

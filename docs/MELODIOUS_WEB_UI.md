@@ -54,7 +54,7 @@ content centred.
 - Old hashes keep working, so bookmarks survive.
 - The router has path arguments: `#devices/<id>`, `#devices/<id>/settings`,
   `#devices/<id>/sweep`, `#devices/lab`, `#remote/<activityId>`,
-  `#wizard/<id>`.
+  `#wizard/<id>`, `#homebuttons/<activityId>`.
 
 ## Screen map
 
@@ -205,6 +205,9 @@ on Apple, Segoe on Windows. That costs 0 bytes. Sizes follow the app:
   - paste import; RemoteCentral fetch; the IR lab.
 - **Bluetooth:** scan, connect, disconnect, adapter status, 30 quick keys
   and custom combos, saved devices with keyboard-script commands.
+- **Home control buttons** (`#homebuttons`, `#homebuttons/<activityId>`,
+  from the Companion's section on Remotes): the Companion's Light 1,
+  Light 2, Plug 1, Plug 2 and + / −, globally and per activity.
 - **Activities:**
   - reorder (Move up and Move down in the ⋮ menu);
   - the vendored advanced editor;
@@ -277,9 +280,10 @@ such as `#devices/<id>`, so you can bookmark it.
   paired remote gets the same section: its buttons for each activity,
   opening the same editor for every remote (a remote without a screen,
   such as the Smart Control or Companion, also has its activity
-  buttons). Every remote's keys stay the same: a key you change goes on
-  all of them unless you set it for one remote only, and each activity
-  row says where they differ.
+  buttons; the Companion also has its home control buttons). Every
+  remote's keys stay the same: a key you change goes on all of them
+  unless you set it for one remote only, and each activity row says where
+  they differ.
 - **Bluetooth keyboard**: pairing and saved devices.
 - **MQTT**: the broker, Home Assistant discovery and the topics.
 - **Wi-Fi**: the network the hub joins. Changes take effect after a

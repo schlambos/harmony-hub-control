@@ -7,13 +7,21 @@
 *.json text eol=lf
 *.sh text eol=lf
 payload/scripts/* text eol=lf
-payload/bin/FILES text eol=lf
-payload/bin/MANIFEST.txt text eol=lf
+build/pins/* text eol=lf linguist-generated
+payload/bin/FILES text eol=lf linguist-generated
+payload/bin/MANIFEST.txt text eol=lf linguist-generated
+payload/source/harmony_shell_assets.h text eol=lf linguist-generated
+payload/source/activity_ui_assets.h text eol=lf linguist-generated
+payload/helpers/hal_remotes_patch.json text eol=lf linguist-generated
 
 *.ps1 text eol=crlf
 
 payload/bin/codex_* binary
 payload/bin/dropbearmulti binary
+payload/bin/busybox-extra binary
+payload/helpers/codex_flash_free binary
+# BusyBox's corresponding source stays byte-exact (the build cmp's the .config).
+third_party/busybox-1.37.0/** -text
 
 # Preserve the tag-pinned upstream license bytes, including two trailing spaces.
 third_party/dropbear-2025.89/LICENSE -whitespace

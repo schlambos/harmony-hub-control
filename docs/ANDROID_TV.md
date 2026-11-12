@@ -52,11 +52,32 @@ of them.
 | VolumeUp, VolumeDown, Mute | Volume keys. Holding a button repeats, as with any IP command |
 | ChannelUp, ChannelDown, PrevChannel | Channel keys |
 | Play, Pause, PlayPause, Stop, FastForward, Rewind, SkipForward, SkipBack, Record | Media keys |
-| InputHdmi1 to InputHdmi4, InputNext | The HDMI input keys and the input menu. The device's inputs HDMI 1-4 use them |
+| InputHdmi1 to InputHdmi4, InputNext | HDMI 1-4 (see Inputs) and the input menu. The device's inputs HDMI 1-4 use them |
 | Number0 to Number9, Red, Green, Yellow, Blue, Captions | Those keys |
 
-Whether a TV honours the HDMI input keys depends on the TV. If yours doesn't,
-let a source switch it by HDMI-CEC, or use InputNext.
+## Inputs
+
+InputHdmi1 to InputHdmi4 send Android's HDMI input keys (KEYCODE_TV_INPUT_HDMI_1
+to 4), except on TVs known to ignore them (if the TV offers app links):
+
+| TV (vendor it reports) | InputHdmi<n> opens |
+|---|---|
+| Hisense | the TV's own input, `content://android.media.tv/passthrough/com.hisense.tv.hitvinput%2F.hdmi.HdmiTvInputService%2FHW<n+1>` |
+
+The TV names its vendor when it connects; the hub's log says
+`TV <id> is a <vendor> <model>`, and `/api/androidtv/status` shows it. These
+were checked on a Hisense 75U8H (Google TV): the HDMI keys do nothing, and the
+input URIs HW2, HW3 and HW4 switch to HDMI 1, 2 and 3. HDMI 4 as HW5 follows
+the same pattern but hasn't been checked on a TV yet. A TV can show an input
+this way even when nothing is plugged into it (its own menu greys those out).
+A Hisense TV that doesn't offer app links gets the HDMI keys.
+
+If your TV ignores the keys and isn't listed, let a source switch it by
+HDMI-CEC, or use InputNext.
+
+When an activity turns the TV on and then picks an input, the input waits until
+the TV reports that it is on (up to 8 s after the power key): a TV that is still
+waking up ignores it.
 
 ## Power
 
@@ -65,13 +86,25 @@ Android's separate wake and sleep keys and only answer the power key. So the hub
 sends the power key only when the TV reports the other state: PowerOn on a TV
 that is already on does nothing.
 
+If a TV ignores the power key (one that is still shutting down from a PowerOff a
+moment ago does) and drops off the network, or goes silent on the connection,
+the hub sends Wake-on-LAN and the power key once more. While PowerOn waits for
+a TV that can't be reached, Wake-on-LAN is repeated every 5 s. If the TV still
+doesn't come on, the commands an activity queued behind PowerOn (its input, say)
+are dropped rather than sent to it later. A PowerOff that arrives while a PowerOn
+hasn't been sent yet (a retry, or one waiting for a TV it can't reach) cancels it
+and those commands, so the TV isn't woken only to be turned off.
+
 How a TV turns on from standby depends on how it sleeps:
 
 - **Network still up** (many TVs keep it for a while, or for good with a
   "network standby" or "quick start" setting): the hub sends the power key.
 - **Network down** (deep standby): the hub sends a Wake-on-LAN packet to the
   TV's address on the network (learned when it pairs) and then the key if it's
-  still needed.
+  still needed. Many TVs power fully on from Wake-on-LAN, and some report
+  standby for a moment while they boot, so after a Wake-on-LAN the hub waits
+  5 s from the TV's latest state report before it presses the key. A key during
+  that boot would turn the TV off again.
   The packet goes to the hub's own subnet broadcast address (for example
   `192.168.1.255`) as well as `255.255.255.255`. With the cloud blocker on, the hub
   has no default route, so only the subnet address can be sent.
@@ -107,7 +140,7 @@ web app ──/api/androidtv/*──► codex_webui ──proxy──► codex_a
   5 s), answers the engine at once, and sends keys as soon as the TV is
   connected. It pairs new TVs (the "polo" pairing protocol on port 6467), finds
   them with mDNS (`_androidtvremote2._tcp`) and wakes them with Wake-on-LAN.
-  TLS is [BearSSL](https://bearssl.org/) 0.6. About 260 KB on flash and about
+  TLS is [BearSSL](https://bearssl.org/) 0.6. About 215 KB on flash and about
   200 KB of RAM with a TV connected.
 - **Identity.** On first start the hub makes one RSA-2048 key and a self-signed
   certificate (`/data/codex/androidtv/client.key.der`, `client.crt.der`, mode 0600)

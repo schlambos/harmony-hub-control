@@ -10,6 +10,7 @@ local connect = require("tasks.connectserver.core.utils")
 local REQUEST_FILE = "/var/volatile/codex-activity-request.json"
 local RESPONSE_FILE = "/var/volatile/codex-activity-response.json"
 local CLOUD_BLOCKER_FILE = "/data/codex/cloud_blocker.conf"
+local MELODIOUS_OFF_FILE = "/etc/melodious-off"
 -- The activityengine task is the only listener for process_activity, so a
 -- synchronous send is a FIFO barrier behind the init_activity_engine that
 -- harmonyengine broadcasts while handling config_new.
@@ -86,7 +87,19 @@ local function writeFileAtomic(path, data)
   return true
 end
 
+local function melodiousOff()
+  local f = io.open(MELODIOUS_OFF_FILE, "r")
+  if not f then
+    return false
+  end
+  f:close()
+  return true
+end
+
 local function blockerActive()
+  if melodiousOff() then
+    return false
+  end
   local value = readFile(CLOUD_BLOCKER_FILE)
   return value ~= nil and string.match(value, "^%s*1[%s]*$") ~= nil
 end
@@ -2857,7 +2870,7 @@ end
 local function workerLoop()
   os.remove(REQUEST_FILE)
   os.remove(RESPONSE_FILE)
-  while not stopRequested do
+  while not stopRequested and not melodiousOff() do
     local seeded, seedError = pcall(seedBlankHub)
     if not seeded then
       log.error("codexactivity blank hub setup failed:", tostring(seedError))
@@ -2892,8 +2905,269 @@ local function workerLoop()
   workerTask = nil
 end
 
+-- The Harmony Companion's home-control keys (docs/HOME_CONTROL_BUTTONS.md).
+-- Light 1, Light 2, Plug 1 and Plug 2 are Ha1-Ha4; + and - are RockerUp and
+-- RockerDown. Their actions live in the Companion's 16422 button maps like
+-- every other key's: 16422Root for all the time, 16422Activity<id> to
+-- override them while that activity runs.
+local HOME_EQUAD = "16422"
+local HOME_ROOT_MAP = HOME_EQUAD .. "Root"
+local MAP_LIST_FILE = "/data/resources/MapList.json"
+local HOME_KEYS = {"Ha1", "Ha2", "Ha3", "Ha4"}
+local IS_HOME_KEY = {Ha1 = true, Ha2 = true, Ha3 = true, Ha4 = true}
+-- + and - adjust the last pressed home key when it has <key>Up/<key>Down,
+-- else they send HcUp/HcDown.
+local ROCKER_SUFFIX = {RockerUp = "Up", RockerDown = "Down"}
+local FIXED_ROCKER_PREFIX = "Hc"
+
+-- The engine's account, as it hands it to the AutomationConfig pass on
+-- every config load: the same object its session serves, which this
+-- plugin may not require (tools/activity_offline_guard.sh). Until the
+-- first load after this plugin starts, keys are left to the engine.
+local engineAccount = nil
+local lastHomeKey = nil
+-- The key each rocker was renamed to at its press (false: left as it is),
+-- so its holds and release go to the same key.
+local rockerAliases = {}
+
+local function requestResourceReload(name)
+  local pending = readFile(RESOURCE_RELOAD_FLAG) or ""
+  -- One name per line; writeFileAtomic ends the file with a newline.
+  return writeFileAtomic(RESOURCE_RELOAD_FLAG, pending .. "\n" .. name)
+end
+
+local function rootButtons(account)
+  local root = type(account) == "table" and type(account.buttonMaps) == "table" and
+    account.buttonMaps[HOME_ROOT_MAP] or nil
+  return root and type(root.buttons) == "table" and root.buttons or nil
+end
+
+-- A key AutomationConfig binds (a Logitech home-control device) keeps the
+-- engine's own handling.
+local function isAutomationBinding(button)
+  local first = type(button.actions) == "table" and button.actions[1] or nil
+  return type(first) == "table" and type(first.parameters) == "table" and
+    first.parameters.haDeviceId ~= nil
+end
+
+-- After every MapList load the engine's reader removes Ha1-Ha4 from the
+-- Companion's root map and rebuilds them from AutomationConfig only. Put
+-- back the MapList's own keys it removed; a key AutomationConfig binds (a
+-- Logitech home-control device) keeps that binding. The account it gets
+-- is remembered for the key hook below.
+local function keepRootHomeKeys(original)
+  return function(jsonData, account)
+    if type(account) == "table" then
+      engineAccount = account
+    end
+    local kept = {}
+    local before = rootButtons(account)
+    if before then
+      for _, key in ipairs(HOME_KEYS) do
+        if type(before[key]) == "table" and not isAutomationBinding(before[key]) then
+          kept[key] = before[key]
+        end
+      end
+    end
+    local result = original(jsonData, account)
+    local after = rootButtons(account)
+    if after then
+      local restored = {}
+      for _, key in ipairs(HOME_KEYS) do
+        if kept[key] and after[key] == nil then
+          after[key] = kept[key]
+          restored[#restored + 1] = key
+        end
+      end
+      if #restored > 0 then
+        log.notice("codexactivity: kept home-control keys", table.concat(restored, " "))
+      end
+    end
+    return result
+  end
+end
+
+local function installRootHomeKeysHook()
+  local ok, reader = pcall(require, "tasks.harmonyengine.loader.userconfigreader")
+  if not ok or type(reader) ~= "table" or reader.codexHomeKeysHook or
+      type(reader.getAutomationConfiguration) ~= "function" then
+    return false
+  end
+  reader.getAutomationConfiguration = keepRootHomeKeys(reader.getAutomationConfiguration)
+  reader.codexHomeKeysHook = true
+  return true
+end
+
+-- The maps the engine looks a Companion key up in, in its order: the
+-- running activity's map, then the root map.
+local function homeControlMaps()
+  local account = engineAccount
+  if type(account) ~= "table" or type(account.buttonMaps) ~= "table" then
+    return {}
+  end
+  local maps = {}
+  local activityId = account.currentActivityId
+  if activityId ~= nil and tostring(activityId) ~= "-1" then
+    maps[#maps + 1] = account.buttonMaps[HOME_EQUAD .. "Activity" .. tostring(activityId)]
+  end
+  maps[#maps + 1] = account.buttonMaps[HOME_ROOT_MAP]
+  return maps -- a missing activity map adds no entry, so the list has no gap
+end
+
+local function resolveButton(maps, key)
+  for _, map in ipairs(maps) do
+    if type(map.buttons) == "table" and map.buttons[key] ~= nil then
+      return map.buttons[key]
+    end
+  end
+  return nil
+end
+
+-- "Nothing" in an activity is a sequence of one zero delay: the engine
+-- drops a key without actions and would fall back to the root map.
+local function doesNothing(button)
+  local actions = type(button) == "table" and button.actions or nil
+  if type(actions) ~= "table" or #actions == 0 then
+    return false
+  end
+  for _, action in ipairs(actions) do
+    if action.name ~= "SendDelay" then
+      return false
+    end
+  end
+  return true
+end
+
+local function hasLongPress(button)
+  return type(button.longActions) == "table" and #button.longActions > 0
+end
+
+local function rockerAlias(maps, rocker)
+  local suffix = ROCKER_SUFFIX[rocker]
+  if lastHomeKey and resolveButton(maps, lastHomeKey .. suffix) then
+    return lastHomeKey .. suffix
+  end
+  if resolveButton(maps, FIXED_ROCKER_PREFIX .. suffix) then
+    return FIXED_ROCKER_PREFIX .. suffix
+  end
+  return false
+end
+
+-- The engine re-sends a key on every hold (about every 220 ms) unless the
+-- key has a long-press action, which would flip a toggle several times.
+-- A home key fires once per press; its holds are answered here.
+local function homeKeyAnswer(cmd, verb, params, maps)
+  local key = params.buttonKey
+  if verb == "press" then
+    lastHomeKey = key
+  end
+  local button = resolveButton(maps, key)
+  if button == nil then
+    return nil
+  end
+  if doesNothing(button) then
+    return connect.createResponse(cmd, "200", "OK", nil)
+  end
+  if verb == "hold" and not hasLongPress(button) and not isAutomationBinding(button) then
+    return connect.createResponse(cmd, "200", "OK", nil)
+  end
+  return nil
+end
+
+-- The engine hands every key named "Rocker" to its home-automation
+-- manager before the button maps are read, so a rocker with an action in
+-- the maps is renamed to that plain key first.
+local function renameRocker(verb, params, maps)
+  local rocker = params.buttonKey
+  local alias = rockerAliases[rocker]
+  if verb == "press" or alias == nil then
+    alias = rockerAlias(maps, rocker)
+    rockerAliases[rocker] = alias
+  end
+  if verb == "release" then
+    rockerAliases[rocker] = nil
+  end
+  if alias then
+    params.buttonKey = alias
+  end
+end
+
+-- The answer for a key handled here, or nil to let the engine handle it.
+local function routeHomeControlKey(cmd, verb, params)
+  if type(params) ~= "table" or tostring(params.equadId) ~= HOME_EQUAD then
+    return nil
+  end
+  local key = params.buttonKey
+  if IS_HOME_KEY[key] then
+    return homeKeyAnswer(cmd, verb, params, homeControlMaps())
+  end
+  if ROCKER_SUFFIX[key] then
+    renameRocker(verb, params, homeControlMaps())
+  end
+  return nil
+end
+
+-- A failure here must never cost the remote its keys: the engine then
+-- handles the key as it would without this plugin.
+local function homeControlCommand(original)
+  return function(cmd, verb, params)
+    local ok, answer = pcall(routeHomeControlKey, cmd, verb, params)
+    if not ok then
+      log.error("codexactivity: home-control key failed:", tostring(answer))
+    elseif answer ~= nil then
+      return answer
+    end
+    return original(cmd, verb, params)
+  end
+end
+
+local function installButtonCommandHook()
+  local ok, handler = pcall(require, "tasks.harmonyengine.apihandler.activity")
+  if not ok or type(handler) ~= "table" or handler.codexHomeControlHook or
+      type(handler.processButtonCommand) ~= "function" then
+    return false
+  end
+  handler.processButtonCommand = homeControlCommand(handler.processButtonCommand)
+  handler.codexHomeControlHook = true
+  return true
+end
+
+-- Whether the hub's MapList gives the Companion's root map home keys.
+local function hasRootHomeKeys()
+  local text = readFile(MAP_LIST_FILE) or ""
+  return text:find(HOME_ROOT_MAP, 1, true) ~= nil and
+    text:find('"ButtonKey"%s*:%s*"Ha[1-4]"') ~= nil
+end
+
+-- The engine loaded MapList before this plugin started, so the root keys
+-- are already gone: one MapList reload brings them back.
+local function installHomeControlHooks()
+  local keysOk, keysInstalled = pcall(installRootHomeKeysHook)
+  if not keysOk then
+    log.error("codexactivity: home-control key hook failed:", tostring(keysInstalled))
+  elseif keysInstalled then
+    log.notice("codexactivity: home-control key hook installed")
+    if hasRootHomeKeys() then
+      local requested, requestError = requestResourceReload("MapList")
+      if not requested then
+        log.warning("codexactivity: MapList reload request failed:", tostring(requestError))
+      end
+    end
+  end
+  local commandOk, commandInstalled = pcall(installButtonCommandHook)
+  if not commandOk then
+    log.error("codexactivity: home-control command hook failed:", tostring(commandInstalled))
+  elseif commandInstalled then
+    log.notice("codexactivity: home-control command hook installed")
+  end
+end
+
 local function start()
+  if melodiousOff() then
+    return false
+  end
   stopRequested = false
+  installHomeControlHooks()
   if not workerTask then
     workerTask = system.addTask("codexactivity", workerLoop)
   end
@@ -2901,6 +3175,9 @@ local function start()
 end
 
 function discover(self)
+  if melodiousOff() then
+    return {}
+  end
   start()
   return {
     ["codex-activity"] = {
@@ -2916,8 +3193,11 @@ function pair(self, gatewayId, gateway)
 end
 
 function monitor(self)
+  if melodiousOff() then
+    return
+  end
   start()
-  while not stopRequested do
+  while not stopRequested and not melodiousOff() do
     system.sleep(60000)
   end
 end

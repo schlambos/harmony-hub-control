@@ -146,13 +146,29 @@ export function setMultiRemote({ enabled, force = false }) {
   return request("/api/multi-remote", { method: "POST", body: force ? { enabled, force: true } : { enabled } });
 }
 
-// USB Ethernet over a self-powered OTG micro-USB Realtek adapter: status, and turning it on or off.
+// USB Ethernet over a self-powered OTG micro-USB adapter (docs/USB_ETHERNET.md):
+// status, and how the cable is used.
 export function getUsbEth() {
   return request("/api/usb-eth");
 }
 
-export function setUsbEth({ enabled }) {
-  return request("/api/usb-eth", { method: "POST", body: { enabled } });
+// Any of: { enabled } (on/off), { wifiOff } (Wi-Fi off while the cable
+// works), { ipMode: "dhcp" } or { ipMode: "static", address, netmask, gateway, dns1, dns2 }.
+export function setUsbEth({ enabled, wifiOff, ipMode, address, netmask, gateway, dns1, dns2 } = {}) {
+  const body = {};
+  if (typeof enabled === "boolean") body.enabled = enabled;
+  if (typeof wifiOff === "boolean") body.wifiOff = wifiOff;
+  if (ipMode === "dhcp") body.ipMode = "dhcp";
+  if (ipMode === "static") {
+    Object.assign(body, { ipMode, address: address ?? "", netmask: netmask ?? "", gateway: gateway ?? "", dns1: dns1 ?? "", dns2: dns2 ?? "" });
+  }
+  return request("/api/usb-eth", { method: "POST", body });
+}
+
+// Wi-Fi, the adapter, the routing table and DNS (read-only; heavier than
+// getUsbEth, so the Wired Ethernet page loads it less often).
+export function getNetworkOverview() {
+  return request("/api/network-overview");
 }
 
 export function importCatalog({ deviceId, commands }) {

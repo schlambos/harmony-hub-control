@@ -189,5 +189,124 @@ check("stored device content: the hub's own file, untouched",
 r = getResource("proxy.resource?get", nil, { uri = "harmony://Account/1/InstallerInfo" })
 check("other missing resources: still 404", r.data.code == "404", encode(r))
 
+-- Melodious turned off (/etc/melodious-off, and legacy /data/codex/melodious-off):
+-- even with cloud_blocker.conf = "1" and restrictions/timezone files present,
+-- zero engine.registerMessage overrides, unpatched http.request, zero
+-- background tasks, and cloudapi/pubnub/packagemgr all start on newaddr.
+local function runOffCase(markerPath)
+  local offFiles = {
+    [markerPath] = "off 20261111-120000",
+    ["/data/codex/cloud_blocker.conf"] = "1",
+    ["/data/codex/timezone.conf"] = "America/New_York\nEST5EDT,M3.2.0,M11.1.0",
+    ["/data/codex/activity-restrictions.json"] = '{"activities":{"100":[{"days":["mon"],"start":"00:00","end":"24:00"}]}}',
+  }
+  local offHandlers, offTasks, cloudStarted, loadedTasks = {}, {}, {}, {}
+  local origRequest = function() return "unpatched" end
+  local offHttp = { request = origRequest }
+  local origStartActivity = function() return "stock-start" end
+  local heactivity = { startActivity = origStartActivity }
+
+  for _, mod in ipairs({
+    "system", "socket.http", "tasks.connectserver.core.engine", "tasks.mfg.core.mfgdata",
+    "tasks.connectserver.transport.cloudapi", "tasks.connectserver.transport.pubnubwrapper",
+    "tasks.connectserver.transport.packagemgr", "tasks.harmonyengine.apihandler.activity",
+    "tasks.crashlog.apihandler.usagelog",
+  }) do
+    package.loaded[mod] = nil
+  end
+
+  local sentAddr = false
+  package.preload["system"] = function()
+    local s = anything()
+    rawset(s, "io", {
+      open = function(path)
+        local body = offFiles[path]
+        if not body then return nil end
+        return { read = function() return body end, close = noop }
+      end,
+    })
+    rawset(s, "addTask", function(name, fn)
+      offTasks[#offTasks + 1] = name
+      return name
+    end)
+    rawset(s, "loadTask", function(path)
+      loadedTasks[#loadedTasks + 1] = path
+      return path
+    end)
+    rawset(s, "isMessageRegistered", function() return true end)
+    rawset(s, "uniqueId", function() return "uuid-1" end)
+    rawset(s, "netlinkOpen", function()
+      return {
+        receive = function()
+          if not sentAddr then
+            sentAddr = true
+            return { { family = "inet", label = "ath0", msgtype = "newaddr", address = "192.0.2.10" } }
+          end
+          error("STOP_NETLINK_LOOP")
+        end,
+        close = noop,
+      }
+    end)
+    return s
+  end
+  package.preload["socket.http"] = function() return offHttp end
+  package.preload["tasks.connectserver.core.engine"] = function()
+    return {
+      registerMessage = function(mime, _, fn)
+        offHandlers[#offHandlers + 1] = mime
+      end,
+    }
+  end
+  package.preload["tasks.mfg.core.mfgdata"] = function() return { hasNetwork = true } end
+  package.preload["tasks.crashlog.apihandler.usagelog"] = function() return anything() end
+  for _, spec in ipairs({
+    { key = "cloudapi", mod = "tasks.connectserver.transport.cloudapi" },
+    { key = "pubnub", mod = "tasks.connectserver.transport.pubnubwrapper" },
+    { key = "packagemgr", mod = "tasks.connectserver.transport.packagemgr" },
+  }) do
+    package.preload[spec.mod] = function()
+      return {
+        start = function()
+          cloudStarted[spec.key] = (cloudStarted[spec.key] or 0) + 1
+          return "task-" .. spec.key
+        end,
+      }
+    end
+  end
+  package.loaded["tasks.harmonyengine.apihandler.activity"] = heactivity
+
+  local ok, err = pcall(assert(loadfile(repoRoot .. "/payload/scripts/netservicestarter.lua")))
+  assert(not ok and tostring(err):find("STOP_NETLINK_LOOP", 1, true), "unexpected exit: " .. tostring(err))
+  return {
+    handlers = offHandlers,
+    http = offHttp,
+    origRequest = origRequest,
+    tasks = offTasks,
+    cloudStarted = cloudStarted,
+    loadedTasks = loadedTasks,
+    heactivity = heactivity,
+    origStartActivity = origStartActivity,
+  }
+end
+
+local off = runOffCase("/etc/melodious-off")
+check("melodious-off: 0 engine.registerMessage overrides",
+  #off.handlers == 0, table.concat(off.handlers, ","))
+check("melodious-off: socket.http.request stays unpatched",
+  off.http.request == off.origRequest and off.http.__codexCloudGuard == nil)
+check("melodious-off: 0 background tasks and startActivity unwrapped",
+  #off.tasks == 0 and off.heactivity.startActivity == off.origStartActivity and
+  off.heactivity.__codexTimeRestrictions == nil, table.concat(off.tasks, ","))
+check("melodious-off: cloudapi, pubnub, and packagemgr all start despite cloud_blocker.conf=1",
+  off.cloudStarted.cloudapi == 1 and off.cloudStarted.pubnub == 1 and
+  off.cloudStarted.packagemgr == 1 and #off.loadedTasks == 5,
+  encode(off.cloudStarted))
+
+local legacyOff = runOffCase("/data/codex/melodious-off")
+check("legacy /data/codex/melodious-off fallback: also skips guards/tasks and starts cloud",
+  #legacyOff.handlers == 0 and legacyOff.http.request == legacyOff.origRequest and
+  #legacyOff.tasks == 0 and legacyOff.cloudStarted.cloudapi == 1 and
+  legacyOff.cloudStarted.pubnub == 1 and legacyOff.cloudStarted.packagemgr == 1)
+
 print(string.format("%d/%d checks passed", count - failures, count))
 os.exit(failures == 0 and 0 or 1)

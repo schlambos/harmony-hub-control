@@ -36,6 +36,7 @@ const HUB_FILES = {
   "payload/bin/codex_portal": ["/data/codex/bin/codex_portal", "755", 0],
   "payload/bin/codex_dhcpd": ["/data/codex/bin/codex_dhcpd", "755", 0],
   "payload/bin/dropbearmulti": ["/data/codex/bin/dropbearmulti", "755", 0],
+  "payload/bin/busybox-extra": ["/data/codex/bin/busybox-extra", "755", 0],
   "payload/scripts/dropbear": ["/usr/sbin/dropbear", "755", 0],
   "payload/scripts/dropbearkey": ["/usr/sbin/dropbearkey", "755", 0],
   "payload/scripts/init.sh": ["/data/codex/init.sh", "755", 1],
@@ -54,6 +55,26 @@ const HUB_FILES = {
   "payload/scripts/netservicestarter.lua": ["/opt/luaworks/tasks/connectserver/netservicestarter.lua", "644", 1],
 };
 const HUB_INVENTORY_FILES = new Set(["payload/bin/MANIFEST.txt", "payload/bin/FILES"]);
+// Known builds of Dropbear, by MD5: version. Builds of one version are the
+// same program (2025.89 with the unloaded MIPS .pdr section stripped, as
+// built and as tools/hub-root ships it, and with only a plain strip, as older
+// releases and harmony-hub-root ship it and the installer may have linked),
+// so either counts as current. Must match DROPBEAR_BUILDS in install_webui.py.
+const DROPBEAR_BUILDS = new Map([
+  ["3733327fd04bca282dbf06f33da0bf6c", "2025.89"],
+  ["ceabc15471be6f67f1e13fccd20a9508", "2025.89"],
+]);
+
+const DROPBEAR_DEST = HUB_FILES["payload/bin/dropbearmulti"][0];
+
+/** The payload files whose copy on the hub (md5 by destination) differs. */
+function changedFiles(files, current) {
+  return files.filter((f) => {
+    const have = current.get(f.dest);
+    const version = DROPBEAR_BUILDS.get(have);
+    return have !== f.md5 && !(f.dest === DROPBEAR_DEST && version !== undefined && version === DROPBEAR_BUILDS.get(f.md5));
+  });
+}
 
 class HubUpdateError extends Error {}
 
@@ -168,6 +189,7 @@ async function updateHub({
   authHeader = null,
   keyPath,
   sshPort = 22,
+  sshPath = "/usr/bin/ssh",
   knownHosts = null,
   fetchImpl,
   allowUrl,
@@ -180,7 +202,7 @@ async function updateHub({
   if (!keyPath) throw new HubUpdateError("No hub SSH key found. Melodious uses the installer's key, ~/.ssh/harmony_owner_….");
   const zipName = `melodious-hub-${release.version}.zip`;
   const work = fs.mkdtempSync(path.join(os.tmpdir(), "melodious-hubzip-"));
-  const ssh = createSsh({ host, keyPath, port: sshPort, knownHosts });
+  const ssh = createSsh({ host, keyPath, port: sshPort, sshPath, knownHosts });
   try {
     onStep("Downloading the hub software from GitHub…");
     const zip = await downloadVerified({ release, name: zipName, dir: work, fetchImpl, allowUrl, userAgent });
@@ -200,9 +222,13 @@ async function updateHub({
       await ssh(`rm -rf ${stage}`).catch(() => {});
       throw new HubUpdateError("This hub has no Melodious setup yet. Install it once with the installer.");
     }
+    if (/^melodious off$/m.test(status)) {
+      await ssh(`rm -rf ${stage}`).catch(() => {});
+      throw new HubUpdateError("Melodious is turned off on this hub. Run with --turn-on to turn it back on first.");
+    }
     const current = new Map();
     for (const m of status.matchAll(/^file (\S+) (\S+)$/gm)) current.set(m[2], m[1]);
-    const changed = files.filter((f) => current.get(f.dest) !== f.md5);
+    const changed = changedFiles(files, current);
     if (!changed.length) {
       await ssh(`rm -rf ${stage}`).catch(() => {});
       return { ok: true, alreadyCurrent: true, message: `The hub already has Melodious ${release.version}'s software.` };
@@ -269,4 +295,4 @@ async function updateHub({
   }
 }
 
-module.exports = { HUB_FILES, HubUpdateError, findHubKey, readHubPayload, updateHub };
+module.exports = { DROPBEAR_BUILDS, HUB_FILES, HubUpdateError, changedFiles, findHubKey, readHubPayload, updateHub };

@@ -96,6 +96,19 @@ describe("codexactivity.lua validateGraph (LuaJIT)", () => {
     });
     assert.match(out, /18\/18 checks passed/);
   });
+
+  it("keeps the Companion's home keys, and routes its rocker, \"nothing\" and holds", (t) => {
+    const probe = spawnSync("luajit", ["-v"], { encoding: "utf8" });
+    if (probe.error || probe.status !== 0) {
+      t.skip("luajit is not available");
+      return;
+    }
+    const out = execFileSync("luajit", ["tools/touch-validator/codexactivity-home-buttons-test.lua"], {
+      cwd: new URL("../../../", import.meta.url).pathname,
+      encoding: "utf8",
+    });
+    assert.match(out, /32\/32 checks passed/);
+  });
 });
 
 describe("netservicestarter.lua Touch Sync guards (LuaJIT)", () => {
@@ -109,7 +122,7 @@ describe("netservicestarter.lua Touch Sync guards (LuaJIT)", () => {
       cwd: new URL("../../../", import.meta.url).pathname,
       encoding: "utf8",
     });
-    assert.match(out, /12\/12 checks passed/);
+    assert.match(out, /17\/17 checks passed/);
   });
 });
 

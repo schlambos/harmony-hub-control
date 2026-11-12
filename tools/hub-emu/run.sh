@@ -16,9 +16,9 @@ sh "$REPO/tools/embed_activity_ui.sh"
 
 if [ ! -f "$HERE/build/codex_webui.mips" ] || [ "$REBUILD" = "--rebuild" ]; then
     echo "== cross-compiling real binaries (MIPS32 BE, production recipe) =="
-    (cd "$REPO" && zig cc -target mips-linux-musleabi -Os -static -s \
+    (cd "$REPO" && zig cc -target mips-linux-musleabi -Os -static -s -Wl,-T,build/discard-mips-pdr.ld \
         -I payload/source -o "$HERE/build/codex_webui.mips" payload/source/codex_webui.c)
-    (cd "$REPO" && zig cc -target mips-linux-musleabi -Os -static -s \
+    (cd "$REPO" && zig cc -target mips-linux-musleabi -mcpu=mips32 -Os -static -s -Wl,-T,build/discard-mips-pdr.ld \
         -o "$HERE/build/codex_hbus.mips" payload/source/codex_hbus.c)
 fi
 file "$HERE/build/codex_webui.mips" | grep -q "ELF 32-bit MSB.*MIPS" || {

@@ -3,8 +3,9 @@
    built the same way: rows that open a page. Every remote with keys gets
    "Buttons for each activity", one row per activity opening the same editor
    (#touch/<id>/<EquadID>); a remote without a screen also gets its activity
-   buttons (#activitybuttons/<EquadID>). Each remote has its own maps, named
-   by its EquadID. Their keys stay alike (the editor changes every remote
+   buttons (#activitybuttons/<EquadID>), and the Companion its home control
+   buttons (#homebuttons, #homebuttons/<id>). Each remote has its own maps,
+   named by its EquadID. Their keys stay alike (the editor changes every remote
    unless a key is set for one remote only), so each activity row only says
    where they differ. Models in remotes-model.js.
 
@@ -33,6 +34,7 @@ import {
   remoteModels,
 } from "./remotes-model.js";
 import { hasRemoteMaps } from "./touch-model.js";
+import { COMPANION_EQUAD } from "./home-buttons-model.js";
 
 const SMART_CONTROL_STEPS = `On a Harmony Smart Control, ${PAIRING_STEPS[SMART_CONTROL_EQUAD]}.`;
 
@@ -217,12 +219,27 @@ export function createRemotesView(section) {
       </div>`;
   }
 
+  /* The Companion's light, plug and + / − buttons: one row for every
+     activity (its root map), then a row per activity for its overrides. */
+  function homeButtonsCard() {
+    const row = (title, href) => listRow({ title, href, chevron: true });
+    return `<div class="m-card">
+        <div class="m-card-head"><span>Home control buttons</span></div>
+        <p class="list-note">Light 1, Light 2, Plug 1, Plug 2 and + / −. An activity follows these unless it has its own.</p>
+        <div class="m-list">${[
+          row("Every activity", "#homebuttons"),
+          ...hub.activities().map((a) => row(hub.activityName(a), `#homebuttons/${encodeURIComponent(String(a["Id-"]))}`)),
+        ].join("")}</div>
+      </div>`;
+  }
+
   /* One section per model: remotes of one model share its maps. */
   function remoteSection(remote) {
     let body;
     if (remote.role === "no-screen") body = `${activityButtonsCard(remote)}${activitiesCard(remote)}`;
     else if (remote.role === "screen") body = activitiesCard(remote);
     else body = `<div class="m-card"><p class="list-note">Nothing to set for this remote here yet.</p></div>`;
+    if (remote.equadId === COMPANION_EQUAD) body += homeButtonsCard();
     const count = remote.slots.length;
     const shared = count > 1
       ? `<p class="list-note">These ${count} remotes are the same model, so they share these settings (slots ${remote.slots.join(", ")}).</p>`

@@ -60,6 +60,7 @@ import subprocess
 import sys
 import tempfile
 import unittest
+from unittest import mock
 from pathlib import Path
 
 TOOLS_DIR = Path(__file__).resolve().parent
@@ -121,7 +122,13 @@ class FakeHub:
         self.fail_link = False
         # harmony-hub-root staging folders: path -> (bytes, files).
         self.root_stages: dict[str, tuple[int, int]] = {}
+        # Module names /proc/modules lists, and whether reading it times out.
+        self.loaded_modules: set[str] = set()
+        self.proc_modules_timeout = False
+        self.proc_modules_fail = False
         self.next_inode = 100
+        # Report a fresh inode per path, as the hub's unionfs does after a reboot.
+        self.union_inodes = False
         self.ram_free_kb = 26_000
         self.ram_inactive_file_kb = 0
         self.ram_slab_reclaimable_kb = 0
@@ -209,6 +216,10 @@ class FakeHub:
         if c == "id; uname -a":
             return 0, "uid=0(root) gid=0(root)\nLinux harmony-fake 3.10.14-codex #1 MIPS\n", ""
 
+        if c == INST.MELODIOUS_OFF_CHECK_CMD:
+            is_off = INST.MELODIOUS_OFF_MARKER in self.fs or INST.LEGACY_MELODIOUS_OFF_MARKER in self.fs
+            return 0, "off\n" if is_off else "", ""
+
         if c == "cat /data/codex/hub_id 2>/dev/null || true":
             entry = self.fs.get("/data/codex/hub_id")
             return 0, entry["data"].decode("utf-8") if entry else "", ""
@@ -248,6 +259,14 @@ class FakeHub:
                 f"avail_bytes={free} path={INST.FLASH_PATH}\n"
             ), ""
 
+        if c == "cat /proc/modules":
+            self.events.append(("proc_modules",))
+            if self.proc_modules_timeout:
+                raise INST.subprocess.TimeoutExpired(c, 30)
+            if self.proc_modules_fail:
+                return 1, "", "cat: can't open '/proc/modules'"
+            return 0, "".join(f"{m} 12345 0 - Live 0xc0000000\n" for m in sorted(self.loaded_modules)), ""
+
         if c == INST.ROOT_TOOL_SCAN:
             lines = [
                 f"root_tool_stage bytes={size} files={files} path={path}"
@@ -256,7 +275,10 @@ class FakeHub:
             for path in (INST.ROOT_TOOL_DROPBEAR, INST.DROPBEAR_DEST):
                 entry = self.fs.get(path)
                 if entry is not None and path not in self.symlinks:
-                    lines.append(f"dropbear_copy inode={self.inode(entry)} path={path}")
+                    links = sum(1 for e in self.fs.values() if e is entry)
+                    # The hub's unionfs, after a reboot, numbers each path afresh.
+                    inode = 900000 + len(path) if self.union_inodes else self.inode(entry)
+                    lines.append(f"dropbear_copy inode={inode} links={links} path={path}")
             return 0, "".join(line + "\n" for line in lines), ""
 
         if c == INST.ROOT_TOOL_DROPBEAR_REMOVE:
@@ -1276,6 +1298,83 @@ def candidate_flash(stdout: str) -> list[tuple[str, str, int]]:
     return rows
 
 
+class PythonInstallerUsbNetModules(unittest.TestCase):
+    """[PYTHON BEHAVIORAL] a replaced USB Ethernet module that is loaded
+    needs a reboot; one that isn't loaded doesn't."""
+
+    ASIX = INST.USB_NET_MODULES_DIR + "asix.ko"
+
+    def setUp(self):
+        self.hub = FakeHub()
+        prime_current_hub(self.hub)
+        self.hub.fs[self.ASIX] = {"data": b"an older asix.ko\n", "mode": "644"}
+        self.harness = InstallerHarness(self.hub)
+        self.addCleanup(self.harness.close)
+
+    def argv(self) -> list[str]:
+        return [a for a in self.harness.base_argv() if a != "--no-apply-cloud-restart"]
+
+    def test_loaded_module_update_reboots(self):
+        """...reading /proc/modules before anything is replaced, so a module
+        loaded from the new file mid-install doesn't count."""
+        self.hub.loaded_modules = {"usbnet", "asix"}
+        code, stdout, stderr = self.harness.run(self.argv())
+        self.assertEqual(code, 0, stderr or stdout)
+        self.assertIn(("service", "reboot"), self.hub.events)
+        self.assertIn("loads the updated USB Ethernet driver", stdout)
+        events = self.hub.events
+        first_write = next(i for i, e in enumerate(events) if e[0] == "persistent_write")
+        self.assertLess(events.index(("proc_modules",)), first_write)
+        self.assertEqual(events.count(("proc_modules",)), 1)
+
+    def test_unreadable_module_list_reboots_to_be_safe(self):
+        """...a timeout reading /proc/modules counts as loaded, not a crash."""
+        self.hub.loaded_modules = {"usbnet"}
+        self.hub.proc_modules_timeout = True
+        code, stdout, stderr = self.harness.run(self.argv())
+        self.assertEqual(code, 0, stderr or stdout)
+        self.assertIn(("service", "reboot"), self.hub.events)
+
+    def test_failed_module_list_read_reboots_to_be_safe(self):
+        """...so does a read that fails (non-zero exit)."""
+        self.hub.loaded_modules = {"usbnet"}
+        self.hub.proc_modules_fail = True
+        code, stdout, stderr = self.harness.run(self.argv())
+        self.assertEqual(code, 0, stderr or stdout)
+        self.assertIn(("service", "reboot"), self.hub.events)
+
+    def test_first_install_with_no_restart_flag_gives_no_reboot_advice(self):
+        """...the advice is for replaced modules only, not newly created ones."""
+        del self.hub.fs[self.ASIX]
+        code, stdout, stderr = self.harness.run(self.harness.base_argv())
+        self.assertEqual(code, 0, stderr or stdout)
+        self.assertNotIn("reboot the hub to load it", stdout)
+
+    def test_unloaded_module_update_does_not_reboot(self):
+        self.hub.loaded_modules = {"usbnet"}
+        code, stdout, stderr = self.harness.run(self.argv())
+        self.assertEqual(code, 0, stderr or stdout)
+        self.assertNotIn(("service", "reboot"), self.hub.events)
+
+    def test_no_module_change_does_not_read_proc_modules(self):
+        self.hub.fs[self.ASIX] = {"data": (INST.PAYLOAD / "modules" / "usb-net" / "asix.ko").read_bytes(), "mode": "644"}
+        self.hub.fs[INST.WEBUI_DEST] = {"data": b"an older codex_webui\n", "mode": "755"}  # something else to install
+        self.hub.loaded_modules = {"asix"}
+        code, stdout, stderr = self.harness.run(self.argv())
+        self.assertEqual(code, 0, stderr or stdout)
+        self.assertIn(("new_copy", INST.WEBUI_DEST), self.hub.events)
+        self.assertNotIn(("proc_modules",), self.hub.events)
+        self.assertNotIn(("service", "reboot"), self.hub.events)
+
+    def test_no_restart_flag_skips_the_check_and_says_to_reboot(self):
+        self.hub.loaded_modules = {"asix"}
+        code, stdout, stderr = self.harness.run(self.harness.base_argv())
+        self.assertEqual(code, 0, stderr or stdout)
+        self.assertNotIn(("proc_modules",), self.hub.events)
+        self.assertNotIn(("service", "reboot"), self.hub.events)
+        self.assertIn("reboot the hub to load it", stdout)
+
+
 class PythonInstallerFlash(unittest.TestCase):
     """[PYTHON BEHAVIORAL] measured free flash, harmony-hub-root's Dropbear
     reused as a hard link, and its leftovers removed only on request."""
@@ -1414,6 +1513,126 @@ class PythonInstallerFlash(unittest.TestCase):
         self.assertEqual(self.hub.fs["/usr/sbin/dropbear"]["data"], wrapper)
         self.assertEqual(self.hub.leftovers(), [])
 
+    # A stand-in for the other build of the same Dropbear: the payload is the
+    # .pdr-stripped build, and the plain-strip one is 41644 bytes larger (its
+    # .pdr, which compresses well). Registered as equivalent for the test.
+    OTHER_BUILD = DROPBEAR + bytes(41644)
+
+    def other_build_known(self):
+        version = INST.DROPBEAR_BUILDS[hashlib.md5(self.DROPBEAR).hexdigest()]
+        other = {hashlib.md5(self.OTHER_BUILD).hexdigest(): version}
+        return mock.patch.dict(INST.DROPBEAR_BUILDS, other)
+
+    def test_payload_dropbear_is_a_known_build(self):
+        """[PYTHON BEHAVIORAL] the shipped dropbearmulti is listed in
+        DROPBEAR_BUILDS, or no other build would count as the same program."""
+        self.assertIn(hashlib.md5(self.DROPBEAR).hexdigest(), INST.DROPBEAR_BUILDS)
+
+    def test_both_real_builds_of_dropbear_2025_89_are_known(self):
+        """[PYTHON BEHAVIORAL] the plain-strip build (what older releases and
+        harmony-hub-root ship, and older hubs run) and the .pdr-stripped one
+        count as the same Dropbear, so neither gets a second copy."""
+        plain, stripped = "3733327fd04bca282dbf06f33da0bf6c", "ceabc15471be6f67f1e13fccd20a9508"
+        self.assertEqual(hashlib.md5(self.DROPBEAR).hexdigest(), stripped)
+        self.assertEqual(INST.DROPBEAR_BUILDS.get(plain), "2025.89")
+        self.assertEqual(INST.DROPBEAR_BUILDS.get(stripped), "2025.89")
+
+    def test_a_new_dropbear_version_still_replaces_the_old_one(self):
+        """[PYTHON BEHAVIORAL] builds count as each other only within one
+        Dropbear version: a hub with an older version's build gets ours."""
+        ours = hashlib.md5(self.DROPBEAR).hexdigest()
+        old = hashlib.md5(self.OTHER_BUILD).hexdigest()
+        with mock.patch.dict(INST.DROPBEAR_BUILDS, {old: "2020.1"}):
+            self.assertFalse(INST.hub_copy_current(INST.DROPBEAR_DEST, old, ours))
+        with self.other_build_known():
+            self.assertTrue(INST.hub_copy_current(INST.DROPBEAR_DEST, old, ours))
+            self.assertFalse(INST.hub_copy_current(INST.WEBUI_DEST, old, ours))
+
+    def test_root_tool_other_dropbear_build_is_linked(self):
+        """[PYTHON BEHAVIORAL] a root tool that ships the other (plain-strip)
+        build still gets its copy reused by hard link, and the install verifies
+        the linked file against that build."""
+        self.root_tool_hub()
+        self.hub.fs[INST.ROOT_TOOL_DROPBEAR] = {"data": self.OTHER_BUILD, "mode": "755"}
+        with self.other_build_known():
+            code, stdout, stderr = self.harness.run(self.harness.base_argv("--hub-id", FAKE_HUB_ID))
+        self.assertEqual(code, 0, stderr or stdout)
+        self.assertIs(self.hub.fs[INST.DROPBEAR_DEST], self.hub.fs[INST.ROOT_TOOL_DROPBEAR])
+        self.assertEqual(self.hub.fs[INST.DROPBEAR_DEST]["data"], self.OTHER_BUILD)
+        self.assertIn(("link", INST.ROOT_TOOL_DROPBEAR, INST.DROPBEAR_DEST), self.hub.events)
+        self.assertNotIn(("new_copy", INST.DROPBEAR_DEST), self.hub.events)
+        self.assertEqual(kv_value(stdout, "flash_link dest"),
+                         f"{INST.DROPBEAR_DEST} source={INST.ROOT_TOOL_DROPBEAR}")
+        self.assertEqual(self.hub.leftovers(), [])
+
+    def test_installed_other_dropbear_build_is_left_alone(self):
+        """[PYTHON BEHAVIORAL] once linked, the other build counts as current:
+        the next run leaves it (and the link) alone instead of copying ours."""
+        self.root_tool_hub()
+        self.hub.fs[INST.ROOT_TOOL_DROPBEAR] = {"data": self.OTHER_BUILD, "mode": "755"}
+        with self.other_build_known():
+            code, stdout, stderr = self.harness.run(self.harness.base_argv("--hub-id", FAKE_HUB_ID))
+            self.assertEqual(code, 0, stderr or stdout)
+            self.hub.events.clear()
+            code, stdout, stderr = self.harness.run(self.harness.base_argv())
+        self.assertEqual(code, 0, stderr or stdout)
+        line = next(l for l in stdout.splitlines()
+                    if l.startswith(f"destination dest={INST.DROPBEAR_DEST} "))
+        self.assertIn("action=unchanged", line)
+        self.assertNotIn(("new_copy", INST.DROPBEAR_DEST), self.hub.events)
+        self.assertIs(self.hub.fs[INST.DROPBEAR_DEST], self.hub.fs[INST.ROOT_TOOL_DROPBEAR])
+
+    def test_linked_dropbear_is_not_a_leftover_after_a_reboot(self):
+        """[PYTHON BEHAVIORAL] after a reboot the hub's unionfs shows the two
+        names of the linked Dropbear with different inodes; their link counts
+        and MD5 still mark them as one file, so it is neither reported as a
+        spare copy nor removed with --remove-root-tool-leftovers."""
+        self.root_tool_hub()
+        self.hub.fs[INST.ROOT_TOOL_DROPBEAR] = {"data": self.OTHER_BUILD, "mode": "755"}
+        with self.other_build_known():
+            code, stdout, stderr = self.harness.run(self.harness.base_argv("--hub-id", FAKE_HUB_ID))
+            self.assertEqual(code, 0, stderr or stdout)
+            self.hub.union_inodes = True
+            code, stdout, stderr = self.harness.run(self.harness.base_argv("--remove-root-tool-leftovers"))
+        self.assertEqual(code, 0, stderr or stdout)
+        self.assertNotIn(f"path={INST.ROOT_TOOL_DROPBEAR}", stdout)
+        self.assertNotIn(f"removed_leftover={INST.ROOT_TOOL_DROPBEAR}", stdout)
+        self.assertIs(self.hub.fs[INST.DROPBEAR_DEST], self.hub.fs[INST.ROOT_TOOL_DROPBEAR])
+
+    def test_separate_root_dropbear_copy_is_credited_at_its_own_size(self):
+        """[PYTHON BEHAVIORAL] a separate (unlinked) root-tool copy of the
+        other, larger build is reported at its own size and credited at no
+        more than ours (its extra bytes are a .pdr that compresses well)."""
+        self.root_tool_hub()
+        self.hub.fs[INST.ROOT_TOOL_DROPBEAR] = {"data": self.OTHER_BUILD, "mode": "755"}
+        self.hub.fail_link = True  # the first install has to copy ours
+        with self.other_build_known():
+            code, stdout, stderr = self.harness.run(self.harness.base_argv("--hub-id", FAKE_HUB_ID))
+            self.assertEqual(code, 0, stderr or stdout)
+            code, stdout, stderr = self.harness.run(self.harness.base_argv())
+        self.assertEqual(code, 0, stderr or stdout)
+        self.assertIn(f"root_tool_leftover bytes={len(self.OTHER_BUILD)} files=1 path={INST.ROOT_TOOL_DROPBEAR}", stdout)
+        # On a full hub, the advice names the credit: ours, not scaled up.
+        ours_flash = next(int(flash) for dest, _action, flash in candidate_flash(stdout) if dest == INST.DROPBEAR_DEST)
+        self.hub.fs[INST.WEBUI_DEST] = {"data": b"an older codex_webui\n", "mode": "755"}  # something to install
+        self.hub.available_bytes = 1
+        with self.other_build_known():
+            code, stdout, _stderr = self.harness.run(self.harness.base_argv())
+        self.assertEqual(kv_value(stdout, "verdict"), INST.VERDICT_CAPACITY)
+        expect = INST.kib(ours_flash)
+        self.assertIn(f"--remove-root-tool-leftovers) frees about {expect}", stdout)
+
+    def test_unknown_root_tool_dropbear_is_not_linked(self):
+        """[PYTHON BEHAVIORAL] a root-tool Dropbear that is neither build gets
+        an ordinary copy of ours, never a link."""
+        self.root_tool_hub()
+        self.hub.fs[INST.ROOT_TOOL_DROPBEAR] = {"data": self.OTHER_BUILD, "mode": "755"}
+        code, stdout, stderr = self.harness.run(self.harness.base_argv("--hub-id", FAKE_HUB_ID))
+        self.assertEqual(code, 0, stderr or stdout)
+        self.assertIn(("new_copy", INST.DROPBEAR_DEST), self.hub.events)
+        self.assertEqual(self.hub.fs[INST.DROPBEAR_DEST]["data"], self.DROPBEAR)
+        self.assertIsNone(kv_value(stdout, "flash_link dest"))
+
     def test_hard_link_lets_a_tight_hub_install(self):
         """[PYTHON BEHAVIORAL] flash that fits everything but a second Dropbear
         is enough once the root tool's copy is linked, and too little without it."""
@@ -1549,6 +1768,24 @@ class PythonInstallerFlash(unittest.TestCase):
         self.assertIn(INST.DROPBEAR_DEST, self.hub.fs)
         self.assertGreater(self.hub.available_bytes, before)
         self.assertFalse(any(e[0] in ("handoff", "service", "new_copy") for e in self.hub.events))
+
+    def test_root_tool_dropbear_kept_while_ours_is_damaged(self):
+        """[PYTHON BEHAVIORAL] while our Dropbear isn't a known build (a
+        damaged copy), the root tool's working one is never offered for removal."""
+        # A root copy that isn't a listed build is never a link source, so
+        # only the known-build check on ours can keep it.
+        argv = self.harness.base_argv("--preflight-only", "--remove-root-tool-leftovers")
+        prime_current_hub(self.hub)
+        self.hub.fs[INST.ROOT_TOOL_DROPBEAR] = {"data": self.OTHER_BUILD, "mode": "755"}
+        code, stdout, stderr = self.harness.run(argv)
+        self.assertEqual(code, 0, stderr or stdout)
+        self.assertIn(f"root_tool_leftover bytes={len(self.OTHER_BUILD)} files=1 path={INST.ROOT_TOOL_DROPBEAR}", stdout)
+
+        self.hub.fs[INST.DROPBEAR_DEST] = {"data": self.DROPBEAR[:4096], "mode": "755"}
+        code, stdout, stderr = self.harness.run(argv)
+        self.assertEqual(code, 0, stderr or stdout)
+        self.assertNotIn(f"path={INST.ROOT_TOOL_DROPBEAR}", stdout)
+        self.assertIn(INST.ROOT_TOOL_DROPBEAR, self.hub.fs)
 
     def test_spare_root_tool_dropbear_kept_while_ssh_uses_it(self):
         """[PYTHON BEHAVIORAL] with the root tool's wrapper still in
@@ -2388,6 +2625,1168 @@ class RcsLocalHalBootDash(RcsLocalHalBoot):
     SHELL = "/bin/dash"
 
 
+def relocate_hub_script(text: str, root: Path) -> str:
+    """Relocate absolute hub paths in a shell script to a scratch root while
+    preserving the #!/bin/sh shebang and /dev/null."""
+    lines = text.splitlines(keepends=True)
+    shebang = ""
+    if lines and lines[0].startswith("#!"):
+        shebang = lines.pop(0)
+    body = "".join(lines)
+    # Protect /dev/null first so /dev replacement doesn't touch it.
+    sentinel = "__CODEX_DEV_NULL__"
+    body = body.replace("/dev/null", sentinel)
+    prefixes = (
+        "/data/codex-backups",
+        "/data/codexmqtt",
+        "/data/codex",
+        "/data/luaworks",
+        "/data",
+        "/etc",
+        "/var",
+        "/usr",
+        "/sbin",
+        "/cache",
+        "/proc",
+        "/sys",
+        "/lib",
+        "/pkg",
+        "/opt",
+        "/home",
+        "/tmp",
+        "/dev",
+    )
+    # Also a ${VAR:-/path} default (offline_egress_guard.sh's GUARD_* paths).
+    pattern = re.compile(r"(?:(?<=:-)|(?<![A-Za-z0-9_.-]))(" + "|".join(re.escape(p) for p in prefixes) + r")(?=/|[\s\"';)&|}]|$)")
+    body = pattern.sub(lambda m: str(root) + m.group(1), body)
+    body = body.replace(sentinel, "/dev/null")
+    return shebang + body
+
+
+class SingleStateBootAndDefenseInDepth(unittest.TestCase):
+    """[SHELL/LUA/STATIC] /etc/melodious-off gates rcS.local + init.sh and
+    every payload script and Lua plugin."""
+
+    def test_every_payload_script_and_plugin_references_melodious_off(self):
+        scripts_dir = INST.PAYLOAD / "scripts"
+        checked = []
+        for path in sorted(scripts_dir.iterdir()):
+            if path.name in ("dropbear", "dropbearkey") or not path.is_file():
+                continue
+            checked.append(path)
+            self.assertIn(
+                "/etc/melodious-off",
+                path.read_text(encoding="utf-8"),
+                f"{path.relative_to(REPO_ROOT)} must check /etc/melodious-off",
+            )
+        for sub in ("activity", "mqtt"):
+            for path in sorted((INST.PAYLOAD / sub).glob("*.lua")):
+                checked.append(path)
+                self.assertIn(
+                    "/etc/melodious-off",
+                    path.read_text(encoding="utf-8"),
+                    f"{path.relative_to(REPO_ROOT)} must check /etc/melodious-off",
+                )
+        self.assertGreaterEqual(len(checked), 9)
+
+    def _make_boot_root(self) -> Path:
+        root = Path(tempfile.mkdtemp(prefix="rcs-full-"))
+        self.addCleanup(shutil.rmtree, root, True)
+        for d in (
+            "bin", "sbin", "usr/bin", "usr/sbin", "etc/init.d", "etc/dropbear",
+            "data/codex/bin", "cache", "proc/sys/vm", "sys/class/input/input0",
+            "sys/class/net/ath0", "lib/firmware", "lib/modules/2.6.31-g89d565c",
+            "var/run", "var/volatile", "tmp", "dev",
+        ):
+            (root / d).mkdir(parents=True, exist_ok=True)
+
+        (root / "sys/class/input/input0/tde").write_text("1 0x0\n")
+        (root / "sys/class/net/ath0/address").write_text("00:04:20:aa:bb:cc\n")
+        (root / "etc/tdeinfo").write_text("5\n")
+        (root / "etc/modules.wlan").write_text("adf\nath_hal\n")
+        (root / "etc/wpa_supplicant.conf").write_text('network={\n\tssid="Home"\n}\n')
+        (root / "etc/hosts").write_text(
+            "127.0.0.1\tlocalhost\n127.0.0.1\tping.myharmony.com\t# codex: Harmony Touch sync probe\n"
+        )
+        (root / "proc/mounts").write_text("rootfs / rootfs rw 0 0\n")
+        (root / "proc/mtd").write_text('dev: size erasesize name\nmtd6: 00010000 00010000 "mfg"\n')
+        (root / "dev/mtd6").write_text("hw_ver\n\n\n\n00.40\n")
+        (root / "lib/firmware/csr8811-a08-pb1.psr").write_text("// pskeys\n")
+        (root / "lib/firmware/csr8811-a08.psr").write_text("// pskeys\n")
+        (root / "usr/bin/hal").write_text("stock-hal")
+
+        # Enable every Melodious boot feature at once.
+        (root / "data/codex/hub_id").write_text("1234\n")
+        (root / "data/codex/cloud_blocker.conf").write_text("1\n")
+        (root / "data/codex/two_screen.conf").write_text("1\n")
+        (root / "data/codex/multi_remote.conf").write_text("1\n")
+        (root / "data/codex/usb_eth.conf").write_text("ENABLED=1\n")
+        (root / "data/codex/bin/hal_remotes").write_text("remotes-hal")
+        (root / "data/codex/bin/hal_multiremote").write_text("multi-hal")
+
+        inv_log = root / "codex_invocations.log"
+        sys_log = root / "sys_calls.log"
+        mount_log = root / "mounts.log"
+
+        # Real init.sh relocated, plus a tracker line right after #!/bin/sh so any
+        # invocation of init.sh itself is recorded before init.sh's own guard.
+        real_init = relocate_hub_script((INST.PAYLOAD / "scripts/init.sh").read_text(encoding="utf-8"), root)
+        init_lines = [
+            f'PATH="{root}/data/codex/bin:{root}/bin:{root}/sbin:{root}/usr/bin:{root}/usr/sbin:/usr/bin:/bin"\n'
+            if line.startswith("PATH=") else line
+            for line in real_init.splitlines(keepends=True)
+        ]
+        tracked_init = (
+            init_lines[0]
+            + f'echo "init.sh $*" >> "{inv_log}"\n'
+            + "".join(init_lines[1:])
+        )
+        init_path = root / "data/codex/init.sh"
+        init_path.write_text(tracked_init, encoding="utf-8")
+        init_path.chmod(0o755)
+
+        # Every other /data/codex executable records any invocation.
+        for rel in (
+            "recovery_ap.sh", "usb_eth_service.sh", "offline_egress_guard.sh",
+            "androidtv_service.sh", "bin/codex_webui", "bin/codex_bt_pair_agent",
+            "bin/codex_bthid_keyboard", "bin/codex_hbus", "bin/dropbear",
+        ):
+            target = root / "data/codex" / rel
+            target.write_text(f'#!/bin/sh\necho "{rel} $*" >> "{inv_log}"\nexit 0\n')
+            target.chmod(0o755)
+
+        # Shimmed system commands called by rcS.local.
+        shims = {
+            "sbin/insmod": f'#!/bin/sh\necho "insmod $*" >> "{sys_log}"\n',
+            "sbin/wlanconfig": f'#!/bin/sh\necho "wlanconfig $*" >> "{sys_log}"\n',
+            "usr/sbin/wpa_supplicant": f'#!/bin/sh\necho "wpa_supplicant $*" >> "{sys_log}"\n',
+            "usr/bin/netmonitor": f'#!/bin/sh\necho "netmonitor $*" >> "{sys_log}"\n',
+            "usr/sbin/bccmd": (
+                f'#!/bin/sh\necho "bccmd $*" >> "{sys_log}"\n'
+                'if [ "$3" = "buildname" ]; then echo "CSR8811 A08"; fi\n'
+            ),
+            "usr/sbin/hciattach": f'#!/bin/sh\necho "hciattach $*" >> "{sys_log}"\n',
+            "usr/sbin/dropbear": f'#!/bin/sh\necho "dropbear $*" >> "{sys_log}"\n',
+            "bin/ifup": f'#!/bin/sh\necho "ifup $*" >> "{sys_log}"\n',
+            "bin/ps": "#!/bin/sh\nexit 0\n",
+            "bin/reboot": f'#!/bin/sh\necho "reboot $*" >> "{sys_log}"\n',
+            "bin/mount": (
+                f'#!/bin/sh\necho "mount $*" >> "{mount_log}"\n'
+                f'echo "none {root}/usr/bin/hal unionfs rw 0 0" >> "{root}/proc/mounts"\n'
+            ),
+        }
+        for rel, content in shims.items():
+            p = root / rel
+            p.write_text(content)
+            p.chmod(0o755)
+
+        real_rcs = relocate_hub_script((INST.PAYLOAD / "scripts/rcS.local").read_text(encoding="utf-8"), root)
+        (root / "etc/init.d/rcS.local").write_text(real_rcs, encoding="utf-8")
+        (root / "etc/init.d/rcS.local").chmod(0o755)
+        return root
+
+    def _run_rcs_local(self, root: Path, wait_bg: bool = True) -> subprocess.CompletedProcess[str]:
+        remotes_md5 = json.loads(INST.HAL_REMOTES_PATCH_FILE.read_text(encoding="utf-8"))["patched_md5"]
+        stock_md5 = "a3fdd823440c43f36e235fe51c45f008"
+        multi_md5 = "cafdd7930309c7d74a6a41a87642f0c1"
+        out_log = root / "rcs_stdout.log"
+        wait_line = (
+            "wait"
+            if wait_bg
+            else f'i=0; while [ "$i" -lt 50 ] && ! grep "codex init done" "{root}/cache/codex-init.log" >/dev/null 2>&1; do /bin/sleep 0.05; i=$((i + 1)); done; /bin/sleep 0.1'
+        )
+        wrapper = f"""
+exec >"{out_log}" 2>&1
+load_modules() {{
+  while read module args; do
+    case "$module" in \\#*|"") continue ;; esac
+    "{root}/sbin/insmod" "{root}/lib/modules/2.6.31-g89d565c/${{module}}.ko" $args
+  done < "$1"
+}}
+uname() {{ echo "2.6.31-g89d565c"; }}
+md5sum() {{
+  case "$1" in
+    */usr/bin/hal) echo "{stock_md5}  $1" ;;
+    */hal_remotes) echo "{remotes_md5}  $1" ;;
+    */hal_multiremote) echo "{multi_md5}  $1" ;;
+  esac
+}}
+pidof() {{ return 0; }}
+sleep() {{ :; }}
+run_rcs() {{ . "{root}/etc/init.d/rcS.local"; }}
+run_rcs
+{wait_line}
+"""
+        env = {"PATH": f"{root}/bin:{root}/sbin:{root}/usr/bin:{root}/usr/sbin:" + os.environ["PATH"]}
+        # start_new_session so any daemon spawned in the ON control case can be reaped cleanly.
+        proc = subprocess.Popen(["/bin/sh", "-c", wrapper], env=env, start_new_session=True)
+        try:
+            rc = proc.wait(timeout=10)
+        finally:
+            try:
+                import signal
+                os.killpg(proc.pid, signal.SIGTERM)
+            except ProcessLookupError:
+                pass
+        out = out_log.read_text() if out_log.exists() else ""
+        return subprocess.CompletedProcess(["/bin/sh"], rc, out, "")
+
+    def test_real_rcs_local_with_melodious_off_invokes_zero_codex_and_zero_bind_mounts(self):
+        root = self._make_boot_root()
+        (root / "etc/melodious-off").write_text("off 20261111-120000\n")
+        done = self._run_rcs_local(root)
+        self.assertEqual(done.returncode, 0, done.stderr or done.stdout)
+
+        invocations = (root / "codex_invocations.log").read_text() if (root / "codex_invocations.log").exists() else ""
+        mounts = (root / "mounts.log").read_text() if (root / "mounts.log").exists() else ""
+        self.assertEqual(invocations, "", f"expected zero /data/codex/* invocations, got: {invocations!r}")
+        self.assertEqual(mounts, "", f"expected zero mount -o bind calls, got: {mounts!r}")
+
+        # Touch sync probe removed atomically from /etc/hosts; stock entries kept.
+        hosts = (root / "etc/hosts").read_text()
+        self.assertIn("127.0.0.1\tlocalhost", hosts)
+        self.assertNotIn("ping.myharmony.com", hosts)
+        self.assertFalse((root / "etc/hosts.codex-new").exists())
+
+        # Stock Wi-Fi and Bluetooth boot steps still ran.
+        sys_calls = (root / "sys_calls.log").read_text()
+        for expected in ("wlanconfig ath0", "wpa_supplicant", "netmonitor", "bccmd -t bcsp psload", "hciattach ttyS0"):
+            self.assertIn(expected, sys_calls)
+
+        # Saved Melodious configs and hal copies stay untouched for --turn-on.
+        self.assertEqual((root / "data/codex/two_screen.conf").read_text(), "1\n")
+        self.assertEqual((root / "data/codex/multi_remote.conf").read_text(), "1\n")
+        self.assertEqual((root / "data/codex/usb_eth.conf").read_text(), "ENABLED=1\n")
+        self.assertTrue((root / "data/codex/bin/hal_remotes").exists())
+        self.assertTrue((root / "data/codex/bin/hal_multiremote").exists())
+        self.assertIn("melodious off", (root / "cache/codex-init.log").read_text())
+
+        # Direct init.sh invocation also exits 0 immediately while marker exists.
+        direct = subprocess.run(["/bin/sh", str(root / "data/codex/init.sh")], capture_output=True, text=True, timeout=10)
+        self.assertEqual(direct.returncode, 0)
+        inv_after = (root / "codex_invocations.log").read_text().splitlines()
+        self.assertEqual(inv_after, ["init.sh "], "init.sh must exit before spawning any daemon")
+
+        # Control check: unlink /etc/melodious-off -> TDE=1 runs recovery_ap.sh boot-tde;
+        # TDE=0 binds hal_remotes, starts usb_eth_service.sh and init.sh.
+        (root / "codex_invocations.log").unlink()
+        (root / "etc/melodious-off").unlink()
+        done_tde = self._run_rcs_local(root)
+        self.assertEqual(done_tde.returncode, 0)
+        self.assertIn("recovery_ap.sh boot-tde", (root / "codex_invocations.log").read_text())
+
+        (root / "codex_invocations.log").unlink()
+        (root / "sys/class/input/input0/tde").write_text("0 0x0\n")
+        done_on = self._run_rcs_local(root, wait_bg=False)
+        self.assertEqual(done_on.returncode, 0)
+        self.assertIn("mount -o bind", (root / "mounts.log").read_text())
+        inv_on = (root / "codex_invocations.log").read_text()
+        self.assertIn("usb_eth_service.sh start", inv_on)
+        self.assertIn("init.sh ", inv_on)
+        self.assertIn("bin/codex_webui 8080", inv_on, done_on.stdout + "\nLOG:\n" + (root / "cache/codex-init.log").read_text())
+
+    def test_defense_in_depth_scripts_and_lua_plugins_honor_melodious_off(self):
+        root = Path(tempfile.mkdtemp(prefix="did-off-"))
+        self.addCleanup(shutil.rmtree, root, True)
+        for d in ("etc", "data/codex/bin", "var/volatile", "var/run", "cache", "bin"):
+            (root / d).mkdir(parents=True, exist_ok=True)
+        (root / "etc/melodious-off").write_text("off\n")
+        (root / "data/codex/cloud_blocker.conf").write_text("1\n")
+        (root / "var/volatile/codex-default-gateway").write_text("192.0.2.1\n")
+
+        # 1. offline_egress_guard.sh: restores WAN default route when marker exists, even with cloud_blocker.conf=1.
+        route_log = root / "route.log"
+        route_shim = root / "bin/route"
+        route_shim.write_text(
+            '#!/bin/sh\n'
+            'if [ "$1" = "-n" ]; then\n'
+            '  echo "Destination Gateway Genmask Flags Metric Ref Use Iface"\n'
+            '  echo "10.0.0.0 192.0.2.1 255.0.0.0 UG 0 0 0 ath0"\n'
+            '  echo "224.0.0.0 0.0.0.0 240.0.0.0 U 0 0 0 ath0"\n'
+            '  exit 0\n'
+            'fi\n'
+            f'echo "route $*" >> "{route_log}"\n'
+        )
+        route_shim.chmod(0o755)
+        egress = root / "egress.sh"
+        egress_lines = relocate_hub_script(
+            (INST.PAYLOAD / "scripts/offline_egress_guard.sh").read_text(encoding="utf-8"), root
+        ).splitlines(keepends=True)
+        egress_text = "".join(
+            f'PATH="{root}/bin:"$PATH\n' if line.startswith("PATH=") else line
+            for line in egress_lines
+        )
+        egress.write_text(egress_text)
+        egress.chmod(0o755)
+        res = subprocess.run(["/bin/sh", str(egress)], capture_output=True, text=True, timeout=10)
+        self.assertEqual(res.returncode, 0, res.stderr)
+        routes = route_log.read_text()
+        self.assertIn("route add default gw 192.0.2.1 dev ath0", routes)
+        self.assertIn("route del -net 10.0.0.0 netmask 255.0.0.0 gw 192.0.2.1", routes)
+
+        # 2. androidtv_service.sh and recovery_ap.sh (monitor + boot-tde) exit 0 without spawning.
+        spawn_log = root / "spawn.log"
+        for name in ("codex_androidtv", "codex_dhcpd", "codex_portal"):
+            b = root / "data/codex/bin" / name
+            b.write_text(f'#!/bin/sh\necho "{name}" >> "{spawn_log}"\n')
+            b.chmod(0o755)
+        atv = root / "atv.sh"
+        atv.write_text(relocate_hub_script((INST.PAYLOAD / "scripts/androidtv_service.sh").read_text(encoding="utf-8"), root))
+        atv.chmod(0o755)
+        self.assertEqual(subprocess.run(["/bin/sh", str(atv)], timeout=5).returncode, 0)
+
+        rec = root / "rec.sh"
+        rec.write_text(relocate_hub_script((INST.PAYLOAD / "scripts/recovery_ap.sh").read_text(encoding="utf-8"), root))
+        rec.chmod(0o755)
+        for mode in ("monitor", "boot-tde"):
+            self.assertEqual(subprocess.run(["/bin/sh", str(rec), mode], timeout=5).returncode, 0)
+        self.assertFalse(spawn_log.exists())
+
+        # 3. codexactivity.lua and codexmqtt.lua: discover() returns {} and spawns 0 tasks when off.
+        if shutil.which("luajit"):
+            lua_check = f"""
+local tasks = {{}}
+local noop = function() return nil end
+local anything
+anything = function() return setmetatable({{}}, {{ __index = function() return noop end }}) end
+local realOpen = io.open
+io.open = function(p, m)
+  if p == "/etc/melodious-off" then return {{ read = function() return "off" end, close = noop }} end
+  return realOpen(p, m)
+end
+package.preload["system"] = function()
+  return {{ addTask = function(n) tasks[#tasks + 1] = n return n end, sleep = noop, safeCall = pcall,
+            taskStatus = function() return "dead" end }}
+end
+package.preload["json"] = function() return {{ encode = noop, decode = noop, null = {{}} }} end
+package.preload["log"] = function() return {{ logger = function() return anything() end }} end
+package.preload["socket"] = function() return anything() end
+for _, m in ipairs({{
+  "tasks.harmonywebservices.core.resourcemanager",
+  "tasks.connectserver.core.utils",
+  "tasks.connectserver.core.engine",
+  "tasks.harmonywebservices.core.session",
+}}) do package.preload[m] = function() return anything() end end
+package.preload["tasks.harmonywebservices.core.statedigest"] = function()
+  return {{ instance = function() return {{}} end }}
+end
+package.path = "{INST.PAYLOAD}/activity/?.lua;{INST.PAYLOAD}/mqtt/?.lua;" .. package.path
+local act = require("codexactivity")
+local mqtt = require("codexmqtt")
+local g1 = act:discover()
+local g2 = mqtt:discover()
+act:monitor()
+mqtt:monitor()
+assert(type(g1) == "table" and next(g1) == nil, "codexactivity discover not empty")
+assert(type(g2) == "table" and next(g2) == nil, "codexmqtt discover not empty")
+assert(#tasks == 0, "tasks spawned: " .. table.concat(tasks, ","))
+print("LUA_PLUGINS_OFF_OK")
+"""
+            lua_res = subprocess.run(["luajit", "-e", lua_check], capture_output=True, text=True, timeout=10)
+            self.assertEqual(lua_res.returncode, 0, lua_res.stderr or lua_res.stdout)
+            self.assertIn("LUA_PLUGINS_OFF_OK", lua_res.stdout)
+
+
+RF_INFO_TWO_SCREEN = (
+    '{"id":1,"data":{"EquadID":"34827","Devices":['
+    '{"EquadID":"16417","SkinId":"97","DeviceIndex":"1","RFID":"1"},'
+    '{"EquadID":"16417","SkinId":"97","DeviceIndex":"2","RFID":"2"}'
+    '],"DeviceCount":2},"code":200}'
+)
+CLOUD_PREFS_JSON = (
+    '{"accountId":"998877","authToken":"fake-cloud-token-xyz","mode":3,'
+    '"remoteId":1234,"discoveryServerUri":"https://svcs.myharmony.com/Discovery/Discovery.svc"}\n'
+)
+LOCAL_PREFS_JSON = (
+    '{\n  "accountId": "hub2-local",\n  "authToken": "local",\n  "mode": 3,\n  "remoteId": 1234\n}\n'
+)
+
+
+class SingleStateTurnOffTree:
+    """Fake hub filesystem on disk for testing TURN_OFF_SCRIPT + real rcS.local
+    + install_webui.py (--turn-off, --turn-on, and normal-run refusal)."""
+
+    STOCK_HAL_MD5 = "a3fdd823440c43f36e235fe51c45f008"
+
+    def __init__(self) -> None:
+        self.dir = Path(tempfile.mkdtemp(prefix="ss-turnoff-"))
+        self.root = self.dir / "root"
+        self.bin_shims = self.dir / "shims"
+        self.bin_shims.mkdir(parents=True)
+        self.calls_log = self.dir / "shim_calls.log"
+        self.rf_reply = RF_INFO_ONE_SMART
+        self.hal_loads = True
+        self.wifi_ip = "192.0.2.10"
+        self.wired_ip = ""
+        self.wpa_disconnected = False
+        self.boot_counter = 1
+        self.reboot_noops = False
+        self.post_boot_override: dict[str, object] = {}
+        self._build_root()
+
+    def close(self) -> None:
+        for dirpath, _dirs, _files in os.walk(self.dir):
+            try:
+                os.chmod(dirpath, 0o755)
+            except OSError:
+                pass
+        shutil.rmtree(self.dir, ignore_errors=True)
+
+    def put(self, path: str, data: bytes | str, mode: int = 0o644) -> Path:
+        raw = data.encode("utf-8") if isinstance(data, str) else data
+        target = self.root / path.lstrip("/")
+        target.parent.mkdir(parents=True, exist_ok=True)
+        target.write_bytes(raw)
+        target.chmod(mode)
+        return target
+
+    def read(self, path: str) -> bytes:
+        return (self.root / path.lstrip("/")).read_bytes()
+
+    def exists(self, path: str) -> bool:
+        return os.path.lexists(self.root / path.lstrip("/"))
+
+    def mode(self, path: str) -> int:
+        return (self.root / path.lstrip("/")).stat().st_mode & 0o777
+
+    def snapshot(self) -> dict[str, tuple[bytes, int]]:
+        out: dict[str, tuple[bytes, int]] = {}
+        for dirpath, _dirs, files in os.walk(self.root):
+            for name in files:
+                full = Path(dirpath) / name
+                rel = "/" + str(full.relative_to(self.root))
+                if rel.startswith(("/proc/", "/sys/", "/tmp/")):
+                    continue
+                out[rel] = (full.read_bytes(), full.stat().st_mode & 0o777)
+        return out
+
+    def _write_shims(self) -> None:
+        state_file = self.dir / "shim_state.json"
+        self._sync_shim_state()
+
+        (self.bin_shims / "ifconfig").write_text(
+            f'''#!/usr/bin/env python3
+import json, sys
+s = json.loads(open({str(state_file)!r}).read())
+arg = sys.argv[1] if len(sys.argv) > 1 else ""
+if arg in ("", "ath0"):
+    print("ath0      Link encap:Ethernet  HWaddr 00:04:20:AA:BB:CC")
+    if s.get("wifi_ip"):
+        print(f"          inet addr:{{s['wifi_ip']}}  Bcast:192.0.2.255  Mask:255.255.255.0")
+if arg == "" and s.get("wired_ip"):
+    print("eth2      Link encap:Ethernet  HWaddr 00:E0:4C:11:22:33")
+    print(f"          inet addr:{{s['wired_ip']}}  Bcast:192.0.2.255  Mask:255.255.255.0")
+'''
+        )
+        (self.bin_shims / "ifconfig").chmod(0o755)
+
+        (self.bin_shims / "wpa_cli").write_text(
+            f'''#!/usr/bin/env python3
+import json, sys
+p = {str(state_file)!r}
+s = json.loads(open(p).read())
+with open({str(self.calls_log)!r}, "a") as f:
+    f.write("wpa_cli " + " ".join(sys.argv[1:]) + "\\n")
+cmd = sys.argv[-1] if len(sys.argv) > 1 else ""
+if cmd == "status":
+    st = "DISCONNECTED" if s.get("wpa_disconnected") else "COMPLETED"
+    print(f"wpa_state={{st}}")
+elif cmd == "reconnect":
+    s["wpa_disconnected"] = False
+    if s.get("wifi_ip_on_reconnect"):
+        s["wifi_ip"] = s["wifi_ip_on_reconnect"]
+    open(p, "w").write(json.dumps(s))
+    print("OK")
+'''
+        )
+        (self.bin_shims / "wpa_cli").chmod(0o755)
+
+        (self.bin_shims / "route").write_text(
+            f'''#!/usr/bin/env python3
+import pathlib, sys
+rf = pathlib.Path({str(self.root / "proc/codex_route")!r})
+with open({str(self.calls_log)!r}, "a") as f:
+    f.write("route " + " ".join(sys.argv[1:]) + "\\n")
+args = sys.argv[1:]
+if args == ["-n"]:
+    print(rf.read_text() if rf.exists() else "")
+elif len(args) >= 4 and args[:3] == ["add", "default", "gw"]:
+    gw = args[3]
+    lines = rf.read_text().splitlines() if rf.exists() else [
+        "Destination Gateway Genmask Flags Metric Ref Use Iface"
+    ]
+    lines.append(f"0.0.0.0 {{gw}} 0.0.0.0 UG 0 0 0 ath0")
+    rf.write_text("\\n".join(lines) + "\\n")
+elif len(args) >= 2 and args[:2] == ["del", "default"]:
+    if rf.exists():
+        lines = [l for l in rf.read_text().splitlines() if not l.startswith("0.0.0.0 ")]
+        rf.write_text("\\n".join(lines) + "\\n")
+'''
+        )
+        (self.bin_shims / "route").chmod(0o755)
+
+    def _sync_shim_state(self, wifi_ip_on_reconnect: str = "") -> None:
+        state_file = self.dir / "shim_state.json"
+        state_file.write_text(
+            json.dumps(
+                {
+                    "wifi_ip": self.wifi_ip,
+                    "wired_ip": self.wired_ip,
+                    "wpa_disconnected": self.wpa_disconnected,
+                    "wifi_ip_on_reconnect": wifi_ip_on_reconnect,
+                }
+            )
+        )
+
+    def _build_root(self) -> None:
+        for d in (
+            "etc/init.d", "etc/dropbear", "home/root/.ssh", "data/codex/bin",
+            "data/luaworks/provision", "opt/luaworks/tasks/connectserver",
+            "pkg/codexactivity", "pkg/codexmqtt", "pkg/heos", "var/run",
+            "var/volatile", "cache", "proc/sys/kernel/random", "proc/sys/vm",
+            "sys/class/input/input0", "sys/class/net/ath0", "lib/firmware",
+            "lib/modules/2.6.31-g89d565c", "usr/bin", "usr/sbin", "sbin", "bin", "tmp", "dev",
+        ):
+            (self.root / d).mkdir(parents=True, exist_ok=True)
+
+        # Current gate-aware Melodious files from the repo.
+        for dest, mode, _kind, local in INST.GATE_SCRIPT_SPECS:
+            self.put(dest, local.read_bytes(), int(mode, 8))
+        self.put("/pkg/codexactivity/manifest.json", '{"plugin":"codexactivity"}\n')
+        self.put("/pkg/codexmqtt/manifest.json", '{"plugin":"codexmqtt"}\n')
+        self.put("/pkg/heos/heos.lua", "-- stock heos\n")
+
+        # Relocate offline_egress_guard.sh paths so running it in apply updates self.root!
+        reloc_egress = relocate_hub_script(
+            (INST.PAYLOAD / "scripts/offline_egress_guard.sh").read_text(encoding="utf-8"), self.root
+        )
+        egress_lines = [
+            f'PATH="{self.bin_shims}:"$PATH\n' if line.startswith("PATH=") else line
+            for line in reloc_egress.splitlines(keepends=True)
+        ]
+        # Keep the literal /etc/melodious-off comment so bootstrap check sees it as gate-aware!
+        egress_lines.insert(1, "# gate: /etc/melodious-off\n")
+        self.put("/data/codex/offline_egress_guard.sh", "".join(egress_lines), 0o755)
+
+        # SSH survival prerequisites.
+        self.put(
+            "/etc/init.d/rcS",
+            "if [ -r /etc/tdeenable -a -x /usr/sbin/dropbear ]; then /usr/sbin/dropbear; fi\n",
+            0o755,
+        )
+        self.put("/etc/tdeenable", "1\n")
+        self.put("/usr/sbin/dropbear", '#!/bin/sh\nexec /data/codex/bin/dropbear -K 300 "$@"\n', 0o755)
+        self.put("/usr/sbin/dropbearkey", '#!/bin/sh\nexec /data/codex/bin/dropbearkey "$@"\n', 0o755)
+        self.put("/data/codex/bin/dropbear", "#!/bin/sh\nexit 0\n", 0o755)
+        self.put("/data/codex/bin/dropbearkey", "#!/bin/sh\nexit 0\n", 0o755)
+        self.put("/home/root/.ssh/authorized_keys", "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIFakeOwnerKey owner@local\n", 0o600)
+        self.put("/etc/dropbear/dropbear_rsa_host_key", "fake-rsa-host-key-bytes\n", 0o600)
+
+        # Wi-Fi + Logitech cloud provisioning + Melodious configs all active.
+        self.put("/etc/wpa_supplicant.conf", 'ctrl_interface=/var/run/wpa_supplicant\nnetwork={\n\tssid="HomeWiFi"\n}\n')
+        self.put("/data/luaworks/provision/preferences", CLOUD_PREFS_JSON)
+        self.put("/data/codex/hub_id", "1234\n")
+        self.put("/data/codex/cloud_blocker.conf", "1\n")
+        self.put("/data/codex/two_screen.conf", "1\n")
+        self.put("/data/codex/multi_remote.conf", "1\n")
+        self.put("/data/codex/usb_eth.conf", "ENABLED=1\n")
+        self.put("/data/codex/timezone.conf", "America/New_York\nEST5EDT,M3.2.0,M11.1.0\n")
+        self.put("/data/codex/activity-restrictions.json", '{"activities":{}}\n')
+        self.put(
+            "/etc/hosts",
+            "127.0.0.1\tlocalhost\n127.0.0.1\tping.myharmony.com\t# codex: Harmony Touch sync probe\n",
+        )
+        self.put("/var/volatile/codex-default-gateway", "192.0.2.1\n")
+
+        # Stock and patched hal copies.
+        self.put("/usr/bin/hal", fake_remotes_hal(), 0o755)
+        self.put("/data/codex/bin/hal_multiremote", fake_patched_hal(), 0o755)
+        self._refresh_hal_helpers()
+
+        # Pre-reboot running Melodious state: bound hal, running daemons, blocked WAN route.
+        self.put("/proc/mounts", "rootfs / rootfs rw 0 0\nnone /usr/bin/hal unionfs rw 0 0\n")
+        self.put(
+            "/proc/codex_ps",
+            "  201 root /data/codex/bin/codex_webui 8080\n"
+            "  202 root /bin/sh /data/codex/offline_egress_guard.sh monitor\n"
+            "  203 root /bin/sh /data/codex/usb_eth_service.sh worker\n"
+            "  204 root /data/codex/bin/codex_androidtv\n",
+        )
+        self.put("/var/run/codex-offline-egress.pid", "202\n")
+        self.put("/var/run/codex-usb-eth-worker.pid", "203\n")
+        self.put(
+            "/proc/codex_route",
+            "Destination Gateway Genmask Flags Metric Ref Use Iface\n"
+            "192.0.2.0 0.0.0.0 255.255.255.0 U 0 0 0 ath0\n"
+            "224.0.0.0 0.0.0.0 240.0.0.0 U 0 0 0 ath0\n",
+        )
+        self.put("/proc/sys/kernel/random/boot_id", "00000000-0000-4000-8000-000000000001\n")
+        self.put("/proc/stat", "btime 1760000100\n")
+        self.put("/proc/uptime", "540.20 500.00\n")
+        self._write_shims()
+
+    def _refresh_hal_helpers(self) -> None:
+        ltcp = self.root / "data/codex/bin/codex_hal_ltcp"
+        ltcp.write_text(f"#!/bin/sh\ncat <<'EOF'\n{self.rf_reply}\nEOF\n")
+        ltcp.chmod(0o755)
+
+        hal_rem = self.root / "data/codex/bin/hal_remotes"
+        if self.hal_loads:
+            # Executable script when invoked with -h, whose md5 we match via patch mock in tests.
+            hal_rem.write_text('#!/bin/sh\nprintf "Usage: hal [-f] [-s]" >&2\nexit 1\n')
+        else:
+            hal_rem.write_text('#!/bin/sh\necho "Segmentation fault" >&2\nexit 139\n')
+        hal_rem.chmod(0o755)
+
+    def simulate_reboot(self) -> None:
+        """Simulate a real hub reboot by resetting volatile state, advancing
+        boot_id/btime/uptime, and running the relocated rcS.local under /bin/sh."""
+        if self.reboot_noops:
+            return
+        self.boot_counter += 1
+        self.put(
+            "/proc/sys/kernel/random/boot_id",
+            f"00000000-0000-4000-8000-{self.boot_counter:012d}\n",
+        )
+        self.put("/proc/stat", f"btime {1760000100 + self.boot_counter * 100}\n")
+        self.put("/proc/uptime", "12.40 10.00\n")
+        # Volatile /var/run and /proc/mounts reset across boot; /usr/bin/hal starts as stock.
+        shutil.rmtree(self.root / "var/run", ignore_errors=True)
+        (self.root / "var/run").mkdir(parents=True, exist_ok=True)
+        self.put("/proc/mounts", "rootfs / rootfs rw 0 0\n")
+        self.put("/usr/bin/hal", b"stock-hal-image", 0o755)
+        self.put("/proc/codex_ps", "  101 root /usr/sbin/dropbear\n")
+        self.put(
+            "/proc/codex_route",
+            "Destination Gateway Genmask Flags Metric Ref Use Iface\n"
+            "0.0.0.0 192.0.2.1 0.0.0.0 UG 0 0 0 ath0\n",
+        )
+
+        # Execute the hub's installed /etc/init.d/rcS.local against self.root!
+        for d in ("sys/class/input/input0", "sys/class/net/ath0", "lib/firmware", "dev", "sbin", "usr/sbin", "usr/bin", "bin"):
+            (self.root / d).mkdir(parents=True, exist_ok=True)
+        self.put("/sys/class/input/input0/tde", "0 0x0\n")
+        self.put("/sys/class/net/ath0/address", "00:04:20:aa:bb:cc\n")
+        self.put("/etc/modules.wlan", "")
+        self.put("/proc/mtd", 'mtd6: 00010000 00010000 "mfg"\n')
+        self.put("/dev/mtd6", "hw_ver\n\n\n\n00.40\n")
+        self.put("/lib/firmware/csr8811-a08.psr", "// pskeys\n")
+        self.put("/lib/firmware/csr8811-a08-pb1.psr", "// pskeys\n")
+
+        installed_rcs = self.read("/etc/init.d/rcS.local").decode("utf-8")
+        reloc_rcs = relocate_hub_script(installed_rcs, self.root)
+        rcs_runner = self.dir / "boot_rcs.sh"
+        real_remotes_md5 = json.loads(INST.HAL_REMOTES_PATCH_FILE.read_text(encoding="utf-8"))["patched_md5"]
+        real_multi_md5 = json.loads(INST.HAL_PATCH_FILE.read_text(encoding="utf-8"))["patched_md5"]
+        rcs_runner.write_text(
+            f"""#!/bin/sh
+load_modules() {{ :; }}
+ifup() {{ :; }}
+wlanconfig() {{ :; }}
+wpa_supplicant() {{ :; }}
+netmonitor() {{ :; }}
+bccmd() {{ [ "${{3:-}}" = "buildname" ] && echo "CSR8811 A08" || true; }}
+hciattach() {{ :; }}
+pidof() {{ return 0; }}
+sleep() {{ :; }}
+md5sum() {{
+  case "$1" in
+    */usr/bin/hal) echo "{self.STOCK_HAL_MD5}  $1" ;;
+    */hal_remotes) echo "{real_remotes_md5}  $1" ;;
+    */hal_multiremote) echo "{real_multi_md5}  $1" ;;
+  esac
+}}
+mount() {{
+  echo "none /usr/bin/hal {self.root}/usr/bin/hal unionfs rw 0 0" >> "{self.root}/proc/mounts"
+  cp "$3" "{self.root}/usr/bin/hal"
+}}
+"""
+            + "\n".join(
+                line
+                for line in reloc_rcs.splitlines()
+                if "/sbin/wlanconfig" not in line
+                and "/usr/sbin/wpa_supplicant" not in line
+                and "/usr/bin/netmonitor" not in line
+                and "/usr/sbin/bccmd" not in line
+                and "/usr/sbin/hciattach" not in line
+            )
+            + "\n",
+            encoding="utf-8",
+        )
+        # Stub init.sh and usb_eth_service.sh during simulated boot to record daemon state in codex_ps
+        orig_init = self.read("/data/codex/init.sh")
+        orig_usb = self.read("/data/codex/usb_eth_service.sh")
+        if b"/etc/melodious-off" in orig_init:
+            boot_init = (
+                f"#!/bin/sh\n[ -f '{self.root}/etc/melodious-off' ] && exit 0\n"
+                f"echo '  301 root /data/codex/bin/codex_webui 8080' >> '{self.root}/proc/codex_ps'\n"
+            ).encode()
+        else:
+            boot_init = (
+                f"#!/bin/sh\necho '  301 root /data/codex/bin/codex_webui 8080' >> '{self.root}/proc/codex_ps'\n"
+            ).encode()
+        self.put("/data/codex/init.sh", boot_init, orig_init and self.mode("/data/codex/init.sh") or 0o755)
+        self.put("/data/codex/usb_eth_service.sh", b"#!/bin/sh\nexit 0\n", 0o755)
+        try:
+            subprocess.run(["/bin/sh", str(rcs_runner)], check=True, capture_output=True, text=True, timeout=10)
+        finally:
+            self.put("/data/codex/init.sh", orig_init, 0o755)
+            self.put("/data/codex/usb_eth_service.sh", orig_usb, 0o755)
+
+        for k, v in self.post_boot_override.items():
+            self.put(k, v)
+
+    def run_turn_off_script(self, mode: str, *extra: str) -> tuple[int, str, str]:
+        self._refresh_hal_helpers()
+        script = self.dir / "turn_off.sh"
+        script.write_text(INST.TURN_OFF_SCRIPT, encoding="utf-8")
+        env = {
+            **os.environ,
+            "CODEX_OFF_ROOT": str(self.root),
+            "CODEX_OFF_PATH": f"{self.bin_shims}:{os.environ['PATH']}",
+            "CODEX_WIFI_WAIT": "1",
+        }
+        proc = subprocess.run(
+            ["/bin/sh", str(script), mode, *extra],
+            env=env,
+            capture_output=True,
+            text=True,
+            timeout=30,
+        )
+        return proc.returncode, proc.stdout, proc.stderr
+
+
+class SingleStateTurnOffOnFlow(unittest.TestCase):
+    """[PYTHON + SHELL BEHAVIORAL] single-state /etc/melodious-off --turn-off,
+    --turn-on, normal-install refusal, older-install bootstrap, preflight gates,
+    and post-reboot verification."""
+
+    def setUp(self):
+        self.tree = SingleStateTurnOffTree()
+        self.addCleanup(self.tree.close)
+        self.key_file = self.tree.dir / "fake_key"
+        self.key_file.write_text("fake-private-key\n")
+        self.hosts_contacted: list[tuple[str, str]] = []
+        self.ports_waited: list[tuple[str, int, str]] = []
+
+        # Point INST.HAL_REMOTES_MD5 / HAL_MULTI_MD5 at our fake hal files on disk.
+        self._saved_md5s = (INST.HAL_REMOTES_MD5, INST.HAL_MULTI_MD5)
+        self.tree._refresh_hal_helpers()
+        INST.HAL_REMOTES_MD5 = hashlib.md5(self.tree.read("/data/codex/bin/hal_remotes")).hexdigest()
+        INST.HAL_MULTI_MD5 = hashlib.md5(self.tree.read("/data/codex/bin/hal_multiremote")).hexdigest()
+        self.addCleanup(self._restore_md5s)
+
+    def _restore_md5s(self):
+        INST.HAL_REMOTES_MD5, INST.HAL_MULTI_MD5 = self._saved_md5s
+
+    def run_cli(self, *argv: str, host: str = FAKE_HUB_HOST) -> tuple[int, str, str]:
+        tree = self.tree
+        uploaded = tree.dir / "uploaded_turn_off.sh"
+        hosts_contacted = self.hosts_contacted
+        ports_waited = self.ports_waited
+        # Also wire a FakeHub synced with tree.root for bootstrap staging/handoff commands!
+        fake_hub = FakeHub()
+        for rel, (data, fmode) in tree.snapshot().items():
+            fake_hub.fs[rel] = {"data": data, "mode": f"{fmode:o}"}
+
+        def fake_rrc(self_inst, command, input_bytes=None, timeout=90):
+            c = command.strip()
+            hosts_contacted.append((self_inst.args.hub_host, c))
+            if c == "id; uname -a":
+                return 0, "uid=0(root) gid=0(root)\n", ""
+            if c == INST.MELODIOUS_OFF_CHECK_CMD:
+                is_off = tree.exists(INST.MELODIOUS_OFF_MARKER) or tree.exists(INST.LEGACY_MELODIOUS_OFF_MARKER)
+                return 0, "off\n" if is_off else "", ""
+            if c == f"cat > {INST.TURN_OFF_SCRIPT_PATH}":
+                uploaded.write_bytes(input_bytes or b"")
+                return 0, "", ""
+            if c.startswith(f"sh {INST.TURN_OFF_SCRIPT_PATH} "):
+                parts = shlex.split(c)[2:]
+                return tree.run_turn_off_script(*parts)
+            if c == f"rm -f {INST.TURN_OFF_SCRIPT_PATH}":
+                uploaded.unlink(missing_ok=True)
+                return 0, "", ""
+            if c.startswith("(/bin/sleep 2;"):
+                tree.simulate_reboot()
+                return 0, "rebooting\n", ""
+            # Bootstrap commands delegate to FakeHub and mirror persistent writes back to tree.root!
+            rc, out, err = fake_hub.dispatch(command, input_bytes)
+            for path, entry in list(fake_hub.fs.items()):
+                if not path.startswith(fake_hub.stage):
+                    tree.put(path, entry["data"], int(str(entry["mode"]), 8))
+            for rel in list(tree.snapshot()):
+                if rel.startswith("/data/codex-backups/webui-handoff-") and rel not in fake_hub.fs:
+                    # Keep handoff directories created by FakeHub.do_handoff
+                    pass
+            return rc, out, err
+
+        old_rrc = INST.Installer.run_remote_rc
+        old_wait = INST.wait_for_port
+        old_sleep = INST.time.sleep
+        old_suffix = INST.stage_suffix
+        INST.Installer.run_remote_rc = fake_rrc
+        INST.wait_for_port = lambda h, p, _s, label: ports_waited.append((h, p, label))
+        INST.time.sleep = lambda _s: None
+        INST.stage_suffix = lambda: "fake01"
+        out_buf, err_buf = io.StringIO(), io.StringIO()
+        try:
+            with contextlib.redirect_stdout(out_buf), contextlib.redirect_stderr(err_buf):
+                try:
+                    code = INST.main(["--hub-host", host, "--key-path", str(self.key_file), *argv])
+                except SystemExit as exc:
+                    code = int(exc.code or 0)
+        finally:
+            INST.Installer.run_remote_rc = old_rrc
+            INST.wait_for_port = old_wait
+            INST.time.sleep = old_sleep
+            INST.stage_suffix = old_suffix
+        self.assertFalse(uploaded.exists(), "RAM helper must be cleaned up")
+        return code, out_buf.getvalue(), err_buf.getvalue()
+
+    def test_flag_mutual_exclusions_and_rejections(self):
+        for bad_args, needle in (
+            (("--turn-off", "--turn-on", "--no-prompt"), "cannot be used together"),
+            (("--turn-off", "--clean-install", "--no-prompt"), "--clean-install"),
+            (("--turn-on", "--clean-install", "--no-prompt"), "--clean-install"),
+            (("--turn-off", "--no-apply-cloud-restart", "--no-prompt"), "--no-apply-cloud-restart"),
+            (("--turn-on", "--no-apply-cloud-restart", "--no-prompt"), "--no-apply-cloud-restart"),
+            (("--force", "--no-prompt"), "only be used with --turn-off"),
+            (("--turn-on", "--force", "--no-prompt"), "only be used with --turn-off"),
+        ):
+            with self.subTest(bad_args=bad_args):
+                code, _out, err = self.run_cli(*bad_args)
+                self.assertEqual(code, 1)
+                self.assertIn(needle, err)
+                self.assertEqual(self.hosts_contacted, [])
+
+    def test_experimental_banner_prints_and_noninteractive_requires_ack(self):
+        """[PYTHON BEHAVIORAL] --turn-off/--turn-on print the EXPERIMENTAL
+        banner before any action; non-interactive runs refuse without
+        --i-understand-experimental; --preflight-only prints the banner and
+        needs no ack; the interactive confirmation carries the warning."""
+        banner_first = INST.EXPERIMENTAL_TURN_OFF_WARNING.split("\n")[0]
+
+        # 1. --preflight-only prints the banner before any action, needs no ack,
+        #    and mutates nothing.
+        before = self.tree.snapshot()
+        code_pf, out_pf, err_pf = self.run_cli("--turn-off", "--preflight-only", "--no-prompt")
+        self.assertEqual(code_pf, 0, err_pf or out_pf)
+        self.assertIn(banner_first, out_pf)
+        self.assertLess(out_pf.index(banner_first), out_pf.index("== Checking SSH =="))
+        self.assertEqual(self.tree.snapshot(), before)
+        code_on_pf, out_on_pf, err_on_pf = self.run_cli("--turn-on", "--preflight-only", "--no-prompt")
+        self.assertEqual(code_on_pf, 0, err_on_pf or out_on_pf)
+        self.assertIn(banner_first, out_on_pf)
+        self.assertEqual(self.tree.snapshot(), before)
+
+        # 2. Non-interactive without the ack flag: refuses before contacting
+        #    the hub, pointing at the flag; nothing changes.
+        self.hosts_contacted.clear()
+        code, out, err = self.run_cli("--turn-off", "--no-prompt")
+        self.assertEqual(code, 1)
+        self.assertIn(banner_first, out)
+        self.assertIn("--i-understand-experimental", err)
+        self.assertEqual(self.hosts_contacted, [])
+        self.assertFalse(self.tree.exists("/etc/melodious-off"))
+        self.assertEqual(self.tree.snapshot(), before)
+
+        code_ton, out_ton, err_ton = self.run_cli("--turn-on", "--no-prompt")
+        self.assertEqual(code_ton, 1)
+        self.assertIn(banner_first, out_ton)
+        self.assertIn("--i-understand-experimental", err_ton)
+        self.assertEqual(self.hosts_contacted, [])
+        self.assertEqual(self.tree.snapshot(), before)
+
+        # 3. Interactive mode: the confirmation prompt itself carries the warning.
+        import builtins
+        prompts = []
+        old_input = builtins.input
+        builtins.input = lambda p="": (prompts.append(p), "n")[1]
+        self.addCleanup(setattr, builtins, "input", old_input)
+        code_no, _out_no, _err_no = self.run_cli("--turn-off")
+        self.assertEqual(code_no, 1)
+        self.assertEqual(self.tree.snapshot(), before)
+        self.assertTrue(any("EXPERIMENTAL" in p for p in prompts), prompts)
+
+        # 4. With the ack flag the banner still prints and the turn-off proceeds.
+        code_ack, out_ack, err_ack = self.run_cli(
+            "--turn-off", "--no-prompt", "--i-understand-experimental"
+        )
+        self.assertEqual(code_ack, 0, err_ack or out_ack)
+        self.assertIn(banner_first, out_ack)
+        self.assertTrue(self.tree.exists("/etc/melodious-off"))
+
+    def test_normal_install_refuses_when_melodious_off_marker_exists(self):
+        for marker in (INST.MELODIOUS_OFF_MARKER, INST.LEGACY_MELODIOUS_OFF_MARKER):
+            with self.subTest(marker=marker):
+                hub = FakeHub()
+                prime_current_hub(hub)
+                hub.fs[marker] = {"data": b"off\n", "mode": "644"}
+                harness = InstallerHarness(hub)
+                self.addCleanup(harness.close)
+                for extra in ((), ("--preflight-only",)):
+                    code, stdout, stderr = harness.run(harness.base_argv(*extra))
+                    self.assertEqual(code, 1, stdout + stderr)
+                    self.assertIn(INST.MELODIOUS_OFF_REFUSAL, stderr)
+                    self.assertEqual([e for e in hub.events if e[0] == "persistent_write"], [])
+
+    def test_turn_off_preflight_only_checks_all_gates_and_mutates_nothing(self):
+        before = self.tree.snapshot()
+        code, out, err = self.run_cli("--turn-off", "--preflight-only", "--no-prompt")
+        self.assertEqual(code, 0, err or out)
+        self.assertEqual(kv_value(out, "rf_check"), "ok")
+        self.assertEqual(kv_value(out, "wifi_check"), "ok")
+        self.assertEqual(kv_value(out, "provision_state"), "cloud")
+        self.assertEqual(kv_value(out, "bootstrap_needed"), "no")
+        self.assertEqual(kv_value(out, "active_off"), "no")
+        self.assertEqual(self.tree.snapshot(), before)
+        self.assertEqual(self.ports_waited, [])
+
+    def test_turn_off_current_hub_writes_only_marker_restores_wan_and_verifies_reboot(self):
+        before = self.tree.snapshot()
+        code, out, err = self.run_cli("--turn-off", "--no-prompt", "--i-understand-experimental")
+        self.assertEqual(code, 0, err or out)
+        self.assertEqual(kv_value(out, "reboot_confirmed"), "yes")
+        self.assertTrue(self.tree.exists("/etc/melodious-off"))
+        self.assertLessEqual(len(self.tree.read("/etc/melodious-off")), 32)
+        self.assertIn("route add default gw 192.0.2.1 dev ath0", self.tree.calls_log.read_text())
+
+        # Every Melodious config, plugin, init.sh mode, and patched hal copy is untouched!
+        for untouched in (
+            "/data/codex/cloud_blocker.conf",
+            "/data/codex/two_screen.conf",
+            "/data/codex/multi_remote.conf",
+            "/data/codex/usb_eth.conf",
+            "/data/codex/timezone.conf",
+            "/data/codex/activity-restrictions.json",
+            "/data/codex/init.sh",
+            "/pkg/codexactivity/codexactivity.lua",
+            "/pkg/codexmqtt/codexmqtt.lua",
+            "/data/codex/bin/hal_remotes",
+            "/data/codex/bin/hal_multiremote",
+        ):
+            self.assertEqual(self.tree.snapshot()[untouched], before[untouched], untouched)
+        self.assertNotIn(b"ping.myharmony.com", self.tree.read("/etc/hosts"))
+        self.assertFalse(any(p.endswith(".codex-new") for p in self.tree.snapshot()))
+
+        # Idempotent second --turn-off: already off, no second reboot.
+        self.ports_waited.clear()
+        code2, out2, err2 = self.run_cli("--turn-off", "--no-prompt", "--i-understand-experimental")
+        self.assertEqual(code2, 0, err2 or out2)
+        self.assertIn("already off", out2)
+        self.assertEqual(self.ports_waited, [])
+
+    def test_declining_prompt_changes_nothing(self):
+        import builtins
+        old_input = builtins.input
+        builtins.input = lambda _p="": "n"
+        self.addCleanup(setattr, builtins, "input", old_input)
+
+        before = self.tree.snapshot()
+        code, _out, _err = self.run_cli("--turn-off")
+        self.assertEqual(code, 1)
+        self.assertEqual(self.tree.snapshot(), before)
+
+    def test_bootstrap_older_install_updates_gate_scripts_and_prunes_handoffs(self):
+        # Simulate pre-single-state rcS.local and netservicestarter.lua without /etc/melodious-off,
+        # plus 3 existing webui-handoff backups so pruning to HANDOFF_KEEP=3 runs.
+        self.tree.put("/etc/init.d/rcS.local", "#!/bin/sh\n[ -x /data/codex/init.sh ] && /data/codex/init.sh &\n", 0o755)
+        self.tree.put("/opt/luaworks/tasks/connectserver/netservicestarter.lua", "-- old nss\n", 0o644)
+        code_pf, out_pf, err_pf = self.run_cli("--turn-off", "--preflight-only", "--no-prompt")
+        self.assertEqual(code_pf, 0, err_pf or out_pf)
+        self.assertEqual(kv_value(out_pf, "bootstrap_needed"), "yes")
+        self.assertFalse(self.tree.exists("/etc/melodious-off"))
+
+        code, out, err = self.run_cli("--turn-off", "--no-prompt", "--i-understand-experimental")
+        self.assertEqual(code, 0, err or out)
+        self.assertIn("Bootstrapping gate-aware scripts", out)
+        self.assertIn("handoff=/data/codex-backups/webui-handoff-", out)
+        self.assertIn(b"/etc/melodious-off", self.tree.read("/etc/init.d/rcS.local"))
+        self.assertIn(b"/etc/melodious-off", self.tree.read("/opt/luaworks/tasks/connectserver/netservicestarter.lua"))
+        self.assertTrue(self.tree.exists("/etc/melodious-off"))
+
+    def test_false_success_prevented_on_no_reboot_or_any_surviving_component(self):
+        # 1. Reboot did not happen (boot_id/btime/uptime unchanged).
+        self.tree.reboot_noops = True
+        code, out, err = self.run_cli("--turn-off", "--no-prompt", "--i-understand-experimental")
+        self.assertEqual(code, 1)
+        self.assertIn("did not restart", err)
+        self.assertEqual(kv_value(out, "reboot_confirmed"), "no")
+
+        # 2. Reboot happened, but individual Melodious components kept running / stayed bound.
+        cases = [
+            ({"/proc/codex_ps": "  401 root /data/codex/bin/codex_webui 8080\n"}, "webui=running"),
+            ({"/proc/codex_ps": "  402 root /bin/sh /data/codex/offline_egress_guard.sh monitor\n"}, "egress_guard=running"),
+            ({"/var/run/codex-usb-eth-worker.pid": "403\n", "/proc/codex_ps": "  403 root worker\n"}, "usb_eth_worker=running"),
+            ({"/proc/codex_ps": "  404 root /data/codex/bin/codex_androidtv\n"}, "androidtv=running"),
+            ({"/proc/mounts": "rootfs / rootfs rw 0 0\nnone /usr/bin/hal unionfs rw 0 0\n"}, "hal_mount=bound"),
+            ({"/etc/hosts": "127.0.0.1\tping.myharmony.com\t# codex: Harmony Touch sync probe\n"}, "touch_probe=present"),
+        ]
+        for override, expected_reason in cases:
+            with self.subTest(expected_reason=expected_reason):
+                t = SingleStateTurnOffTree()
+                self.addCleanup(t.close)
+                self.tree = t
+                self.tree._refresh_hal_helpers()
+                INST.HAL_REMOTES_MD5 = hashlib.md5(self.tree.read("/data/codex/bin/hal_remotes")).hexdigest()
+                t.post_boot_override = override
+                code, _out, err = self.run_cli("--turn-off", "--no-prompt", "--i-understand-experimental")
+                self.assertEqual(code, 1, expected_reason)
+                self.assertIn(expected_reason, err)
+
+    def test_duplicate_remote_gate_refuses_noscreen_dups_and_warns_two_screen(self):
+        # Two Smart Controls (16414) -> refused without --force, allowed with --force.
+        self.tree.rf_reply = RF_INFO_TWO_SMART
+        code, _out, err = self.run_cli("--turn-off", "--no-prompt", "--i-understand-experimental")
+        self.assertEqual(code, 1)
+        self.assertIn("16414 (slots 1, 2)", err)
+        self.assertFalse(self.tree.exists("/etc/melodious-off"))
+
+        code_f, out_f, err_f = self.run_cli("--turn-off", "--force", "--no-prompt", "--i-understand-experimental")
+        self.assertEqual(code_f, 0, err_f or out_f)
+        self.assertIn("WARNING:", out_f)
+        self.assertTrue(self.tree.exists("/etc/melodious-off"))
+
+        # Two screen remotes (16417) -> warns and proceeds without --force.
+        t2 = SingleStateTurnOffTree()
+        self.addCleanup(t2.close)
+        self.tree = t2
+        t2.rf_reply = RF_INFO_TWO_SCREEN
+        self.tree._refresh_hal_helpers()
+        INST.HAL_REMOTES_MD5 = hashlib.md5(self.tree.read("/data/codex/bin/hal_remotes")).hexdigest()
+        code_s, out_s, err_s = self.run_cli("--turn-off", "--no-prompt", "--i-understand-experimental")
+        self.assertEqual(code_s, 0, err_s or out_s)
+        self.assertIn("EquadID 16417, slots 1, 2", out_s)
+
+    def test_wifi_survival_gate_reconnects_wifi_off_and_switches_from_wired_ip(self):
+        # 1. Pristine wpa_supplicant.conf without network={ -> refused unless --force.
+        self.tree.put("/etc/wpa_supplicant.conf", "ctrl_interface=/var/run/wpa_supplicant\n")
+        code, _out, err = self.run_cli("--turn-off", "--no-prompt", "--i-understand-experimental")
+        self.assertEqual(code, 1)
+        self.assertIn("wpa_supplicant.conf", err)
+        self.assertFalse(self.tree.exists("/etc/melodious-off"))
+
+        # Restore valid wpa_supplicant.conf; simulate #125 wifi-off active while connected on wired IP!
+        self.tree.put("/etc/wpa_supplicant.conf", 'network={\n\tssid="HomeWiFi"\n}\n')
+        self.tree.put("/var/run/codex-usb-eth-wifi-off", "")
+        self.tree.wifi_ip = ""
+        self.tree.wired_ip = "192.0.2.50"
+        self.tree.wpa_disconnected = True
+        self.tree._sync_shim_state(wifi_ip_on_reconnect="192.0.2.10")
+
+        # Preflight-only must NOT run wpa_cli reconnect.
+        code_pf, out_pf, err_pf = self.run_cli("--turn-off", "--preflight-only", "--no-prompt", host="192.0.2.50")
+        self.assertEqual(code_pf, 0, err_pf or out_pf)
+        self.assertEqual(kv_value(out_pf, "wifi_off_active"), "yes")
+        calls = self.tree.calls_log.read_text() if self.tree.calls_log.exists() else ""
+        self.assertNotIn("wpa_cli -i ath0 reconnect", calls)
+
+        # Apply reconnects ath0, obtains 192.0.2.10, and waits/verifies on 192.0.2.10 after reboot!
+        self.ports_waited.clear()
+        self.hosts_contacted.clear()
+        code_go, out_go, err_go = self.run_cli("--turn-off", "--no-prompt", "--i-understand-experimental", host="192.0.2.50")
+        self.assertEqual(code_go, 0, err_go or out_go)
+        self.assertIn("wpa_cli -i ath0 reconnect", self.tree.calls_log.read_text())
+        self.assertEqual(kv_value(out_go, "post_reboot_host"), "192.0.2.10")
+        self.assertIn("Hub Wi-Fi IP: 192.0.2.10", out_go)
+        self.assertIn(("192.0.2.10", 22, "SSH"), self.ports_waited)
+        verify_hosts = [h for h, cmd in self.hosts_contacted if "verify-off" in cmd]
+        self.assertEqual(verify_hosts, ["192.0.2.10"])
+
+    def test_fresh_hub_local_account_and_unprovisioned_refused_unless_force(self):
+        # #130 local account
+        self.tree.put("/data/luaworks/provision/preferences", LOCAL_PREFS_JSON)
+        code, _out, err = self.run_cli("--turn-off", "--no-prompt", "--i-understand-experimental")
+        self.assertEqual(code, 1)
+        self.assertIn("local_account", err)
+        self.assertIn("cleanDataFolder", err)
+        self.assertFalse(self.tree.exists("/etc/melodious-off"))
+
+        # Unprovisioned
+        (self.tree.root / "data/luaworks/provision/preferences").unlink()
+        code_u, _out_u, err_u = self.run_cli("--turn-off", "--no-prompt", "--i-understand-experimental")
+        self.assertEqual(code_u, 1)
+        self.assertIn("unprovisioned", err_u)
+
+        # --force overrides with warning
+        code_f, out_f, err_f = self.run_cli("--turn-off", "--force", "--no-prompt", "--i-understand-experimental")
+        self.assertEqual(code_f, 0, err_f or out_f)
+        self.assertIn("WARNING:", out_f)
+        self.assertTrue(self.tree.exists("/etc/melodious-off"))
+
+    def test_hardened_ssh_survival_checks_never_bypassed_by_force(self):
+        # 1. Missing authorized_keys or whitespace-only authorized_keys
+        self.tree.put("/home/root/.ssh/authorized_keys", "   \n")
+        code, _out, err = self.run_cli("--turn-off", "--force", "--no-prompt", "--i-understand-experimental")
+        self.assertEqual(code, 1)
+        self.assertIn("authorized_keys", err)
+        self.tree.put("/home/root/.ssh/authorized_keys", "ssh-ed25519 AAAAC3Nza owner\n")
+
+        # 2. Missing host key AND broken dropbearkey -> refused; working dropbearkey -> allowed!
+        (self.tree.root / "etc/dropbear/dropbear_rsa_host_key").unlink()
+        (self.tree.root / "data/codex/bin/dropbearkey").unlink()
+        code2, _out2, err2 = self.run_cli("--turn-off", "--force", "--no-prompt", "--i-understand-experimental")
+        self.assertEqual(code2, 1)
+        self.assertIn("dropbearkey", err2)
+
+        self.tree.put("/data/codex/bin/dropbearkey", "#!/bin/sh\nexit 0\n", 0o755)
+        code3, out3, err3 = self.run_cli("--turn-off", "--preflight-only", "--no-prompt")
+        self.assertEqual(code3, 0, err3 or out3)
+
+        # 3. Empty 0-byte host key file (rcS [ -r ] would skip dropbearkey and Dropbear would fail!)
+        self.tree.put("/etc/dropbear/dropbear_rsa_host_key", "")
+        code4, _out4, err4 = self.run_cli("--turn-off", "--force", "--no-prompt", "--i-understand-experimental")
+        self.assertEqual(code4, 1)
+        self.assertIn("dropbear_rsa_host_key", err4)
+
+    def test_turn_on_checks_hal_load_unlinks_markers_and_verifies_reboot(self):
+        # Turn off first.
+        code_off, out_off, err_off = self.run_cli("--turn-off", "--no-prompt", "--i-understand-experimental")
+        self.assertEqual(code_off, 0, err_off or out_off)
+        self.tree.put(INST.LEGACY_MELODIOUS_OFF_MARKER, "legacy\n")
+
+        # 1. --turn-on --preflight-only runs hal_remotes load-check and keeps marker.
+        code_pf, out_pf, err_pf = self.run_cli("--turn-on", "--preflight-only", "--no-prompt")
+        self.assertEqual(code_pf, 0, err_pf or out_pf)
+        self.assertEqual(kv_value(out_pf, "expected_hal"), "two-screen")
+        self.assertEqual(kv_value(out_pf, "two_screen_load_check"), "ok")
+        self.assertTrue(self.tree.exists(INST.MELODIOUS_OFF_MARKER))
+
+        # 2. Broken hal_remotes binary: --turn-on refuses BEFORE unlinking /etc/melodious-off!
+        self.tree.hal_loads = False
+        self.tree._refresh_hal_helpers()
+        INST.HAL_REMOTES_MD5 = hashlib.md5(self.tree.read("/data/codex/bin/hal_remotes")).hexdigest()
+        self.ports_waited.clear()
+        code_bad, out_bad, err_bad = self.run_cli("--turn-on", "--no-prompt", "--i-understand-experimental")
+        self.assertEqual(code_bad, 1)
+        self.assertEqual(kv_value(out_bad, "two_screen_load_check"), "failed")
+        self.assertIn("left off", err_bad)
+        self.assertTrue(self.tree.exists(INST.MELODIOUS_OFF_MARKER))
+        self.assertEqual(self.ports_waited, [])
+
+        # 3. Working hal_remotes: --turn-on unlinks both markers, reboots, waits for :22 and :8080,
+        # and verifies codex_webui + two-screen hal!
+        self.tree.hal_loads = True
+        self.tree._refresh_hal_helpers()
+        INST.HAL_REMOTES_MD5 = hashlib.md5(self.tree.read("/data/codex/bin/hal_remotes")).hexdigest()
+        code_on, out_on, err_on = self.run_cli("--turn-on", "--no-prompt", "--i-understand-experimental")
+        self.assertEqual(code_on, 0, out_on + "\nERR:\n" + err_on + "\nLOG:\n" + self.tree.read("/cache/codex-init.log").decode())
+        self.assertFalse(self.tree.exists(INST.MELODIOUS_OFF_MARKER))
+        self.assertFalse(self.tree.exists(INST.LEGACY_MELODIOUS_OFF_MARKER))
+        self.assertIn((FAKE_HUB_HOST, 22, "SSH"), self.ports_waited)
+        self.assertIn((FAKE_HUB_HOST, 8080, "Web UI"), self.ports_waited)
+        self.assertEqual(kv_value(out_on, "reboot_confirmed"), "yes")
+        self.assertEqual(kv_value(out_on, "active_on"), "yes")
+        self.assertIn("Melodious is back on (hal: two-screen).", out_on)
+
+        # 4. Already on -> no-op.
+        self.ports_waited.clear()
+        code_again, out_again, err_again = self.run_cli("--turn-on", "--no-prompt", "--i-understand-experimental")
+        self.assertEqual(code_again, 0, err_again or out_again)
+        self.assertIn("already on", out_again)
+        self.assertEqual(self.ports_waited, [])
+
+
 class PowerShellStaticContract(unittest.TestCase):
     """[PS1 STATIC] structured assertions on install_webui.ps1 (no pwsh run).
 
@@ -2416,10 +3815,57 @@ class PowerShellStaticContract(unittest.TestCase):
         assert match, f"missing ${variable} array"
         return re.findall(r'"([^"]+)"', match.group(1))
 
+    def test_dropbear_builds_match_python(self):
+        """[PS1 STATIC] $DropbearBuilds lists the same builds as DROPBEAR_BUILDS."""
+        match = re.search(r"\$DropbearBuilds = @\{(.*?)\n\}", self.text, re.S)
+        self.assertIsNotNone(match)
+        builds = dict(re.findall(r'"([0-9a-f]{32})"\s*=\s*"([^"]+)"', match.group(1)))
+        self.assertEqual(builds, INST.DROPBEAR_BUILDS)
+        for name in ("Set-UpgradeGates", "Set-DropbearLink"):
+            body = self.text.split(f"function {name}(", 1)[1].split("\nfunction ", 1)[0]
+            self.assertIn("Test-HubCopyCurrent", body, name)
+        removable = self.text.split("function Test-RootToolDropbearRemovable(", 1)[1].split("\nfunction ", 1)[0]
+        self.assertIn("$DropbearLinks[$RootToolDropbear] -ne 1", removable)
+        self.assertIn("$DropbearBuilds.Keys -ccontains [string]$Probe[$DropbearDest]", removable)
+        credit = self.text.split("function Get-LeftoverCredit(", 1)[1].split("\nfunction ", 1)[0]
+        self.assertIn('$Probe[$RootToolDropbear]["size"]', credit)
+        self.assertIn("$Cand.LinkMd5", self.text.split("function Add-NewCopyLink(", 1)[1].split("\nfunction ", 1)[0])
+        self.assertIn("$cand.LinkMd5", self.text.split("function Test-Installed(", 1)[1].split("\nfunction ", 1)[0])
+
+    def test_usb_net_module_update_reboots_like_python(self):
+        """[PS1 STATIC] a loaded USB Ethernet module that changed reboots the
+        hub, read from /proc/modules only when restarts are allowed."""
+        self.assertEqual(self.ps_scalar("UsbNetModulesDir"), INST.USB_NET_MODULES_DIR)
+        body = self.text.split("function Read-LoadedModules(", 1)[1].split("\nfunction ", 1)[0]
+        self.assertIn('"cat /proc/modules"', body)
+        self.assertIn("} catch {", body)
+        self.assertLess(self.main.index("if (-not $NoApplyCloudRestart) { Read-LoadedModules }"),
+                        self.main.index("Add-RollbackCopies"))
+        self.assertIn("$usbNetChanged = (-not $NoApplyCloudRestart) -and (Test-UsbNetModulesChanged)", self.main)
+        self.assertIn('(Get-UsbNetModuleNames @("replace")).Count -gt 0', self.main)
+        self.assertIn("$script:LoadedModules = $names", body)
+        changed = self.text.split("function Test-UsbNetModulesChanged(", 1)[1].split("\n}\n", 1)[0]
+        self.assertNotIn("Read-LoadedModules", changed)
+        self.assertIn("-or $usbNetChanged)", self.main)
+
     def test_contract_switches_present(self):
         """[PS1 STATIC] -PreflightOnly and -CleanInstall switches exist."""
         self.assertIn("[switch]$PreflightOnly", self.text)
         self.assertIn("[switch]$CleanInstall", self.text)
+
+    def test_start_services_replaces_the_guard_and_the_usb_eth_worker(self):
+        """[PS1 STATIC] Like the Python installer: the running egress guard is
+        stopped (so the new one, with the Wi-Fi watchdog, takes over) before it's
+        started, and USB Ethernet's worker is restarted only if switched on."""
+        start = self.text.split("function Start-Services()", 1)[1].split("function Ensure-ParentDirs()", 1)[0]
+        kill = start.index("cat /var/run/codex-offline-egress.pid")
+        self.assertLess(kill, start.index("offline_egress_guard.sh monitor"))
+        self.assertIn("grep '^ENABLED=1`$' /data/codex/usb_eth.conf", start)
+        self.assertIn("/data/codex/usb_eth_service.sh restart", start)
+        py = INST_SOURCE.split("def start_services(self)", 1)[1].split("\n    def ", 1)[0]
+        self.assertLess(py.index("GUARD_REPLACE"), py.index("offline_egress_guard.sh monitor"))
+        self.assertIn("USB_ETH_RESTART", py)
+        self.assertIn("usb_eth_service.sh restart", INST_SOURCE.split("USB_ETH_RESTART = (", 1)[1].split(")", 1)[0])
 
     def test_flag_parity_with_python(self):
         """[PS1 STATIC] Python's preflight/clean-install flags have PS1 parity."""
@@ -2495,7 +3941,7 @@ class PowerShellStaticContract(unittest.TestCase):
                          "else /data/codex/bin/codex_hal_ltcp rf.info '{}' 8 2>&1; fi"):
             self.assertIn(fragment, python_command)
             self.assertIn(fragment, command)
-        self.assertIn("-or $multiRemoteChanged) -and -not $NoApplyCloudRestart", self.main)
+        self.assertIn("-or $multiRemoteChanged -or $usbNetChanged) -and -not $NoApplyCloudRestart", self.main)
         # force-off, the mount probe, and the reboot decided by the running hal too.
         self.assertRegex(self.text, r'\[ValidateSet\("on", "off", "force-off"\)\]\s*\[string\]\$MultiRemote')
         self.assertIn('$MultiRemoteForce = $MultiRemote -eq "force-off"', self.text)
@@ -2685,6 +4131,117 @@ class PowerShellStaticContract(unittest.TestCase):
         trap_at = main.index("trap {")
         self.assertLess(trap_at, main.index("New-StagingTree"))
         self.assertIn("Remove-StagingTree", main[trap_at:trap_at + 120])
+
+    def test_turn_off_and_turn_on_parity_and_crlf(self):
+        """[PS1 STATIC] install_webui.ps1 keeps CRLF, embeds the exact same
+        TURN_OFF_SCRIPT and MELODIOUS_OFF_CHECK_CMD bytes as install_webui.py,
+        and mirrors -TurnOff, -TurnOn, -Force, refusal, bootstrap, and Wi-Fi
+        switchover."""
+        raw = INSTALLER_PS1.read_bytes()
+        self.assertIn(b"\r\n", raw)
+        self.assertNotIn(b"\n", raw.replace(b"\r\n", b""), "install_webui.ps1 must use CRLF on every line")
+
+        for sw in ("[switch]$TurnOff", "[switch]$TurnOn", "[switch]$Force"):
+            self.assertIn(sw, self.text)
+        self.assertEqual(self.ps_scalar("TurnOffScriptPath"), INST.TURN_OFF_SCRIPT_PATH)
+        self.assertEqual(self.ps_scalar("MelodiousOffMarker"), INST.MELODIOUS_OFF_MARKER)
+        self.assertEqual(self.ps_scalar("LegacyMelodiousOffMarker"), INST.LEGACY_MELODIOUS_OFF_MARKER)
+        self.assertEqual(self.ps_here_string("MelodiousOffCheckCmd"), INST.MELODIOUS_OFF_CHECK_CMD)
+        self.assertEqual(self.ps_here_string("TurnOffScript") + "\n", INST.TURN_OFF_SCRIPT)
+
+        # GateScriptSpecs matches GATE_SCRIPT_SPECS destinations and modes in order.
+        specs_block = self.text.split("$GateScriptSpecs = @(", 1)[1].split("\n)", 1)[0]
+        ps_specs = re.findall(r'@\("([^"]+)",\s*"([^"]+)",\s*"([^"]+)",\s*"([^"]+)"\)', specs_block)
+        py_specs = [
+            (dest, mode, kind, str(local.relative_to(INST.PAYLOAD)).replace("\\", "/"))
+            for dest, mode, kind, local in INST.GATE_SCRIPT_SPECS
+        ]
+        self.assertEqual(ps_specs, py_specs)
+
+        # Mutual exclusions + normal-run refusal + TurnOff/TurnOn dispatch order.
+        self.assertIn('if ($TurnOff -and $TurnOn)', self.text)
+        self.assertIn('if ($Force -and -not $TurnOff)', self.text)
+        self.assertIn('if ($CleanInstall) { throw "$modeFlag cannot be combined with -CleanInstall" }', self.text)
+        self.assertIn('if ($NoApplyCloudRestart) { throw "$modeFlag cannot be combined with -NoApplyCloudRestart" }', self.text)
+        main = self.main.replace("\r\n", "\n")
+        self.assertLess(main.index("if ($TurnOff) { exit (Invoke-TurnOff) }"), main.index("Test-NotTurnedOff"))
+        self.assertLess(main.index("if ($TurnOn) { exit (Invoke-TurnOn) }"), main.index("Test-NotTurnedOff"))
+        self.assertLess(main.index("Test-NotTurnedOff"), main.index("Resolve-HubIdentity"))
+        self.assertIn("Invoke-TurnOffBootstrap", self.text)
+        self.assertIn("post_reboot_host=$wifiIp", self.text)
+        self.assertIn("reboot_confirmed=", self.text)
+
+        # EXPERIMENTAL disclaimer parity: identical banner bytes, printed
+        # before any action, with an explicit non-interactive acknowledgment
+        # gate and the warning folded into both confirmation prompts.
+        self.assertEqual(
+            self.ps_here_string("ExperimentalTurnOffWarning"), INST.EXPERIMENTAL_TURN_OFF_WARNING
+        )
+        self.assertIn("[switch]$IUnderstandExperimental", self.text)
+        self.assertIn("if ($IUnderstandExperimental -and -not ($TurnOff -or $TurnOn))", self.text)
+        banner_call = self.text.index("Warn-ExperimentalTurnOffOn\n")
+        ack_gate = self.text.index("if ($NoPrompt -and -not $PreflightOnly -and -not $IUnderstandExperimental)")
+        ssh_step = self.text.index('Step "Checking SSH"')
+        self.assertLess(banner_call, ssh_step, "the EXPERIMENTAL banner must print before any action")
+        self.assertLess(ack_gate, ssh_step, "the -NoPrompt ack gate must fire before any hub contact")
+        for prompt in (
+            "EXPERIMENTAL, not validated on live hardware. Turn Melodious off and restart the hub?",
+            "EXPERIMENTAL, not validated on live hardware. Turn Melodious back on and restart the hub?",
+        ):
+            self.assertIn(prompt, self.text)
+            self.assertIn(prompt, INST_SOURCE)
+
+
+def shipped_ps1_files() -> list[Path]:
+    """Every .ps1 in the repo tree, skipping hidden, virtualenv and build dirs."""
+    skip = {"node_modules", "build", "venv", "__pycache__"}
+    found = []
+    for root, dirs, files in os.walk(REPO_ROOT):
+        dirs[:] = sorted(d for d in dirs if not d.startswith(".") and d not in skip)
+        found.extend(Path(root) / name for name in sorted(files) if name.lower().endswith(".ps1"))
+    return found
+
+
+class PowerShell51Encoding(unittest.TestCase):
+    """[PS1 STATIC] every shipped .ps1 decodes the same under Windows
+    PowerShell 5.1 as under pwsh 7 (no pwsh run).
+
+    Windows PowerShell 5.1 reads a script without a byte order mark as
+    Windows-1252, not UTF-8. A UTF-8 em dash (E2 80 94) then becomes three
+    characters, the last of which (0x94, a right double quote) PowerShell
+    treats as a string delimiter, so the script stops parsing (issue #139).
+    A script is safe only if it is pure ASCII or starts with a UTF-8 BOM.
+    """
+
+    UTF8_BOM = b"\xef\xbb\xbf"
+
+    def test_shipped_ps1_are_ascii_or_bom_prefixed(self):
+        scripts = shipped_ps1_files()
+        names = {path.name for path in scripts}
+        self.assertIn("install_webui.ps1", names)
+        self.assertIn("restore_backup.ps1", names)
+        problems = []
+        for path in scripts:
+            raw = path.read_bytes()
+            rel = path.relative_to(REPO_ROOT)
+            if raw.startswith(self.UTF8_BOM):
+                try:
+                    raw.decode("utf-8")
+                except UnicodeDecodeError as exc:
+                    problems.append(f"{rel}: has a UTF-8 BOM but is not valid UTF-8 ({exc})")
+                continue
+            for number, line in enumerate(raw.split(b"\n"), 1):
+                bad = sorted({byte for byte in line if byte > 0x7F})
+                if bad:
+                    problems.append(
+                        f"{rel}:{number}: non-ASCII bytes {' '.join(f'{b:02X}' for b in bad)} "
+                        f"in a file without a UTF-8 BOM: {line.strip()[:80]!r}"
+                    )
+        self.assertEqual(
+            problems, [],
+            "Windows PowerShell 5.1 reads these as Windows-1252; use ASCII or add a UTF-8 BOM:\n"
+            + "\n".join(problems),
+        )
 
 
 @unittest.skipUnless(shutil.which("pwsh"),

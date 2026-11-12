@@ -329,7 +329,7 @@ function harmonyDate() {
   return `/Date(${Date.now()}+0000)/`;
 }
 
-function commandAction(deviceId, command, eventType) {
+export function commandAction(deviceId, command, eventType) {
   return {
     "DeviceId-": Number(deviceId),
     __type: "ButtonCommandAction",
@@ -461,16 +461,29 @@ function blankActivity(alloc) {
   };
 }
 
-function surfaceTemplate(config) {
+function surfaceTemplate(config, remote = "16414") {
   const maps = config?.mapList?.ButtonMaps ?? [];
-  const surface = maps.find((m) =>
-    m?.__type === "ActivityButtonMap" && /^16414Activity/.test(String(m?.ButtonMapIdentifier ?? "")));
-  const fallback = maps.find((m) => m?.__type === "ActivityButtonMap");
-  const source = surface ?? fallback ?? {};
+  const prefix = String(remote ?? "");
+  const hasSurface = (m) =>
+    m && (m["SurfaceId-"] ?? m.SurfaceId ?? m["ButtonMapSurfaceId-"] ?? m.ButtonMapSurfaceId) != null;
+  const pick = (predicate) => maps.find((m) => hasSurface(m) && predicate(m));
+  const id = (m) => String(m?.ButtonMapIdentifier ?? "");
+  const source =
+    (prefix && (
+      pick((m) => m?.__type === "ActivityButtonMap" && id(m).startsWith(`${prefix}Activity`)) ??
+      pick((m) => id(m) === `${prefix}Root`) ??
+      pick((m) => id(m).startsWith(prefix))
+    )) ??
+    pick((m) => m?.__type === "ActivityButtonMap") ??
+    pick((m) => id(m).endsWith("Root")) ??
+    pick(() => true) ??
+    maps.find((m) => m?.__type === "ActivityButtonMap" && id(m).startsWith(`${prefix}Activity`)) ??
+    maps.find((m) => m?.__type === "ActivityButtonMap") ??
+    {};
   return {
-    "ButtonMapSurfaceId-": source["ButtonMapSurfaceId-"] ?? null,
-    "RemoteId-": source["RemoteId-"] ?? null,
-    "SurfaceId-": source["SurfaceId-"] ?? null,
+    "ButtonMapSurfaceId-": source["ButtonMapSurfaceId-"] ?? source.ButtonMapSurfaceId ?? null,
+    "RemoteId-": source["RemoteId-"] ?? source.RemoteId ?? null,
+    "SurfaceId-": source["SurfaceId-"] ?? source.SurfaceId ?? null,
   };
 }
 
@@ -621,10 +634,14 @@ function isActivityFunctionMap(map, activityId) {
 }
 
 /* Surface key used by the advanced editor for remote-surface totality.
+   The hub resolves activity maps by the remote prefix of ButtonMapIdentifier
+   (<EquadID>Activity<id>), not by RemoteId-/SurfaceId-/ButtonMapSurfaceId-.
    HID maps use a virtual key and are excluded from surface templates. */
 function activityMapSurfaceKey(map) {
   if (!map || typeof map !== "object") return "";
   if (isKeyboardHidActivityMap(map)) return "virtual|16420|ActivityButtonMap";
+  const match = String(map.ButtonMapIdentifier ?? "").match(/^(.+?)Activity-?\d+$/);
+  if (match) return `${match[1]}|${String(map.__type ?? "")}`;
   const surface = map["SurfaceId-"] ?? map.SurfaceId;
   const buttonSurface = map["ButtonMapSurfaceId-"] ?? map.ButtonMapSurfaceId;
   if (surface == null && buttonSurface == null) return "";
@@ -649,7 +666,7 @@ function rewriteIdentifierForActivity(identifier, activityId) {
    the advanced editor can route actions later without a repair warning for
    missing surfaces. Mirrors activity-ui cloneMapForActivity(keepActions=false)
    after prune. */
-function cloneEmptySurfaceMap(template, activityId, alloc) {
+function cloneEmptySurfaceMap(template, activityId, alloc, config = null) {
   const map = cloneJsonResource(template);
   delete map.ButtonMapId;
   delete map["Id-"];
@@ -663,6 +680,13 @@ function cloneEmptySurfaceMap(template, activityId, alloc) {
     map.DateModified = harmonyDate();
   }
   map.__type = map.__type || "ActivityButtonMap";
+  if (config) {
+    const match = String(map.ButtonMapIdentifier ?? "").match(/^(.+?)Activity-?\d+$/);
+    const surf = surfaceTemplate(config, match ? match[1] : "16414");
+    for (const key of ["ButtonMapSurfaceId-", "RemoteId-", "SurfaceId-"]) {
+      if (map[key] == null && surf[key] != null) map[key] = surf[key];
+    }
+  }
   return map;
 }
 
@@ -747,7 +771,7 @@ function mergeActivityButtonMaps({
       /* Never duplicate the wizard-owned surface via a second 16414 clone. */
       if (wizardKey && key === wizardKey) continue;
     }
-    const cloned = cloneEmptySurfaceMap(template, activityId, alloc);
+    const cloned = cloneEmptySurfaceMap(template, activityId, alloc, config);
     result.push(cloned);
     presentKeys.add(key);
   }
@@ -975,13 +999,24 @@ const ACTIVITY_BUTTON_BY_TYPE = { 1: "WatchTVActivity", 2: "MovieActivity", 4: "
    is never touched: Settings > Remotes > Activity buttons edits those.
    Screen remotes (16417) have no activity buttons, and Logitech gave them
    no root map. Same shapes as remotes-model's buildActivityButtonsMapList. */
-function ensureRootMaps({ buttonMaps, activity, alloc }) {
+function ensureRootMaps({ buttonMaps, activity, alloc, config = null }) {
   const activityId = activity["Id-"];
   for (const remote of [SMART_CONTROL_REMOTE, ...COMPANION_REMOTES]) {
     const rootId = `${remote}Root`;
     if (buttonMaps.some((m) => String(m?.ButtonMapIdentifier ?? "") === rootId)) continue;
     const own = buttonMaps.find((m) => String(m?.ButtonMapIdentifier ?? "") === `${remote}Activity${activityId}`);
     if (!own) continue;
+    let surface = {
+      "ButtonMapSurfaceId-": own["ButtonMapSurfaceId-"] ?? own.ButtonMapSurfaceId ?? null,
+      "RemoteId-": own["RemoteId-"] ?? own.RemoteId ?? null,
+      "SurfaceId-": own["SurfaceId-"] ?? own.SurfaceId ?? null,
+    };
+    if (config && (surface["ButtonMapSurfaceId-"] == null || surface["RemoteId-"] == null || surface["SurfaceId-"] == null)) {
+      const fallback = surfaceTemplate(config, remote);
+      for (const key of ["ButtonMapSurfaceId-", "RemoteId-", "SurfaceId-"]) {
+        if (surface[key] == null && fallback[key] != null) surface[key] = fallback[key];
+      }
+    }
     buttonMaps.push({
       "ButtonMapId-": alloc.mapId(),
       Buttons: [{
@@ -1000,9 +1035,9 @@ function ensureRootMaps({ buttonMaps, activity, alloc }) {
         ButtonKey: ACTIVITY_BUTTON_BY_TYPE[Number(activity.Type)] ?? ACTIVITY_BUTTON_BY_TYPE[1],
         ButtonLongPressAction: null,
       }],
-      "ButtonMapSurfaceId-": own["ButtonMapSurfaceId-"] ?? null,
-      "RemoteId-": own["RemoteId-"] ?? null,
-      "SurfaceId-": own["SurfaceId-"] ?? null,
+      "ButtonMapSurfaceId-": surface["ButtonMapSurfaceId-"],
+      "RemoteId-": surface["RemoteId-"],
+      "SurfaceId-": surface["SurfaceId-"],
       __type: "RootButtonMap",
       ButtonMapIdentifier: rootId,
       DateModified: harmonyDate(),
@@ -1076,8 +1111,12 @@ export function buildActivityGraph({ config, draft, editId, remotes = [] }) {
     const sibling = mergedMaps.find((m) => String(m?.ButtonMapIdentifier ?? "").startsWith(`${prefix}Activity`))
       ?? (paired.has(prefix) ? wizardMap : null);
     if (!sibling) continue;
-    const made = cloneEmptySurfaceMap(sibling, activityId, alloc);
+    const made = cloneEmptySurfaceMap(sibling, activityId, alloc, config);
     made.ButtonMapIdentifier = id;
+    const surf = surfaceTemplate(config, prefix);
+    for (const key of ["ButtonMapSurfaceId-", "RemoteId-", "SurfaceId-"]) {
+      if (made[key] == null && surf[key] != null) made[key] = surf[key];
+    }
     mergedMaps.push(made);
   }
   for (const prefix of ["16417", ...COMPANION_REMOTES]) {
@@ -1086,7 +1125,7 @@ export function buildActivityGraph({ config, draft, editId, remotes = [] }) {
   if (!editId) {
     seedTouchOnScreenButtons({ buttonMaps: mergedMaps, activityId, draft, config, alloc });
   }
-  ensureRootMaps({ buttonMaps: mergedMaps, activity, alloc });
+  ensureRootMaps({ buttonMaps: mergedMaps, activity, alloc, config });
 
   const existingFunction = functionMaps.find((m) => isActivityFunctionMap(m, activityId));
   if (!existingFunction) {

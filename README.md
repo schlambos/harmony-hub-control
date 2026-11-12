@@ -93,7 +93,7 @@ can back up, restore and edit account-free.
 | Harmony Hub | Rooted with [harmony-hub-root](https://github.com/Ripthulhu/harmony-hub-root). Melodious doesn't root hubs. |
 | SSH key | The root tool's private key, `harmony_owner_*`, in `~/.ssh` (`%USERPROFILE%\.ssh` on Windows). |
 | Hub ID | The numeric Hub ID the root tool prints. Don't guess it: Melodious sends it with every command to the hub's engine. |
-| Free flash | About 1.4 MB of the hub's 5 MB data flash for the first install (about 1 MB if the root tool's identical Dropbear can be reused); each later web app update needs about 0.65 MB. The installer measures it and stops before writing anything if there isn't enough — see [docs/INSTALL.md](docs/INSTALL.md#if-the-hubs-flash-is-full). |
+| Free flash | About 1.6 MB of the hub's 5 MB data flash for the first install (about 1.2 MB if the root tool's Dropbear can be reused); each later web app update needs about 0.65 MB (the first one that adds BusyBox, about 0.25 MB more). The installer measures it and stops before writing anything if there isn't enough — see [docs/INSTALL.md](docs/INSTALL.md#if-the-hubs-flash-is-full). |
 | Install computer | Windows with PowerShell, Linux or macOS with Python 3, or a Docker or Unraid host. The installer needs only `ssh`, not `scp` or `sftp`. |
 | Network | A trusted home network. The web app is plain HTTP. |
 | Home Assistant (optional) | Any recent Home Assistant with [HACS](https://hacs.xyz/), reachable from the hub over plain `http://`. An MQTT broker is needed only for the MQTT bridge. |
@@ -148,7 +148,7 @@ and a user reports the Harmony Elite works.**
 | Harmony Touch | Validated, with stock remote firmware: offline sync, hard keys, on-screen buttons, the number pad, gestures, device screens and press modes. |
 | Harmony Smart Control remote | Validated, paired next to a Touch: pairing on the hub with no cloud (Settings → Remotes), its keys driving the same devices as the Touch's, and its activity buttons. It keeps no setup of its own; its buttons live on the hub. If it stops responding, take its coin cell out for 10 seconds, then pair it again. |
 | Harmony Elite | Works, per a user report; not yet tested here. |
-| Harmony Companion remote | Supported: activity buttons and per-activity keys in its own maps, edited the same way as the Smart Control's. Community-tested. |
+| Harmony Companion remote | Supported: activity buttons and per-activity keys in its own maps, edited the same way as the Smart Control's, and its home control buttons (Light 1, Light 2, Plug 1, Plug 2, + / −), each a command, an activity or a sequence with a long press and + / −, for all activities or one ([docs/HOME_CONTROL_BUTTONS.md](docs/HOME_CONTROL_BUTTONS.md)). Community-tested. |
 | Other remotes that pair with the hub, such as the Harmony Ultimate or 950 | Expected to work, but not yet tested. Features that need a screen apply only to remotes that have one. |
 | Phones, tablets and computers | The web, Android and macOS apps. |
 
@@ -422,12 +422,22 @@ staging, ~0.5 MB each — the usual full-flash fix), `--skip-flash-check`. `--he
 - **Update:** re-run the installer, or macOS Settings → Updates → **Update hub…** (checksum-checked
   download, SSH install with rollback, finishes on-hub if the Mac disconnects; settings unchanged).
   Android only notifies — it never holds the SSH key.
-- **Roll back:** `.\restore_backup.ps1 -HubHost <hub-ip> -KeyPath "$env:USERPROFILE\.ssh\<key>"`
-  restores boot script, cloud blocker, SSH wrappers, Hub ID and MQTT from the newest handoff, then
-  reboot.
+- **Turn off (experimental):** `python3 install_webui.py --hub-host <hub-ip> --turn-off` (`-TurnOff` in
+  PowerShell) sets `/etc/melodious-off`, restores the internet route and reboots into stock `hal` +
+  Logitech's cloud so the Harmony app can sync the hub again; root SSH and all Melodious files/configs
+  stay put. **Experimental — not yet validated on live hardware:** fully tested off-hub, but whether
+  the Harmony app fully reclaims the hub after `--turn-off` is unproven; back up first (Web UI →
+  **Download full backup**), and scripted `--no-prompt` runs must pass `--i-understand-experimental`
+  (`-IUnderstandExperimental`).
+- **Turn back on (experimental, same caveat):** `python3 install_webui.py --hub-host <hub-ip> --turn-on`
+  (`-TurnOn`) unlinks `/etc/melodious-off` (zero flash needed) and reboots back into Melodious with the
+  cloud blocker on (normal installer runs and macOS **Update hub…** refuse while turned off).
+- **Roll back an update:** `.\restore_backup.ps1 -HubHost <hub-ip> -KeyPath "$env:USERPROFILE\.ssh\<key>"`
+  goes back one update from the newest handoff backup (boot script, `netservicestarter.lua`, SSH
+  wrappers, Hub ID and MQTT), then reboot; use `--turn-off` to stop running Melodious.
 - **Docker/Unraid:** same installer via env vars, then a small proxy — [UNRAID.md](UNRAID.md).
 
-Full walkthrough, all flags and flash-full help: **[docs/INSTALL.md](docs/INSTALL.md)**.
+Full walkthrough, `--turn-off`/`--turn-on` gates, all flags and flash-full help: **[docs/INSTALL.md](docs/INSTALL.md)**.
 
 ## How it works
 
@@ -463,7 +473,7 @@ Logitech cloud ✕  cloud tasks not started, hosts refused, WAN route removed
   sync, clock).
 - **Transactional saves:** validate → back up → write → read back → reload → publish revision;
   failure restores prior files. Backups kept: 5 resource / 3 handoff
-  ([docs/INSTALL.md](docs/INSTALL.md#rolling-back)). The remote *pulls* revisions, answered locally
+  ([docs/INSTALL.md](docs/INSTALL.md#rolling-back-an-update)). The remote *pulls* revisions, answered locally
   — [docs/TOUCH_EDITOR.md](docs/TOUCH_EDITOR.md).
 - **HA path:** IP commands POST to the integration webhook (instant 200, service after); back the
   other way, a `remote` entity drives the hub API and live state lands in RAM-only `/api/ha-state`
@@ -509,11 +519,12 @@ tools/shipped_copy_hygiene.mjs`. Full test list and rebuilding `codex_webui` (Zi
 
 | Document | What it covers |
 | --- | --- |
-| [docs/INSTALL.md](docs/INSTALL.md) | Installing, updating and rolling back: the full installer walkthrough, every flag, and flash-full troubleshooting |
+| [docs/INSTALL.md](docs/INSTALL.md) | Installing, updating, turning Melodious off/on, and rolling back: the full installer walkthrough, every flag, and flash-full troubleshooting |
 | [docs/API.md](docs/API.md) | The hub's HTTP API, and the activity rules the paired remote needs |
 | [docs/HOME_ASSISTANT.md](docs/HOME_ASSISTANT.md) | Home Assistant entities as hub devices, webhook rules, press and hold behaviour, and setup |
 | [docs/ANDROID_TV.md](docs/ANDROID_TV.md) | Android TV and Google TV sets over the network: pairing, commands, power, codex_androidtv |
 | [docs/TOUCH_EDITOR.md](docs/TOUCH_EDITOR.md) | Remote sync, how presses and gestures resolve, on-screen buttons, device screens, slot rules and validation |
+| [docs/HOME_CONTROL_BUTTONS.md](docs/HOME_CONTROL_BUTTONS.md) | The Harmony Companion's home control buttons: keys, data model and the engine hook |
 | [docs/MELODIOUS_WEB_UI.md](docs/MELODIOUS_WEB_UI.md) | The web app's architecture, screen map, tokens and components |
 | [DESIGN.md](DESIGN.md) | The design system shared by the web and Android apps |
 | [docs/ANDROID_CATALOG.md](docs/ANDROID_CATALOG.md) | Logitech catalog lookup and sign-in in the Android app |
@@ -521,6 +532,8 @@ tools/shipped_copy_hygiene.mjs`. Full test list and rebuilding `codex_webui` (Zi
 | [desktop/README.md](desktop/README.md) | Building, testing and releasing the macOS app |
 | [tools/catalog/README.md](tools/catalog/README.md) | The Logitech catalog helper for the command line |
 | [docs/BUILD.md](docs/BUILD.md) | Building the MIPS binaries with the pinned toolchain |
+| [docs/CI.md](docs/CI.md) | What CI checks on every pull request, and how to run the same checks yourself |
+| [docs/CI_BUILD_RELEASE_DESIGN.md](docs/CI_BUILD_RELEASE_DESIGN.md) | The design of the CI, build and release pipeline, and what comes next |
 | [docs/PROTOCOLS.md](docs/PROTOCOLS.md) | The hub's own protocols and ports |
 | [docs/SECURITY.md](docs/SECURITY.md) | Security notes and what never to commit |
 | [UNRAID.md](UNRAID.md) | Docker and Unraid |
@@ -543,7 +556,15 @@ tokens, hub backups, firmware dumps or rooting tools. Read [CONTRIBUTING.md](CON
 - **Third-party code:**
   - Material Icons (Apache-2.0), in [`third_party/material-icons/`](third_party/material-icons/);
   - Dropbear SSH, in [`third_party/dropbear-2025.89/`](third_party/dropbear-2025.89/), with its
-    licence.
+    licence;
+  - BusyBox 1.37.0 (GPL-2.0), built into `busybox-extra`, with its licence, patch, configuration
+    and how to rebuild it in [`third_party/busybox-1.37.0/`](third_party/busybox-1.37.0/);
+  - BearSSL 0.6 (MIT), built into `codex_androidtv`, in
+    [`third_party/bearssl-0.6/`](third_party/bearssl-0.6/);
+  - the Linux kernel 2.6.31 (GPL-2.0), from Logitech's published hub kernel archive, built into
+    `asix.ko`, with two upstream Linux 3.1 patches by Marek Vasut; the config, patches, licence and
+    how to rebuild it are in
+    [`third_party/linux-2.6.31-harmony/`](third_party/linux-2.6.31-harmony/README.md).
 
 **Contributors.** Thank you to everyone who has contributed code, pull requests, testing and issue
 reports so far:

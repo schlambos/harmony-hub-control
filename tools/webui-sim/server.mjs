@@ -20,6 +20,7 @@ import {
 } from "./public/js/views/device-settings-model.js";
 import { LIMITS, isSafeLabel } from "./public/js/views/ir-model.js";
 import { MAX_ACTIVITIES, isRestrictableId, normalizeWindows, restrictedAt } from "./public/js/views/restrictions-model.js";
+import { validateStatic } from "./public/js/views/ethernet-model.js";
 
 const SIM_DIR = path.dirname(fileURLToPath(import.meta.url));
 const PUBLIC_DIR = path.join(SIM_DIR, "public");
@@ -581,6 +582,19 @@ let simUsbEthSupported = true;
 let simUsbEthEhciBound = false;
 let simUsbEthAdapter = null; // null | { vidPid, product, supportedChip, carrier, ipv4 }
 let simUsbEthForcedState = null; // null | { state, reason } (POST /api/sim/usb-eth)
+/* How the cable is used (usb_eth.conf's WIFI_OFF and IP_* settings, and what
+   the service found): set with POST /api/usb-eth, the rest with
+   POST /api/sim/usb-eth. */
+let simUsbEthWifiOff = false;
+let simUsbEthIpMode = "dhcp";
+let simUsbEthStatic = { address: "", netmask: "", gateway: "", dns: [] };
+let simUsbEthSeparate = false; // the cable is on another network than the hub's gateway
+let simUsbEthGatewayLost = false; // the gateway stopped answering through the cable
+let simUsbEthNeedsRestart = false; // the running egress guard predates its Wi-Fi watchdog
+let simUsbEthLanSince = 0; // when the cable began carrying local traffic
+let simUsbEthRx = 0;
+let simUsbEthTx = 0;
+const SIM_USB_ETH_WIFI_OFF_MS = 1500; // the hub waits a minute (WIFI_OFF_AFTER)
 const SIM_RESTART_MS = 4000;
 const SIM_HAL_STOCK_MD5 = "a3fdd823440c43f36e235fe51c45f008";
 const SIM_HAL_MULTI_MD5 = "cafdd7930309c7d74a6a41a87642f0c1";
@@ -601,6 +615,15 @@ function resetSimRemotes() {
   simUsbEthEhciBound = false;
   simUsbEthAdapter = null;
   simUsbEthForcedState = null;
+  simUsbEthWifiOff = false;
+  simUsbEthIpMode = "dhcp";
+  simUsbEthStatic = { address: "", netmask: "", gateway: "", dns: [] };
+  simUsbEthSeparate = false;
+  simUsbEthGatewayLost = false;
+  simUsbEthNeedsRestart = false;
+  simUsbEthLanSince = 0;
+  simUsbEthRx = 0;
+  simUsbEthTx = 0;
 }
 
 /* The raw text of a top-level JSON member's value, like codex_webui's
@@ -693,6 +716,12 @@ function simUsbEthState() {
   const dev = simUsbEthEhciBound && simUsbEthAdapter ? simUsbEthAdapter : null;
   const boundIface = simUsbEthEnabled && dev && dev.supportedChip !== false ? "eth0" : "";
   const carrier = Boolean(boundIface && dev.carrier !== false);
+  const isStatic = simUsbEthIpMode === "static";
+  let ipv4 = "";
+  if (carrier) {
+    if (isStatic) ipv4 = simUsbEthStatic.address;
+    else ipv4 = String(dev.ipv4 || (simUsbEthSeparate ? "10.0.0.55" : "192.168.1.55"));
+  }
   /* Enabled is not operational: mirror the hub's state names. */
   let state = "platform_absent";
   let reason = "";
@@ -704,10 +733,26 @@ function simUsbEthState() {
     else if (!dev) state = "adapter_absent";
     else if (dev.supportedChip === false) state = "adapter_unsupported";
     else if (!carrier) state = "awaiting_carrier_dhcp";
-    else state = "operational";
+    else if (simUsbEthGatewayLost && !simUsbEthSeparate) {
+      state = "gateway_unreachable";
+      reason = "gateway_lost";
+    } else state = "operational";
   } else if (simUsbEthEhciBound) {
     state = "bus_ready";
   }
+  const operational = state === "operational";
+  // Like use_cable(): on the gateway's network the cable carries local traffic.
+  const carriesLan = operational && !simUsbEthSeparate;
+  if (!carriesLan) simUsbEthLanSince = 0;
+  else if (!simUsbEthLanSince) simUsbEthLanSince = Date.now();
+  if (operational) {
+    simUsbEthRx += 6144;
+    simUsbEthTx += 3072;
+  }
+  const router = !ipv4 ? null : isStatic ? simUsbEthStatic.gateway || null : ipv4.replace(/\.\d+$/, ".1");
+  // Like manage_wifi(): off once the cable has carried local traffic a while, never without the guard's watchdog.
+  const wifiSuspended = carriesLan && simUsbEthWifiOff && !simUsbEthNeedsRestart &&
+    Date.now() - simUsbEthLanSince >= SIM_USB_ETH_WIFI_OFF_MS;
   return {
     ok: true,
     enabled: simUsbEthEnabled,
@@ -715,28 +760,113 @@ function simUsbEthState() {
     kernel,
     ehciBound: simUsbEthEhciBound,
     platformRegistered: simUsbEthEhciBound,
-    operational: state === "operational",
+    operational,
     state,
     reason,
-    routeMode: state === "operational" ? "metric" : "",
+    routeMode: operational ? "metric" : "",
     driverLoaded: Boolean(simUsbEthEnabled && simUsbEthSupported && dev && dev.supportedChip !== false),
     gadgetLoaded: false,
     usbDevice: dev ? String(dev.vidPid || "0bda:8152") : "",
     usbProduct: dev ? String(dev.product || "USB 10/100 LAN") : "",
     ifname: boundIface,
     carrier,
-    ipv4: boundIface && dev.carrier !== false ? String(dev.ipv4 || "192.168.1.55") : ""
+    ipv4,
+    speedMbps: carrier ? Number(dev.speedMbps || 100) : null,
+    fullDuplex: carrier ? dev.fullDuplex !== false : null,
+    netmask: ipv4 ? (isStatic ? simUsbEthStatic.netmask : "255.255.255.0") : null,
+    router,
+    dns: ipv4 && isStatic && simUsbEthStatic.dns.length ? [...simUsbEthStatic.dns] : ["192.168.1.1"],
+    ipMode: simUsbEthIpMode,
+    staticConfig: { ...simUsbEthStatic, dns: [...simUsbEthStatic.dns] },
+    separateNetwork: operational && simUsbEthSeparate,
+    gatewayUnreachable: state === "gateway_unreachable",
+    wifiIp: "192.168.1.50",
+    wifiOff: simUsbEthWifiOff,
+    wifiSuspended,
+    wifiNeedsRestart: simUsbEthWifiOff && simUsbEthNeedsRestart,
+    wifiOffBlocked: null, // "noRouter" on the hub: cloud blocker off and no default route through the cable
+    rxBytes: boundIface ? simUsbEthRx : null,
+    txBytes: boundIface ? simUsbEthTx : null,
+    lanInterface: carriesLan ? boundIface : "ath0"
   };
 }
 
-/* POST /api/usb-eth, like codex_webui's render_usb_eth_set_json(). */
+/* The network an address is on: address AND mask, like the hub's connected route. */
+function simNetworkOf(ip, mask) {
+  const a = ip.split(".").map(Number);
+  const m = (mask || "255.255.255.0").split(".").map(Number);
+  return a.map((x, i) => x & m[i]).join(".");
+}
+
+/* GET /api/network-overview, like codex_webui's render_network_overview_json(). */
+function simNetworkOverview() {
+  const st = simUsbEthState();
+  const lan = st.lanInterface;
+  const route = (destination, gateway, netmask, metric, iface) =>
+    ({ destination, gateway, netmask, flags: gateway === "0.0.0.0" ? "U" : "UG", metric, interface: iface });
+  const routes = [];
+  if (st.ifname && st.ipv4) routes.push(route(simNetworkOf(st.ipv4, st.netmask), "0.0.0.0", st.netmask, 0, st.ifname));
+  // The Wi-Fi subnet route is demoted while the cable carries local traffic.
+  routes.push(route("192.168.1.0", "0.0.0.0", "255.255.255.0", lan === "ath0" ? 0 : 20, "ath0"));
+  for (const [net, mask] of [["192.168.0.0", "255.255.0.0"], ["172.16.0.0", "255.240.0.0"], ["10.0.0.0", "255.0.0.0"]]) {
+    routes.push(route(net, "192.168.1.1", mask, 0, lan));
+  }
+  routes.push(route("224.0.0.0", "0.0.0.0", "240.0.0.0", 0, lan));
+  return {
+    ok: true,
+    available: true,
+    wifi: {
+      interface: "ath0", ip: "192.168.1.50", netmask: "255.255.255.0", mac: "00:04:20:00:00:01", up: true,
+      rxBytes: 18247694, txBytes: 6943236, rxErrors: 0, txErrors: 0,
+      ssid: "Home", state: st.wifiSuspended ? "DISCONNECTED" : "COMPLETED", bssid: "00:11:22:33:44:55",
+      security: "WPA2-PSK", cipher: "CCMP", standard: "802.11ng", frequencyGhz: "2.412", bitRate: "72.2 Mb/s",
+      quality: "82/94", signalDbm: -66, noiseDbm: -95, txPowerDbm: 11, suspended: st.wifiSuspended
+    },
+    wired: st.ifname ? {
+      interface: st.ifname, ip: st.ipv4 || null, netmask: st.netmask, mac: "02:00:00:aa:bb:cc", up: true, carrier: st.carrier,
+      rxBytes: st.rxBytes, txBytes: st.txBytes, rxErrors: 0, txErrors: 0,
+      speedMbps: st.speedMbps, fullDuplex: st.fullDuplex, mode: st.ipMode
+    } : null,
+    routes,
+    dns: st.dns,
+    lanInterface: lan,
+    gateway: "192.168.1.1",
+    cloudBlocker: true
+  };
+}
+
+/* POST /api/usb-eth, like codex_webui's render_usb_eth_set_json(): any of
+   "enabled" and "wifiOff" (top-level true/false) and "ipMode" ("dhcp", or
+   "static" with plain-string "address", "netmask", "gateway", "dns1",
+   "dns2"). Switching to DHCP keeps the static values, for the form. */
 function handleUsbEthSet(res, params) {
   const token = jsonTopToken(params.__raw, "enabled");
-  if (token !== "true" && token !== "false") {
-    sendJson(res, 400, { ok: false, error: 'Send {"enabled": true} or {"enabled": false}.' });
+  const wifiToken = jsonTopToken(params.__raw, "wifiOff");
+  const modeToken = jsonTopToken(params.__raw, "ipMode");
+  const notBool = (t) => t !== null && t !== "true" && t !== "false";
+  if ((token === null && wifiToken === null && modeToken === null) || notBool(token) || notBool(wifiToken) ||
+      (modeToken !== null && modeToken !== '"dhcp"' && modeToken !== '"static"')) {
+    sendJson(res, 400, { ok: false, error: 'Send {"enabled": true|false}, {"wifiOff": true|false} and/or {"ipMode": "dhcp"|"static", ...}.' });
     return;
   }
-  const want = token === "true";
+  let fields = null;
+  if (modeToken === '"static"') {
+    fields = {};
+    for (const key of ["address", "netmask", "gateway", "dns1", "dns2"]) {
+      const raw = jsonTopToken(params.__raw, key);
+      if (raw !== null && (!/^"[^"\\]*"$/.test(raw) || raw.length > 21)) {
+        sendJson(res, 400, { ok: false, error: "Address fields must be plain strings.", field: key });
+        return;
+      }
+      fields[key] = raw === null ? "" : raw.slice(1, -1);
+    }
+    const problem = validateStatic(fields);
+    if (problem) {
+      sendJson(res, 400, { ok: false, error: problem.message, field: problem.field });
+      return;
+    }
+  }
+  const want = token === null ? null : token === "true";
   if (want && !simUsbEthSupported) {
     sendJson(res, 409, {
       ok: false,
@@ -745,10 +875,19 @@ function handleUsbEthSet(res, params) {
     });
     return;
   }
-  simUsbEthEnabled = want;
-  simUsbEthForcedState = null;
-  if (want) simUsbEthEhciBound = true; // Like the hub: stop leaves EHCI registered.
-  logEvent({ kind: "usb-eth", message: `USB Ethernet ${want ? "on" : "off"}` });
+  if (wifiToken !== null) simUsbEthWifiOff = wifiToken === "true";
+  if (fields) {
+    simUsbEthIpMode = "static";
+    simUsbEthStatic = { address: fields.address, netmask: fields.netmask, gateway: fields.gateway, dns: [fields.dns1, fields.dns2].filter(Boolean) };
+  } else if (modeToken === '"dhcp"') {
+    simUsbEthIpMode = "dhcp";
+  }
+  if (want !== null) {
+    simUsbEthEnabled = want;
+    simUsbEthForcedState = null;
+    if (want) simUsbEthEhciBound = true; // Like the hub: stop leaves EHCI registered.
+    logEvent({ kind: "usb-eth", message: `USB Ethernet ${want ? "on" : "off"}` });
+  }
   sendJson(res, 200, simUsbEthState());
 }
 
@@ -1721,7 +1860,7 @@ async function handleApi(req, res, pathname, url) {
       sendJson(res, 200, {
         ok: true, version: "sim", identity: "ready",
         tvs: [...simAndroidTv.tvs.values()].map((tv) => ({
-          id: tv.id, name: tv.name, host: tv.host, mac: "02:00:00:00:00:60", connected: true,
+          id: tv.id, name: tv.name, vendor: "Sim", model: "Sim TV", host: tv.host, mac: "02:00:00:00:00:60", connected: true,
           on: tv.on, volume: 12, volumeMax: 100, muted: false, keysSent: 0, connects: 1, error: ""
         }))
       });
@@ -1837,10 +1976,20 @@ async function handleApi(req, res, pathname, url) {
       else if (params.adapter && typeof params.adapter === "object") simUsbEthAdapter = { ...params.adapter };
       if (params.state === null) simUsbEthForcedState = null;
       else if (typeof params.state === "string") simUsbEthForcedState = { state: params.state, reason: String(params.reason || "") };
+      // How the cable fares: "separate" (on another network than the hub's
+      // gateway: only an extra address), "gatewayLost" (the gateway stopped
+      // answering through it: gateway_unreachable), "wifiNeedsRestart" (the
+      // egress guard predates its Wi-Fi watchdog: Wi-Fi off waits for a restart).
+      if (typeof params.separate === "boolean") simUsbEthSeparate = params.separate;
+      if (typeof params.gatewayLost === "boolean") simUsbEthGatewayLost = params.gatewayLost;
+      if (typeof params.wifiNeedsRestart === "boolean") simUsbEthNeedsRestart = params.wifiNeedsRestart;
       sendJson(res, 200, simUsbEthState());
       return;
     case "GET /api/usb-eth":
       sendJson(res, 200, simUsbEthState());
+      return;
+    case "GET /api/network-overview":
+      sendJson(res, 200, simNetworkOverview());
       return;
     case "POST /api/usb-eth":
       handleUsbEthSet(res, params);
