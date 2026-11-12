@@ -1177,6 +1177,7 @@ static void send_wol(const char *mac) {
 
 static void tv_requeue_power_on(struct tv *t);
 static void tv_release(struct tv *t, long long now);
+static void tv_pop(struct tv *t);
 
 /* Wake-on-LAN, at most once per min_gap ms; then try to connect soon. */
 static void tv_wake(struct tv *t, long long now, long long min_gap) {
@@ -1194,6 +1195,12 @@ static void tv_lost(struct tv *t, const char *why) {
 	t->next_attempt = now_ms() + t->backoff;
 	t->backoff = t->backoff < 30000 ? t->backoff * 2 : 30000;
 	if (!t->unreachable_since) t->unreachable_since = now_ms();
+	/* An input menu cut off part way: the menu may have closed, and the rest
+	 * (Down..., Select) would act on whatever has focus. Drop it. */
+	if (t->qcount && t->q[t->qhead].code == PSEUDO_MENU && t->q[t->qhead].step > 0) {
+		logmsg("TV %s: dropped an input menu cut off at step %d", t->id, t->q[t->qhead].step);
+		tv_pop(t);
+	}
 	/* The TV went away while turning on: one that is still shutting down
 	 * ignores the power key and drops off the network. Try again. */
 	if (t->waking) tv_requeue_power_on(t);
@@ -1346,10 +1353,13 @@ static void tv_enqueue(struct tv *t, const struct cmd *c) {
 	}
 	if (t->qcount == QLEN) {
 		/* Full: drop the oldest command that isn't a power command, which the
-		 * commands behind it may depend on. */
+		 * commands behind it may depend on, nor an input menu part sent
+		 * (which would leave the menu open). */
 		int k = 0;
-		for (int i = 0; i < t->qcount; i++)
-			if (!is_power(t->q[(t->qhead + i) % QLEN].code)) { k = i; break; }
+		for (int i = 0; i < t->qcount; i++) {
+			const struct cmd *q = &t->q[(t->qhead + i) % QLEN];
+			if (!is_power(q->code) && !(q->code == PSEUDO_MENU && q->step > 0)) { k = i; break; }
+		}
 		for (int i = k; i < t->qcount - 1; i++) t->q[(t->qhead + i) % QLEN] = t->q[(t->qhead + i + 1) % QLEN];
 		t->qcount--;
 	}
@@ -1469,7 +1479,12 @@ static void tv_flush(struct tv *t) {
 			if (conn_queue(t->c, &mout) < 0) return;
 			t->keys++;
 			DBG("TV %s: input menu step %d, key %d", t->id, c->step, key);
-			if (++c->step > c->arg) { tv_pop(t); continue; }
+			if (++c->step > c->arg) {
+				/* Done. What waited behind a long menu gets its wait from now. */
+				tv_pop(t);
+				tv_release(t, now);
+				continue;
+			}
 			c->not_before = now + c->gap;
 			c->start = now;
 			return;
@@ -1823,6 +1838,13 @@ static void pair_on_message(void *owner, const unsigned char *d, size_t len) {
 			snprintf(t->host, sizeof t->host, "%s", pair.host);
 			snprintf(t->name, sizeof t->name, "%s", pair.name[0] ? pair.name : "Android TV");
 			sanitize(t->name);
+			if (!existed) {
+				/* A new TV starts on the built-in behaviour: an input profile
+				 * left on disk for this id (its tvs.tsv line lost) isn't its. */
+				char ipath[256];
+				inputs_path(t, ipath, sizeof ipath);
+				unlink(ipath);
+			}
 			/* the TV's certificate names its Bluetooth address: CN=atvremote/<bt> */
 			const char *bt = memmem(pair.c->cap.der, pair.c->cap.der_len, "atvremote/", 10);
 			if (bt && (size_t)(bt + 27 - (const char *)pair.c->cap.der) <= pair.c->cap.der_len) {
@@ -1982,7 +2004,7 @@ static int json_str(const char *body, const char *key, char *out, size_t cap) {
 	return 0;
 }
 
-struct sbuf { char b[4096]; size_t n; };
+struct sbuf { char b[8192]; size_t n; };   /* /status: up to 8 TVs at ~600 bytes each */
 static void sb(struct sbuf *s, const char *fmt, ...) {
 	va_list ap;
 	va_start(ap, fmt);
@@ -2071,6 +2093,15 @@ static void http_handle(int fd) {
 	char *body = strstr(req, "\r\n\r\n");
 	body = body ? body + 4 : req + n;
 	struct sbuf s = { .n = 0 };
+	{
+		/* A body shorter than its Content-Length (too slow, or too big) is
+		 * refused: a profile cut at a line boundary would still parse. */
+		char *cl = strcasestr(req, "\r\nContent-Length:");
+		if (cl && cl < body && (size_t)(req + n - body) < (size_t)strtoul(cl + 17, NULL, 10)) {
+			http_reply(fd, "{\"ok\":false,\"error\":\"The request arrived incomplete.\"}");
+			return;
+		}
+	}
 
 	if (!strcmp(path, "/cmd")) {
 		/* The engine: {"device":"<tv id>","command":"<Name>"}. Always 200, at once. */
@@ -2096,7 +2127,15 @@ static void http_handle(int fd) {
 				/* The TV's input profile says what this input does. */
 				struct slotdef *sd = &t->in->slot[slot];
 				if (t->in->method == IM_NONE) ok = 2;       /* "don't switch inputs": nothing to send */
-				else if (sd->used && input_target(t->in->method, sd->value, sd->uri, t->in->pattern, t->in->gap, &c)) ok = 1;
+				else if (sd->used) ok = input_target(t->in->method, sd->value, sd->uri, t->in->pattern, t->in->gap, &c);
+				else if (slot <= 4) {
+					/* InputHdmi1-4 not in the profile (a button still bound to
+					 * one, say): the built-in behaviour, as with no profile. */
+					c.code = key_lookup(base);
+					ok = c.code > 0;
+				} else {
+					logmsg("TV %s: input slot %d (%s) isn't in its input settings", t->id, slot, base);
+				}
 			} else {
 				c.code = key_lookup(base);
 				ok = c.code > 0;

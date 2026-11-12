@@ -86,11 +86,17 @@ export function tvInputsMarkup({ draft, tv, inUse, stepper, maxInputs }) {
   if (tv.loadError) parts.push(`<p class="ds-note">${escapeHtml(tv.loadError)}</p>`);
   parts.push(`<div class="m-list ds-tv-methods" role="radiogroup" aria-label="How this TV switches inputs">${methodRows(draft, tv, stepper)}</div>`);
   const note = presetNote(draft, draft.preset?.vendor);
-  if (note && draft.method !== "none") parts.push(`<p class="ds-hint ds-tv-note">${escapeHtml(note)}${draft.fromProfile ? "" : " · not saved yet"}</p>`);
+  if (note && draft.method !== "none") parts.push(`<p class="ds-hint ds-tv-note">${escapeHtml(note)}</p>`);
   else if (!draft.fromProfile && draft.method !== "none") {
-    // No brand suggestion: say which manufacturer was looked up, and where it's set.
+    // No brand suggestion: say which manufacturer was looked up, and where
+    // it's set. A TV added before brands were saved at pairing says its own
+    // while it's connected: offer to save that once.
     const brand = tv.base?.vendor ? `“${tv.base.vendor}”` : "this TV";
-    parts.push(`<p class="ds-hint ds-tv-note">No suggested setup for ${escapeHtml(brand)}. The manufacturer is set in the device's Edit details.</p>`);
+    const reported = String(tv.status?.vendor ?? "");
+    const offer = reported && reported.toLowerCase() !== String(tv.base?.vendor ?? "").toLowerCase()
+      ? `<button type="button" class="btn btn-text" data-focus="tv-use-brand" data-tv-act="use-brand">Use “${escapeHtml(`${reported} ${tv.status.model ?? ""}`.trim())}”, as the TV reports</button>`
+      : "";
+    parts.push(`<div class="ds-tv-note"><p class="ds-hint">No suggested setup for ${escapeHtml(brand)}. The manufacturer is set in the device's Edit details.</p>${offer}</div>`);
   }
   if (draft.method === "none") return parts.join("");
   parts.push(`<div class="m-list">${stepper("inputDelay")}</div>`);

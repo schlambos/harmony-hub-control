@@ -16,7 +16,7 @@ import {
 } from "../api.js";
 import * as hub from "../state.js";
 import { confirmDialog, escapeHtml, icon, openMenu, sectionLabel, setAppBar, snackbar, spinner } from "../ui/shell.js";
-import { openCommandPicker, stepperRow } from "./device-sheets.js";
+import { hubChange, openCommandPicker, stepperRow } from "./device-sheets.js";
 import {
   INPUT_DELAY_MAX_MS,
   INPUT_TYPES,
@@ -211,25 +211,35 @@ export function createDeviceSettings({ root, track }) {
 
   /* What the network TV writer gets (names, order, slots, delay) and what
      codex_androidtv gets (the profile). Each is saved only when it changed. */
-  function tvWriterKey() {
-    return JSON.stringify(writerInputs(tv.draft));
+  function tvWriterKey(t = tv) {
+    return JSON.stringify(writerInputs(t.draft));
   }
 
-  function tvProfileKey() {
-    return profileText(tv.draft);
+  function tvProfileKey(t = tv) {
+    return profileText(t.draft);
+  }
+
+  function tvInputsChanged() {
+    return tvWriterKey() !== tv.writerKey || tvProfileKey() !== tv.profileKey;
   }
 
   function evaluate() {
     if (tv) {
       const settings = settingsOf(false);
       const problems = validateDeviceSettings(settings, names);
-      problems.push(...tvInputProblems(tv.draft, { appLinks: tv.status?.connected ? tv.status.appLinks !== false : true }));
-      const kept = tv.draft.method === "none" ? [] : tv.draft.rows.map((r) => r.name.trim());
-      for (const use of inputsInUse(config, deviceId, kept)) {
-        problems.push(`Activity "${use.activity}" switches this TV to ${use.input}; keep that input or change the activity first.`);
+      // The inputs are written only when they changed, so only then do their
+      // problems stop a save (power and timing save on their own).
+      const inputsChanged = tvInputsChanged();
+      if (inputsChanged && tv.loadError) {
+        problems.push("This TV's input settings couldn't be read, so they can't be changed now. Reload the page.");
+      } else if (inputsChanged) {
+        problems.push(...tvInputProblems(tv.draft, { appLinks: tv.status?.connected ? tv.status.appLinks !== false : true }));
+        const kept = tv.draft.method === "none" ? [] : tv.draft.rows.map((r) => r.name.trim());
+        for (const use of inputsInUse(config, deviceId, kept)) {
+          problems.push(`Activity "${use.activity}" switches this TV to ${use.input}; keep that input or change the activity first.`);
+        }
       }
-      const changed = tvWriterKey() !== tv.writerKey || tvProfileKey() !== tv.profileKey ||
-        JSON.stringify(settings) !== initialKey;
+      const changed = inputsChanged || JSON.stringify(settings) !== initialKey;
       return { settings, problems, changed };
     }
     const inputsChanged = inputsKey() !== initialInputsKey;
@@ -421,8 +431,11 @@ export function createDeviceSettings({ root, track }) {
     draft = draftFrom(entry);
     tv = null;
     if (isAndroidTvEntry(entry)) {
-      tv = await loadTv(entry);
+      // Assigned only once this page is still the one shown: a slow load
+      // from a page already left mustn't become the next device's TV.
+      const t = await loadTv(entry);
       if (mine !== shown) return;
+      tv = t;
     }
     initialKey = JSON.stringify(settingsOf(false));
     initialInputsKey = inputsKey();
@@ -453,13 +466,15 @@ export function createDeviceSettings({ root, track }) {
     };
     const t = {
       id, status, presets, base,
+      device: { name: String(entry.Device?.Name ?? ""), type: String(entry.Device?.DeviceTypeDisplayName ?? "") },
       draft: readTvInputs(base),
-      loadError: saved.ok ? "" : `Couldn't read this TV's input settings from the hub (${saved.error.message}). Saving replaces them.`,
+      loadError: saved.ok ? "" : `Couldn't read this TV's input settings from the hub (${saved.error.message}).`,
     };
-    tv = t;
-    t.writerKey = tvWriterKey();
-    // A TV without a saved profile has nothing saved yet: saving writes it.
-    t.profileKey = saved.ok && saved.profile ? tvProfileKey() : "";
+    // What's shown is what counts as saved: the profile, or with none the
+    // hub's built-in behaviour. Only a change to the inputs writes them, so
+    // saving power or timing never turns the built-in behaviour into a profile.
+    t.writerKey = tvWriterKey(t);
+    t.profileKey = tvProfileKey(t);
     return t;
   }
 
@@ -468,8 +483,12 @@ export function createDeviceSettings({ root, track }) {
     const id = tv.id;
     const status = await getAndroidTvStatus().then((r) => (r.tvs ?? []).find((t) => t.id === id) ?? null, () => null);
     if (!tv || tv.id !== id) return;
+    // Redraw only when something shown changed, so polling while the TV
+    // wakes doesn't take the focus from a field being typed in.
+    const shownOf = (s) => JSON.stringify([s?.connected, s?.on, s?.appLinks, s?.mac, s?.vendor, s?.model, Boolean(s)]);
+    const redraw = shownOf(tv.status) !== shownOf(status);
     tv.status = status;
-    render(focus);
+    if (redraw) render(focus);
   }
 
   function hide() {
@@ -494,30 +513,36 @@ export function createDeviceSettings({ root, track }) {
   }
 
   /* A network TV saves in three steps, each only when it changed: its
-     inputs to the network TV writer (which adds the Input<n> commands they
-     need), its profile to codex_androidtv, then power and timing. A step that
-     fails stops the rest; Save again finishes. */
+     profile to codex_androidtv (how each slot switches), its inputs to the
+     network TV writer (which adds the Input<n> commands they need), then
+     power and timing. The profile goes first: slots it lists that the device
+     doesn't use yet are harmless, while device inputs without a profile entry
+     would do nothing. A step that fails stops the rest; Save again finishes. */
   async function saveTv(settings) {
     const id = deviceId;
     const t = tv;
     const parts = [];
-    if (tvWriterKey() !== t.writerKey) {
-      const set = androidTvDeviceSet(config);
-      const mine = set.devices.find((d) => d.entity === t.id);
-      if (!mine) throw new Error("This TV isn't in the hub's network TV list any more.");
-      Object.assign(mine, writerInputs(t.draft));
-      await saveAndroidTvDevices(set);
-      t.writerKey = tvWriterKey();
-      parts.push("inputs");
-    }
     if (tvProfileKey() !== t.profileKey) {
       try {
         await saveTvInputs(t.id, tvProfileKey());
       } catch (error) {
-        throw new Error(`${parts.length ? "The inputs were saved, but not how the TV switches them" : "How the TV switches inputs wasn't saved"}: ${error.message}`);
+        throw new Error(`How the TV switches inputs wasn't saved: ${error.message}`);
       }
       t.profileKey = tvProfileKey();
       parts.push("input switching");
+    }
+    if (tvWriterKey() !== t.writerKey) {
+      const set = androidTvDeviceSet(config);
+      const mine = set.devices.find((d) => d.entity === t.id);
+      try {
+        if (!mine) throw new Error("This TV isn't in the hub's network TV list any more.");
+        Object.assign(mine, writerInputs(t.draft));
+        await saveAndroidTvDevices(set);
+      } catch (error) {
+        throw new Error(`${parts.length ? "How the TV switches inputs was saved, but not the inputs" : "The inputs weren't saved"}: ${error.message}`);
+      }
+      t.writerKey = tvWriterKey();
+      parts.push("inputs");
     }
     if (JSON.stringify(settings) !== initialKey) {
       try {
@@ -701,6 +726,33 @@ export function createDeviceSettings({ root, track }) {
       render("tv-preset");
     } else if (act === "share") {
       track(openShareSheet({ entry: shareEntry(d, tv.base.vendor, tv.base.model) }));
+    } else if (act === "use-brand") {
+      // A TV added before brands were saved at pairing: save what it reports
+      // as the device's manufacturer and model, once, as Edit details would.
+      const t = tv;
+      const vendor = String(t.status?.vendor ?? "");
+      const model = String(t.status?.model ?? "") || t.base.model;
+      if (!vendor) return;
+      try {
+        await hubChange("/ir/device", { deviceId, name: t.device.name, manufacturer: vendor, model, type: t.device.type }, () => {
+          const d = hub.deviceById(deviceId)?.entry?.Device;
+          return Boolean(d) && d.Manufacturer === vendor && d.Model === model;
+        });
+      } catch (error) {
+        snackbar(error.message, { error: true });
+        return;
+      }
+      if (tv !== t) return;
+      const untouched = !tvInputsChanged();
+      Object.assign(t.base, { vendor, model });
+      if (untouched && !t.base.profile) {
+        // Still the hub's built-in behaviour: show it as the brand's suggestion.
+        t.draft = readTvInputs(t.base);
+        t.writerKey = tvWriterKey(t);
+        t.profileKey = tvProfileKey(t);
+      }
+      snackbar(`Saved ${vendor} as the manufacturer`);
+      render("tv-preset");
     } else if (act === "refresh") {
       refreshTvStatus("tv-refresh");
     } else if (act === "power-on") {

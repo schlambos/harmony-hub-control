@@ -2010,7 +2010,11 @@ async function handleApi(req, res, pathname, url) {
     }
     case "POST /api/androidtv/inputs": {
       const id = String(params.device ?? "");
-      const text = String(params.profile ?? "");
+      if (typeof params.profile !== "string") {
+        sendError(res, 400, "profile (the input settings as text, or \"\" for the built-in behaviour) is required");
+        return;
+      }
+      const text = params.profile;
       if (!simAndroidTv.tvs.has(id)) {
         sendJson(res, 200, { ok: false, error: "No such TV." });
         return;

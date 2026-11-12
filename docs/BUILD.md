@@ -20,12 +20,12 @@ exact SHA-256 digests and sizes are:
 
 | Binary | Size | SHA-256 |
 | --- | --- | --- |
-| `codex_webui` | 1349864 | `1969517860189e396b1a53877f8608a35ba0d7068aadfb7c68de8cc0d4c22384` |
+| `codex_webui` | 1351656 | `1d9a6d39bfc735830d8381869e0b1f9faf3efa23b3820ef3a568487ecc89b310` |
 | `codex_dhcpd` | 31464 | `749161a5cd140cb72a73619c61d77c4beeb4a71f31ca87810ead4575b8f1ce81` |
 | `codex_portal` | 48680 | `4cf21f469d3ff4ef0c37b00bc40d14e1a143713d3777b7bd7e19c4b2ff0b4c33` |
 | `dropbearmulti` | 577296 | `e2ea632aed8b31dc5ea56b9673cbd983ec83260a97d33f891a0cebf51d5c6c8d` |
 | `codex_hbus` | 47160 | `5d649e9455c93badf6843b7f973d526ac2be7313465525ca81f5b24b85ff8b74` |
-| `codex_androidtv` | 232824 | `9a1423cf63ce3b56d7ee624e118d0ac8c62a2a670209baf16807e2fbf6f95817` |
+| `codex_androidtv` | 233496 | `dffdef43d59404c796f11024277a27b14805d189bb4c36916965c481e4b84e47` |
 | `codex_usbeth` | 57736 | `f45949f5cab0fdbda3394e8024d8b5bda8d706c502a43b7d6e1e04ae23c81a90` |
 | `busybox-extra` | 418688 | `f516bde18556bfe4c63731f882bc06d02beed1f61dff92898fd9cd9773e6a3bc` |
 
@@ -97,8 +97,8 @@ Both regenerators reproduce the committed headers byte-for-byte.
 
 Pinned source blobs:
 
-- `payload/source/codex_webui.c` — `fe7491bd2db95d22fefa6d1f5bd1a247bc9e2ba3`
-- `payload/source/harmony_shell_assets.h` — `bcfd261e40c336d17ba4280ddb50ffc5c1315b9c`
+- `payload/source/codex_webui.c` — `255735f5468c206a2603c3f59c249f96895e100c`
+- `payload/source/harmony_shell_assets.h` — `de543ca13f608e842be656efe6781470f485008d`
 - `payload/source/activity_ui_assets.h` — `c64ccf038c79160a0995f3e4ec322c47130e2ca9`
 - `payload/source/remote_skin_jpg.h` — `419611c5ff0713f1f5de2dd684d699f6d77238d5`
 
@@ -110,8 +110,8 @@ Pinned source blobs:
 ```
 
 Result must be `ELF 32-bit MSB executable, MIPS, MIPS32 rel2, statically
-linked, stripped`, size 1349864, SHA-256
-`1969517860189e396b1a53877f8608a35ba0d7068aadfb7c68de8cc0d4c22384`.
+linked, stripped`, size 1351656, SHA-256
+`1d9a6d39bfc735830d8381869e0b1f9faf3efa23b3820ef3a568487ecc89b310`.
 
 To compare against a Homebrew-built box binary, compare what loads: the
 `.comment` compiler stamp differs, and box binaries still carry `.pdr`
@@ -162,9 +162,9 @@ cd build/tmp
 ```
 
 Result must be `ELF 32-bit MSB executable, MIPS, MIPS32 rel2`, statically
-linked, stripped, size 232824, SHA-256
-`9a1423cf63ce3b56d7ee624e118d0ac8c62a2a670209baf16807e2fbf6f95817`
-(`payload/source/codex_androidtv.c` blob `0a16343ec959eb7dcfca5ebb740aaa6a8dbbb3c2`).
+linked, stripped, size 233496, SHA-256
+`dffdef43d59404c796f11024277a27b14805d189bb4c36916965c481e4b84e47`
+(`payload/source/codex_androidtv.c` blob `1be29e776d4384a5fd6ca5a98e06325b7812a1da`).
 The output doesn't depend on where the tree or BearSSL is unpacked. For the
 fake-TV smoke test, build the same way with `-target x86_64-linux-musl` (or
 your host) into `build/output/codex_androidtv-native`.

@@ -126,6 +126,9 @@ export function readPresets(json) {
       model: typeof raw.model === "string" ? raw.model : "",
       method,
       pattern: pattern ? pattern.id : "",
+      // A suggestion built on an untested pattern is offered, never applied
+      // on its own when a TV is added.
+      untestedPattern: Boolean(pattern?.untested),
       gapMs: Number.isInteger(gap) && gap >= MENU_GAP_LIMITS[0] && gap <= MENU_GAP_LIMITS[1] ? gap : MENU_GAP_MS,
       inputs,
       checked: raw.checked && typeof raw.checked === "object"
@@ -239,12 +242,12 @@ export function readTvInputs({ entryInputs, delayMs = 0, profile, presets, vendo
     draft.gapMs = preset.gapMs;
     const byName = new Map(preset.inputs.map((i) => [i.name.toLowerCase(), i.value]));
     const presetRows = rowsFromPreset(preset);
-    draft.rows = (entryInputs ?? []).map((input) => {
+    draft.rows = slotted((entryInputs ?? []).map((input) => {
       const slot = slotOf(input.command);
       const fromName = byName.get(String(input.name).toLowerCase());
-      const fromSlot = presetRows.find((r) => r.slot === slot)?.value;
-      return { name: input.name, slot, value: fromName ?? fromSlot ?? "", status: "untested", date: "" };
-    }).filter((r) => r.slot);
+      const fromSlot = slot ? presetRows.find((r) => r.slot === slot)?.value : undefined;
+      return { name: input.name, slot, value: slot ? fromName ?? fromSlot ?? "" : "", status: "untested", date: "", was: slot ? "" : input.command };
+    }));
     return draft;
   }
   draft.method = entryInputs === null ? "none" : profile.method;
@@ -252,12 +255,24 @@ export function readTvInputs({ entryInputs, delayMs = 0, profile, presets, vendo
   if (profile.method === "link") {
     draft.pattern = profile.pattern ? draft.patterns.find((p) => p.uri === profile.pattern)?.id ?? CUSTOM_LINKS : CUSTOM_LINKS;
   }
-  draft.rows = (entryInputs ?? []).map((input) => {
+  draft.rows = slotted((entryInputs ?? []).map((input) => {
     const slot = slotOf(input.command);
-    const saved = profile.slots.get(slot);
-    return { name: input.name, slot, value: saved?.value ?? "", status: saved?.status ?? "untested", date: saved?.date ?? "" };
-  }).filter((r) => r.slot);
+    const saved = slot ? profile.slots.get(slot) : null;
+    return { name: input.name, slot, value: saved?.value ?? "", status: saved?.status ?? "untested", date: saved?.date ?? "", was: slot ? "" : input.command };
+  }));
   return draft;
+}
+
+/* Inputs set up before slots (the generic editor could point one at any
+   command, such as Home): each gets the lowest free slot, with nothing to open
+   yet and `was` naming its old command, instead of vanishing from the page.
+   Nothing changes on the hub until the inputs are saved. */
+function slotted(rows) {
+  for (const row of rows) {
+    if (row.slot) continue;
+    row.slot = freeSlot(rows.filter((r) => r.slot)) ?? null;
+  }
+  return rows.filter((r) => r.slot);
 }
 
 /* A new row: the lowest free slot, nothing to open yet. */
@@ -414,6 +429,7 @@ export function targetOptions(draft) {
 }
 
 export function statusLabel(row) {
+  if (row.was && (row.value === "" || row.value === null || row.value === undefined)) return `Was the ${row.was} command · choose what it opens`;
   if (row.status === "works") return row.date ? `Works · ${shortDate(row.date)}` : "Works";
   if (row.status === "failed") return "Didn't work";
   return "Untested";
@@ -511,8 +527,11 @@ export function finderAnswer(state, draft, answer) {
   const next = { ...state, found: [...state.found], added: [...state.added], index: state.index + 1 };
   if (answer.kind === "nothing") next.nothingInARow += 1;
   else next.nothingInARow = 0;
-  if (answer.kind === "input") next.found.push({ name: answer.name, value });
-  if (answer.kind === "new" && String(answer.name ?? "").trim()) next.added.push({ name: String(answer.name).trim(), value });
+  // A typed name that is already an input counts as that input.
+  const typed = answer.kind === "new" ? String(answer.name ?? "").trim() : "";
+  const existing = typed ? draft.rows.find((r) => String(r.name).trim().toLowerCase() === typed.toLowerCase()) : null;
+  if (answer.kind === "input" || existing) next.found.push({ name: existing ? existing.name : answer.name, value });
+  else if (typed) next.added.push({ name: typed, value });
   const named = new Set([...next.found, ...next.added].map((f) => f.name.toLowerCase()));
   const allFound = draft.rows.length > 0 && draft.rows.every((r) => named.has(String(r.name).toLowerCase()));
   next.done = allFound || next.index >= next.candidates.length || next.nothingInARow >= FINDER_GIVE_UP;

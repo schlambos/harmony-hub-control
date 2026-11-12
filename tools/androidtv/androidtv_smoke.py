@@ -17,7 +17,9 @@ long as it does; a TV that drops off while turning on gets the power key again; 
 forgetting the TV removes it. Input profiles: a bad one is refused whole; links from a
 pattern or whole links, keys as they are (no vendor link), the input menu key by key with
 its gap, and "don't switch" each work through the engine's input commands, including
-Input5 and up; the profile survives a restart; Try sends Home, then the input 1.5 s later,
+Input5 and up; InputHdmi1-4 left out of a profile keep the built-in behaviour; a menu cut
+off by a disconnect is dropped; a body shorter than its Content-Length is refused; the
+profile survives a restart; Try sends Home, then the input 1.5 s later,
 and refuses targets that don't hold, a TV that is off, and links to a TV without app links;
 an empty profile goes back to built-in; forgetting the TV removes its profile.
 
@@ -29,6 +31,7 @@ import argparse
 import json
 import os
 import shutil
+import socket
 import subprocess
 import sys
 import tempfile
@@ -549,7 +552,7 @@ def main() -> int:
         assert not os.path.exists(profile_path)
         assert call(args.port, "/status")["tvs"][0]["inputs"] == "builtin"
 
-        # Links from a pattern, on a TV that isn't a Hisense; slot 7 is Input7.
+        # Links from a pattern; slot 7 is Input7.
         fake_pattern = "content://android.media.tv/passthrough/fake%2FHW{n}"
         prof = (f"method\tlink\npattern\t{fake_pattern}\n"
                 "slot\t1\t2\tworks\t2026-11-12\nslot\t7\t9\tuntested\t-\n")
@@ -561,10 +564,12 @@ def main() -> int:
         fake.wait_for("app_link", since=mark, link=fake_pattern.replace("{n}", "2"))
         cmd("Input7")
         fake.wait_for("app_link", since=mark, link=fake_pattern.replace("{n}", "9"))
-        assert cmd("InputHdmi2")["ok"] is False, "a slot the profile doesn't set was sent"
+        assert cmd("Input8")["ok"] is False, "a slot the profile doesn't set was sent"
         assert cmd("Input33")["ok"] is False
-        time.sleep(0.5)
-        assert fake.count("key", since=mark, code=244) == 0, "an unset slot fell back to the HDMI key"
+        # InputHdmi2 isn't in the profile: the built-in behaviour (the fake
+        # TV says it's a Hisense here: HDMI 2's input link).
+        assert cmd("InputHdmi2")["ok"] is True
+        fake.wait_for("app_link", since=mark, link=hisense + "3")
         # A long press opens the link once, on the press.
         mark = len(fake.events)
         cmd("InputHdmi1:start")
@@ -598,6 +603,19 @@ def main() -> int:
         cmd("Input5")
         fake.wait_for("key", since=mark, code=170)
         assert fake.count("app_link", since=mark) == 0, "a profile key became a vendor input link"
+        # InputHdmi1-4 left out of a profile keep the built-in behaviour (a
+        # button may still be bound to one); Input5 and up have nothing.
+        mark = len(fake.events)
+        assert cmd("InputHdmi2")["ok"] is True
+        fake.wait_for("app_link", since=mark, link=hisense + "3")
+        assert cmd("Input6")["ok"] is False
+
+        # A body shorter than its Content-Length is refused, not parsed.
+        with socket.create_connection(("127.0.0.1", args.port), timeout=5) as so:
+            so.sendall(f"POST /inputs?device={tv} HTTP/1.0\r\nContent-Length: 200\r\n\r\nmethod\tnone\n".encode())
+            reply = so.recv(4096).decode()
+        assert "incomplete" in reply, reply
+        assert call(args.port, f"/inputs?device={tv}")["profile"] == prof
 
         # The input menu: InputNext, Down to the position, Select, a gap apart.
         prof = "method\tmenu\ngap\t300\nslot\t1\t1\tuntested\t-\nslot\t2\t3\tuntested\t-\n"
@@ -613,6 +631,22 @@ def main() -> int:
         cmd("InputHdmi1")
         fake.wait_for("key", since=mark, timeout=10, code=23)
         assert [e["code"] for e in fake.events[mark:] if e.get("event") == "key"] == [178, 23]
+
+        # An input menu cut off by the TV dropping is dropped, not finished
+        # after the reconnect (Down/Select with no menu open would act on
+        # whatever has focus).
+        assert post_text(f"/inputs?device={tv}", "method\tmenu\ngap\t1500\nslot\t2\t3\tuntested\t-\n")["ok"]
+        mark = len(fake.events)
+        cmd("InputHdmi2")
+        fake.wait_for("key", since=mark, code=178)
+        set_mode("vendor=Hisense offline")
+        end = time.time() + 5
+        while call(args.port, "/status")["tvs"][0]["connected"] and time.time() < end:
+            time.sleep(0.05)
+        set_mode("vendor=Hisense")
+        wait_on()
+        time.sleep(2)
+        assert [e["code"] for e in fake.events[mark:] if e.get("event") == "key"] == [178], fake.events[mark:]
 
         # "Don't switch inputs": an input command is taken and sends nothing.
         assert post_text(f"/inputs?device={tv}", "method\tnone\n")["ok"]

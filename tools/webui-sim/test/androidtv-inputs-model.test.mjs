@@ -25,6 +25,7 @@ import {
   shareEntry,
   slotCommand,
   slotOf,
+  statusLabel,
   targetLabel,
   tryRequest,
   tvInputProblems,
@@ -73,6 +74,11 @@ describe("the presets file", () => {
     assert.equal(PRESETS.fallback.method, "keys");
     assert.deepEqual(PRESETS.fallback.inputs.map((i) => i.value), [243, 244, 245, 246]);
     assert.ok(PRESETS.patterns.filter((p) => p.id !== "hisense-hw").every((p) => p.untested));
+    assert.equal(hisense.untestedPattern, false);
+    // A preset on an untested pattern says so (it's never applied on its own).
+    const t = readPresets({ version: 1, patterns: [{ id: "x", uri: "content://a/HW{n}", untested: true }],
+      presets: [{ vendor: "X", method: "link", pattern: "x", inputs: [{ name: "HDMI 1", n: 1 }] }] });
+    assert.equal(t.presets[0].untestedPattern, true);
   });
   it("leaves out entries that don't hold, and treats a broken file as none", () => {
     const got = readPresets({
@@ -138,6 +144,20 @@ describe("the draft", () => {
     const other = readTvInputs({ entryInputs: HDMI, profile: null, presets: PRESETS, vendor: "Sony" });
     assert.equal(other.method, "keys");
     assert.deepEqual(other.rows.map((r) => r.value), [243, 244, 245, 246]);
+    // A TV added before brands were saved is "Android TV": no suggestion, so
+    // the default (the page writes nothing until the inputs are changed).
+    assert.equal(readTvInputs({ entryInputs: HDMI, profile: null, presets: PRESETS, vendor: "Android TV" }).method, "keys");
+  });
+  it("gives inputs set up with other commands a free slot, nothing to open and their old command, instead of dropping them", () => {
+    const old = [{ name: "Shield", command: "InputHdmi1" }, { name: "Cable", command: "Home" }, { name: "Game", command: "InputHdmi2" }];
+    const d = readTvInputs({ entryInputs: old, profile: null, presets: PRESETS, vendor: "Hisense" });
+    assert.deepEqual(d.rows.map((r) => [r.name, r.slot, r.value, r.was]), [["Shield", 1, 2, ""], ["Cable", 3, "", "Home"], ["Game", 2, 3, ""]]);
+    assert.equal(statusLabel(d.rows[1]), "Was the Home command · choose what it opens");
+    assert.ok(tvInputProblems(d).includes("Choose what Cable opens."));
+    assert.deepEqual(writerInputs(d).inputs.map((i) => i.command), ["InputHdmi1", "InputHdmi3", "InputHdmi2"]);
+    const saved = parseProfile("method\tkeys\nslot\t1\t243\tworks\t2026-11-12\n");
+    const p = readTvInputs({ entryInputs: old, profile: saved, presets: PRESETS, vendor: "Hisense" });
+    assert.deepEqual(p.rows.map((r) => [r.name, r.slot, r.value]), [["Shield", 1, 243], ["Cable", 3, ""], ["Game", 2, ""]]);
   });
   it("reads renamed inputs by slot, and a device without inputs as don't switch", () => {
     const renamed = [{ name: "Shield", command: "InputHdmi1" }, { name: "Xbox", command: "InputHdmi3" }];
@@ -287,6 +307,16 @@ describe("Find my inputs", () => {
     assert.deepEqual(d.rows.map((r) => [r.name, r.value, r.status]),
       [["HDMI 1", 2, "works"], ["HDMI 2", "", "untested"], ["Xbox", 3, "works"]]);
     assert.ok(tvInputProblems(d).includes("Choose what HDMI 2 opens."));
+  });
+  it("takes a typed name that is already an input as that input", () => {
+    const d = readTvInputs({ entryInputs: HDMI.slice(0, 2), profile: null, presets: PRESETS, vendor: "Hisense" });
+    let s = finderStart(d);
+    s = finderAnswer(s, d, { kind: "nothing" });                   // No. 1
+    s = finderAnswer(s, d, { kind: "new", name: " hdmi 2 " });     // No. 2, typed
+    assert.deepEqual(s.found, [{ name: "HDMI 2", value: 2 }]);
+    assert.deepEqual(s.added, []);
+    finderApply(d, s, "2026-11-12");
+    assert.deepEqual(d.rows.map((r) => [r.name, r.value, r.status]), [["HDMI 1", "", "untested"], ["HDMI 2", 2, "works"]]);
   });
   it(`gives up after ${FINDER_GIVE_UP} "nothing changed" answers in a row`, () => {
     const d = readTvInputs({ entryInputs: HDMI, profile: null, presets: PRESETS, vendor: "Hisense" });

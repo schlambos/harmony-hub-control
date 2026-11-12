@@ -66,7 +66,7 @@ async function applyTvInputPreset(tvId, manufacturer, model) {
     if (!tv || tv.inputs !== "builtin") return;
     const hdmi = [1, 2, 3, 4].map((n) => ({ name: `HDMI ${n}`, command: slotCommand(n) }));
     const draft = readTvInputs({ entryInputs: hdmi, profile: null, presets, vendor: manufacturer, model });
-    if (!draft.preset?.vendor) return;
+    if (!draft.preset?.vendor || draft.preset.untestedPattern) return;
     applyPreset(draft);
     if (JSON.stringify(writerInputs(draft).inputs) !== JSON.stringify(hdmi)) return;
     if (tvInputProblems(draft, { appLinks: !tv.connected || tv.appLinks !== false }).length) return;

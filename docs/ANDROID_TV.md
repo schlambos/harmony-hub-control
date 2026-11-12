@@ -93,8 +93,12 @@ asks:
   brand. **Share this setup** shows yours as an entry for the presets file, to
   paste into an issue so others with that TV can start from it.
 
-Nothing is saved until **Save**, which writes the inputs to the device and how
-the TV switches them to codex_androidtv.
+Nothing is saved until **Save**, which writes how the TV switches inputs to
+codex_androidtv, then the inputs to the device, and only when the inputs part
+changed: saving power or timing alone leaves a TV with nothing saved on the
+hub's built-in behaviour. Inputs set up before this with other commands (such
+as Home) are listed with the next free input command and "Was the Home
+command"; choose what each opens before saving the inputs.
 
 ### Suggestions by brand
 
@@ -104,7 +108,8 @@ device's manufacturer and model (filled in from what the TV reports when it is
 added: the hub's log says `TV <id> is a <vendor> <model>`, and
 `/api/androidtv/status` shows it while the TV is connected). A TV added before
 this, saved as "Android TV", gets a suggestion once **Edit details** sets its
-manufacturer. Changing or adding a brand is a change to
+manufacturer; while it's connected, Settings offers to save the brand it
+reports with one tap. Changing or adding a brand is a change to
 that one file; nothing is rebuilt. A new TV gets its brand's suggestion when it
 is added, and the device page says "Inputs not checked yet" until its inputs
 are saved from Settings.
@@ -121,13 +126,15 @@ are saved from Settings.
 ```
 
 - `patterns`: link patterns with `{n}` once. `untested: true` marks one nobody
-  has confirmed yet; the page says so, and no preset applies it on its own.
+  has confirmed yet: it's in the page's list, and a preset that uses it is
+  offered in Settings but never applied on its own when a TV is added.
 - `presets`: matched by vendor (a case-insensitive prefix), then `model` when
   given; the first match wins, else `default`. `method` is `link`, `keys`,
   `menu` or `none`. Each input has a `name` and `n` (a pattern number), `link`
   (a whole link, for link without a pattern), `key` (a key code) or
   `position` (a place in the input menu, with `gapMs` on the preset).
-- `checked`: on which model, when, and which inputs someone confirmed.
+- `checked`: on which model, when, and which inputs someone confirmed (kept
+  for whoever maintains the file; the page doesn't show it).
 
 The page checks the file and leaves out entries that don't hold, so a mistake
 in it can't break Settings; a missing file means no suggestions (the HDMI keys).

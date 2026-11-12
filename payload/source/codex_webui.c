@@ -3566,7 +3566,13 @@ static void render_androidtv_inputs_set(int fd, const struct request *req) {
         send_androidtv_error(fd, "503 Service Unavailable", "out of memory");
         return;
     }
-    json_string(req->body, "profile", profile, ANDROIDTV_PROFILE_MAX + 2);
+    /* "profile":"" is the one way back to the built-in behaviour: a request
+       without the key is refused, not taken as a reset. */
+    if (!json_string(req->body, "profile", profile, ANDROIDTV_PROFILE_MAX + 2)) {
+        free(profile);
+        send_androidtv_error(fd, "400 Bad Request", "profile (the input settings as text, or \"\" for the built-in behaviour) is required");
+        return;
+    }
     if (strlen(profile) > ANDROIDTV_PROFILE_MAX) {
         free(profile);
         send_androidtv_error(fd, "413 Payload Too Large", "the input settings are too long");
