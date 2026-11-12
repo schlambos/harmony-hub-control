@@ -34,14 +34,14 @@ function activity(id, name, order) {
   };
 }
 
-function map(mapId, activityId, surface, buttonId, actionId = 0) {
+function map(mapId, activityId, surface, buttonId, actionId = 0, prefix = `skin${surface}`) {
   return {
     "ButtonMapId-": mapId,
     "ActivityId-": activityId,
     "RemoteId-": 10,
     "SurfaceId-": surface,
     "ButtonMapSurfaceId-": surface,
-    ButtonMapIdentifier: `skinActivity${activityId}`,
+    ButtonMapIdentifier: `${prefix}Activity${activityId}`,
     __type: "ActivityButtonMap",
     Buttons: [{
       ButtonId: buttonId,
@@ -423,7 +423,6 @@ validateGraph();
 
   const survivingId = state.config.activityList.Activities[0]["Id-"];
   const probeMap = map(1400, survivingId, 40, 5400, 0);
-  probeMap.ButtonMapIdentifier = `skinActivity${survivingId}`;
   probeMap.Buttons[0].MenuItem.MenuName = `Activity.${survivingId}`;
   state.config.mapList.ButtonMaps.push(probeMap);
   validateGraph();
@@ -469,6 +468,46 @@ validateGraph();
   );
   rootVictim.ButtonAction = rootAction;
   rootVictim.ButtonLongPressAction = rootLong;
+  validateGraph();
+}
+
+// --- Issue #86: remote-prefix map identity & Root surface fallback ---
+{
+  const survivingId = state.config.activityList.Activities[0]["Id-"];
+  // Companion map sharing the Smart Control's RemoteId-/SurfaceId-/ButtonMapSurfaceId-
+  // (#79 / #86): distinct EquadID prefixes must not collide as duplicate surfaces.
+  const smartMap = state.config.mapList.ButtonMaps.find(
+    (entry) => String(entry["ActivityId-"]) === String(survivingId) && entry["SurfaceId-"] === 20
+  );
+  const companionShared = cloneMapForActivity(smartMap, survivingId, survivingId, true);
+  companionShared.ButtonMapIdentifier = `16422Activity${survivingId}`;
+  state.config.mapList.ButtonMaps.push(companionShared);
+  validateGraph();
+
+  // Duplicate ButtonMapIdentifier is rejected (hub loader overwrites earlier map).
+  const dupIdentifier = cloneMapForActivity(smartMap, survivingId, survivingId, true);
+  dupIdentifier.ButtonMapIdentifier = `16422Activity${survivingId}`;
+  dupIdentifier["SurfaceId-"] = 999;
+  dupIdentifier["ButtonMapSurfaceId-"] = 999;
+  state.config.mapList.ButtonMaps.push(dupIdentifier);
+  assert.throws(
+    () => validateGraph(),
+    /has more than one button map for remote surface 16422\|ActivityButtonMap|Button map identifier 16422Activity.*is duplicated/,
+    "two maps with the same EquadID prefix / ButtonMapIdentifier are rejected"
+  );
+  state.config.mapList.ButtonMaps.pop();
+
+  // Null surface ids on an activity map with a valid <EquadID>Activity<id>
+  // identifier are backfilled from Root during reconcile and never block validateGraph.
+  companionShared["RemoteId-"] = null;
+  companionShared["SurfaceId-"] = null;
+  companionShared["ButtonMapSurfaceId-"] = null;
+  validateGraph();
+  const backfill = reconcileActivityMaps();
+  assert.equal(companionShared["RemoteId-"], 10, "RemoteId- backfilled from root/existing map");
+  assert.equal(companionShared["SurfaceId-"], 20, "SurfaceId- backfilled from root/existing map");
+  assert.equal(companionShared["ButtonMapSurfaceId-"], 20, "ButtonMapSurfaceId- backfilled from root/existing map");
+  assert.ok(backfill.repairedIdentifiers.includes(companionShared));
   validateGraph();
 }
 
