@@ -13,6 +13,12 @@ source in this setup — unplugging USB is a power-cycle).
 Timings and hashes quoted are from that run; treat them as expectations,
 not guarantees.
 
+The chain has since been repeated on four more hubs: three skin 97 units
+with 32 MB of RAM and one skin 106 unit with 64 MB, starting from firmware
+4.12.36, 4.15.290 and 4.15.600, all on a Linux host. All four ended rooted
+on Melodious. What they added is in "USB on Linux, and the rules that
+keep the link alive" below and in notes on the individual steps.
+
 
 ## Provenance
 
@@ -47,6 +53,28 @@ Until that lands, this runbook is the procedure.
   to go back to 4.15.330.
 - Everything after the reset is reversible by resetting again.
 
+## USB on Linux, and the rules that keep the link alive
+
+- **Linux needs the `hidapi` backend.** The kernel's HID core ignores
+  Logitech's Harmony product-ID range (it includes the hub's `046d:c129`),
+  so the hub enumerates but never gets a `/dev/hidraw*` node. Install
+  `requirements-usb.txt` into a venv and pass `--usb-backend hidapi`
+  (libusb) to every USB action.
+- **Let the hub settle about 5 minutes after any plug-in or reboot** before
+  the first USB call. Calls made a minute or so after plug-in got "write
+  returned no bytes" and kept failing.
+- **Make the first call `--action usb-preflight`** (a raw file read). Only
+  after it answers, use hbus calls (sysinfo, Wi-Fi, reset, `lan-root`).
+- **The wedge:** an hbus call that comes back with `LTCP hbus error frame
+  FF 08 FF 01 01` left the link dead on two hubs: every write then
+  "returned no bytes", and re-authorizing the device in sysfs didn't help.
+  A USB device-control reboot can't be delivered in that state; **only a
+  power-cycle (replug) recovered it.** Then settle and preflight again.
+- **Once the hub is on Wi-Fi, prefer the LAN.** Read the firmware version
+  from `connect.discoveryinfo?get`. Reboot a provisioned hub with the
+  WebSocket's `setup.firmware?reboot`, which never disturbed USB. A USB
+  device-control reboot right after provisioning wedged USB once.
+
 ## Step 0 — Identify the hub and capture what the reset will destroy
 
 Read-only over USB:
@@ -58,13 +86,29 @@ python3 run_harmony_hub_tool.py --action usb-hub-id        # provisioned hub ID,
 python3 run_harmony_hub_tool.py --action usb-wifi-status
 ```
 
+`usb-sysinfo` reads only the radio file. For the hub itself, the hbus
+call `connect.sysinfo?get` over USB works before root and before Wi-Fi.
+It reports `ram_size` (`"32MB"` or `"64MB"`), `skin` (`0x61` = 97,
+`0x6a` = 106), `fw_ver`, `hw_ver` and `bt_addr` (the label's MAC):
+
+```sh
+python3 -c 'import harmony_usb_bridge as b; print(b.UsbHbusTransport(b.parse_args(["--backend","hidapi"])).call("connect.sysinfo?get", {}, 10))'
+```
+
+The radio's `Devices` list tells you what remote is paired (`EquadID`:
+16414 Smart Control, 16417 a remote with a screen, 16420 keyboard,
+16422/16423 Companion), and `connect.discoveryinfo?get` gives the hub's
+`friendlyName`. Note both before the reset if you care which retail kit a
+hub came from.
+
 Photograph the underside label (model, serial). If the hub is on a LAN,
 the current firmware and provisioning state are visible via
 `connect.discoveryinfo?get` / `setup.account?getProvisionInfo` on 8088
 (and, once you know the hub ID, the config resources `DeviceList`,
 `ActivityList`, `MapList` over the WebSocket). Save any capture outside
 this repo if it contains the previous owner's email/account ID; mask
-those in anything shared.
+those in anything shared. One WebSocket call returns the whole
+configuration: `vnd.logitech.harmony/vnd.logitech.harmony.engine?config`.
 
 **Firmware gate: the hub must end this step on 4.15.600.** The hal
 patches and this chain are pinned to it. If it already is, skip Step 1.
@@ -96,8 +140,18 @@ bundle's RSA `sdigest` itself; these are unmodified Logitech images.
    python3 run_harmony_hub_tool.py --action usb-flash-firmware --firmware-file 4.15.600.2987731.hfw2
    ```
 
-   Type `YES` at the prompt. Agree a stall timeout before starting
+   Type `YES` at the prompt (or pass `--yes` when scripting; without a
+   terminal the prompt fails with "EOF when reading a line" before
+   anything is written). Agree a stall timeout before starting
    (we used 15 minutes); do not interrupt a flash that is merely slow.
+
+   **A `'u'` checksum result is normal.** On both later hubs we flashed
+   (from 4.12.36 and from 4.15.290), the checksum step returned
+   `0x75/'u'` rather than `'m'`. The tool then skips its own USB commit,
+   as the bundle's XML says to, and hands off to the boot updater
+   (`resultMode: bootUpdaterHandoff`, `committed: false`). The hub rebooted
+   by itself and reported 4.15.600 about 90 seconds later. Judge the flash
+   by the version after the reboot, not by `committed`.
 4. **Verify.** After the reboot, `connect.discoveryinfo?get` must report
    `current_fw_version` **4.15.600**. In our run the update preserved
    provisioning, Wi-Fi, the RF pairing and all config resources
@@ -125,6 +179,11 @@ the data and cache partitions.
   took it down.
 - The hub then stayed absent from USB, still fast-blinking, past a
   10-minute watch. That is longer than the erase can plausibly take.
+- **This is the normal path, not a one-off.** All four later hubs did the
+  same: `/sys/reboot` left them up, the device-control reboot took them
+  down, and they never came back by themselves (Linux logs `device
+  descriptor read/64, error -71` for the port). Plan to power-cycle as soon
+  as the hub drops off USB.
 - **Recovery (worked first try): power-cycle = pull the USB cable**,
   wait 15 seconds, plug it back in. USB re-enumerated at **+9.6 s** and
   stayed stable. Do not pull power *while* a flash (Step 1) might be
@@ -173,6 +232,15 @@ The gate that does open pre-provisioning is hal's own `/tde/enable`:
 - Correct write → read-back `"1"`, `/etc/tdeenable` created,
   `connect.jsonfiletransfer` goes 594 → 200. Root file staging is now
   possible.
+- **The marker file can be empty.** On one later hub the gate opened
+  (read-back `"1"`, file API 200) but `/etc/tdeenable` read back as 598
+  "Empty file". `lan-root`'s TDE pre-check reads that file and wants a
+  `1`, so it stopped with "TDE gate failed". The fix, once the hub is
+  provisioned (Step 5): over the WebSocket,
+  `connect.jsonfiletransfer?put`
+  `{"path":"../../etc","file":"tdeenable","content":1}`. It answers 500,
+  but the file then reads `1`. Writing it this way before every `lan-root`
+  let the other three hubs run straight through.
 
 ## Step 5 — Provision locally (no cloud)
 
@@ -219,14 +287,19 @@ resource and index together, or the JSON file API): an object with
 `enableXMPP` set and empty devices/scenes/maps/programs/groups is
 enough to satisfy the verifier.
 
-Then root over USB:
+Then reboot the hub (the WebSocket `setup.firmware?reboot` is the
+gentlest), let it settle, run `usb-preflight`, and root over USB:
 
 ```sh
 python3 run_harmony_hub_tool.py --action lan-root --transport usb --hub-host <hub2-ip> --ignore-saved-hub-id
 ```
 
 (`--transport post` also exists and is smoke-tested on a fresh hub; the
-full root run was executed over USB.) Expect 554 payload chunks staged,
+full root run was executed over USB.) **Don't expect XMPP.** On the
+locally provisioned hubs, port 5222 stayed closed even after seeding
+`AutomationConfig` with `enableXMPP` and rebooting, so the default XMPP
+transport can't connect. Pass `--transport usb` (all five runs) or
+`post`. Expect 554 payload chunks staged,
 `discover` 200, Dropbear listening on 22. **Proof bar:**
 `ssh root@<hub2-ip>` gives `uid=0(root)`; `/etc/version` reads
 4.15.600; `md5sum /usr/bin/hal` is the stock pin above.
@@ -267,7 +340,11 @@ tracked separately):**
 | `/tde/enable` write accepted, read-back still `"0"`, APIs still 594 | Length byte was `0x00` ("remove marker"). Re-send with length `0x01`. |
 | `jsonfiletransfer?put` → 598 "Failed to decode json" | That API only accepts valid JSON content. Lua source cannot be staged through it; provision/seed with JSON (Steps 5–6) and let the mode-3 log writer stage code. |
 | WebSocket 401 with the correct hub ID after provisioning | `remoteId` was written as a JSON string. Rewrite preferences with a numeric `remoteId`, reboot. |
-| USB HID enumerated but LTCP stops answering after a reboot | Gadget wedge. USB device-control reboot (`0xFF`, arg `0x00`) re-initializes it; `usb-preflight` confirms. |
+| USB HID enumerated but LTCP stops answering after a reboot | Gadget wedge. USB device-control reboot (`0xFF`, arg `0x00`) re-initializes it; `usb-preflight` confirms. If writes "return no bytes" (typically after an `hbus error frame FF 08 FF 01 01`), the reboot can't get through: power-cycle, wait ~5 min, preflight first. |
+| Linux: hub enumerates (`046d:c129`) but no `/dev/hidraw*` | The kernel ignores Harmony HID IDs. Use the venv with `requirements-usb.txt` and `--usb-backend hidapi`. |
+| `lan-root` stops: "TDE gate failed" although `/tde/enable` reads `"1"` | `/etc/tdeenable` exists but is empty. Write it over the WebSocket after provisioning (Step 4). |
+| `lan-root` can't reach port 5222 on a locally provisioned hub | XMPP doesn't start on these. Use `--transport usb` (or `post`). |
+| Flash ends `checksumResult 0x75/'u'`, `committed: false` | Normal boot-updater handoff. Check `current_fw_version` after the reboot. |
 | Remote paired, hub sees presses, activity never starts | Missing `16414Root` map. See wizard gap 2 above. |
 | Steady red blink on the fresh hub | Normal "no config yet" indication. Not a fault. |
 
@@ -281,3 +358,23 @@ tracked separately):**
    AutomationConfig seed) should become tool commands in
    `tools/hub-root/` instead of manual operations.
 4. POST-transport full root run is unproven (smoke-tested only).
+5. `usb-factory-reset`'s `/sys/reboot` doesn't reboot the hub; the reset
+   only proceeds after a device-control reboot, and then the hub needs a
+   power-cycle (Step 2). The tool could send the device-control reboot
+   itself and say plainly that a replug will be needed.
+6. `lan-root`'s TDE pre-check could accept an open `/tde/enable` gate, or
+   write the marker itself, instead of failing on an empty
+   `/etc/tdeenable` (Step 4).
+
+## Hardware seen so far
+
+| Skin | RAM (`MemTotal`) | SoC | Firmware before | Result |
+|---|---|---|---|---|
+| 106 | — | — | 4.15.330 | First run (above) |
+| 106 | 64 MB (62524 kB) | AR9330 (Hornet) | 4.15.290 | Flashed, rooted, Melodious |
+| 97 (×3) | 32 MB (30036 kB) | AR9330 (Hornet) | 4.12.36, 4.15.600 ×2 | Flashed where needed, rooted, Melodious |
+
+The 64 MB unit has the same SoC and the same flash layout (data 5 MB,
+cache 5 MB, root 4 MB) as the 32 MB ones; only the RAM differs. With
+Melodious running it had about 33 MB free after boot, against about 1 MB
+on a 32 MB hub.
