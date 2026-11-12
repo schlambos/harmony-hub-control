@@ -1860,7 +1860,7 @@ async function handleApi(req, res, pathname, url) {
       sendJson(res, 200, {
         ok: true, version: "sim", identity: "ready",
         tvs: [...simAndroidTv.tvs.values()].map((tv) => ({
-          id: tv.id, name: tv.name, host: tv.host, mac: "02:00:00:00:00:60", connected: true,
+          id: tv.id, name: tv.name, vendor: "Sim", model: "Sim TV", host: tv.host, mac: "02:00:00:00:00:60", connected: true,
           on: tv.on, volume: 12, volumeMax: 100, muted: false, keysSent: 0, connects: 1, error: ""
         }))
       });

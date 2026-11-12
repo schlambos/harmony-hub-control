@@ -9,7 +9,11 @@ It checks: the hub identity is made on first use; a TV that acknowledges a secre
 never got, or never confirms the code, fails the pairing; pairing (a mistyped code is
 caught before anything is sent, the right one pairs); the TV connects; PowerOff/PowerOn
 send the power key only when the state differs, and wait for the TV to report its state
-on a new connection; keys arrive; an unknown command still gets HTTP 200; and
+on a new connection; keys arrive; an unknown command still gets HTTP 200; other
+TVs get the HDMI keys for InputHdmi1-4, while a Hisense TV gets the input's TV-input
+URI (the keys again if it offers no app links); after the power key,
+inputs wait until the TV reports it is on; a command queued behind PowerOn waits as
+long as it does; a TV that drops off while turning on gets the power key again; and
 forgetting the TV removes it.
 
 MIT License, Copyright (c) 2026 Josh Lukens.
@@ -179,8 +183,14 @@ def main() -> int:
         mark = len(fake.events)
         cmd("VolumeUp")
         fake.wait_for("key", since=mark, code=24)
-        cmd("InputHdmi2")
-        fake.wait_for("key", since=mark, code=244)
+        # A TV without an input URI (this one says it is a FakeCo) gets the HDMI
+        # keys, KEYCODE_TV_INPUT_HDMI_1..4, for all four inputs, never an app link.
+        assert call(args.port, "/status")["tvs"][0]["vendor"] == "FakeCo"
+        for n in range(1, 5):
+            cmd(f"InputHdmi{n}")
+            fake.wait_for("key", since=mark, code=242 + n)
+        assert fake.count("app_link", since=mark) == 0, "a non-Hisense TV got an input by app link"
+        mark = len(fake.events)
         cmd("app:https://www.netflix.com/title")
         fake.wait_for("app_link", since=mark, link="https://www.netflix.com/title")
         r = cmd("NoSuchCommand")
@@ -211,6 +221,287 @@ def main() -> int:
         fake.wait_for("remote_start_sent", since=mark)
         time.sleep(0.8)
         assert fake.count("key", since=mark) == 0, "PowerOn toggled a TV that was already on"
+        set_mode("")
+
+        def restart_connected() -> int:
+            nonlocal daemon
+            daemon.terminate()
+            daemon.wait(5)
+            mark = len(fake.events)
+            daemon = subprocess.Popen([args.codex_androidtv, "--dir", state, "--port", str(args.port), "-v",
+                                       "--log", os.path.join(tmp, "codex-androidtv.log")])
+            fake.wait_for("remote_configured", since=mark)
+            end = time.time() + 5
+            while not (call(args.port, "/status")["tvs"] or [{}])[0].get("connected") and time.time() < end:
+                time.sleep(0.05)
+            return mark
+
+        hisense = "content://android.media.tv/passthrough/com.hisense.tv.hitvinput%2F.hdmi.HdmiTvInputService%2FHW"
+
+        # A Hisense TV ignores the HDMI key codes: InputHdmi<n> opens HW<n+1>'s
+        # passthrough URI. Other keys are unchanged.
+        # Give the TV a MAC (a locally administered one), so the Wake-on-LAN
+        # paths run: the daemon learns it by ARP on a real network.
+        tsv = os.path.join(state, "tvs.tsv")
+        rows = open(tsv).read().split("\n")
+        rows = ["\t".join(r.split("\t")[:2] + ["02:00:5e:00:00:01"] + r.split("\t")[3:]) if r.startswith(tv) else r for r in rows]
+        open(tsv, "w").write("\n".join(rows))
+        set_mode("vendor=Hisense")
+        restart_connected()
+        st = call(args.port, "/status")["tvs"][0]
+        assert st["mac"] == "02:00:5e:00:00:01", st
+        assert st["vendor"] == "Hisense" and st["model"] == "Fake", st
+        mark = len(fake.events)
+        cmd("InputHdmi1")
+        fake.wait_for("app_link", since=mark, link=hisense + "2")
+        cmd("InputHdmi4")
+        fake.wait_for("app_link", since=mark, link=hisense + "5")
+        cmd("InputNext")
+        fake.wait_for("key", since=mark, code=178)
+        assert fake.count("key", since=mark, code=243) == 0 and fake.count("key", since=mark, code=246) == 0
+
+        # A Hisense TV that doesn't offer app links gets the HDMI keys instead.
+        set_mode("vendor=Hisense no-applink")
+        mark = restart_connected()
+        e = fake.wait_for("remote_configured", since=mark)
+        assert not e["features"] & 0x200, e   # the daemon took up no app links (F_APPLINK)
+        assert call(args.port, "/status")["tvs"][0]["vendor"] == "Hisense"
+        mark = len(fake.events)
+        for n in range(1, 5):
+            cmd(f"InputHdmi{n}")
+            fake.wait_for("key", since=mark, code=242 + n)
+        assert fake.count("app_link", since=mark) == 0, "an input went by app link to a TV without app links"
+        set_mode("vendor=Hisense")
+        restart_connected()
+
+        # After the power key, an input waits until the TV reports that it is on.
+        mark = len(fake.events)
+        cmd("PowerOff")
+        fake.wait_for("power", since=mark, on=False)
+        set_mode("vendor=Hisense wake-delay=2")
+        mark = len(fake.events)
+        cmd("PowerOn")
+        cmd("InputHdmi2")
+        e = fake.wait_for("app_link", since=mark, timeout=10, link=hisense + "3")
+        assert e["awake"] is True, f"the input reached a TV still waking up: {e}"
+
+        # Behind a PowerOn, a command waits as long as it does: here the TV takes
+        # 10 s to report its state, longer than a lone command may wait (8 s).
+        set_mode("vendor=Hisense start-delay=10")
+        mark = restart_connected()
+        cmd("PowerOn")
+        cmd("InputHdmi3")
+        fake.wait_for("app_link", since=mark, timeout=16, link=hisense + "4")
+        assert fake.count("key", since=mark, code=26) == 0, "PowerOn toggled a TV that was already on"
+
+        # A TV that ignores the power key and drops off the network (still shutting
+        # down) gets the power key again once it is back, then the input.
+        set_mode("vendor=Hisense")
+        mark = len(fake.events)
+        cmd("PowerOff")
+        fake.wait_for("power", since=mark, on=False)
+        set_mode("vendor=Hisense power-drop-once")
+        mark = len(fake.events)
+        cmd("PowerOn")
+        cmd("InputHdmi1")
+        fake.wait_for("power_dropped", since=mark)
+        fake.wait_for("power", since=mark, timeout=15, on=True)
+        e = fake.wait_for("app_link", since=mark, timeout=15, link=hisense + "2")
+        assert e["awake"] is True, e
+        log_text = open(os.path.join(tmp, "codex-androidtv.log")).read()
+        assert "trying again" in log_text and "sent Wake-on-LAN to 02:00:5e:00:00:01" in log_text
+
+        # A retry that finds the TV back on by itself (Wake-on-LAN woke it)
+        # sends just the input...
+        set_mode("vendor=Hisense")
+        mark = len(fake.events)
+        cmd("PowerOff")
+        fake.wait_for("power", since=mark, on=False)
+        set_mode("vendor=Hisense power-drop-once wake-on-return")
+        mark = len(fake.events)
+        cmd("PowerOn")
+        cmd("InputHdmi1")
+        fake.wait_for("power_dropped", since=mark)
+        fake.wait_for("app_link", since=mark, timeout=15, link=hisense + "2")
+        assert fake.count("key", since=mark, code=26) == 0, "keyed a TV that came back on"
+
+        # ...and the next PowerOn gets its own retry: the count from the last
+        # one doesn't carry over.
+        set_mode("vendor=Hisense")
+        mark = len(fake.events)
+        cmd("PowerOff")
+        fake.wait_for("power", since=mark, on=False)
+        set_mode("vendor=Hisense power-drop-once")
+        mark = len(fake.events)
+        cmd("PowerOn")
+        cmd("InputHdmi2")
+        fake.wait_for("power_dropped", since=mark)
+        fake.wait_for("power", since=mark, timeout=15, on=True)
+        fake.wait_for("app_link", since=mark, timeout=15, link=hisense + "3")
+
+        # A TV that ignores the power key and goes silent (no pings) on the open
+        # connection is dropped when the wait for "on" ends, then tried again.
+        set_mode("vendor=Hisense")
+        mark = len(fake.events)
+        cmd("PowerOff")
+        fake.wait_for("power", since=mark, on=False)
+        set_mode("vendor=Hisense quiet-once")
+        mark = len(fake.events)
+        cmd("PowerOn")
+        cmd("InputHdmi3")
+        fake.wait_for("power_quiet", since=mark)
+        fake.wait_for("power", since=mark, timeout=20, on=True)
+        e = fake.wait_for("app_link", since=mark, timeout=10, link=hisense + "4")
+        assert e["awake"] is True, e
+        assert "went quiet while turning on" in open(os.path.join(tmp, "codex-androidtv.log")).read()
+
+        # A TV that never reports "on" after the power key, but keeps talking,
+        # doesn't hold the queue for ever: after 8 s the rest goes anyway.
+        set_mode("vendor=Hisense")
+        mark = len(fake.events)
+        cmd("PowerOff")
+        fake.wait_for("power", since=mark, on=False)
+        set_mode("vendor=Hisense wake-delay=30")
+        mark = len(fake.events)
+        t0 = time.time()
+        cmd("PowerOn")
+        cmd("InputHdmi2")
+        fake.wait_for("app_link", since=mark, timeout=14, link=hisense + "3")
+        assert time.time() - t0 > 7, "the input didn't wait for the TV to report it was on"
+        assert "sending the rest anyway" in open(os.path.join(tmp, "codex-androidtv.log")).read()
+
+        # ...and with nothing queued behind it the wait still ends (a timer, not
+        # the queue): a lone PowerOn to a TV that never confirms.
+        set_mode("vendor=Hisense")
+        mark = len(fake.events)
+        cmd("PowerOff")
+        fake.wait_for("power", since=mark, on=False)
+        set_mode("vendor=Hisense wake-delay=30")
+        before = open(os.path.join(tmp, "codex-androidtv.log")).read().count("sending the rest anyway")
+        cmd("PowerOn")
+        end = time.time() + 12
+        while time.time() < end and open(os.path.join(tmp, "codex-androidtv.log")).read().count("sending the rest anyway") == before:
+            time.sleep(0.2)
+        assert open(os.path.join(tmp, "codex-androidtv.log")).read().count("sending the rest anyway") > before
+
+        # A PowerOn that expires (the TV never came back) takes what was queued
+        # behind it along: the input isn't sent when the TV turns up later.
+        set_mode("vendor=Hisense offline")
+        end = time.time() + 6
+        while (call(args.port, "/status")["tvs"] or [{}])[0].get("connected") and time.time() < end:
+            time.sleep(0.1)
+        cmd("PowerOn")
+        cmd("InputHdmi2")
+        end = time.time() + 26
+        while time.time() < end and "didn't come on; dropped 1 queued command" not in open(os.path.join(tmp, "codex-androidtv.log")).read():
+            time.sleep(0.5)
+        assert "didn't come on; dropped 1 queued command" in open(os.path.join(tmp, "codex-androidtv.log")).read()
+        mark = len(fake.events)
+        set_mode("vendor=Hisense")
+        fake.wait_for("remote_configured", since=mark, timeout=40)
+        time.sleep(2)
+        assert fake.count("app_link", since=mark) == 0 and fake.count("key", since=mark) == 0, fake.events[mark:]
+
+        # The activity started again while the TV is unreachable: the second
+        # PowerOn joins the first and renews its wait, so the TV that comes
+        # back after 24 s still turns on and ends on the newer input.
+        mark = len(fake.events)
+        cmd("PowerOff")
+        fake.wait_for("power", since=mark, on=False)
+        set_mode("vendor=Hisense offline")
+        end = time.time() + 6
+        while (call(args.port, "/status")["tvs"] or [{}])[0].get("connected") and time.time() < end:
+            time.sleep(0.1)
+        cmd("PowerOn")
+        cmd("InputHdmi1")
+        time.sleep(12)
+        cmd("PowerOn")
+        cmd("InputHdmi2")
+        time.sleep(12)
+        mark = len(fake.events)
+        set_mode("vendor=Hisense")
+        fake.wait_for("power", since=mark, timeout=20, on=True)
+        e = fake.wait_for("app_link", since=mark, timeout=10, link=hisense + "3")
+        assert e["awake"] is True, e
+        assert fake.count("key", since=mark, code=26) == 1, "PowerOn was pressed twice"
+
+        # A PowerOff queued behind a waking TV wins over the retry: the TV that
+        # ignored the key and dropped off isn't keyed on again.
+        mark = len(fake.events)
+        cmd("PowerOff")
+        fake.wait_for("power", since=mark, on=False)
+        set_mode("vendor=Hisense power-drop-once")
+        mark = len(fake.events)
+        cmd("PowerOn")
+        fake.wait_for("power_dropped", since=mark)
+        cmd("PowerOff")
+        time.sleep(6)
+        assert fake.count("power", since=mark, on=True) == 0, "the retry turned on a TV the user had turned off"
+
+        # ...and so does one that arrives after the retry is queued: the retry
+        # and the input behind it are cancelled, not sent first.
+        set_mode("vendor=Hisense")
+        end = time.time() + 10
+        while not (call(args.port, "/status")["tvs"] or [{}])[0].get("connected") and time.time() < end:
+            time.sleep(0.1)
+        mark = len(fake.events)
+        cmd("Mute")   # a key re-arms the fake TV's once-only modes
+        fake.wait_for("key", since=mark, code=164)
+        log_path = os.path.join(tmp, "codex-androidtv.log")
+        retries = open(log_path).read().count("trying again")
+        set_mode("vendor=Hisense power-drop-once")
+        mark = len(fake.events)
+        cmd("PowerOn")
+        cmd("InputHdmi2")
+        fake.wait_for("power_dropped", since=mark)
+        end = time.time() + 5
+        while open(log_path).read().count("trying again") == retries and time.time() < end:
+            time.sleep(0.05)
+        assert open(log_path).read().count("trying again") > retries, "the PowerOn wasn't queued again"
+        cmd("PowerOff")
+        time.sleep(8)
+        assert fake.count("power", since=mark, on=True) == 0, "the retry went ahead of a later PowerOff"
+        assert fake.count("app_link", since=mark) == 0, fake.events[mark:]
+        assert "PowerOff cancels a PowerOn not sent yet; dropped 2 queued command(s)" in open(log_path).read()
+
+        # A TV that Wake-on-LAN powers fully on reports standby while it boots:
+        # the PowerOn waits for that to settle instead of keying it off again.
+        set_mode("vendor=Hisense")
+        end = time.time() + 10
+        while not (call(args.port, "/status")["tvs"] or [{}])[0].get("connected") and time.time() < end:
+            time.sleep(0.1)
+        cmd("PowerOff")
+        time.sleep(1)
+        set_mode("vendor=Hisense offline")
+        end = time.time() + 6
+        while (call(args.port, "/status")["tvs"] or [{}])[0].get("connected") and time.time() < end:
+            time.sleep(0.1)
+        mark = len(fake.events)
+        cmd("PowerOn")
+        cmd("InputHdmi2")
+        time.sleep(1)
+        set_mode("vendor=Hisense boot-on=2")
+        fake.wait_for("power", since=mark, timeout=20, on=True, by="boot")
+        e = fake.wait_for("app_link", since=mark, timeout=10, link=hisense + "3")
+        assert e["awake"] is True, e
+        assert fake.count("key", since=mark, code=26) == 0, "keyed a TV that was booting on from Wake-on-LAN"
+        set_mode("vendor=Hisense")
+        mark = len(fake.events)
+        cmd("PowerOff")
+        fake.wait_for("power", since=mark, on=False)
+
+        # A burst of keys to an unreachable TV doesn't push its PowerOn out of
+        # the queue.
+        set_mode("vendor=Hisense offline")
+        end = time.time() + 6
+        while (call(args.port, "/status")["tvs"] or [{}])[0].get("connected") and time.time() < end:
+            time.sleep(0.1)
+        cmd("PowerOn")
+        for _ in range(14):
+            cmd("Mute")
+        mark = len(fake.events)
+        set_mode("vendor=Hisense")
+        fake.wait_for("power", since=mark, timeout=20, on=True)
         set_mode("")
 
         r = call(args.port, "/forget", {"id": tv})

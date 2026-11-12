@@ -207,6 +207,20 @@ static uint64_t pb_get_uint(const unsigned char *d, size_t len, unsigned field) 
 	return 0;
 }
 
+/* A length-delimited field as a printable string (anything else becomes '?'). */
+static void pb_get_str(const unsigned char *d, size_t len, unsigned field, char *out, size_t outlen) {
+	const unsigned char *p = d, *end = d + len;
+	struct pfield f;
+	out[0] = 0;
+	while (pb_next(&p, end, &f) == 1) {
+		if (f.num != field || f.wt != 2) continue;
+		size_t n = f.len < outlen - 1 ? f.len : outlen - 1;
+		for (size_t i = 0; i < n; i++) out[i] = f.d[i] >= 0x20 && f.d[i] < 0x7f && f.d[i] != '"' && f.d[i] != '\\' ? (char)f.d[i] : '?';
+		out[n] = 0;
+		return;
+	}
+}
+
 /* ================================================================== identity */
 
 static struct {
@@ -734,8 +748,33 @@ enum { F_PING = 1, F_KEY = 2, F_POWER = 32, F_VOLUME = 64, F_APPLINK = 512 };
 #define PSEUDO_POWER_ON 1001
 #define PSEUDO_POWER_OFF 1002
 
-struct cmd { int code; int dir; char link[200]; long long at; };
+struct cmd { int code; int dir; int retry; char link[200]; long long at, start; };
 #define QLEN 12
+/* How long a command at the head of the queue may wait for the session:
+ * PowerOn longer, since a TV woken by Wake-on-LAN takes a while to come back.
+ * Commands behind a PowerOn don't age while it is pending or the TV is waking:
+ * their clock restarts when it is done (tv_release). After the power key the
+ * TV gets WAKE_CONFIRM_MS to report "on". A PowerOn that sent Wake-on-LAN, or
+ * was retried after the TV dropped, waits WAKE_SETTLE_MS after the session's
+ * latest state report before it presses the key: many TVs power fully on from
+ * Wake-on-LAN (or the key that was ignored) and report standby for a moment
+ * while booting, and a key then would turn them off again. */
+#define CMD_WAIT_MS 8000
+#define POWER_ON_WAIT_MS 20000
+#define WAKE_CONFIRM_MS 8000
+#define WAKE_RETRIES 1
+#define WAKE_SETTLE_MS 5000
+/* A connected TV pings every 5 s: this long without anything from it means it
+ * isn't listening. While a PowerOn waits for an unreachable TV, Wake-on-LAN is
+ * sent again this often (a TV still shutting down can miss one). */
+#define QUIET_MS 7000
+#define WOL_REPEAT_MS 5000
+/* TVs that ignore KEYCODE_TV_INPUT_HDMI_1..4 but switch when the port's
+ * TV-input passthrough URI is launched, by the vendor they report: fmt gets
+ * the HDMI number plus offset. Hisense (checked on a 75U8H): HW<n+1> is HDMI n. */
+static const struct { const char *vendor; const char *fmt; int offset; } INPUT_URIS[] = {
+	{ "hisense", "content://android.media.tv/passthrough/com.hisense.tv.hitvinput%%2F.hdmi.HdmiTvInputService%%2FHW%d", 1 },
+};
 
 struct tv {
 	int used;
@@ -747,6 +786,12 @@ struct tv {
 	struct conn *c;
 	int ready, is_on, vol, vol_max, muted;
 	int state_known;                /* remote_start seen on this connection */
+	char vendor[32], model[48];     /* from the TV's remote_configure device_info */
+	char seen[82];                  /* "vendor model" last logged */
+	long long state_at;             /* last remote_start */
+	int waking;                     /* power key sent for PowerOn, "on" not reported yet */
+	int wake_retries;               /* PowerOn re-sent after the TV dropped while waking */
+	long long wake_until;           /* give up waiting for "on" (and send the rest) then */
 	unsigned features;
 	long long next_attempt, unreachable_since, last_rediscover, last_wol;
 	int backoff;
@@ -920,6 +965,17 @@ static void send_wol(const char *mac) {
 		logmsg("Wake-on-LAN to %s failed: %s", mac, strerror(err));
 }
 
+static void tv_requeue_power_on(struct tv *t);
+static void tv_release(struct tv *t, long long now);
+
+/* Wake-on-LAN, at most once per min_gap ms; then try to connect soon. */
+static void tv_wake(struct tv *t, long long now, long long min_gap) {
+	if (!t->mac[0] || now - t->last_wol <= min_gap) return;
+	send_wol(t->mac);
+	t->last_wol = now;
+	if (t->next_attempt > now + 1000) { t->backoff = 1000; t->next_attempt = now + 1000; }
+}
+
 static void tv_lost(struct tv *t, const char *why) {
 	if (t->c && t->c->fd >= 0) conn_close(t->c, why);
 	if (t->ready || t->c) logmsg("TV %s: %s", t->id, why);
@@ -928,6 +984,9 @@ static void tv_lost(struct tv *t, const char *why) {
 	t->next_attempt = now_ms() + t->backoff;
 	t->backoff = t->backoff < 30000 ? t->backoff * 2 : 30000;
 	if (!t->unreachable_since) t->unreachable_since = now_ms();
+	/* The TV went away while turning on: one that is still shutting down
+	 * ignores the power key and drops off the network. Try again. */
+	if (t->waking) tv_requeue_power_on(t);
 }
 
 static void tv_on_message(void *owner, const unsigned char *d, size_t len) {
@@ -940,6 +999,25 @@ static void tv_on_message(void *owner, const unsigned char *d, size_t len) {
 		switch (f.num) {
 		case 1: { /* remote_configure */
 			unsigned supported = (unsigned)pb_get_uint(f.d, f.len, 1);
+			{
+				/* device_info (field 2): model 1, vendor 2 */
+				const unsigned char *q = f.d, *qend = f.d + f.len;
+				struct pfield g;
+				while (pb_next(&q, qend, &g) == 1) {
+					if (g.num != 2 || g.wt != 2) continue;
+					char vendor[sizeof t->vendor], model[sizeof t->model];
+					pb_get_str(g.d, g.len, 2, vendor, sizeof vendor);
+					pb_get_str(g.d, g.len, 1, model, sizeof model);
+					snprintf(t->vendor, sizeof t->vendor, "%s", vendor);
+					snprintf(t->model, sizeof t->model, "%s", model);
+					char seen[sizeof t->seen];
+					snprintf(seen, sizeof seen, "%s %s", vendor[0] ? vendor : "?", model[0] ? model : "?");
+					if (strcmp(seen, t->seen)) {
+						logmsg("TV %s is a %s", t->id, seen);
+						snprintf(t->seen, sizeof t->seen, "%s", seen);
+					}
+				}
+			}
 			t->features = (F_PING | F_KEY | F_POWER | F_VOLUME | F_APPLINK) & supported;
 			pb_uint(&info, 3, 1);
 			pb_str(&info, 4, "1");
@@ -967,10 +1045,16 @@ static void tv_on_message(void *owner, const unsigned char *d, size_t len) {
 			break;
 		case 40: { /* remote_start */
 			int on = (int)pb_get_uint(f.d, f.len, 1);
-			if (on != t->is_on) logmsg("TV %s is %s", t->id, on ? "on" : "in standby");
+			if (on != t->is_on || !t->state_known) logmsg("TV %s is %s", t->id, on ? "on" : "in standby");
 			t->is_on = on;
 			t->state_known = 1;
+			t->state_at = now_ms();
 			t->ready = 1;
+			if (on && t->waking) {
+				t->waking = 0;
+				t->wake_retries = 0;
+				tv_release(t, t->state_at);
+			}
 			break;
 		}
 		case 50: /* remote_set_volume_level */
@@ -996,6 +1080,7 @@ static void tv_connect(struct tv *t) {
 	}
 	t->ready = 0;
 	t->state_known = 0;
+	t->vendor[0] = t->model[0] = 0;   /* this connection's remote_configure says */
 	t->next_attempt = now_ms() + t->backoff;
 	if (conn_open(t->c, t->host, REMOTE_PORT, &t->pk) < 0) {
 		tv_lost(t, t->c->error);
@@ -1008,10 +1093,131 @@ static void tv_connect(struct tv *t) {
 	}
 }
 
+static int is_power(int code) { return code == PSEUDO_POWER_ON || code == PSEUDO_POWER_OFF; }
+
+static void tv_pop(struct tv *t) {
+	t->qhead = (t->qhead + 1) % QLEN;
+	t->qcount--;
+}
+
 static void tv_enqueue(struct tv *t, const struct cmd *c) {
-	if (t->qcount == QLEN) { t->qhead = (t->qhead + 1) % QLEN; t->qcount--; }
-	t->q[(t->qhead + t->qcount) % QLEN] = *c;
+	struct cmd n = *c;
+	n.start = n.at;
+	if (n.code == PSEUDO_POWER_ON) {
+		/* A PowerOn after a PowerOn still pending (queued, or the TV waking)
+		 * is the same request: the activity started again, a button pressed
+		 * twice. A later power command decides otherwise. */
+		int last = t->waking ? PSEUDO_POWER_ON : 0;
+		struct cmd *pending = NULL;
+		for (int i = 0; i < t->qcount; i++) {
+			struct cmd *q = &t->q[(t->qhead + i) % QLEN];
+			if (is_power(q->code)) { last = q->code; pending = q->code == PSEUDO_POWER_ON ? q : NULL; }
+		}
+		if (last == PSEUDO_POWER_ON) {
+			/* It gets the newer request's full wait. */
+			if (pending) pending->start = n.at;
+			DBG("TV %s: PowerOn already pending", t->id);
+			return;
+		}
+		t->wake_retries = 0;   /* a new request gets its own retry */
+	} else if (n.code == PSEUDO_POWER_OFF) {
+		/* A PowerOn not sent yet (a retry, or one waiting for an unreachable
+		 * TV) is cancelled with what was queued behind it: the TV is to end
+		 * up off, and needn't wake first. */
+		int k = -1;
+		for (int i = 0; i < t->qcount; i++)
+			if (is_power(t->q[(t->qhead + i) % QLEN].code)) k = i;
+		if (k >= 0 && t->q[(t->qhead + k) % QLEN].code == PSEUDO_POWER_ON) {
+			logmsg("TV %s: PowerOff cancels a PowerOn not sent yet; dropped %d queued command(s)",
+			       t->id, t->qcount - k);
+			t->qcount = k;
+			t->wake_retries = 0;
+		}
+	}
+	if (t->qcount == QLEN) {
+		/* Full: drop the oldest command that isn't a power command, which the
+		 * commands behind it may depend on. */
+		int k = 0;
+		for (int i = 0; i < t->qcount; i++)
+			if (!is_power(t->q[(t->qhead + i) % QLEN].code)) { k = i; break; }
+		for (int i = k; i < t->qcount - 1; i++) t->q[(t->qhead + i) % QLEN] = t->q[(t->qhead + i + 1) % QLEN];
+		t->qcount--;
+	}
+	t->q[(t->qhead + t->qcount) % QLEN] = n;
 	t->qcount++;
+}
+
+/* A power command is done: what is behind it may now be sent, and its wait
+ * clock starts now. */
+static void tv_release(struct tv *t, long long now) {
+	for (int i = 0; i < t->qcount; i++) t->q[(t->qhead + i) % QLEN].start = now;
+}
+
+/* The TV didn't come on: drop what an activity queued behind its PowerOn (its
+ * input, say), up to the next power command, which is a new request. */
+static void tv_drop_group(struct tv *t, const char *why) {
+	int n = 0;
+	while (t->qcount && !is_power(t->q[t->qhead].code)) { tv_pop(t); n++; }
+	if (n) logmsg("TV %s %s; dropped %d queued command(s)", t->id, why, n);
+	else logmsg("TV %s %s", t->id, why);
+}
+
+/* The TV dropped (or went quiet) while turning on: it ignored the power key,
+ * still shutting down. Put the PowerOn back at the head of the queue and wake
+ * it over the network, once; unless a later power command is queued, which
+ * then decides. */
+static void tv_requeue_power_on(struct tv *t) {
+	t->waking = 0;
+	for (int i = 0; i < t->qcount; i++) {
+		if (!is_power(t->q[(t->qhead + i) % QLEN].code)) continue;
+		DBG("TV %s: dropped while turning on; a later power command decides", t->id);
+		t->wake_retries = 0;
+		return;
+	}
+	if (t->wake_retries >= WAKE_RETRIES) {
+		t->wake_retries = 0;
+		tv_drop_group(t, "didn't come on after the power key was sent twice");
+		return;
+	}
+	t->wake_retries++;
+	long long now = now_ms();
+	struct cmd c = { .code = PSEUDO_POWER_ON, .dir = 3, .retry = 1, .at = now, .start = now };
+	if (t->qcount == QLEN) t->qcount--;   /* drop the newest to make room */
+	t->qhead = (t->qhead + QLEN - 1) % QLEN;
+	t->q[t->qhead] = c;
+	t->qcount++;
+	logmsg("TV %s: dropped off while turning on; trying again", t->id);
+	t->backoff = 1000;
+	t->next_attempt = now + 1000;
+	t->last_wol = 0;
+	tv_wake(t, now, 0);
+}
+
+/* The URI that opens HDMI <hdmi> on this TV, or 0 if it takes the key. */
+static int tv_input_uri(const struct tv *t, int hdmi, char *out, size_t n) {
+	if (!(t->features & F_APPLINK)) return 0;
+	for (size_t i = 0; i < sizeof INPUT_URIS / sizeof INPUT_URIS[0]; i++) {
+		size_t len = strlen(INPUT_URIS[i].vendor);
+		if (strncasecmp(t->vendor, INPUT_URIS[i].vendor, len)) continue;
+		snprintf(out, n, INPUT_URIS[i].fmt, hdmi + INPUT_URIS[i].offset);
+		return 1;
+	}
+	return 0;
+}
+
+/* After the power key for PowerOn: the TV reported "on" (remote_start clears
+ * waking), or the wait is over. Silent too (no pings): it ignored the key,
+ * still shutting down; drop the session and tv_lost puts the PowerOn back.
+ * Still talking: send the rest. Runs every loop, queue or not. */
+static void tv_check_wake(struct tv *t, long long now) {
+	if (!t->waking || !t->c || t->c->fd < 0 || now < t->wake_until) return;
+	if (now - t->c->last_rx > QUIET_MS) {
+		tv_lost(t, "the TV went quiet while turning on");
+		return;
+	}
+	logmsg("TV %s: didn't report that it turned on; sending the rest anyway", t->id);
+	t->waking = 0;
+	tv_release(t, now);
 }
 
 /* Send what is queued once the session is up. PowerOn/PowerOff are discrete for the
@@ -1021,42 +1227,67 @@ static void tv_flush(struct tv *t) {
 	long long now = now_ms();
 	while (t->qcount) {
 		struct cmd *c = &t->q[t->qhead];
-		int limit = c->code == PSEUDO_POWER_ON ? 20000 : 8000;
-		if (now - c->at > limit) {
+		/* After the power key for PowerOn, hold the rest (inputs above all)
+		 * until the TV says it is on: a waking TV ignores them. Nothing ages
+		 * meanwhile; tv_check_wake ends the hold. */
+		if (t->waking) return;
+		long long limit = c->code == PSEUDO_POWER_ON ? POWER_ON_WAIT_MS : CMD_WAIT_MS;
+		if (now - c->start > limit) {
+			int was_on = c->code == PSEUDO_POWER_ON;
 			logmsg("TV %s: dropped a command that waited %lld ms", t->id, now - c->at);
-		} else {
-			if (!t->ready || !t->c || !t->c->tls_up) return;
-			struct pbuf out = { .n = 0 }, sub = { .n = 0 };
-			int code = c->code;
-			if (code == PSEUDO_POWER_ON || code == PSEUDO_POWER_OFF) {
-				/* remote_set_active carries no power state: wait for remote_start,
-				 * or a stale is_on could toggle the TV the wrong way. */
-				if (!t->state_known) return;
-				int want_on = code == PSEUDO_POWER_ON;
-				if (t->is_on == want_on) {
-					DBG("TV %s: already %s", t->id, want_on ? "on" : "off");
-					code = 0;
-				} else {
-					code = 26;
-					t->is_on = want_on; /* remote_start corrects this */
-				}
+			tv_pop(t);
+			if (was_on) {
+				tv_drop_group(t, "didn't come on");
+				/* What is left is a new request: its wait starts now, as
+				 * after a power command that completed. */
+				tv_release(t, now);
 			}
-			if (c->link[0]) {
-				pb_str(&sub, 1, c->link);
-				pb_sub(&out, 90, &sub);
-			} else if (code) {
-				pb_uint(&sub, 1, (uint64_t)code);
-				pb_uint(&sub, 2, (uint64_t)c->dir);
-				pb_sub(&out, 10, &sub);
-			}
-			if (out.n) {
-				if (conn_queue(t->c, &out) < 0) return;
-				t->keys++;
-				DBG("TV %s: key %d", t->id, code);
-			}
+			continue;
 		}
-		t->qhead = (t->qhead + 1) % QLEN;
-		t->qcount--;
+		if (!t->ready || !t->c || !t->c->tls_up) return;
+		struct pbuf out = { .n = 0 }, sub = { .n = 0 };
+		int code = c->code, set_on = -1, wake = 0, power = is_power(code);
+		char link[sizeof c->link];
+		snprintf(link, sizeof link, "%s", c->link);
+		if (power) {
+			/* remote_set_active carries no power state: wait for remote_start,
+			 * or a stale is_on could toggle the TV the wrong way. */
+			if (!t->state_known) return;
+			int want_on = code == PSEUDO_POWER_ON;
+			if (want_on && !t->is_on && (c->retry || (t->last_wol && t->last_wol >= c->at))
+			    && now - t->state_at < WAKE_SETTLE_MS) return;
+			if (t->is_on == want_on) {
+				DBG("TV %s: already %s", t->id, want_on ? "on" : "off");
+				code = 0;
+				if (want_on) t->wake_retries = 0;
+			} else {
+				code = 26;
+				set_on = want_on;   /* remote_start corrects this */
+				wake = want_on;     /* and hold the queue until it says "on" */
+			}
+		} else if (code >= 243 && code <= 246 && !link[0] && tv_input_uri(t, code - 243 + 1, link, sizeof link)) {
+			/* A long press launches it once, on the press. */
+			if (c->dir == 2) code = 0, link[0] = 0;
+			else DBG("TV %s: HDMI %d by its input URI", t->id, code - 243 + 1);
+		}
+		if (link[0]) {
+			pb_str(&sub, 1, link);
+			pb_sub(&out, 90, &sub);
+		} else if (code) {
+			pb_uint(&sub, 1, (uint64_t)code);
+			pb_uint(&sub, 2, (uint64_t)c->dir);
+			pb_sub(&out, 10, &sub);
+		}
+		if (out.n) {
+			if (conn_queue(t->c, &out) < 0) return;
+			if (set_on >= 0) t->is_on = set_on;
+			if (wake) { t->waking = 1; t->wake_until = now + WAKE_CONFIRM_MS; }
+			t->keys++;
+			if (link[0]) DBG("TV %s: link %s", t->id, link);
+			else DBG("TV %s: key %d", t->id, code);
+		}
+		tv_pop(t);
+		if (power && !wake) tv_release(t, now);
 	}
 }
 
@@ -1376,6 +1607,7 @@ static void pair_on_message(void *owner, const unsigned char *d, size_t len) {
 			t->used = 1;
 			if (tvs_save() < 0) { pair_fail("could not save the paired TV"); return; }
 			if (t->c && t->c->fd >= 0) conn_close(t->c, "re-paired");
+			t->waking = 0;
 			t->next_attempt = 0;
 			snprintf(pair.tv_id, sizeof pair.tv_id, "%s", t->id);
 			pair.state = P_PAIRED;
@@ -1476,6 +1708,8 @@ static void tv_rehost(struct tv *t, const char *host) {
 	if (t->c && t->c->fd >= 0) conn_close(t->c, "moved");
 	t->ready = 0;
 	t->state_known = 0;
+	t->waking = 0;
+	t->vendor[0] = t->model[0] = 0;
 	t->backoff = 1000;
 	t->next_attempt = 0;
 }
@@ -1546,6 +1780,10 @@ static void status_json(struct sbuf *s) {
 		if (!t->used) continue;
 		sb(s, "%s{\"id\":\"%s\",\"name\":", first ? "" : ",", t->id);
 		sb_str(s, t->name);
+		sb(s, ",\"vendor\":");
+		sb_str(s, t->vendor);
+		sb(s, ",\"model\":");
+		sb_str(s, t->model);
 		sb(s, ",\"host\":\"%s\",\"mac\":\"%s\",\"connected\":%s,\"on\":%s,\"volume\":%d,\"volumeMax\":%d,\"muted\":%s,"
 		   "\"keysSent\":%lu,\"connects\":%lu,\"error\":", t->host, t->mac, t->ready ? "true" : "false",
 		   t->ready && t->is_on ? "true" : "false", t->vol, t->vol_max, t->muted ? "true" : "false", t->keys, t->connects);
@@ -1622,10 +1860,7 @@ static void http_handle(int fd) {
 		http_reply(fd, s.b);
 		if (!ok) { logmsg("engine sent an unknown device or command: %s %s", dev, name); return; }
 		tv_enqueue(t, &c);
-		if (c.code == PSEUDO_POWER_ON && !t->ready && t->mac[0] && now_ms() - t->last_wol > 3000) {
-			send_wol(t->mac);
-			t->last_wol = now_ms();
-		}
+		if (c.code == PSEUDO_POWER_ON && !t->ready) tv_wake(t, now_ms(), 3000);
 		if (!t->ready && (!t->c || t->c->fd < 0)) { t->backoff = 1000; t->next_attempt = 0; }
 		return;
 	}
@@ -1802,6 +2037,11 @@ int main(int argc, char **argv) {
 				t->last_rediscover = now;
 				mdns_start(3000);
 			}
+			if (!t->ready) {
+				for (int k = 0; k < t->qcount; k++)
+					if (t->q[(t->qhead + k) % QLEN].code == PSEUDO_POWER_ON) { tv_wake(t, now, WOL_REPEAT_MS); break; }
+			}
+			tv_check_wake(t, now);
 			if (t->c && t->c->fd >= 0) tv_flush(t);
 			else if (t->qcount) tv_flush(t); /* expire stale */
 		}
