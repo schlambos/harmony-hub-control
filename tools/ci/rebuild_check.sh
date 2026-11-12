@@ -11,8 +11,8 @@
 #   1. the generated sources are what their generators write
 #      (harmony_shell_assets.h with bun 1.3.14, activity_ui_assets.h, and the
 #      two-screen hal edits when pyelftools is installed);
-#   2. build/build_harmony_tools_kali.sh builds everything, against its own
-#      *_EXPECT_* pins;
+#   2. build/build_harmony_tools_kali.sh builds everything, against
+#      build/pins/*;
 #   3. each built file is the committed one.
 # Not rebuilt: payload/modules/usb-net/*.ko. Their kernel tree and backport
 # sources are not in the repository; tools/ci/verify_pins.py checks their pins.
