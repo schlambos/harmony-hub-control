@@ -613,7 +613,10 @@ def main() -> int:
         # A body shorter than its Content-Length is refused, not parsed.
         with socket.create_connection(("127.0.0.1", args.port), timeout=5) as so:
             so.sendall(f"POST /inputs?device={tv} HTTP/1.0\r\nContent-Length: 200\r\n\r\nmethod\tnone\n".encode())
-            reply = so.recv(4096).decode()
+            reply = b""
+            while chunk := so.recv(4096):   # the daemon closes after its reply
+                reply += chunk
+            reply = reply.decode()
         assert "incomplete" in reply, reply
         assert call(args.port, f"/inputs?device={tv}")["profile"] == prof
 
