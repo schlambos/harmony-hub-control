@@ -78,6 +78,15 @@ These keep their own licences:
 - The libraries the Android app is built with (AndroidX and Jetpack Compose,
   Kotlin, kotlinx, OkHttp, JSch), declared in
   Android/gradle/libs.versions.toml: each under its own licence.
+- The Linux kernel 2.6.31, from the hub kernel archive Logitech published
+  (opensource.logitech.com), built into payload/modules/usb-net/asix.ko:
+  GNU General Public License version 2,
+  third_party/linux-2.6.31-harmony/LICENSE. Its two patches are upstream
+  Linux 3.1 commits by Marek Vasut, adapted to 2.6.31. The corresponding
+  source (the archive, the config, the patches and
+  build/build_usb_eth_asix.sh) is described in
+  third_party/linux-2.6.31-harmony/README.md. The GPL applies to the
+  module only, not to the rest of this project.
 - harmony-ng (https://github.com/iranl/harmony-ng), by iranl and
   contributors: MIT License, Copyright (c) 2026 iranl and contributors.
   The EHCI-registration mechanism, the AR9344 USB host-mode PHY finding,

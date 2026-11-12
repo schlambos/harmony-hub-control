@@ -1,0 +1,25 @@
+From: Marek Vasut <marek.vasut@gmail.com>
+Subject: ASIX: Add AX88772B USB ID
+
+Upstream Linux commit 308859097831831a979f2e82cbeef0a94f438080
+("ASIX: Add AX88772B USB ID", Linux 3.1), by Marek Vasut, with
+"Signed-off-by: Marek Vasut <marek.vasut@gmail.com>" and
+"Signed-off-by: David S. Miller <davem@davemloft.net>".
+
+Adapted to Linux 2.6.31 for Melodious: the same 0b95:772b entry with
+ax88772_info, placed at the end of 2.6.31's table instead of before the
+AX88772 entry, with a longer comment.
+
+--- a/drivers/net/usb/asix.c
++++ b/drivers/net/usb/asix.c
+@@ -1492,6 +1492,10 @@
+ 	// ASIX 88772a
+ 	USB_DEVICE(0x0db0, 0xa877),
+ 	.driver_info = (unsigned long) &ax88772_info,
++}, {
++	// ASIX AX88772B 10/100 (added upstream in Linux 3.1 the same way)
++	USB_DEVICE (0x0b95, 0x772b),
++	.driver_info = (unsigned long) &ax88772_info,
+ },
+ 	{ },		// END
+ };

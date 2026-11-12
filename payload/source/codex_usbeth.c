@@ -481,7 +481,9 @@ struct usbeth_id {
 static const struct usbeth_id usbeth_ids[] = {
     { "0bda", "8152", "r8152" }, { "0bda", "8153", "r8152" },
     { "04e8", "a101", "r8152" },
-    /* Linux 2.6.31 asix.ko: AX88172/88772/88772A/88178 and clones. */
+    /* asix.ko: Linux 2.6.31 asix.c (AX88172/88772/88772A/88178 and clones)
+     * plus the AX88772B/C (0b95:772b) changes from Linux 3.1; see
+     * third_party/linux-2.6.31-harmony/. */
     { "077b", "2226", "asix" }, { "0846", "1040", "asix" },
     { "2001", "1a00", "asix" }, { "0b95", "1720", "asix" },
     { "07b8", "420a", "asix" }, { "08dd", "90ff", "asix" },
@@ -495,7 +497,7 @@ static const struct usbeth_id usbeth_ids[] = {
     { "1737", "0039", "asix" }, { "04bb", "0930", "asix" },
     { "050d", "5055", "asix" }, { "05ac", "1402", "asix" },
     { "0b95", "772a", "asix" }, { "14ea", "ab11", "asix" },
-    { "0db0", "a877", "asix" },
+    { "0db0", "a877", "asix" }, { "0b95", "772b", "asix" },
     /* Linux v3.14 ax88179_178a.ko (AX88179/AX88178A). */
     { "0b95", "1790", "ax88179_178a" }, { "0b95", "178a", "ax88179_178a" },
     { "2001", "4a00", "ax88179_178a" }, { "0df6", "0072", "ax88179_178a" },
