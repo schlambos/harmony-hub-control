@@ -83,6 +83,20 @@ A changed SSH host key does not undo the installation. Verify that the IP still
 belongs to your hub before replacing its old `known_hosts` entry. The tool leaves
 that entry alone and prints a warning if the final SSH client fails.
 
+### Bundled Dropbear
+
+`dropbearmulti` is Dropbear 2025.89 (`dropbear`, `dropbearkey`, `dbclient` and
+`scp` in one static MIPS binary), the same file as Melodious's
+`payload/bin/dropbearmulti`. `build/build_harmony_tools_kali.sh` builds it from
+the pinned upstream release with the Bootlin `mips32--uclibc--stable-2017.05`
+toolchain and checks it against its pinned SHA-256
+(`3403183654a48993dcf66d7180954c88664b7044747276b617640aebe7a43ff2`, 535,652
+bytes). It is stripped with `strip -R .pdr`, which also drops the MIPS `.pdr`
+section, a debugging aid that no segment loads. Before 2026-11-12 it was
+stripped without `-R .pdr` (577,296 bytes, SHA-256 `e2ea632a…`): the same code
+and data, 41 KB larger. Melodious's installer treats both as the installed
+Dropbear and hard-links whichever this tool left on the hub.
+
 ### Files changed on the hub
 
 ```text
