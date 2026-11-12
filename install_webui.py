@@ -82,6 +82,9 @@ JFFS2_DIRENT_HEADER = 40
 FLASH_MARGIN_BYTES = 64 * 1024
 FLASH_MARGIN_PERCENT = 5
 
+# USB Ethernet driver modules (usb_eth_service.sh loads them from here).
+USB_NET_MODULES_DIR = "/data/codex/modules/usb-net/"
+
 # What harmony-hub-root leaves behind. Its dropbearmulti is our Dropbear
 # (DROPBEAR_BUILDS), and its staging folders hold about 0.5 MB of base64
 # chunks each.
@@ -1310,6 +1313,8 @@ class Installer:
         self.candidates: list[Candidate] = []
         # Whether the multi-remote hal runs now; None until checked (--multi-remote only).
         self.hal_bound: bool | None = None
+        # Module names in the hub's /proc/modules, read once when needed.
+        self.loaded_modules: set[str] | None = None
         # md5 of the hal that runs now, and what the hub says about multi-remote;
         # None until checked (--two-screen or --multi-remote only).
         self.running_hal: str | None = None
@@ -2716,6 +2721,39 @@ class Installer:
         # The engine loads /pkg plugins once at start; only a reboot restarts it.
         return any(c.kind == "plugin" for c in self.active_candidates())
 
+    def usb_net_module_names(self, actions: tuple[str, ...] = ("replace", "create")) -> set[str]:
+        """Module names of the USB Ethernet modules this install writes."""
+        return {
+            c.dest[len(USB_NET_MODULES_DIR):-len(".ko")].replace("-", "_")
+            for c in self.active_candidates()
+            if c.action in actions and c.dest.startswith(USB_NET_MODULES_DIR) and c.dest.endswith(".ko")
+        }
+
+    def read_loaded_modules(self) -> None:
+        """Note which modules are loaded, before anything is replaced (only
+        when a USB Ethernet module is about to be)."""
+        names = self.usb_net_module_names()
+        if not names or self.loaded_modules is not None:
+            return
+        try:
+            code, out, _err = self.run_remote_rc("cat /proc/modules", timeout=30)
+        except (subprocess.TimeoutExpired, OSError):
+            code, out = 1, ""
+        # If the list can't be read, assume they are loaded: a needless
+        # reboot beats a driver that silently stays old.
+        self.loaded_modules = {line.split()[0] for line in out.splitlines() if line.strip()} if code == 0 else set(names)
+
+    def usb_net_modules_changed(self) -> bool:
+        """A replaced USB Ethernet module that was loaded takes effect only at
+        the next boot: usb_eth_service.sh never reloads a module it finds
+        loaded, and unloading one under a working cable would drop it. Uses
+        the list read before the install (read_loaded_modules); without one,
+        assume loaded."""
+        names = self.usb_net_module_names()
+        if not names:
+            return False
+        return self.loaded_modules is None or bool(names & self.loaded_modules)
+
     # ------------------------------------------------------- turn off / on
 
     def check_not_turned_off(self) -> None:
@@ -3040,6 +3078,8 @@ class Installer:
             info("The hub already matches this payload; nothing was installed or restarted.")
             return 0
 
+        if not self.args.no_apply_cloud_restart:
+            self.read_loaded_modules()
         try:
             self.stage_rollback_copies()
             self.create_handoff()
@@ -3101,14 +3141,19 @@ class Installer:
         self.report_flash_after_install()
         self.cleanup_stage()
 
-        if (
-            self.cloud_blocker_changed() or self.plugins_changed() or self.hal_setting_changed()
-        ) and not self.args.no_apply_cloud_restart:
+        if not self.args.no_apply_cloud_restart:
+            cloud, plugins, hal = self.cloud_blocker_changed(), self.plugins_changed(), self.hal_setting_changed()
+            usb_net = not (cloud or plugins or hal) and self.usb_net_modules_changed()
+        else:
+            cloud = plugins = hal = usb_net = False
+        if cloud or plugins or hal or usb_net:
             step("Restarting the hub")
-            if self.cloud_blocker_changed():
+            if cloud:
                 info("Rebooting the hub so Logitech cloud services restart in blocked mode.")
-            elif self.plugins_changed():
+            elif plugins:
                 info("Rebooting the hub so its engine loads the updated plugins.")
+            elif usb_net:
+                info("Rebooting the hub so it loads the updated USB Ethernet driver.")
             else:
                 info("Rebooting the hub so it starts the " + self.wanted_hal() + " hal.")
             self.reboot_and_wait()
@@ -3120,6 +3165,8 @@ class Installer:
             info("Install finished in explicit clean-install mode (configuration regenerated).")
         else:
             info("Install finished in default upgrade mode (existing configuration preserved where applicable).")
+        if self.args.no_apply_cloud_restart and self.usb_net_module_names(("replace",)):
+            info("A USB Ethernet driver was updated: if USB Ethernet is in use, reboot the hub to load it.")
         info("Persistent paths were mutated only after preflight ALLOWED; staging was volatile until then.")
         info(f"Web UI: http://{self.args.hub_host}:8080/")
         info("Web UI authentication: disabled")

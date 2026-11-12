@@ -1174,6 +1174,10 @@ $RootToolStages = [System.Collections.ArrayList]::new()
 $DropbearCopies = @{}
 # Hard-link count of each, by path.
 $DropbearLinks = @{}
+# USB Ethernet driver modules (usb_eth_service.sh loads them from here), and
+# the module names in the hub's /proc/modules, read once when needed.
+$UsbNetModulesDir = "/data/codex/modules/usb-net/"
+$script:LoadedModules = $null
 $MqttExplicitSupplied = ($PSBoundParameters.ContainsKey("MqttBroker") -or
     $PSBoundParameters.ContainsKey("MqttPort") -or
     $PSBoundParameters.ContainsKey("MqttUser") -or
@@ -2403,6 +2407,41 @@ function Test-PluginsChanged() {
     return [bool](Get-ActiveCandidates | Where-Object { $_.Kind -eq "plugin" })
 }
 
+# Module names of the USB Ethernet modules this install writes.
+function Get-UsbNetModuleNames([string[]]$Actions = @("replace", "create")) {
+    return @(Get-ActiveCandidates | Where-Object { $_.Action -in $Actions -and $_.Dest.StartsWith($UsbNetModulesDir) -and $_.Dest.EndsWith(".ko") } |
+        ForEach-Object { $_.Dest.Substring($UsbNetModulesDir.Length, $_.Dest.Length - $UsbNetModulesDir.Length - 3).Replace("-", "_") })
+}
+
+# Note which modules are loaded, before anything is replaced (only when a USB
+# Ethernet module is about to be). If the list can't be read, assume they are
+# loaded: a needless reboot beats a driver that silently stays old.
+function Read-LoadedModules() {
+    $names = Get-UsbNetModuleNames
+    if ($names.Count -eq 0 -or $null -ne $script:LoadedModules) { return }
+    try {
+        $r = Invoke-RemoteRc "cat /proc/modules" $null 30000
+    } catch {
+        $r = [PSCustomObject]@{ Code = 1; Out = "" }
+    }
+    if ($r.Code -eq 0) {
+        $script:LoadedModules = @($r.Out -split "`n" | Where-Object { $_.Trim() } | ForEach-Object { ($_.Trim() -split "\s+")[0] })
+    } else {
+        $script:LoadedModules = $names
+    }
+}
+
+# A replaced USB Ethernet module that was loaded takes effect only at the next
+# boot: usb_eth_service.sh never reloads a module it finds loaded, and
+# unloading one under a working cable would drop it. Uses the list read before
+# the install (Read-LoadedModules); without one, assume loaded.
+function Test-UsbNetModulesChanged() {
+    $names = Get-UsbNetModuleNames
+    if ($names.Count -eq 0) { return $false }
+    if ($null -eq $script:LoadedModules) { return $true }
+    return [bool]($names | Where-Object { $script:LoadedModules -ccontains $_ })
+}
+
 # ---------------------------------------------------------- turn off / on
 
 function Test-NotTurnedOff() {
@@ -2806,6 +2845,7 @@ if ((Get-ActiveCandidates).Count -eq 0) {
     exit 0
 }
 
+if (-not $NoApplyCloudRestart) { Read-LoadedModules }
 try {
     Add-RollbackCopies
     New-HandoffBackup
@@ -2872,12 +2912,15 @@ Remove-StagingTree
 $cloudChanged = Test-CloudBlockerChanged
 $pluginsChanged = Test-PluginsChanged
 $multiRemoteChanged = Test-MultiRemoteChanged
-if (($cloudChanged -or $pluginsChanged -or $multiRemoteChanged) -and -not $NoApplyCloudRestart) {
+$usbNetChanged = (-not $NoApplyCloudRestart) -and (Test-UsbNetModulesChanged)
+if (($cloudChanged -or $pluginsChanged -or $multiRemoteChanged -or $usbNetChanged) -and -not $NoApplyCloudRestart) {
     Step "Restarting the hub"
     if ($cloudChanged) {
         Info "Rebooting the hub so Logitech cloud services restart in blocked mode."
     } elseif ($pluginsChanged) {
         Info "Rebooting the hub so its engine loads the updated plugins."
+    } elseif ($usbNetChanged) {
+        Info "Rebooting the hub so it loads the updated USB Ethernet driver."
     } else {
         Info "Rebooting the hub so it starts the $(Get-WantedHal) hal."
     }
@@ -2891,6 +2934,9 @@ if ($FirstInstall) {
     Info "Install finished in explicit clean-install mode (configuration regenerated)."
 } else {
     Info "Install finished in default upgrade mode (existing configuration preserved where applicable)."
+}
+if ($NoApplyCloudRestart -and (Get-UsbNetModuleNames @("replace")).Count -gt 0) {
+    Info "A USB Ethernet driver was updated: if USB Ethernet is in use, reboot the hub to load it."
 }
 Info "Persistent paths were mutated only after preflight ALLOWED; staging was volatile until then."
 Info "Web UI: http://$HubHost`:8080/"

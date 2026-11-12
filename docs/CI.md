@@ -68,18 +68,54 @@ checks the release zip's SHA-256.
 
 ## Pins
 
-`tools/ci/verify_pins.py` reads the tree and nothing else. It compares the
-committed files with every place that pins them:
+`tools/ci/verify_pins.py` reads the tree and nothing else. Each shipped binary
+has a single home for its SHA-256 and size under `build/pins/<name>`:
 
-- `payload/bin/MANIFEST.txt`: size and MD5, and that every file in
-  `payload/bin/` is listed;
-- `build/build_harmony_tools_kali.sh`: each `*_EXPECT_SHA256` and
-  `*_EXPECT_SIZE`;
-- `docs/BUILD.md`: the size and SHA-256 table, each "size N, SHA-256"
-  sentence, and the source blob ids;
+- `build/pins/<name>`: `SHA256` and `SIZE` of each binary in `payload/bin/`
+  plus `payload/helpers/codex_flash_free` (read directly by
+  `build/build_harmony_tools_kali.sh`);
+- `payload/bin/MANIFEST.txt`: deterministic size (`1970-01-01 00:00` fixed
+  timestamp) and MD5 inventory in sorted order, checked byte-for-byte against
+  `python3 tools/ci/verify_pins.py --write-manifest`;
+- `build/build_harmony_tools_kali.sh` and `docs/BUILD.md`: checked to ensure
+  duplicate inline `*_EXPECT_*` constants, digest tables, and source-blob
+  hashes do not return;
 - `payload/modules/usb-net/README.md`: size, SHA-256 and MD5 of each module.
 
 It prints every stale pin, with the value the file really has.
+
+## Repinning and absorbing `main`
+
+`tools/repin.sh` rebuilds changed (or named) Zig binaries on macOS or Linux,
+regenerates `harmony_shell_assets.h` and `activity_ui_assets.h` when web inputs
+change, updates `build/pins/<name>` and `payload/bin/MANIFEST.txt`, and runs
+`python3 tools/ci/verify_pins.py`:
+
+```sh
+sh tools/repin.sh                  # rebuild Zig binaries whose inputs changed
+sh tools/repin.sh codex_webui      # rebuild a named binary (and web headers)
+sh tools/repin.sh --all            # rebuild all 10 Zig binaries + web headers
+```
+
+`tools/absorb_main.sh` merges `main` into a feature branch (or a pull request
+in a temporary worktree) and resolves derived conflicts automatically:
+
+```sh
+sh tools/absorb_main.sh                # merge origin/main into current branch
+sh tools/absorb_main.sh --pr 134       # dry-run absorb main into PR #134
+sh tools/absorb_main.sh --pr 134 --push # absorb main and push to PR #134
+```
+
+- If any **hand-written** file conflicts, `absorb_main.sh` stops immediately
+  (exit != 0), lists the conflicting files, and aborts the merge cleanly.
+- If **only derived files** conflict (`payload/bin/*`,
+  `payload/helpers/codex_flash_free`, `build/pins/*`,
+  `payload/bin/MANIFEST.txt`, `payload/source/harmony_shell_assets.h`,
+  `payload/source/activity_ui_assets.h`, or legacy pre-Phase-2 inline pin hunks
+  in `build/build_harmony_tools_kali.sh` and `docs/BUILD.md`), it resolves them
+  automatically, runs `tools/repin.sh` for the binaries changed on the branch,
+  verifies with `verify_pins.py`, and commits the merge while preserving
+  contributor commit authorship.
 
 ## Reproducible builds
 

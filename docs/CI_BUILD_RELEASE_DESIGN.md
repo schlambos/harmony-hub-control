@@ -1,7 +1,7 @@
 # CI, build and release pipeline: design
 
-Status: Phase 1 is built ([CI.md](CI.md)). Phases 2 and 3 are proposals for
-the owner to pick from. Written 2026-11-12 against `main` at `b5d9254`.
+Status: Phases 1 and 2 (Options A + B) are built ([CI.md](CI.md)). Phase 3 is a
+proposal for the owner. Written 2026-11-12 against `main` at `b5d9254`.
 
 ## The problem
 
@@ -74,35 +74,42 @@ that a binary and its pins match the source, they can be written by a tool
 instead of by hand, and the pull request diff no longer has to be trusted
 for them.
 
-## Phase 2: ending the churn (options)
+## Phase 2: ending the churn (built: A + B)
 
-### A. One home for each pin (cheap)
+### A. One home for each pin (built)
 
 - Each binary's SHA-256 and size move to a file of its own, `build/pins/<name>`.
   The build script reads them from there.
 - `docs/BUILD.md` stops repeating digests and source blob ids; it keeps the
   recipes and points at `build/pins/`.
 - `MANIFEST.txt` stays, since the installers and the release tool read it,
-  but a tool writes it in a fixed form, and CI checks that.
+  but `tools/ci/verify_pins.py --write-manifest` (and `tools/repin.sh`) writes
+  it in a fixed deterministic form (`1970-01-01 00:00` timestamp, sorted order),
+  and CI checks that byte-for-byte.
 
 Fixes the 6 different-binary conflicts (21%) outright. Does nothing for two
 pull requests that rebuild the same binary. Cost: the build script, the
 docs, `verify_pins.py`; no installer change. It also removes the 95
-hand-kept pins that Phase 1 now has to police.
+hand-kept pins that Phase 1 previously had to police.
 
-### B. One command to repin and to absorb `main` (cheap, builds on A)
+### B. One command to repin and to absorb `main` (built, builds on A)
 
 - `tools/repin.sh [binary…]`: regenerate the headers, rebuild the binaries
-  whose sources changed, copy them into `payload/`, write their pins and
-  `MANIFEST.txt`. The Zig binaries build on macOS and Linux; BusyBox and
-  Dropbear need the Linux container, and change rarely.
-- `tools/absorb_main.sh [--pr N]`: merge `main`; where only derived files
-  conflict (binaries, pins, `MANIFEST.txt`, generated headers), take
-  `main`'s and run `repin`; where a hand-written file conflicts, stop and
-  say which. With `--pr N` the owner can do it for a contributor's pull
-  request before merging.
-- `.gitattributes` marks the derived files as generated, so reviews collapse
-  them.
+  whose sources changed (or `--all`), copy them into `payload/`, write their
+  pins in `build/pins/<name>` and `payload/bin/MANIFEST.txt`, and verify with
+  `tools/ci/verify_pins.py`. The Zig binaries build on macOS and Linux; BusyBox
+  and Dropbear need the Linux container, and change rarely.
+- `tools/absorb_main.sh [--pr N] [--push]`: merge `main`; where only derived
+  files conflict (binaries, `build/pins/*`, `MANIFEST.txt`, generated headers,
+  plus legacy pre-Phase-2 inline pin conflict hunks in
+  `build/build_harmony_tools_kali.sh` and `docs/BUILD.md`), take `main`'s and
+  run `repin.sh`; where a hand-written file conflicts, stop, list the
+  conflicting files, and abort the merge cleanly. With `--pr N` the owner can
+  run it in a temporary worktree for a contributor's pull request (and push back
+  with `--push`, preserving contributor commit authorship).
+- `.gitattributes` marks the derived files (`build/pins/*`, `MANIFEST.txt`,
+  `FILES`, generated headers, `hal_remotes_patch.json`) `linguist-generated`,
+  so reviews collapse them.
 
 A same-binary conflict still happens, but it costs one command: nothing by
 hand for the 6 that were derived files only, and only the real source
@@ -190,8 +197,8 @@ no signing key, no hub.
 | Step | What | Size |
 | --- | --- | --- |
 | 1 | Merge Phase 1; require its two checks on `main` | done, plus one setting |
-| 2 | A: `build/pins/`, digests out of `BUILD.md`, generated `MANIFEST.txt` | small |
-| 3 | B: `tools/repin.sh`, `tools/absorb_main.sh`, `.gitattributes` | small |
+| 2 | A: `build/pins/`, digests out of `BUILD.md`, generated `MANIFEST.txt` | done (Phase 2) |
+| 3 | B: `tools/repin.sh`, `tools/absorb_main.sh`, `.gitattributes` | done (Phase 2) |
 | 4 | Release workflow | medium |
 | 5 | Only if needed: C for `codex_webui` | medium |
 
@@ -208,5 +215,6 @@ no signing key, no hub.
 - **`install_webui.py` needs Python 3.12.** An f-string with a backslash in
   its expression (the statement ending at line 2620) is a syntax error on
   Python 3.11 and older, and no document states the requirement.
-- **`BUILD.md` still calls `dropbearmulti` unverified.** The build script
-  requires it to reproduce, and CI now proves it does.
+- **Fixed in Phase 2:** `BUILD.md` previously called `dropbearmulti`
+  unverified; it now documents the reproducible Bootlin + Dropbear 2025.89
+  build verified in CI against `build/pins/dropbearmulti`.

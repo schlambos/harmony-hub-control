@@ -8,6 +8,7 @@ SRC="$REPO_ROOT/payload/source"
 TOOLS="$SCRIPT_DIR/toolchains"
 BUILD="$SCRIPT_DIR/tmp"
 OUT="$SCRIPT_DIR/output"
+PINS="$SCRIPT_DIR/pins"
 
 mkdir -p "$TOOLS" "$BUILD" "$OUT"
 
@@ -56,42 +57,18 @@ STRIP=mips-buildroot-linux-uclibc-strip
 # environment variables (or the caller's PATH for WEBUI_ZIG).
 # ---------------------------------------------------------------------------
 
-#: expected output digests (fail closed on any mismatch)
-WEBUI_EXPECT_SHA256=1d9a6d39bfc735830d8381869e0b1f9faf3efa23b3820ef3a568487ecc89b310
-WEBUI_EXPECT_SIZE=1351656
-PAIR_EXPECT_SHA256=6d5c5f0056187c6029ff2ebc1226c81c6df69ef2edb80d20eca6963530cab816
-PAIR_EXPECT_SIZE=83160
-BTHID_EXPECT_SHA256=7e2498cacd94d93db912ac7e1e1fb90afe7e70218e7dc1ae932669879da09180
-BTHID_EXPECT_SIZE=89544
-HAL_EXPECT_SHA256=239327e3ff8d9ebfc3f11ed06d1cfba91de9207206958f142af9a2aa68783b62
-HAL_EXPECT_SIZE=53848
-HBUS_EXPECT_SHA256=5d649e9455c93badf6843b7f973d526ac2be7313465525ca81f5b24b85ff8b74
-HBUS_EXPECT_SIZE=47160
-DHCPD_EXPECT_SHA256=749161a5cd140cb72a73619c61d77c4beeb4a71f31ca87810ead4575b8f1ce81
-DHCPD_EXPECT_SIZE=31464
-PORTAL_EXPECT_SHA256=4cf21f469d3ff4ef0c37b00bc40d14e1a143713d3777b7bd7e19c4b2ff0b4c33
-PORTAL_EXPECT_SIZE=48680
-ANDROIDTV_EXPECT_SHA256=dffdef43d59404c796f11024277a27b14805d189bb4c36916965c481e4b84e47
-ANDROIDTV_EXPECT_SIZE=233496
-USBETH_EXPECT_SHA256=f45949f5cab0fdbda3394e8024d8b5bda8d706c502a43b7d6e1e04ae23c81a90
-USBETH_EXPECT_SIZE=57736
-#: installer helper (payload/helpers): run from RAM staging, never installed
-FLASHFREE_EXPECT_SHA256=749c055e9fdc5cea50d3f48d0775441bd758f6811ee32f625c5b423121854177
-FLASHFREE_EXPECT_SIZE=27912
+#: expected output digests live in build/pins/<name> (SHA256 and SIZE, fail
+#: closed on any mismatch).
 
 #: BearSSL 0.6 source for codex_androidtv (bearssl.org publishes no checksum; this
 #: is the tarball's SHA-256 as downloaded on 2026-11-07)
 BEARSSL_VERSION=0.6
 BEARSSL_SHA256=6705bba1714961b41a728dfc5debbe348d2966c117649392f8c8139efc83ff14
 #: BusyBox 1.37.0 (GPL-2.0): pinned upstream tarball (busybox.net publishes a
-#: .sha256 beside it; this matches it) and the committed binary's identity
+#: .sha256 beside it; this matches it)
 BUSYBOX_VERSION=1.37.0
 BUSYBOX_TARBALL_SHA256=3311dff32e746499f4df0d5df04d7eb396382d7e108bb9250e7b519b837043a4
-BUSYBOX_EXPECT_SHA256=f516bde18556bfe4c63731f882bc06d02beed1f61dff92898fd9cd9773e6a3bc
-BUSYBOX_EXPECT_SIZE=418688
-#: committed dropbearmulti identity and its pinned upstream source tarball
-DROPBEAR_EXPECT_SHA256=e2ea632aed8b31dc5ea56b9673cbd983ec83260a97d33f891a0cebf51d5c6c8d
-DROPBEAR_EXPECT_SIZE=577296
+#: Dropbear 2025.89 pinned upstream source tarball
 DROPBEAR_TARBALL_SHA256=0d1f7ca711cfc336dc8a85e672cab9cfd8223a02fe2da0a4a7aeb58c9e113634
 
 #: pinned executable SHA-256 of the official Zig 0.16.0 `zig`, one per host
@@ -112,6 +89,32 @@ sha256_of() {
     sha256sum "$1" | awk '{print $1}'
   else
     shasum -a 256 "$1" | awk '{print $1}'
+  fi
+}
+
+#: check_pin <name> <built_file>: read build/pins/<name> and fail closed on any
+#: size or SHA-256 mismatch.
+check_pin() {
+  _pin_name="$1"
+  _pin_file="$2"
+  _pin_path="$PINS/$_pin_name"
+  if [ ! -f "$_pin_path" ]; then
+    echo "error: missing pin file $_pin_path" >&2
+    exit 1
+  fi
+  SHA256=""
+  SIZE=""
+  # shellcheck disable=SC1090
+  . "$_pin_path"
+  if [ -z "$SHA256" ] || [ -z "$SIZE" ]; then
+    echo "error: $_pin_path must define SHA256 and SIZE" >&2
+    exit 1
+  fi
+  _found_sha=$(sha256_of "$_pin_file")
+  _found_size=$(wc -c < "$_pin_file" | tr -d ' ')
+  if [ "$_found_sha" != "$SHA256" ] || [ "$_found_size" != "$SIZE" ]; then
+    echo "error: $_pin_name build is not exact (size $_found_size, sha256 $_found_sha; expected size $SIZE, sha256 $SHA256 from build/pins/$_pin_name)" >&2
+    exit 1
   fi
 }
 
@@ -173,12 +176,7 @@ check_zig "WEBUI_ZIG" "$WEBUI_ZIG" "$WEBUI_ZIG_SHA256" "$WEBUI_ZIG_FINGERPRINT"
     -o build/output/codex_webui \
     payload/source/codex_webui.c
 )
-WEBUI_SHA256=$(sha256_of "$OUT/codex_webui")
-WEBUI_SIZE=$(wc -c < "$OUT/codex_webui" | tr -d ' ')
-if [ "$WEBUI_SHA256" != "$WEBUI_EXPECT_SHA256" ] || [ "$WEBUI_SIZE" != "$WEBUI_EXPECT_SIZE" ]; then
-  echo "error: codex_webui build is not exact (size $WEBUI_SIZE, sha256 $WEBUI_SHA256; expected size $WEBUI_EXPECT_SIZE, sha256 $WEBUI_EXPECT_SHA256)" >&2
-  exit 1
-fi
+check_pin codex_webui "$OUT/codex_webui"
 
 # ---------------------------------------------------------------------------
 # pair-agent / bthid / HAL / HBus / dhcpd / portal — Official Zig 0.16.0
@@ -215,54 +213,9 @@ check_zig "OFFICIAL_ZIG" "$OFFICIAL_ZIG" "$OFFICIAL_ZIG_SHA256" "$OFFICIAL_ZIG_F
     payload/source/codex_flash_free.c
 )
 
-PAIR_SHA256=$(sha256_of "$OUT/codex_bt_pair_agent")
-PAIR_SIZE=$(wc -c < "$OUT/codex_bt_pair_agent" | tr -d ' ')
-if [ "$PAIR_SHA256" != "$PAIR_EXPECT_SHA256" ] || [ "$PAIR_SIZE" != "$PAIR_EXPECT_SIZE" ]; then
-  echo "error: codex_bt_pair_agent build is not exact (size $PAIR_SIZE, sha256 $PAIR_SHA256; expected size $PAIR_EXPECT_SIZE, sha256 $PAIR_EXPECT_SHA256)" >&2
-  exit 1
-fi
-BTHID_SHA256=$(sha256_of "$OUT/codex_bthid_keyboard")
-BTHID_SIZE=$(wc -c < "$OUT/codex_bthid_keyboard" | tr -d ' ')
-if [ "$BTHID_SHA256" != "$BTHID_EXPECT_SHA256" ] || [ "$BTHID_SIZE" != "$BTHID_EXPECT_SIZE" ]; then
-  echo "error: codex_bthid_keyboard build is not exact (size $BTHID_SIZE, sha256 $BTHID_SHA256; expected size $BTHID_EXPECT_SIZE, sha256 $BTHID_EXPECT_SHA256)" >&2
-  exit 1
-fi
-HAL_SHA256=$(sha256_of "$OUT/codex_hal_ltcp")
-HAL_SIZE=$(wc -c < "$OUT/codex_hal_ltcp" | tr -d ' ')
-if [ "$HAL_SHA256" != "$HAL_EXPECT_SHA256" ] || [ "$HAL_SIZE" != "$HAL_EXPECT_SIZE" ]; then
-  echo "error: codex_hal_ltcp build is not exact (size $HAL_SIZE, sha256 $HAL_SHA256; expected size $HAL_EXPECT_SIZE, sha256 $HAL_EXPECT_SHA256)" >&2
-  exit 1
-fi
-HBUS_SHA256=$(sha256_of "$OUT/codex_hbus")
-HBUS_SIZE=$(wc -c < "$OUT/codex_hbus" | tr -d ' ')
-if [ "$HBUS_SHA256" != "$HBUS_EXPECT_SHA256" ] || [ "$HBUS_SIZE" != "$HBUS_EXPECT_SIZE" ]; then
-  echo "error: codex_hbus build is not exact (size $HBUS_SIZE, sha256 $HBUS_SHA256; expected size $HBUS_EXPECT_SIZE, sha256 $HBUS_EXPECT_SHA256)" >&2
-  exit 1
-fi
-DHCPD_SHA256=$(sha256_of "$OUT/codex_dhcpd")
-DHCPD_SIZE=$(wc -c < "$OUT/codex_dhcpd" | tr -d ' ')
-if [ "$DHCPD_SHA256" != "$DHCPD_EXPECT_SHA256" ] || [ "$DHCPD_SIZE" != "$DHCPD_EXPECT_SIZE" ]; then
-  echo "error: codex_dhcpd build is not exact (size $DHCPD_SIZE, sha256 $DHCPD_SHA256; expected size $DHCPD_EXPECT_SIZE, sha256 $DHCPD_EXPECT_SHA256)" >&2
-  exit 1
-fi
-PORTAL_SHA256=$(sha256_of "$OUT/codex_portal")
-PORTAL_SIZE=$(wc -c < "$OUT/codex_portal" | tr -d ' ')
-if [ "$PORTAL_SHA256" != "$PORTAL_EXPECT_SHA256" ] || [ "$PORTAL_SIZE" != "$PORTAL_EXPECT_SIZE" ]; then
-  echo "error: codex_portal build is not exact (size $PORTAL_SIZE, sha256 $PORTAL_SHA256; expected size $PORTAL_EXPECT_SIZE, sha256 $PORTAL_EXPECT_SHA256)" >&2
-  exit 1
-fi
-USBETH_SHA256=$(sha256_of "$OUT/codex_usbeth")
-USBETH_SIZE=$(wc -c < "$OUT/codex_usbeth" | tr -d ' ')
-if [ "$USBETH_SHA256" != "$USBETH_EXPECT_SHA256" ] || [ "$USBETH_SIZE" != "$USBETH_EXPECT_SIZE" ]; then
-  echo "error: codex_usbeth build is not exact (size $USBETH_SIZE, sha256 $USBETH_SHA256; expected size $USBETH_EXPECT_SIZE, sha256 $USBETH_EXPECT_SHA256)" >&2
-  exit 1
-fi
-FLASHFREE_SHA256=$(sha256_of "$OUT/codex_flash_free")
-FLASHFREE_SIZE=$(wc -c < "$OUT/codex_flash_free" | tr -d ' ')
-if [ "$FLASHFREE_SHA256" != "$FLASHFREE_EXPECT_SHA256" ] || [ "$FLASHFREE_SIZE" != "$FLASHFREE_EXPECT_SIZE" ]; then
-  echo "error: codex_flash_free build is not exact (size $FLASHFREE_SIZE, sha256 $FLASHFREE_SHA256; expected size $FLASHFREE_EXPECT_SIZE, sha256 $FLASHFREE_EXPECT_SHA256)" >&2
-  exit 1
-fi
+for _zig_bin in codex_bt_pair_agent codex_bthid_keyboard codex_hal_ltcp codex_hbus codex_dhcpd codex_portal codex_usbeth codex_flash_free; do
+  check_pin "$_zig_bin" "$OUT/$_zig_bin"
+done
 
 # ---------------------------------------------------------------------------
 # codex_androidtv (network Android/Google TVs) — Official Zig 0.16.0 with BearSSL.
@@ -290,12 +243,7 @@ tar -C "$BUILD" -xzf "$BEARSSL_TARBALL"
     -o "$OUT/codex_androidtv" "$SRC/codex_androidtv.c" \
     $(find "bearssl-$BEARSSL_VERSION/src" -name '*.c' | LC_ALL=C sort)
 )
-ANDROIDTV_SHA256=$(sha256_of "$OUT/codex_androidtv")
-ANDROIDTV_SIZE=$(wc -c < "$OUT/codex_androidtv" | tr -d ' ')
-if [ "$ANDROIDTV_SHA256" != "$ANDROIDTV_EXPECT_SHA256" ] || [ "$ANDROIDTV_SIZE" != "$ANDROIDTV_EXPECT_SIZE" ]; then
-  echo "error: codex_androidtv build is not exact (size $ANDROIDTV_SIZE, sha256 $ANDROIDTV_SHA256; expected size $ANDROIDTV_EXPECT_SIZE, sha256 $ANDROIDTV_EXPECT_SHA256)" >&2
-  exit 1
-fi
+check_pin codex_androidtv "$OUT/codex_androidtv"
 
 # ---------------------------------------------------------------------------
 # busybox-extra — BusyBox 1.37.0, Official Zig 0.16.0, static. A second
@@ -343,12 +291,7 @@ cp "$BUSYBOX_THIRD_PARTY/busybox.config" "$BUILD/busybox-out/.config"
     HOSTCC="${HOSTCC:-cc}" EXTRA_LDFLAGS="-s $PDR_LDFLAGS" SKIP_STRIP=y busybox
 )
 cp "$BUILD/busybox-out/busybox" "$OUT/busybox-extra"
-BUSYBOX_SHA256=$(sha256_of "$OUT/busybox-extra")
-BUSYBOX_SIZE=$(wc -c < "$OUT/busybox-extra" | tr -d ' ')
-if [ "$BUSYBOX_SHA256" != "$BUSYBOX_EXPECT_SHA256" ] || [ "$BUSYBOX_SIZE" != "$BUSYBOX_EXPECT_SIZE" ]; then
-  echo "error: busybox-extra build is not exact (size $BUSYBOX_SIZE, sha256 $BUSYBOX_SHA256; expected size $BUSYBOX_EXPECT_SIZE, sha256 $BUSYBOX_EXPECT_SHA256)" >&2
-  exit 1
-fi
+check_pin busybox-extra "$OUT/busybox-extra"
 
 DROPBEAR_VERSION=2025.89
 DROPBEAR_TARBALL="$BUILD/dropbear-$DROPBEAR_VERSION.tar.bz2"
@@ -390,17 +333,19 @@ make -j"$(nproc)" MULTI=1 PROGRAMS="dropbear dropbearkey dbclient scp" dropbearm
 cp dropbearmulti "$OUT/dropbearmulti"
 
 #: fail closed unless the rebuild reproduces the committed binary exactly
-DROPBEAR_SHA256=$(sha256_of "$OUT/dropbearmulti")
-DROPBEAR_SIZE=$(wc -c < "$OUT/dropbearmulti" | tr -d ' ')
-if [ "$DROPBEAR_SHA256" != "$DROPBEAR_EXPECT_SHA256" ] || [ "$DROPBEAR_SIZE" != "$DROPBEAR_EXPECT_SIZE" ]; then
-  echo "error: dropbearmulti build is not exact (size $DROPBEAR_SIZE, sha256 $DROPBEAR_SHA256; expected size $DROPBEAR_EXPECT_SIZE, sha256 $DROPBEAR_EXPECT_SHA256)" >&2
-  exit 1
-fi
+check_pin dropbearmulti "$OUT/dropbearmulti"
 
 cd "$OUT"
 ln -sf dropbearmulti dropbear
 ln -sf dropbearmulti dropbearkey
-md5sum codex_dhcpd codex_portal codex_hbus codex_hal_ltcp codex_bthid_keyboard codex_bt_pair_agent codex_androidtv codex_usbeth codex_webui dropbearmulti busybox-extra > MD5SUMS
-file codex_dhcpd codex_portal codex_hbus codex_hal_ltcp codex_bthid_keyboard codex_bt_pair_agent codex_androidtv codex_usbeth codex_webui dropbearmulti busybox-extra > FILES
-ls -l codex_dhcpd codex_portal codex_hbus codex_hal_ltcp codex_bthid_keyboard codex_bt_pair_agent codex_androidtv codex_usbeth codex_webui dropbearmulti busybox-extra > MANIFEST.txt
+BIN_LIST="busybox-extra codex_androidtv codex_bt_pair_agent codex_bthid_keyboard codex_dhcpd codex_hal_ltcp codex_hbus codex_portal codex_usbeth codex_webui dropbearmulti"
+# shellcheck disable=SC2086
+md5sum $BIN_LIST > MD5SUMS
+# shellcheck disable=SC2086
+file $BIN_LIST > FILES
+: > MANIFEST.txt
+for _bin in $BIN_LIST; do
+  _sz=$(wc -c < "$_bin" | tr -d ' ')
+  printf -- '-rwxr-xr-x 1 codex codex %s 1970-01-01 00:00 %s\n' "$_sz" "$_bin" >> MANIFEST.txt
+done
 cat MD5SUMS >> MANIFEST.txt
