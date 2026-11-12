@@ -14,7 +14,12 @@ TVs get the HDMI keys for InputHdmi1-4, while a Hisense TV gets the input's TV-i
 URI (the keys again if it offers no app links); after the power key,
 inputs wait until the TV reports it is on; a command queued behind PowerOn waits as
 long as it does; a TV that drops off while turning on gets the power key again; and
-forgetting the TV removes it.
+forgetting the TV removes it. Input profiles: a bad one is refused whole; links from a
+pattern or whole links, keys as they are (no vendor link), the input menu key by key with
+its gap, and "don't switch" each work through the engine's input commands, including
+Input5 and up; the profile survives a restart; Try sends Home, then the input 1.5 s later,
+and refuses targets that don't hold, a TV that is off, and links to a TV without app links;
+an empty profile goes back to built-in; forgetting the TV removes its profile.
 
 MIT License, Copyright (c) 2026 Josh Lukens.
 """
@@ -504,11 +509,172 @@ def main() -> int:
         fake.wait_for("power", since=mark, timeout=20, on=True)
         set_mode("")
 
+        # Input profiles (POST /inputs, inputs-<id>.tsv): how the web app says
+        # the TV switches inputs, overriding the built-in behaviour above.
+        def post_text(path: str, text: str) -> dict:
+            req = urllib.request.Request(f"http://127.0.0.1:{args.port}{path}", data=text.encode(),
+                                         method="POST", headers={"Content-Type": "text/plain"})
+            with urllib.request.urlopen(req, timeout=5) as r:
+                return json.loads(r.read())
+
+        def wait_on() -> dict:
+            end = time.time() + 10
+            while time.time() < end:
+                st = (call(args.port, "/status")["tvs"] or [{}])[0]
+                if st.get("connected") and st.get("on"):
+                    return st
+                time.sleep(0.1)
+            raise AssertionError("the TV didn't come back on")
+
+        profile_path = os.path.join(state, f"inputs-{tv}.tsv")
+        st = wait_on()
+        assert st["inputs"] == "builtin" and st["appLinks"] is True, st
+        assert call(args.port, f"/inputs?device={tv}")["profile"] is None
+        # A profile that doesn't hold is refused whole, and nothing changes.
+        for bad, why in [
+            ("method\tlaser\n", "unknown method"),
+            ("slot\t1\t243\tuntested\t-\n", "no method"),
+            ("method\tkeys\nslot\t1\tabc\tuntested\t-\n", "key code"),
+            ("method\tkeys\nslot\t40\t243\tuntested\t-\n", "slot is"),
+            ("method\tkeys\nslot\t1\t243\tmaybe\t-\n", "status"),
+            ("method\tkeys\nslot\t1\t243\tworks\tyesterday\n", "date"),
+            ("method\tkeys\nslot\t1\t243\tworks\t-\nslot\t1\t244\tworks\t-\n", "twice"),
+            ("method\tlink\npattern\tcontent://x/HW\nslot\t1\t2\tuntested\t-\n", "{n}"),
+            ("method\tlink\nslot\t1\tnot a link\tuntested\t-\n", "link"),
+            ("method\tkeys\npattern\tcontent://x/{n}\n", "only the link method"),
+            ("method\tmenu\ngap\t5\n", "gap"),
+        ]:
+            r = post_text(f"/inputs?device={tv}", bad)
+            assert r["ok"] is False and why in r["error"], (bad, r)
+        assert not os.path.exists(profile_path)
+        assert call(args.port, "/status")["tvs"][0]["inputs"] == "builtin"
+
+        # Links from a pattern, on a TV that isn't a Hisense; slot 7 is Input7.
+        fake_pattern = "content://android.media.tv/passthrough/fake%2FHW{n}"
+        prof = (f"method\tlink\npattern\t{fake_pattern}\n"
+                "slot\t1\t2\tworks\t2026-11-12\nslot\t7\t9\tuntested\t-\n")
+        assert post_text(f"/inputs?device={tv}", prof)["ok"]
+        assert call(args.port, f"/inputs?device={tv}")["profile"] == prof
+        assert call(args.port, "/status")["tvs"][0]["inputs"] == "link"
+        mark = len(fake.events)
+        cmd("InputHdmi1")
+        fake.wait_for("app_link", since=mark, link=fake_pattern.replace("{n}", "2"))
+        cmd("Input7")
+        fake.wait_for("app_link", since=mark, link=fake_pattern.replace("{n}", "9"))
+        assert cmd("InputHdmi2")["ok"] is False, "a slot the profile doesn't set was sent"
+        assert cmd("Input33")["ok"] is False
+        time.sleep(0.5)
+        assert fake.count("key", since=mark, code=244) == 0, "an unset slot fell back to the HDMI key"
+        # A long press opens the link once, on the press.
+        mark = len(fake.events)
+        cmd("InputHdmi1:start")
+        cmd("InputHdmi1:end")
+        time.sleep(0.8)
+        assert fake.count("app_link", since=mark) == 1, "a long press opened the link twice"
+        # The profile survives a restart.
+        restart_connected()
+        assert call(args.port, "/status")["tvs"][0]["inputs"] == "link"
+        mark = len(fake.events)
+        cmd("Input7")
+        fake.wait_for("app_link", since=mark, link=fake_pattern.replace("{n}", "9"))
+
+        # A whole link per input.
+        prof = "method\tlink\nslot\t1\tcontent://x/one\tuntested\t-\nslot\t2\thttps://example.com/two\tfailed\t2026-11-12\n"
+        assert post_text(f"/inputs?device={tv}", prof)["ok"]
+        mark = len(fake.events)
+        cmd("InputHdmi2")
+        fake.wait_for("app_link", since=mark, link="https://example.com/two")
+
+        # Keys from the profile go as they are, even on a Hisense (which
+        # otherwise gets its input links for the HDMI keys).
+        set_mode("vendor=Hisense")
+        restart_connected()
+        wait_on()
+        prof = "method\tkeys\nslot\t1\t243\tuntested\t-\nslot\t5\t170\tuntested\t-\n"
+        assert post_text(f"/inputs?device={tv}", prof)["ok"]
+        mark = len(fake.events)
+        cmd("InputHdmi1")
+        fake.wait_for("key", since=mark, code=243)
+        cmd("Input5")
+        fake.wait_for("key", since=mark, code=170)
+        assert fake.count("app_link", since=mark) == 0, "a profile key became a vendor input link"
+
+        # The input menu: InputNext, Down to the position, Select, a gap apart.
+        prof = "method\tmenu\ngap\t300\nslot\t1\t1\tuntested\t-\nslot\t2\t3\tuntested\t-\n"
+        assert post_text(f"/inputs?device={tv}", prof)["ok"]
+        mark = len(fake.events)
+        cmd("InputHdmi2")
+        fake.wait_for("key", since=mark, timeout=10, code=23)
+        keys = [e for e in fake.events[mark:] if e.get("event") == "key"]
+        assert [e["code"] for e in keys] == [178, 20, 20, 23], keys
+        gaps = [b["t"] - a["t"] for a, b in zip(keys, keys[1:])]
+        assert all(g >= 0.25 for g in gaps), gaps
+        mark = len(fake.events)
+        cmd("InputHdmi1")
+        fake.wait_for("key", since=mark, timeout=10, code=23)
+        assert [e["code"] for e in fake.events[mark:] if e.get("event") == "key"] == [178, 23]
+
+        # "Don't switch inputs": an input command is taken and sends nothing.
+        assert post_text(f"/inputs?device={tv}", "method\tnone\n")["ok"]
+        mark = len(fake.events)
+        assert cmd("InputHdmi1")["ok"] is True
+        time.sleep(0.8)
+        assert fake.count("key", since=mark) == 0 and fake.count("app_link", since=mark) == 0
+
+        # Try (POST /try): one target now, unsaved, Home first and the input
+        # 1.5 s later.
+        mark = len(fake.events)
+        r = call(args.port, "/try", {"device": tv, "method": "link", "pattern": fake_pattern, "value": "4"})
+        assert r["ok"], r
+        e = fake.wait_for("app_link", since=mark, link=fake_pattern.replace("{n}", "4"))
+        home = [x for x in fake.events[mark:] if x.get("event") == "key" and x.get("code") == 3]
+        assert home and e["t"] - home[0]["t"] >= 1.4, (home, e)
+        mark = len(fake.events)
+        assert call(args.port, "/try", {"device": tv, "method": "keys", "value": "244", "home": "0"})["ok"]
+        fake.wait_for("key", since=mark, code=244)
+        assert fake.count("key", since=mark, code=3) == 0, "home 0 still pressed Home"
+        for body, why in [
+            ({"device": tv, "method": "keys", "value": "x"}, "key code"),
+            ({"device": tv, "method": "link", "value": "nolink"}, "link"),
+            ({"device": tv, "method": "link", "pattern": "content://x/HW", "value": "2"}, "{n}"),
+            ({"device": tv, "method": "menu", "value": "99"}, "position"),
+            ({"device": tv, "method": "beam", "value": "1"}, "Choose"),
+            ({"device": "androidtvdeadbeef", "method": "keys", "value": "243"}, "No such TV"),
+        ]:
+            r = call(args.port, "/try", body)
+            assert r["ok"] is False and why in r["error"], (body, r)
+        mark = len(fake.events)
+        cmd("PowerOff")
+        fake.wait_for("power", since=mark, on=False)
+        time.sleep(0.5)
+        r = call(args.port, "/try", {"device": tv, "method": "keys", "value": "243"})
+        assert r["ok"] is False and "off" in r["error"], r
+        mark = len(fake.events)
+        assert call(args.port, "/try", {"device": tv, "method": "power", "value": "on"})["ok"]
+        fake.wait_for("power", since=mark, on=True)
+        wait_on()
+        set_mode("vendor=Hisense no-applink")
+        restart_connected()
+        st = wait_on()
+        assert st["appLinks"] is False, st
+        r = call(args.port, "/try", {"device": tv, "method": "link", "value": "content://x/one"})
+        assert r["ok"] is False and "links" in r["error"], r
+        set_mode("")
+
+        # An empty profile goes back to the built-in behaviour.
+        assert post_text(f"/inputs?device={tv}", "")["ok"]
+        assert not os.path.exists(profile_path)
+        assert call(args.port, "/status")["tvs"][0]["inputs"] == "builtin"
+        # Forgetting the TV (below) removes its profile too.
+        assert post_text(f"/inputs?device={tv}", "method\tkeys\n")["ok"]
+        assert os.path.exists(profile_path)
+
         r = call(args.port, "/forget", {"id": tv})
         assert r["ok"], r
         st = call(args.port, "/status")
         assert st["tvs"] == [], st
         assert not os.path.exists(os.path.join(state, f"tv-{tv}.crt.der"))
+        assert not os.path.exists(profile_path), "forgetting the TV left its input profile"
         ok = True
         print("androidtv smoke: OK")
     finally:

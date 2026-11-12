@@ -409,5 +409,81 @@ check("refuses to remove a TV an activity uses", inUse.ok == false and inUse.err
 check("the name clash with another device is refused",
   androidtv({ devices = { TV, { entity = "androidtv99887766", name = "Receiver" } } }).ok == false)
 
+-- Inputs: the Settings page sends a TV's inputs, each a slot command -------------
+resetHub(seedState())
+androidtv({ devices = { TV } })
+local function tvEntry() return entryTagged("melodious-androidtv-")[1] end
+local function inputsOf(e)
+  local feature = featureOf(e, "InputFeature")
+  if not feature then return "none" end
+  local out = {}
+  for _, input in ipairs(feature.Inputs) do
+    out[#out + 1] = input.InputOrder .. ":" .. input.InputName .. "=" .. input.Actions[1].IRCommandName
+  end
+  return table.concat(out, ",")
+end
+local function hasCommand(e, name)
+  for _, c in ipairs(e.Commands) do if c.Name == name then return c end end
+end
+local withInputs = { entity = TV.entity, name = TV.name, manufacturer = TV.manufacturer, model = TV.model,
+  inputDelay = 500, inputs = {
+    { name = "Shield", command = "InputHdmi2" }, { name = "Xbox", command = "inputhdmi3" },
+    { name = "Live TV", command = "Input6" } } }
+local saved = androidtv({ devices = { withInputs } })
+local e = tvEntry()
+check("a TV's inputs are saved with their names, order and slot commands", saved.ok and
+  inputsOf(e) == "1:Shield=InputHdmi2,2:Xbox=InputHdmi3,3:Live TV=Input6", inputsOf(e))
+check("the input delay is saved", featureOf(e, "InputFeature").InputDelay == 500)
+check("an input's slot command beyond HDMI 4 joins the commands (Input6)",
+  hasCommand(e, "Input6") ~= nil and #e.Commands == 52 and hasCommand(e, "Input6").Parameters[1].Value == "Input6", #e.Commands)
+local input6Id = hasCommand(e, "Input6")["Id-"]
+local renamedAgain = androidtv({ devices = { { entity = TV.entity, name = "Den TV", manufacturer = "Hisense", model = "75U8H" } } })
+e = tvEntry()
+check("a commit without inputs (a rename) keeps them, their delay and Input6", renamedAgain.ok and
+  inputsOf(e) == "1:Shield=InputHdmi2,2:Xbox=InputHdmi3,3:Live TV=Input6" and
+  featureOf(e, "InputFeature").InputDelay == 500 and hasCommand(e, "Input6")["Id-"] == input6Id, inputsOf(e))
+local reordered = androidtv({ devices = { { entity = TV.entity, name = "Den TV", manufacturer = "Hisense", model = "75U8H",
+  inputs = { { name = "Live TV", command = "Input6" }, { name = "Shield", command = "InputHdmi2" } } } } })
+e = tvEntry()
+check("reordering keeps each input's slot and Input6's command ID", reordered.ok and
+  inputsOf(e) == "1:Live TV=Input6,2:Shield=InputHdmi2" and hasCommand(e, "Input6")["Id-"] == input6Id, inputsOf(e))
+local dropped = androidtv({ devices = { { entity = TV.entity, name = "Den TV", manufacturer = "Hisense", model = "75U8H",
+  inputs = { { name = "Shield", command = "InputHdmi2" } } } } })
+e = tvEntry()
+check("removing the input that used Input6 removes the command", dropped.ok and hasCommand(e, "Input6") == nil and
+  #e.Commands == 51 and hasCommand(e, "InputHdmi4") ~= nil, #e.Commands)
+local function refused(inputs, extra)
+  local d = { entity = TV.entity, name = "Den TV", manufacturer = "Hisense", model = "75U8H", inputs = inputs }
+  for k, v in pairs(extra or {}) do d[k] = v end
+  return androidtv({ devices = { d } })
+end
+local r1 = refused({ { name = "Menu", command = "InputNext" } })
+check("an input must use a slot command, not another command", r1.ok == false and r1.error:find("slot command") ~= nil, r1.error)
+local r2 = refused({ { name = "A", command = "Input5" }, { name = "B", command = "input5" } })
+check("two inputs can't share a slot", r2.ok == false and r2.error:find("two inputs") ~= nil, r2.error)
+local r3 = refused({ { name = "A", command = "Input33" } })
+check("Input33 is past the last slot", r3.ok == false, r3.error)
+local r4 = refused({ { name = "A", command = "InputHdmi1" }, { name = "a", command = "InputHdmi2" } })
+check("input names are unique, ignoring case", r4.ok == false and r4.error:find("twice") ~= nil, r4.error)
+local r5 = refused({ { name = "A", command = "InputHdmi1" } }, { inputDelay = 70000 })
+check("the input delay is 0-60000 ms", r5.ok == false and r5.error:find("inputDelay") ~= nil, r5.error)
+check("refused input lists change nothing", inputsOf(tvEntry()) == "1:Shield=InputHdmi2")
+local none = androidtv({ devices = { { entity = TV.entity, name = "Den TV", manufacturer = "Hisense", model = "75U8H", inputs = {} } } })
+check("an empty input list is \"don't switch inputs\" (no input feature)", none.ok and inputsOf(tvEntry()) == "none")
+androidtv({ devices = { { entity = TV.entity, name = "Den", manufacturer = "Hisense", model = "75U8H" } } })
+check("and a later commit without inputs keeps it that way", inputsOf(tvEntry()) == "none")
+androidtv({ devices = { withInputs } })
+local tvDeviceId = tonumber(tvEntry().Device["Id-"])
+local acts = stored("ActivityList")
+acts.Activities[1].Roles[#acts.Activities[1].Roles + 1] = { ["DeviceId-"] = tvDeviceId, __type = "DisplayActivityRole",
+  SelectedInput = { Name = "Xbox" } }
+hub.files.ActivityList.text = encodeJson(acts)
+local usedInput = refused({ { name = "Shield", command = "InputHdmi2" } })
+check("an input an activity switches to can't be removed", usedInput.ok == false and usedInput.error:find("Xbox") ~= nil,
+  usedInput.error)
+local renamedInput = refused({ { name = "Shield", command = "InputHdmi2" }, { name = "Xbox", command = "Input7" } })
+check("but it may move to another slot", renamedInput.ok and hasCommand(tvEntry(), "Input7") ~= nil and
+  hasCommand(tvEntry(), "Input6") == nil, renamedInput.error)
+
 print(string.format("%d/%d checks passed", count - failures, count))
 os.exit(failures == 0 and 0 or 1)
