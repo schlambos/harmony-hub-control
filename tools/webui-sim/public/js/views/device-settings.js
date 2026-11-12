@@ -665,7 +665,7 @@ export function createDeviceSettings({ root, track }) {
   function openTvPattern() {
     const d = tv.draft;
     const options = [
-      ...d.patterns.map((p) => ({ id: p.id, label: `${p.label}${p.untested ? " (untested)" : ""}` })),
+      ...d.patterns.map((p) => ({ id: p.id, label: p.label })),
       { id: CUSTOM_LINKS, label: "A link for each input" },
     ];
     track(openCommandPicker({

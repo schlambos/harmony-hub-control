@@ -774,9 +774,31 @@ input.androidtv-code {
 }
 
 /* A network TV's inputs (androidtv-inputs.js): the method's own settings sit
-   under its choice; each input shows its last Try result under its name. */
-.ds-tv-sub {
-  margin-left: var(--space-6);
+   under its choice, indented past its text and with no divider between them,
+   so they read as part of it; each input shows its last Try result under its
+   name. The indent: the choice's padding, radio and gap (46px), plus 24px. */
+.ds-tv-methods {
+  --ds-tv-indent: calc(var(--space-3) + 20px + 14px + var(--space-6));
+}
+
+.m-list .m-row.ds-tv-sub {
+  min-height: 44px;
+  padding-top: 0;
+  padding-left: var(--ds-tv-indent);
+  border-top: 0;
+}
+
+div.ds-tv-sub {
+  padding-left: calc(var(--ds-tv-indent) - var(--space-4));
+}
+
+p.ds-tv-sub {
+  margin: 0;
+  padding: 0 var(--space-4) var(--space-3) var(--ds-tv-indent);
+}
+
+.ds-tv-sub + .ds-choice {
+  border-top: 1px solid var(--divider);
 }
 
 .ds-tv-note {

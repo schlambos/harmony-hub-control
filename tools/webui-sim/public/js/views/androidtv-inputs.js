@@ -35,7 +35,7 @@ export function tryBlocker(tv) {
 function patternLabel(draft) {
   if (draft.pattern === CUSTOM_LINKS) return "A link for each input";
   const p = draft.patterns.find((q) => q.id === draft.pattern);
-  return p ? `${p.label}${p.untested ? " (untested)" : ""}` : "Choose…";
+  return p ? p.label : "Choose…";
 }
 
 function methodRows(draft, tv, stepper) {
@@ -84,7 +84,7 @@ export function tvInputsMarkup({ draft, tv, inUse, stepper, maxInputs }) {
     parts.push(`<p class="ds-hint">Used by activities: ${escapeHtml(inUse.map((u) => `${u.input} (${u.activity})`).join(", "))}. Keep these names.</p>`);
   }
   if (tv.loadError) parts.push(`<p class="ds-note">${escapeHtml(tv.loadError)}</p>`);
-  parts.push(`<div class="m-list" role="radiogroup" aria-label="How this TV switches inputs">${methodRows(draft, tv, stepper)}</div>`);
+  parts.push(`<div class="m-list ds-tv-methods" role="radiogroup" aria-label="How this TV switches inputs">${methodRows(draft, tv, stepper)}</div>`);
   const note = presetNote(draft, draft.preset?.vendor);
   if (note && draft.method !== "none") parts.push(`<p class="ds-hint ds-tv-note">${escapeHtml(note)}${draft.fromProfile ? "" : " · not saved yet"}</p>`);
   else if (!draft.fromProfile && draft.method !== "none") {

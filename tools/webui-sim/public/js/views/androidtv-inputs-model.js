@@ -435,9 +435,7 @@ export function today(now = new Date()) {
 export function presetNote(draft, vendor) {
   const p = draft.preset;
   if (!p?.vendor) return "";
-  const checked = p.checked?.model ? ` · checked on a ${p.vendor} ${p.checked.model}` : "";
-  const which = vendor && p.vendor ? `Suggested for ${p.vendor}` : "Suggested";
-  return `${which}${checked}`;
+  return vendor && p.vendor ? `Suggested for ${p.vendor}` : "Suggested";
 }
 
 /* For the device page's status line: a TV still on the hub's built-in input
