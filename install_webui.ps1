@@ -1365,6 +1365,7 @@ function Build-Inventory() {
     Add-Candidate (New-Candidate "/data/codex/offline_egress_guard.sh" "755" "runtime" -Local (Join-Path $Payload "scripts/offline_egress_guard.sh"))
     Add-Candidate (New-Candidate "/data/codex/recovery_ap.sh" "755" "runtime" -Local (Join-Path $Payload "scripts/recovery_ap.sh"))
     Add-Candidate (New-Candidate "/data/codex/androidtv_service.sh" "755" "runtime" -Local (Join-Path $Payload "scripts/androidtv_service.sh"))
+    Add-Candidate (New-Candidate "/data/codex/androidtv-input-presets.json" "644" "runtime" -Local (Join-Path $Payload "androidtv/input-presets.json"))
     Add-Candidate (New-Candidate "/data/codex/usb_eth_service.sh" "755" "runtime" -Local (Join-Path $Payload "scripts/usb_eth_service.sh"))
     Add-Candidate (New-Candidate "/data/codex/modules/usb-net/r8152.ko" "644" "runtime" -Local (Join-Path $Payload "modules/usb-net/r8152.ko"))
     Add-Candidate (New-Candidate "/data/codex/modules/usb-net/usbnet.ko" "644" "runtime" -Local (Join-Path $Payload "modules/usb-net/usbnet.ko"))

@@ -772,3 +772,78 @@ input.androidtv-code {
 .rs-window-foot .m-field-hint {
   margin: 0;
 }
+
+/* A network TV's inputs (androidtv-inputs.js): the method's own settings sit
+   under its choice; each input shows its last Try result under its name. */
+.ds-tv-sub {
+  margin-left: var(--space-6);
+}
+
+.ds-tv-note {
+  margin-top: var(--space-2);
+}
+
+.ds-tv-name {
+  display: flex;
+  flex: 1 1 0;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+}
+
+.ds-tv-name .ds-input-name {
+  flex: none;
+  width: 100%;
+}
+
+.ds-tv-status {
+  display: inline-flex;
+  align-items: center;
+  gap: 2px;
+  padding-left: var(--space-1);
+  color: var(--on-surface-variant);
+  font-size: var(--fs-caption);
+}
+
+.ds-tv-status.is-works {
+  color: var(--key-green);
+}
+
+.ds-tv-status.is-failed {
+  color: var(--error);
+}
+
+.ds-tv-blocker {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-1);
+}
+
+.ds-tv-blocker .ds-hint {
+  margin-bottom: 0;
+}
+
+.ds-tv-answers {
+  display: grid;
+  gap: var(--space-2);
+  margin-top: var(--space-4);
+}
+
+.ds-tv-new {
+  display: flex;
+  gap: var(--space-2);
+}
+
+.ds-tv-new input {
+  flex: 1 1 0;
+  min-width: 0;
+}
+
+.ds-tv-share {
+  width: 100%;
+  margin: var(--space-3) 0;
+  font-family: var(--font-mono);
+  font-size: var(--fs-caption);
+}

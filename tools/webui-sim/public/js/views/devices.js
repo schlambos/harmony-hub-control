@@ -32,6 +32,7 @@ import { changeNote, hubChange, openCommandSheet, openDeviceSheet, openLearnShee
 import { createDeviceSweep } from "./device-sweep.js";
 import { createIrLab, labNote } from "./ir-lab.js";
 import { androidTvDeviceSet, androidTvIdOf, isAndroidTvDevice, strandedTvs, tvStatusText } from "./androidtv-model.js";
+import { tvInputsHint } from "./androidtv-inputs-model.js";
 import { LIMITS, deviceUsage, touchScreenState, withoutDeviceMaps } from "./ir-model.js";
 import { describeHaDeviceState, describeTheaterLink, deviceIconName, deviceKeys, isHaCommandRedundant } from "./remote-model.js";
 import {
@@ -360,7 +361,9 @@ export function createDevicesView(section) {
         let text;
         try {
           const st = await getAndroidTvStatus();
-          text = tvStatusText((st.tvs ?? []).find((tv) => tv.id === androidTvIdOf(d)));
+          const found = (st.tvs ?? []).find((tv) => tv.id === androidTvIdOf(d));
+          const hint = tvInputsHint(found);
+          text = tvStatusText(found) + (hint ? ` · ${hint}` : "");
         } catch (error) {
           text = error.message || "The hub's network TV service didn't answer.";
         }

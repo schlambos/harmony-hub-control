@@ -226,6 +226,26 @@ export function forgetTv({ id }) {
   return request("/api/androidtv/forget", { method: "POST", body: { id } });
 }
 
+/** How a network TV switches inputs: codex_androidtv's profile for it ({profile: text|null}). */
+export function getTvInputs(id) {
+  return request(`/api/androidtv/inputs?device=${encodeURIComponent(id)}`);
+}
+
+/** Save a network TV's input profile (text; "" goes back to the built-in behaviour). */
+export function saveTvInputs(id, profile) {
+  return request("/api/androidtv/inputs", { method: "POST", body: { device: id, profile } });
+}
+
+/** Send one input target to a TV now, unsaved (the Settings page's Try). */
+export function tryTvInput(body) {
+  return request("/api/androidtv/try", { method: "POST", body });
+}
+
+/** The brand presets file (androidtv-input-presets.json), as the hub has it. */
+export function getTvInputPresets() {
+  return request("/api/androidtv/input-presets");
+}
+
 /** The hub's whole set of network TV devices (codexactivity CommitAndroidTvDevices). */
 export function saveAndroidTvDevices({ devices, dryRun = false }) {
   return request("/api/androidtv/devices", { method: "POST", body: { devices, dryRun } });

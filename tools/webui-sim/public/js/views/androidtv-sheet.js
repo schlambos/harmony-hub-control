@@ -16,9 +16,12 @@ import {
   discoverTvs,
   finishTvPairing,
   forgetTv,
+  getAndroidTvStatus,
   getConfig,
   getTvPairing,
+  getTvInputPresets,
   saveAndroidTvDevices,
+  saveTvInputs,
   startTvPairing,
 } from "../api.js";
 import * as hub from "../state.js";
@@ -36,9 +39,44 @@ import {
   pairStateText,
 } from "./androidtv-model.js";
 import { fieldId, setMessage, textField } from "./device-sheets.js";
+import {
+  applyPreset,
+  profileText,
+  readPresets,
+  readTvInputs,
+  slotCommand,
+  tvInputProblems,
+  writerInputs,
+} from "./androidtv-inputs-model.js";
 
 const DISCOVER_FOR_MS = 7000;
 const POLL_MS = 600;
+
+/* After a TV is added: when the presets file has a suggestion for the vendor
+   it reports, save it as the TV's input profile. Best effort: the device page
+   and Settings → Inputs still offer it if this doesn't happen. Only when the
+   suggestion's inputs are the new TV's own (HDMI 1-4), so the device's input
+   list needs no change. */
+async function applyTvInputPreset(tvId) {
+  try {
+    const presets = readPresets(await getTvInputPresets());
+    let tv = null;
+    for (let i = 0; i < 8 && !tv?.vendor; i++) {
+      tv = ((await getAndroidTvStatus()).tvs ?? []).find((t) => t.id === tvId) ?? null;
+      if (!tv?.vendor) await new Promise((resolve) => setTimeout(resolve, 1000));
+    }
+    if (!tv?.vendor || tv.inputs !== "builtin") return;
+    const hdmi = [1, 2, 3, 4].map((n) => ({ name: `HDMI ${n}`, command: slotCommand(n) }));
+    const draft = readTvInputs({ entryInputs: hdmi, profile: null, presets, vendor: tv.vendor, model: tv.model });
+    if (!draft.preset?.vendor) return;
+    applyPreset(draft);
+    if (JSON.stringify(writerInputs(draft).inputs) !== JSON.stringify(hdmi)) return;
+    if (tvInputProblems(draft, { appLinks: tv.appLinks !== false }).length) return;
+    await saveTvInputs(tvId, profileText(draft));
+  } catch {
+    // Settings → Inputs offers the same suggestion.
+  }
+}
 
 export function openAndroidTvSheet({ onDone } = {}) {
   let step = "find";
@@ -204,6 +242,7 @@ export function openAndroidTvSheet({ onDone } = {}) {
             saving = saveAndroidTvDevices(androidTvDeviceSet(config, { add: { entity: tvId, name, manufacturer, model } }));
             await saving;
             committed = true;
+            applyTvInputPreset(tvId);
             await hub.refreshConfig().catch(() => {});
             added = hub.devices().find((d) => isAndroidTvEntry(d.entry) && androidTvIdOf(d.entry) === tvId) ?? null;
             const open = content.isConnected;

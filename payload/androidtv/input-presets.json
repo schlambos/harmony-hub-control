@@ -1,0 +1,52 @@
+{
+  "version": 1,
+  "about": "Suggested input settings for network TVs, by the vendor the TV reports. The web app reads this file (GET /api/androidtv/input-presets) to fill a TV's Settings > Inputs; users can change everything there. Change or add a brand here: no rebuild. docs/ANDROID_TV.md#inputs explains the fields.",
+  "patterns": [
+    {
+      "id": "hisense-hw",
+      "label": "Hisense (HW numbers)",
+      "uri": "content://android.media.tv/passthrough/com.hisense.tv.hitvinput%2F.hdmi.HdmiTvInputService%2FHW{n}"
+    },
+    {
+      "id": "mediatek-tvinput-hw",
+      "label": "MediaTek TV input (HW numbers)",
+      "untested": true,
+      "uri": "content://android.media.tv/passthrough/com.mediatek.tvinput%2F.hdmi.HDMIInputService%2FHW{n}"
+    },
+    {
+      "id": "mediatek-tis-hdmi",
+      "label": "MediaTek TIS (HDMI numbers)",
+      "untested": true,
+      "uri": "content://android.media.tv/passthrough/com.mediatek.tis%2F.HdmiInputService%2FHDMI{n}"
+    },
+    {
+      "id": "vt-source-hw",
+      "label": "VT source (HW numbers)",
+      "untested": true,
+      "uri": "content://android.media.tv/passthrough/com.vt.source.external%2F.hdmi.HdmiTvInputService%2FHW{n}"
+    }
+  ],
+  "presets": [
+    {
+      "vendor": "Hisense",
+      "method": "link",
+      "pattern": "hisense-hw",
+      "inputs": [
+        { "name": "HDMI 1", "n": 2 },
+        { "name": "HDMI 2", "n": 3 },
+        { "name": "HDMI 3", "n": 4 },
+        { "name": "HDMI 4", "n": 5 }
+      ],
+      "checked": { "model": "75U8H", "date": "2026-11-11", "inputs": ["HDMI 1", "HDMI 2", "HDMI 3"] }
+    }
+  ],
+  "default": {
+    "method": "keys",
+    "inputs": [
+      { "name": "HDMI 1", "key": 243 },
+      { "name": "HDMI 2", "key": 244 },
+      { "name": "HDMI 3", "key": 245 },
+      { "name": "HDMI 4", "key": 246 }
+    ]
+  }
+}
