@@ -22,8 +22,8 @@
   anyway, every copy is removed and nothing live changed), then renamed into
   place, codex_webui last. Unchanged files are left alone. Originals are
   copied into RAM first so any later failure restores them with their
-  observed modes. The dropbearmulti harmony-hub-root leaves (the same build
-  as ours, or the .pdr-stripped one) is hard-linked instead of copied.
+  observed modes. The dropbearmulti harmony-hub-root leaves (either build of
+  our Dropbear) is hard-linked instead of copied.
 .PARAMETER PreflightOnly
   Volatile preflight only: stage/verify/compare/report under
   /var/volatile/codex-install-*. No persistent writes, pruning, handoff,
@@ -134,12 +134,13 @@ $RootToolStagePattern = '^/data/codexssh_[A-Za-z0-9_]+_stage$'
 # Known builds of Dropbear, by MD5: their version. Same as DROPBEAR_BUILDS in
 # install_webui.py: builds of one version load the same image, so either
 # counts as the installed Dropbear and the root tool's copy is reused
-# whichever it is (2025.89 as built, and .pdr-stripped as harmony-hub-root
-# ships it). A new Dropbear release gets its own version, so it still
-# replaces the old one.
+# whichever it is (2025.89 .pdr-stripped, as built and as tools/hub-root
+# ships it, and with only a plain strip, as older releases and
+# harmony-hub-root ship it). A new Dropbear release gets its own version, so
+# it still replaces the old one.
 $DropbearBuilds = @{
-    "3733327fd04bca282dbf06f33da0bf6c" = "2025.89"  # as built, 577296 bytes
-    "ceabc15471be6f67f1e13fccd20a9508" = "2025.89"  # .pdr stripped, 535652 bytes
+    "3733327fd04bca282dbf06f33da0bf6c" = "2025.89"  # plain strip (older), 577296 bytes
+    "ceabc15471be6f67f1e13fccd20a9508" = "2025.89"  # .pdr stripped (current), 535652 bytes
 }
 
 function Test-HubCopyCurrent([string]$Dest, [string]$Have, [string]$Want) {
@@ -1754,10 +1755,13 @@ function Get-LeftoverCredit() {
     if (Test-RootToolDropbearRemovable) {
         $dropbear = $Candidates | Where-Object { $_.Dest -eq $DropbearDest } | Select-Object -First 1
         if ($null -ne $dropbear -and $dropbear.Bytes -gt 0) {
-            # Scaled to the root tool's copy, which may be the smaller build.
-            # (Its stripped .pdr compressed well, so this errs low: safe.)
+            # Ours scaled down to a smaller root-tool copy, never up: the
+            # other build of 2025.89 is ours plus a .pdr section that
+            # compresses to a fraction of its size, so scaling by size
+            # would over-credit it. Errs low: safe.
             $size = [long]$dropbear.Bytes
             if ($Probe.Contains($RootToolDropbear) -and $Probe[$RootToolDropbear]["size"]) { $size = [long]$Probe[$RootToolDropbear]["size"] }
+            if ($size -gt $dropbear.Bytes) { $size = [long]$dropbear.Bytes }
             $credit += [long][Math]::Floor($dropbear.FlashBytes * $size / $dropbear.Bytes)
         }
     }

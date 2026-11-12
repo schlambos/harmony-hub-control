@@ -329,7 +329,13 @@ cd "$BUILD/dropbear-$DROPBEAR_VERSION"
   LDFLAGS="-static"
 
 make -j"$(nproc)" MULTI=1 PROGRAMS="dropbear dropbearkey dbclient scp" dropbearmulti
-"$STRIP" dropbearmulti || true
+# -R .pdr: also drop the MIPS procedure-descriptor section, a debugging aid
+# that no segment loads (plain strip keeps it). Same code and data, 41 KB
+# smaller; the file tools/hub-root bundles, and the one proposed for
+# harmony-hub-root in Ripthulhu/harmony-hub-root#10. Plain strip gave sha256
+# e2ea632a..., 577296 bytes (what harmony-hub-root ships until then), which
+# the installers still accept (DROPBEAR_BUILDS).
+"$STRIP" -R .pdr dropbearmulti || true
 cp dropbearmulti "$OUT/dropbearmulti"
 
 #: fail closed unless the rebuild reproduces the committed binary exactly

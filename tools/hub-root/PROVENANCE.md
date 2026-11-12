@@ -18,6 +18,20 @@
   - `bb5df37` — opening the TDE gate on unprovisioned hubs (gate
     pre-check, JSON file-transfer staging fallback).
   - Their tests in `tests/test_hbus_transports.py` (44 tests).
+  - 2026-11-12: `dropbearmulti` replaced by the same Dropbear build stripped
+    with `strip -R .pdr` (535,652 bytes instead of 577,296; code and data
+    unchanged), as proposed for upstream in Ripthulhu/harmony-hub-root#10.
+    It is the file `build/build_harmony_tools_kali.sh` now builds.
+  - 2026-11-12: the hub-side installer installs its files all or nothing
+    by replacing them (same bytes left alone; the rest written beside, then
+    all renamed over) instead of rewriting them in place one by one, so a
+    Dropbear that Melodious hard-linked and SSH is running is never
+    rewritten under it, and a failure leaves the hub as it was;
+    `tests/test_hub_install_lua.py`.
+    Also proposed upstream in Ripthulhu/harmony-hub-root#10.
+  - 2026-11-12: `SHA256SUMS.txt` refreshed. It still listed upstream's
+    hashes for the four files the Melodious commits above changed, and now
+    covers the two test files Melodious added.
 
 The fresh-hub chain that uses this tool is documented in
 `docs/FRESH_HUB_ACTIVATION.md`.
