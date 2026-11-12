@@ -22,6 +22,12 @@
     with `strip -R .pdr` (535,652 bytes instead of 577,296; code and data
     unchanged), as proposed for upstream in Ripthulhu/harmony-hub-root#10.
     It is the file `build/build_harmony_tools_kali.sh` now builds.
+  - 2026-11-12: the hub-side installer installs its files all or nothing
+    by replacing them (same bytes left alone; the rest written beside, then
+    all renamed over) instead of rewriting them in place one by one, so a
+    Dropbear that Melodious hard-linked and SSH is running is never
+    rewritten under it, and a failure leaves the hub as it was;
+    `tests/test_hub_install_lua.py`.
 
 The fresh-hub chain that uses this tool is documented in
 `docs/FRESH_HUB_ACTIVATION.md`.
