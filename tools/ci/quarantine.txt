@@ -1,0 +1,6 @@
+# Suites that fail on main for a reason no open change caused. CI reports them
+# and doesn't count them (tools/ci/run_suites.sh). One line each: the suite's
+# name, a tab, then what fails and since when. Delete the line in the change
+# that fixes the suite; CI fails while a listed suite passes.
+lua-ha-devices	codexactivity-ha-devices-test.lua:586 indexes a nil 'v1entry' and stops there, so the checks after it never run. Seen on main b5d9254, 2026-11-12.
+activity-offline-guard	the guard forbids any "http://" in codexactivity.lua, which has carried the Home Assistant webhook URL (http://127.0.0.1:8095/cmd) since the HA devices work. The guard or the rule needs deciding. Seen on main b5d9254, 2026-11-12.

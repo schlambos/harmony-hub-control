@@ -4181,6 +4181,58 @@ class PowerShellStaticContract(unittest.TestCase):
             self.assertIn(prompt, INST_SOURCE)
 
 
+def shipped_ps1_files() -> list[Path]:
+    """Every .ps1 in the repo tree, skipping hidden, virtualenv and build dirs."""
+    skip = {"node_modules", "build", "venv", "__pycache__"}
+    found = []
+    for root, dirs, files in os.walk(REPO_ROOT):
+        dirs[:] = sorted(d for d in dirs if not d.startswith(".") and d not in skip)
+        found.extend(Path(root) / name for name in sorted(files) if name.lower().endswith(".ps1"))
+    return found
+
+
+class PowerShell51Encoding(unittest.TestCase):
+    """[PS1 STATIC] every shipped .ps1 decodes the same under Windows
+    PowerShell 5.1 as under pwsh 7 (no pwsh run).
+
+    Windows PowerShell 5.1 reads a script without a byte order mark as
+    Windows-1252, not UTF-8. A UTF-8 em dash (E2 80 94) then becomes three
+    characters, the last of which (0x94, a right double quote) PowerShell
+    treats as a string delimiter, so the script stops parsing (issue #139).
+    A script is safe only if it is pure ASCII or starts with a UTF-8 BOM.
+    """
+
+    UTF8_BOM = b"\xef\xbb\xbf"
+
+    def test_shipped_ps1_are_ascii_or_bom_prefixed(self):
+        scripts = shipped_ps1_files()
+        names = {path.name for path in scripts}
+        self.assertIn("install_webui.ps1", names)
+        self.assertIn("restore_backup.ps1", names)
+        problems = []
+        for path in scripts:
+            raw = path.read_bytes()
+            rel = path.relative_to(REPO_ROOT)
+            if raw.startswith(self.UTF8_BOM):
+                try:
+                    raw.decode("utf-8")
+                except UnicodeDecodeError as exc:
+                    problems.append(f"{rel}: has a UTF-8 BOM but is not valid UTF-8 ({exc})")
+                continue
+            for number, line in enumerate(raw.split(b"\n"), 1):
+                bad = sorted({byte for byte in line if byte > 0x7F})
+                if bad:
+                    problems.append(
+                        f"{rel}:{number}: non-ASCII bytes {' '.join(f'{b:02X}' for b in bad)} "
+                        f"in a file without a UTF-8 BOM: {line.strip()[:80]!r}"
+                    )
+        self.assertEqual(
+            problems, [],
+            "Windows PowerShell 5.1 reads these as Windows-1252; use ASCII or add a UTF-8 BOM:\n"
+            + "\n".join(problems),
+        )
+
+
 @unittest.skipUnless(shutil.which("pwsh"),
                      "[PS1 RUNTIME-OPTIONAL] pwsh not installed; left to Main")
 class PowerShellRuntimeParse(unittest.TestCase):

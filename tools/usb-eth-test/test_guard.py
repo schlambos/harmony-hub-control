@@ -114,11 +114,28 @@ class GuardHub(unittest.TestCase):
         }
         # usb_eth_service.sh's worker, alive unless a test ends it (kill_worker).
         self.worker = subprocess.Popen(["sleep", "300"])
-        self.addCleanup(self.worker.kill)
+        self.addCleanup(self._kill_worker_cleanup)
         (t / "run/codex-usb-eth-worker.pid").write_text(f"{self.worker.pid}\n")
 
+    def _kill_worker_cleanup(self):
+        try:
+            self.worker.kill()
+        except (ProcessLookupError, OSError):
+            pass
+        try:
+            self.worker.wait(timeout=10)
+        except subprocess.TimeoutExpired:
+            try:
+                self.worker.kill()
+            except (ProcessLookupError, OSError):
+                pass
+            self.worker.wait(timeout=10)
+
     def kill_worker(self):
-        self.worker.kill()
+        try:
+            self.worker.kill()
+        except (ProcessLookupError, OSError):
+            pass
         self.worker.wait()
 
     def tearDown(self):
@@ -216,7 +233,16 @@ class EgressGuardLanDevice(GuardHub):
         state.write_text("")
         # A live worker: leave Wi-Fi to it.
         live = subprocess.Popen(["sleep", "30"])
-        self.addCleanup(live.kill)
+        def _cleanup_live():
+            try:
+                live.kill()
+            except (ProcessLookupError, OSError):
+                pass
+            try:
+                live.wait(timeout=10)
+            except subprocess.TimeoutExpired:
+                live.wait(timeout=10)
+        self.addCleanup(_cleanup_live)
         (self.tmp / "run/codex-usb-eth-worker.pid").write_text(f"{live.pid}\n")
         self.guard(**self.guard_env())
         self.assertTrue(state.exists())
@@ -238,7 +264,21 @@ class EgressGuardLanDevice(GuardHub):
                  GUARD_USBETH_WIFI_OFF=str(self.tmp / "run/codex-usb-eth-wifi-off"),
                  GUARD_USBETH_PID=str(self.tmp / "run/codex-usb-eth-worker.pid"))
         g = subprocess.Popen(SHELL + [str(GUARD), "monitor"], env=e, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
-        self.addCleanup(lambda: g.poll() is None and g.kill())
+        def _cleanup_guard():
+            try:
+                if g.poll() is None:
+                    g.kill()
+            except (ProcessLookupError, OSError):
+                pass
+            try:
+                g.wait(timeout=10)
+            except subprocess.TimeoutExpired:
+                try:
+                    g.kill()
+                except (ProcessLookupError, OSError):
+                    pass
+                g.wait(timeout=10)
+        self.addCleanup(_cleanup_guard)
         self.assertTrue(self.wait_for(caps))
         self.assertEqual(caps.read_text().strip(), "wifi-watchdog")
         self.assertEqual((self.tmp / "run/guard.pid").read_text().strip(), str(g.pid))
@@ -317,7 +357,21 @@ class EgressGuardLanDevice(GuardHub):
         old = self.tmp / "old_guard.sh"
         old.write_text(f'#!/bin/sh\necho $$ > {pidf}\ntrap \'rm -f "{pidf}"\' 0 1 2 15\nwhile :; do sleep 1; done\n')
         g = subprocess.Popen(SHELL + [str(old)], env=self.env)
-        self.addCleanup(lambda: g.poll() is None and g.kill())
+        def _cleanup_old():
+            try:
+                if g.poll() is None:
+                    g.kill()
+            except (ProcessLookupError, OSError):
+                pass
+            try:
+                g.wait(timeout=10)
+            except subprocess.TimeoutExpired:
+                try:
+                    g.kill()
+                except (ProcessLookupError, OSError):
+                    pass
+                g.wait(timeout=10)
+        self.addCleanup(_cleanup_old)
         self.assertTrue(self.wait_for(pidf))
         snippet = mod.GUARD_REPLACE.replace("/var/run/codex-offline-egress.pid", str(pidf))
         subprocess.run(SHELL + ["-c", snippet], env=self.env, timeout=30)
@@ -334,7 +388,21 @@ class EgressGuardLanDevice(GuardHub):
                  GUARD_LAN_DEV_FILE=str(self.tmp / "run/codex-lan-dev"), GUARD_SYS=self.env["USBETH_SYS"],
                  GUARD_LOG=str(self.tmp / "guard.log"), GUARD_CAPS_FILE=str(caps))
         g = subprocess.Popen(SHELL + [str(GUARD), "monitor"], env=e, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
-        self.addCleanup(lambda: g.poll() is None and g.kill())
+        def _cleanup_guard2():
+            try:
+                if g.poll() is None:
+                    g.kill()
+            except (ProcessLookupError, OSError):
+                pass
+            try:
+                g.wait(timeout=10)
+            except subprocess.TimeoutExpired:
+                try:
+                    g.kill()
+                except (ProcessLookupError, OSError):
+                    pass
+                g.wait(timeout=10)
+        self.addCleanup(_cleanup_guard2)
         self.assertTrue(self.wait_for(pidf))
         pidf.unlink()
         self.assertTrue(self.wait_for(pidf, 6), "the guard didn't put its pid file back")
@@ -352,7 +420,22 @@ class EgressGuardLanDevice(GuardHub):
         pidf = self.tmp / "run/guard2.pid"
         old = subprocess.Popen(["sleep", "30"])
         new = subprocess.Popen(["sleep", "30"])
-        self.addCleanup(lambda: [p.kill() for p in (old, new)])
+        def _cleanup_old_new():
+            for p in (old, new):
+                try:
+                    p.kill()
+                except (ProcessLookupError, OSError):
+                    pass
+            for p in (old, new):
+                try:
+                    p.wait(timeout=10)
+                except subprocess.TimeoutExpired:
+                    try:
+                        p.kill()
+                    except (ProcessLookupError, OSError):
+                        pass
+                    p.wait(timeout=10)
+        self.addCleanup(_cleanup_old_new)
         pidf.write_text(f"{old.pid}\n")
         # The new guard writes its pid while the snippet sleeps after killing the old one.
         snippet = mod.GUARD_REPLACE.replace("/var/run/codex-offline-egress.pid", str(pidf))
@@ -424,7 +507,7 @@ class GuardAndService(unittest.TestCase):
         import test_service
         self.ts = test_service
         self.sb = test_service.Sandbox({"bound": True, "wifi_ip": "192.168.0.50"})
-        self.addCleanup(shutil.rmtree, self.sb.dir, True)
+        self.addCleanup(self.sb.close)  # kills what the service started, then removes it
         (self.sb.dir / "sys/class/net/eth2").mkdir(parents=True)
         (self.sb.dir / "sys/class/net/ath0").mkdir(parents=True)
         p = f"{self.sb.bin}:{self.sb.hubbin}"
@@ -432,11 +515,24 @@ class GuardAndService(unittest.TestCase):
         self.procs = []
 
     def tearDown(self):
-        self.sb.run("stop", **self.path)
+        try:
+            self.sb.run("stop", **self.path)
+        except Exception:
+            pass
         for proc in self.procs:
-            if proc.poll() is None:
-                proc.kill()
-            proc.wait()
+            try:
+                if proc.poll() is None:
+                    proc.kill()
+            except (ProcessLookupError, OSError):
+                pass
+            try:
+                proc.wait(timeout=10)
+            except subprocess.TimeoutExpired:
+                try:
+                    proc.kill()
+                except (ProcessLookupError, OSError):
+                    pass
+                proc.wait(timeout=10)
 
     def wait(self, cond, timeout=20.0):
         import time
@@ -446,6 +542,31 @@ class GuardAndService(unittest.TestCase):
                 return True
             time.sleep(0.05)
         return False
+
+    def lan_dev(self):
+        p = self.sb.run_dir / "codex-lan-dev"
+        return p.read_text().strip() if p.exists() else "ath0"
+
+    def calls(self):
+        return self.sb.calls().splitlines()
+
+    def led(self):
+        return [c for c in self.calls() if c.startswith("hal ")]
+
+    def led_file(self):
+        f = self.sb.run_dir / "codex-usb-eth-led"
+        return f.read_text().strip() if f.exists() else ""
+
+    def cable_settled(self):
+        # The cable took local traffic and the worker finished that pass: the
+        # gateway checks and (with WIFI_OFF) the Wi-Fi-off minute were timed
+        # from the clock as it was, and the LED went last. Moving the clock
+        # before then starts those timers late, and the test waits forever.
+        if self.lan_dev() != "eth2" or self.led_file() != "1":
+            return False
+        if "WIFI_OFF=1" not in (self.sb.dir / "usb_eth.conf").read_text():
+            return True
+        return (self.sb.run_dir / "codex-usb-eth-wired-since").exists()
 
     def test_the_guard_hands_everything_back_when_the_worker_dies(self):
         sb, run = self.sb, self.sb.run_dir
@@ -460,15 +581,18 @@ class GuardAndService(unittest.TestCase):
         guard = subprocess.Popen(SHELL + [str(GUARD), "monitor"], env=env, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
         self.procs.append(guard)
         self.assertTrue(self.wait(lambda: (sb.dir / "guard.caps").exists()))
-        worker = subprocess.Popen(["sh", str(self.ts.SERVICE), "worker"], env=sb.env(**self.path),
-                                  stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        worker = sb.popen(["sh", str(self.ts.SERVICE), "worker"], env=sb.env(**self.path),
+                          stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
         self.procs.append(worker)
         lan = run / "codex-lan-dev"
         wifi_off = run / "codex-usb-eth-wifi-off"
         multicast = lambda dev: any(r["net"] == "224.0.0.0" and r["dev"] == dev for r in sb.read_fake().get("extra_routes", []))
-        self.assertTrue(self.wait(lambda: lan.exists() and lan.read_text().strip() == "eth2"))
+        self.assertTrue(self.wait(self.cable_settled), self.led())
         self.assertTrue(self.wait(lambda: multicast("eth2")), "the guard didn't follow the cable")
-        (sb.dir / "uptime").write_text("1061.00 0.00\n")
+        _utmp = sb.dir / "uptime.tmp"
+        _utmp.write_text("1061.00 0.00\n")
+        import os as _os
+        _os.replace(_utmp, sb.dir / "uptime")
         self.assertTrue(self.wait(lambda: wifi_off.exists() and "Wi-Fi off: the cable works" in sb.log.read_text()))
         # The worker dies; the adapter keeps carrier and its address.
         worker.kill()
