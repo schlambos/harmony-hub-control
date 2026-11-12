@@ -447,6 +447,31 @@ class GuardAndService(unittest.TestCase):
             time.sleep(0.05)
         return False
 
+    def lan_dev(self):
+        p = self.sb.run_dir / "codex-lan-dev"
+        return p.read_text().strip() if p.exists() else "ath0"
+
+    def calls(self):
+        return self.sb.calls().splitlines()
+
+    def led(self):
+        return [c for c in self.calls() if c.startswith("hal ")]
+
+    def led_file(self):
+        f = self.sb.run_dir / "codex-usb-eth-led"
+        return f.read_text().strip() if f.exists() else ""
+
+    def cable_settled(self):
+        # The cable took local traffic and the worker finished that pass: the
+        # gateway checks and (with WIFI_OFF) the Wi-Fi-off minute were timed
+        # from the clock as it was, and the LED went last. Moving the clock
+        # before then starts those timers late, and the test waits forever.
+        if self.lan_dev() != "eth2" or self.led_file() != "1":
+            return False
+        if "WIFI_OFF=1" not in (self.sb.dir / "usb_eth.conf").read_text():
+            return True
+        return (self.sb.run_dir / "codex-usb-eth-wired-since").exists()
+
     def test_the_guard_hands_everything_back_when_the_worker_dies(self):
         sb, run = self.sb, self.sb.run_dir
         (sb.dir / "usb_eth.conf").write_text("ENABLED=1\nWIFI_OFF=1\n")
@@ -466,7 +491,7 @@ class GuardAndService(unittest.TestCase):
         lan = run / "codex-lan-dev"
         wifi_off = run / "codex-usb-eth-wifi-off"
         multicast = lambda dev: any(r["net"] == "224.0.0.0" and r["dev"] == dev for r in sb.read_fake().get("extra_routes", []))
-        self.assertTrue(self.wait(lambda: lan.exists() and lan.read_text().strip() == "eth2"))
+        self.assertTrue(self.wait(self.cable_settled), self.led())
         self.assertTrue(self.wait(lambda: multicast("eth2")), "the guard didn't follow the cable")
         (sb.dir / "uptime").write_text("1061.00 0.00\n")
         self.assertTrue(self.wait(lambda: wifi_off.exists() and "Wi-Fi off: the cable works" in sb.log.read_text()))
