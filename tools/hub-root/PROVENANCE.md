@@ -28,6 +28,10 @@
     Dropbear that Melodious hard-linked and SSH is running is never
     rewritten under it, and a failure leaves the hub as it was;
     `tests/test_hub_install_lua.py`.
+    Also proposed upstream in Ripthulhu/harmony-hub-root#10.
+  - 2026-11-12: `SHA256SUMS.txt` refreshed. It still listed upstream's
+    hashes for the four files the Melodious commits above changed, and now
+    covers the two test files Melodious added.
 
 The fresh-hub chain that uses this tool is documented in
 `docs/FRESH_HUB_ACTIVATION.md`.
