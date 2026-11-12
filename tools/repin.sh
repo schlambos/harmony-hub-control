@@ -374,7 +374,10 @@ build_one() {
           --disable-loginfunc --disable-pututline --disable-pututxline \
           CC=mips-buildroot-linux-uclibc-gcc CFLAGS="-Os -static" LDFLAGS="-static"
         make -j"$(nproc)" MULTI=1 PROGRAMS="dropbear dropbearkey dbclient scp" dropbearmulti
-        mips-buildroot-linux-uclibc-strip dropbearmulti || true
+        # -R .pdr: also drop the unloaded MIPS procedure-descriptor section,
+        # matching build/build_harmony_tools_kali.sh (a plain strip keeps it
+        # and would rebuild the old 577296-byte binary).
+        mips-buildroot-linux-uclibc-strip -R .pdr dropbearmulti || true
         cp dropbearmulti "$REPO_ROOT/payload/bin/dropbearmulti"
       )
       ;;

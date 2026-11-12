@@ -25,8 +25,8 @@ Changed files install as a two-phase commit:
      live file has changed (BLOCKED_CAPACITY);
   2. rename each .codex-new over its destination, codex_webui last.
 
-When harmony-hub-root already left its dropbearmulti on the hub (the same
-build as ours, or the .pdr-stripped one: DROPBEAR_BUILDS), phase 1
+When harmony-hub-root already left its dropbearmulti on the hub (either
+build of our Dropbear: DROPBEAR_BUILDS), phase 1
 hard-links it instead of writing a second copy. Its leftover staging
 folders are reported, and removed with --remove-root-tool-leftovers.
 
@@ -93,15 +93,16 @@ ROOT_TOOL_DROPBEAR = "/data/rootssh/bin/dropbearmulti"
 ROOT_TOOL_FILES = ["/data/rootssh/bin/dropbearmulti", "/data/rootssh/bin/dropbear", "/data/rootssh/bin/dropbearkey"]
 ROOT_TOOL_STAGE_RE = re.compile(r"^/data/codexssh_[A-Za-z0-9_]+_stage$")
 # Known builds of Dropbear, by MD5: their version. For 2025.89 that is the
-# build build/build_harmony_tools_kali.sh makes, and the same file with the
-# unloaded MIPS .pdr section stripped, which is what harmony-hub-root ships
-# from its stripped release on. Builds of one version load the same image, so
+# build build/build_harmony_tools_kali.sh makes, with the unloaded MIPS .pdr
+# section stripped (as tools/hub-root ships it), and the same build with only
+# a plain strip, which earlier releases and harmony-hub-root ship and older
+# hubs run. Builds of one version load the same image, so
 # either counts as the installed Dropbear and the root tool's copy is reused
 # whichever it is. A new Dropbear release gets its own version here, so it
 # still replaces the old one.
 DROPBEAR_BUILDS = {
-    "3733327fd04bca282dbf06f33da0bf6c": "2025.89",  # as built, 577296 bytes
-    "ceabc15471be6f67f1e13fccd20a9508": "2025.89",  # .pdr stripped, 535652 bytes
+    "3733327fd04bca282dbf06f33da0bf6c": "2025.89",  # plain strip (older), 577296 bytes
+    "ceabc15471be6f67f1e13fccd20a9508": "2025.89",  # .pdr stripped (current), 535652 bytes
 }
 # The hub's ls has no -R; a root-tool stage holds files and a chunks/ folder.
 ROOT_TOOL_SCAN = (
@@ -1849,10 +1850,12 @@ class Installer:
         if self.root_tool_dropbear_removable():
             dropbear = next((c for c in self.candidates if c.dest == DROPBEAR_DEST), None)
             if dropbear is not None and dropbear.bytes:
-                # Scaled to the root tool's copy, which may be the smaller build.
-                # (Its stripped .pdr compressed well, so this errs low: safe.)
+                # Ours scaled down to a smaller root-tool copy, never up: the
+                # other build of 2025.89 is ours plus a .pdr section that
+                # compresses to a fraction of its size, so scaling by size
+                # would over-credit it. Errs low: safe.
                 size = int(self.probe.get(ROOT_TOOL_DROPBEAR, {}).get("size", dropbear.bytes))
-                credit += dropbear.flash_bytes * size // dropbear.bytes
+                credit += dropbear.flash_bytes * min(size, dropbear.bytes) // dropbear.bytes
         return credit
 
     def active_candidates(self) -> list[Candidate]:

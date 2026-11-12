@@ -72,9 +72,12 @@ unchanged. `tools/elf_load_cmp.py` checks that: it compares the entry point,
 the program headers and the bytes of every segment of two ELF files, ignoring
 only the section table that the loader never reads.
 
-`dropbearmulti` keeps its `.pdr` on purpose. The installers hard-link the
-copy harmony-hub-root leaves on the hub when it is byte-identical, which saves
-far more flash than the section's 41 KB.
+`dropbearmulti` (built with the Bootlin GCC toolchain, not Zig) drops its
+`.pdr` too: the build strips it with `strip -R .pdr`, which saves 41 KB. Hubs
+rooted with an older root tool carry the plainly stripped build (577296
+bytes, sha256 `e2ea632a…`). The installers treat both builds as the installed
+Dropbear (`DROPBEAR_BUILDS`), so they still hard-link that copy instead of
+writing a second one.
 
 ```sh
 python3 tools/elf_load_cmp.py old/codex_webui payload/bin/codex_webui

@@ -57,8 +57,9 @@ const HUB_FILES = {
 };
 const HUB_INVENTORY_FILES = new Set(["payload/bin/MANIFEST.txt", "payload/bin/FILES"]);
 // Known builds of Dropbear, by MD5: version. Builds of one version are the
-// same program (2025.89 as built, and with the unloaded MIPS .pdr section
-// stripped, as harmony-hub-root ships it and the installer may have linked),
+// same program (2025.89 with the unloaded MIPS .pdr section stripped, as
+// built and as tools/hub-root ships it, and with only a plain strip, as older
+// releases and harmony-hub-root ship it and the installer may have linked),
 // so either counts as current. Must match DROPBEAR_BUILDS in install_webui.py.
 const DROPBEAR_BUILDS = new Map([
   ["3733327fd04bca282dbf06f33da0bf6c", "2025.89"],

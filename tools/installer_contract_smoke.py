@@ -1513,9 +1513,10 @@ class PythonInstallerFlash(unittest.TestCase):
         self.assertEqual(self.hub.fs["/usr/sbin/dropbear"]["data"], wrapper)
         self.assertEqual(self.hub.leftovers(), [])
 
-    # A stand-in for the other build of the same Dropbear (the real stripped
-    # one is a MIPS strip away), registered as equivalent for the test.
-    OTHER_BUILD = DROPBEAR[: len(DROPBEAR) - 41644]
+    # A stand-in for the other build of the same Dropbear: the payload is the
+    # .pdr-stripped build, and the plain-strip one is 41644 bytes larger (its
+    # .pdr, which compresses well). Registered as equivalent for the test.
+    OTHER_BUILD = DROPBEAR + bytes(41644)
 
     def other_build_known(self):
         version = INST.DROPBEAR_BUILDS[hashlib.md5(self.DROPBEAR).hexdigest()]
@@ -1526,6 +1527,15 @@ class PythonInstallerFlash(unittest.TestCase):
         """[PYTHON BEHAVIORAL] the shipped dropbearmulti is listed in
         DROPBEAR_BUILDS, or no other build would count as the same program."""
         self.assertIn(hashlib.md5(self.DROPBEAR).hexdigest(), INST.DROPBEAR_BUILDS)
+
+    def test_both_real_builds_of_dropbear_2025_89_are_known(self):
+        """[PYTHON BEHAVIORAL] the plain-strip build (what older releases and
+        harmony-hub-root ship, and older hubs run) and the .pdr-stripped one
+        count as the same Dropbear, so neither gets a second copy."""
+        plain, stripped = "3733327fd04bca282dbf06f33da0bf6c", "ceabc15471be6f67f1e13fccd20a9508"
+        self.assertEqual(hashlib.md5(self.DROPBEAR).hexdigest(), stripped)
+        self.assertEqual(INST.DROPBEAR_BUILDS.get(plain), "2025.89")
+        self.assertEqual(INST.DROPBEAR_BUILDS.get(stripped), "2025.89")
 
     def test_a_new_dropbear_version_still_replaces_the_old_one(self):
         """[PYTHON BEHAVIORAL] builds count as each other only within one
@@ -1539,7 +1549,7 @@ class PythonInstallerFlash(unittest.TestCase):
             self.assertFalse(INST.hub_copy_current(INST.WEBUI_DEST, old, ours))
 
     def test_root_tool_other_dropbear_build_is_linked(self):
-        """[PYTHON BEHAVIORAL] a root tool that ships the other (.pdr-stripped)
+        """[PYTHON BEHAVIORAL] a root tool that ships the other (plain-strip)
         build still gets its copy reused by hard link, and the install verifies
         the linked file against that build."""
         self.root_tool_hub()
@@ -1591,7 +1601,8 @@ class PythonInstallerFlash(unittest.TestCase):
 
     def test_separate_root_dropbear_copy_is_credited_at_its_own_size(self):
         """[PYTHON BEHAVIORAL] a separate (unlinked) root-tool copy of the
-        other, smaller build is reported, and credited, at its own size."""
+        other, larger build is reported at its own size and credited at no
+        more than ours (its extra bytes are a .pdr that compresses well)."""
         self.root_tool_hub()
         self.hub.fs[INST.ROOT_TOOL_DROPBEAR] = {"data": self.OTHER_BUILD, "mode": "755"}
         self.hub.fail_link = True  # the first install has to copy ours
@@ -1601,14 +1612,14 @@ class PythonInstallerFlash(unittest.TestCase):
             code, stdout, stderr = self.harness.run(self.harness.base_argv())
         self.assertEqual(code, 0, stderr or stdout)
         self.assertIn(f"root_tool_leftover bytes={len(self.OTHER_BUILD)} files=1 path={INST.ROOT_TOOL_DROPBEAR}", stdout)
-        # On a full hub, the advice names the credit: ours scaled to the root copy's size.
+        # On a full hub, the advice names the credit: ours, not scaled up.
         ours_flash = next(int(flash) for dest, _action, flash in candidate_flash(stdout) if dest == INST.DROPBEAR_DEST)
         self.hub.fs[INST.WEBUI_DEST] = {"data": b"an older codex_webui\n", "mode": "755"}  # something to install
         self.hub.available_bytes = 1
         with self.other_build_known():
             code, stdout, _stderr = self.harness.run(self.harness.base_argv())
         self.assertEqual(kv_value(stdout, "verdict"), INST.VERDICT_CAPACITY)
-        expect = INST.kib(ours_flash * len(self.OTHER_BUILD) // len(self.DROPBEAR))
+        expect = INST.kib(ours_flash)
         self.assertIn(f"--remove-root-tool-leftovers) frees about {expect}", stdout)
 
     def test_unknown_root_tool_dropbear_is_not_linked(self):
