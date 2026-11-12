@@ -95,7 +95,7 @@
 
 /* The Melodious release this hub software belongs to. Bump it in the release
  * commit; GET /api/version reports it so the apps know which hub they talk to. */
-#define MELODIOUS_VERSION "2.0.0"
+#define MELODIOUS_VERSION "2.1.0"
 /* Version of this hub's HTTP API as the apps see it: 1 = /api/version exists.
  * Raise it when a route the apps rely on changes shape. */
 #define MELODIOUS_API_LEVEL 1
