@@ -114,11 +114,28 @@ class GuardHub(unittest.TestCase):
         }
         # usb_eth_service.sh's worker, alive unless a test ends it (kill_worker).
         self.worker = subprocess.Popen(["sleep", "300"])
-        self.addCleanup(self.worker.kill)
+        self.addCleanup(self._kill_worker_cleanup)
         (t / "run/codex-usb-eth-worker.pid").write_text(f"{self.worker.pid}\n")
 
+    def _kill_worker_cleanup(self):
+        try:
+            self.worker.kill()
+        except (ProcessLookupError, OSError):
+            pass
+        try:
+            self.worker.wait(timeout=10)
+        except subprocess.TimeoutExpired:
+            try:
+                self.worker.kill()
+            except (ProcessLookupError, OSError):
+                pass
+            self.worker.wait(timeout=10)
+
     def kill_worker(self):
-        self.worker.kill()
+        try:
+            self.worker.kill()
+        except (ProcessLookupError, OSError):
+            pass
         self.worker.wait()
 
     def tearDown(self):
@@ -216,7 +233,16 @@ class EgressGuardLanDevice(GuardHub):
         state.write_text("")
         # A live worker: leave Wi-Fi to it.
         live = subprocess.Popen(["sleep", "30"])
-        self.addCleanup(live.kill)
+        def _cleanup_live():
+            try:
+                live.kill()
+            except (ProcessLookupError, OSError):
+                pass
+            try:
+                live.wait(timeout=10)
+            except subprocess.TimeoutExpired:
+                live.wait(timeout=10)
+        self.addCleanup(_cleanup_live)
         (self.tmp / "run/codex-usb-eth-worker.pid").write_text(f"{live.pid}\n")
         self.guard(**self.guard_env())
         self.assertTrue(state.exists())
@@ -238,7 +264,21 @@ class EgressGuardLanDevice(GuardHub):
                  GUARD_USBETH_WIFI_OFF=str(self.tmp / "run/codex-usb-eth-wifi-off"),
                  GUARD_USBETH_PID=str(self.tmp / "run/codex-usb-eth-worker.pid"))
         g = subprocess.Popen(SHELL + [str(GUARD), "monitor"], env=e, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
-        self.addCleanup(lambda: g.poll() is None and g.kill())
+        def _cleanup_guard():
+            try:
+                if g.poll() is None:
+                    g.kill()
+            except (ProcessLookupError, OSError):
+                pass
+            try:
+                g.wait(timeout=10)
+            except subprocess.TimeoutExpired:
+                try:
+                    g.kill()
+                except (ProcessLookupError, OSError):
+                    pass
+                g.wait(timeout=10)
+        self.addCleanup(_cleanup_guard)
         self.assertTrue(self.wait_for(caps))
         self.assertEqual(caps.read_text().strip(), "wifi-watchdog")
         self.assertEqual((self.tmp / "run/guard.pid").read_text().strip(), str(g.pid))
@@ -317,7 +357,21 @@ class EgressGuardLanDevice(GuardHub):
         old = self.tmp / "old_guard.sh"
         old.write_text(f'#!/bin/sh\necho $$ > {pidf}\ntrap \'rm -f "{pidf}"\' 0 1 2 15\nwhile :; do sleep 1; done\n')
         g = subprocess.Popen(SHELL + [str(old)], env=self.env)
-        self.addCleanup(lambda: g.poll() is None and g.kill())
+        def _cleanup_old():
+            try:
+                if g.poll() is None:
+                    g.kill()
+            except (ProcessLookupError, OSError):
+                pass
+            try:
+                g.wait(timeout=10)
+            except subprocess.TimeoutExpired:
+                try:
+                    g.kill()
+                except (ProcessLookupError, OSError):
+                    pass
+                g.wait(timeout=10)
+        self.addCleanup(_cleanup_old)
         self.assertTrue(self.wait_for(pidf))
         snippet = mod.GUARD_REPLACE.replace("/var/run/codex-offline-egress.pid", str(pidf))
         subprocess.run(SHELL + ["-c", snippet], env=self.env, timeout=30)
@@ -334,7 +388,21 @@ class EgressGuardLanDevice(GuardHub):
                  GUARD_LAN_DEV_FILE=str(self.tmp / "run/codex-lan-dev"), GUARD_SYS=self.env["USBETH_SYS"],
                  GUARD_LOG=str(self.tmp / "guard.log"), GUARD_CAPS_FILE=str(caps))
         g = subprocess.Popen(SHELL + [str(GUARD), "monitor"], env=e, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
-        self.addCleanup(lambda: g.poll() is None and g.kill())
+        def _cleanup_guard2():
+            try:
+                if g.poll() is None:
+                    g.kill()
+            except (ProcessLookupError, OSError):
+                pass
+            try:
+                g.wait(timeout=10)
+            except subprocess.TimeoutExpired:
+                try:
+                    g.kill()
+                except (ProcessLookupError, OSError):
+                    pass
+                g.wait(timeout=10)
+        self.addCleanup(_cleanup_guard2)
         self.assertTrue(self.wait_for(pidf))
         pidf.unlink()
         self.assertTrue(self.wait_for(pidf, 6), "the guard didn't put its pid file back")
@@ -352,7 +420,22 @@ class EgressGuardLanDevice(GuardHub):
         pidf = self.tmp / "run/guard2.pid"
         old = subprocess.Popen(["sleep", "30"])
         new = subprocess.Popen(["sleep", "30"])
-        self.addCleanup(lambda: [p.kill() for p in (old, new)])
+        def _cleanup_old_new():
+            for p in (old, new):
+                try:
+                    p.kill()
+                except (ProcessLookupError, OSError):
+                    pass
+            for p in (old, new):
+                try:
+                    p.wait(timeout=10)
+                except subprocess.TimeoutExpired:
+                    try:
+                        p.kill()
+                    except (ProcessLookupError, OSError):
+                        pass
+                    p.wait(timeout=10)
+        self.addCleanup(_cleanup_old_new)
         pidf.write_text(f"{old.pid}\n")
         # The new guard writes its pid while the snippet sleeps after killing the old one.
         snippet = mod.GUARD_REPLACE.replace("/var/run/codex-offline-egress.pid", str(pidf))
@@ -432,11 +515,24 @@ class GuardAndService(unittest.TestCase):
         self.procs = []
 
     def tearDown(self):
-        self.sb.run("stop", **self.path)
+        try:
+            self.sb.run("stop", **self.path)
+        except Exception:
+            pass
         for proc in self.procs:
-            if proc.poll() is None:
-                proc.kill()
-            proc.wait()
+            try:
+                if proc.poll() is None:
+                    proc.kill()
+            except (ProcessLookupError, OSError):
+                pass
+            try:
+                proc.wait(timeout=10)
+            except subprocess.TimeoutExpired:
+                try:
+                    proc.kill()
+                except (ProcessLookupError, OSError):
+                    pass
+                proc.wait(timeout=10)
 
     def wait(self, cond, timeout=20.0):
         import time
@@ -493,7 +589,10 @@ class GuardAndService(unittest.TestCase):
         multicast = lambda dev: any(r["net"] == "224.0.0.0" and r["dev"] == dev for r in sb.read_fake().get("extra_routes", []))
         self.assertTrue(self.wait(self.cable_settled), self.led())
         self.assertTrue(self.wait(lambda: multicast("eth2")), "the guard didn't follow the cable")
-        (sb.dir / "uptime").write_text("1061.00 0.00\n")
+        _utmp = sb.dir / "uptime.tmp"
+        _utmp.write_text("1061.00 0.00\n")
+        import os as _os
+        _os.replace(_utmp, sb.dir / "uptime")
         self.assertTrue(self.wait(lambda: wifi_off.exists() and "Wi-Fi off: the cable works" in sb.log.read_text()))
         # The worker dies; the adapter keeps carrier and its address.
         worker.kill()

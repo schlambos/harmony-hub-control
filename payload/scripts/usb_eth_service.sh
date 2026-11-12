@@ -76,6 +76,17 @@ log() {
   echo "$(date) codex usb-eth: $*" >> "$LOG"
 }
 
+# Atomic single-value file write: readers (the guard's watchdog via
+# worker_running, the tests, the egress guard via codex-lan-dev) must never
+# see an empty file mid-write. `echo X > file` truncates then writes; a
+# concurrent cat in that window sees empty and thinks the worker is gone
+# (the restart pid-file gap that flaked CI). Write to a temp and rename.
+atomic_write() {
+  _af=$1; _av=$2
+  _tmp="$_af.tmp.$$"
+  printf "%s\n" "$_av" > "$_tmp" 2>/dev/null && mv "$_tmp" "$_af" 2>/dev/null || rm -f "$_tmp"
+}
+
 write_state() {
   # $1 = state, $2 = reason (may be empty)
   _tmp="$STATE_FILE.tmp.$$"
@@ -134,7 +145,7 @@ lock_try() {
     mkdir "$LOCK_DIR" 2>/dev/null || return 1
   fi
   # The worker's own pid ($$ is its parent's, long gone, in a subshell).
-  echo "${WORKER_SELF:-$$}" > "$LOCK_DIR/pid"
+  atomic_write "$LOCK_DIR/pid" "${WORKER_SELF:-$$}"
   return 0
 }
 
@@ -154,7 +165,9 @@ lock_release() {
 
 # udhcpc -R releases the lease and runs its deconfig event (clearing the
 # address) as it exits: wait for that (bounded), so it can't land after
-# what the caller does next, such as setting a static address.
+# what the caller does next, such as setting a static address. The test
+# stub's slow release takes 0.3 s real time while the test stubs sleep to
+# 0.05 s, so 10 ticks (0.5 s in tests, 10 s on the hub) cover it.
 stop_udhcpc_for() {
   _if="$1"
   [ -n "$_if" ] || return 0
@@ -166,7 +179,7 @@ stop_udhcpc_for() {
       *)
         kill "$_pid" 2>/dev/null || true
         _ticks=0
-        while kill -0 "$_pid" 2>/dev/null && [ "$_ticks" -lt 5 ]; do
+        while kill -0 "$_pid" 2>/dev/null && [ "$_ticks" -lt 10 ]; do
           _ticks=$(expr "$_ticks" + 1)
           sleep 1
         done
@@ -680,7 +693,7 @@ manage_wifi() {
   _mnow=$(uptime_s)
   [ -n "$_mnow" ] || return 0
   _since=$(cat "$WIRED_SINCE_FILE" 2>/dev/null)
-  case "$_since" in ""|*[!0-9]*) _since=$_mnow; echo "$_mnow" > "$WIRED_SINCE_FILE" ;; esac
+  case "$_since" in ""|*[!0-9]*) _since=$_mnow; atomic_write "$WIRED_SINCE_FILE" "$_mnow" ;; esac
   wifi_suspended && return 0
   [ -n "$(hub_gateway)" ] && [ "$GATEWAY_MISSES" = 0 ] || return 0
   if [ "$_mnow" -ge "$NOT_BEFORE" ] && [ $((_mnow - _since)) -ge "$WIFI_OFF_AFTER" ] && wifi_safety_net; then
@@ -733,9 +746,9 @@ led_sync() {
   fi
   [ "$_lnow" -ge "$LED_RETRY_AT" ] || return 0
   if [ "$_want" = 1 ]; then _mode=extender_mode; else _mode=non_extender_mode; fi
-  echo pending > "$LED_STATE"
+  atomic_write "$LED_STATE" pending
   if hal_led "$_mode" && hal_led fire_command; then
-    echo "$_want" > "$LED_STATE"
+    atomic_write "$LED_STATE" "$_want"
     LED_FORCE_AT=0
     LED_RETRY_AT=0
     LED_NEXT_ASSERT=$((_lnow + 300))
@@ -1055,8 +1068,8 @@ use_cable() {
   fi
   if apply_net "$_uif"; then
     if [ "$(cat "$LAN_DEV_FILE" 2>/dev/null)" != "$_uif" ]; then
-      echo "$_uif" > "$LAN_DEV_FILE"
-      uptime_s > "$WIRED_SINCE_FILE"
+      atomic_write "$LAN_DEV_FILE" "$_uif"
+      atomic_write "$WIRED_SINCE_FILE" "$(uptime_s)"
       log "LAN traffic now through $_uif ($_uip)"
     fi
     prefer_wired_default "$_uif"
@@ -1122,7 +1135,7 @@ start_usb_eth() {
   log "starting USB Ethernet (worker)"
   write_state starting queued
   ( worker_main ) >> "$LOG" 2>&1 &
-  echo $! > "$WORKER_PIDFILE"
+  atomic_write "$WORKER_PIDFILE" "$!"
   lock_release
   return 0
 }
@@ -1145,7 +1158,7 @@ restart_usb_eth() {
     _pid=$(cat "$WORKER_PIDFILE" 2>/dev/null)
     # This shell holds the pid file during the swap, so the egress guard's
     # Wi-Fi watchdog never sees "no worker" and reconnects Wi-Fi.
-    echo $$ > "$WORKER_PIDFILE"
+    atomic_write "$WORKER_PIDFILE" "$$"
     case "$_pid" in
       *[!0-9]*|"") ;;
       *)
@@ -1161,7 +1174,7 @@ restart_usb_eth() {
   fi
   log "restarting the USB Ethernet worker (the wired path stays as it is)"
   ( worker_main ) >> "$LOG" 2>&1 &
-  echo $! > "$WORKER_PIDFILE"
+  atomic_write "$WORKER_PIDFILE" "$!"
   lock_release
   return 0
 }
@@ -1324,7 +1337,7 @@ case "$1" in
   status) status_usb_eth ;;
   recover) recover_usb_eth ;;
   overview) overview_usb_eth ;;
-  worker) echo $$ > "$WORKER_PIDFILE"; worker_main ;;  # tests drive the worker in the foreground
+  worker) atomic_write "$WORKER_PIDFILE" "$$"; worker_main ;;  # tests drive the worker in the foreground
   *)
     echo "usage: $0 {start [--force]|stop|stop-if-disabled|restart|recover|status|overview}" >&2
     exit 2
