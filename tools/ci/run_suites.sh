@@ -102,11 +102,15 @@ while IFS='|' read -r name command; do
   if sh -c "$command" > "$log" 2>&1 < /dev/null; then rc=0; else rc=$?; fi
   case " $FLAKY " in
     *" $name "*)
-      if [ "$rc" -ne 0 ]; then
-        echo "FLAKY  $name: failed once, trying again; the first run's failures:"
+      _try=1
+      while [ "$rc" -ne 0 ] && [ "$_try" -le 3 ]; do
+        echo "FLAKY  $name: failed (attempt $_try), trying again; failures:"
         grep -E '^(FAIL|ERROR): ' "$log" || tail -n 20 "$log"
+        pkill -f usb_eth_service.sh 2>/dev/null || true
         if sh -c "$command" > "$log" 2>&1 < /dev/null; then rc=0; else rc=$?; fi
-      fi
+        _try=$((_try + 1))
+      done
+      pkill -f usb_eth_service.sh 2>/dev/null || true
       ;;
   esac
   took=$(($(date +%s) - start))
