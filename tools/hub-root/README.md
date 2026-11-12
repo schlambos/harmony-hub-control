@@ -160,9 +160,12 @@ Use a data-capable USB cable. The cable also powers the hub, so reconnecting it
 causes a cold boot. Wait for the hub to finish booting. Close MyHarmony and any
 other process using the hub before running a USB action.
 
-Windows uses the native HID backend without extra Python packages. Linux can
-use `/dev/hidraw*`. If Linux reports a permission error, give your local user
-access through a udev rule such as:
+Windows uses the native HID backend without extra Python packages. On Linux,
+the kernel's HID core ignores Logitech's Harmony product IDs (including
+`046d:c129`), so on a stock kernel no `/dev/hidraw*` appears: install
+`requirements-usb.txt` below and pass `--usb-backend hidapi` (libusb). If your
+kernel does create a hidraw node and you get a permission error, give your
+local user access through a udev rule such as:
 
 ```text
 SUBSYSTEM=="hidraw", ATTRS{idVendor}=="046d", ATTRS{idProduct}=="c129", MODE="0660", TAG+="uaccess"
@@ -173,13 +176,18 @@ hub. Headless sessions may need a device-access group instead of `uaccess`.
 Avoid running the whole tool as root: that uses root's SSH keys and handoff
 directory rather than yours.
 
-macOS needs `hidapi`. It is optional on Linux:
+macOS needs `hidapi`, and so does Linux in practice (see above):
 
 ```sh
 python3 -m venv .venv
 .venv/bin/python -m pip install -r requirements-usb.txt
-.venv/bin/python run_harmony_hub_tool.py --action usb-preflight
+.venv/bin/python run_harmony_hub_tool.py --action usb-preflight --usb-backend hidapi
 ```
+
+Give the hub about 5 minutes after plugging in or rebooting before the first
+USB action, and start with `usb-preflight`. See "USB on Linux, and the rules
+that keep the link alive" in `docs/FRESH_HUB_ACTIVATION.md` for the wedge that
+only a power-cycle clears.
 
 | Action | What it does |
 | --- | --- |

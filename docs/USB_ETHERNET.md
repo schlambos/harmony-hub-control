@@ -1,7 +1,7 @@
 # USB Ethernet (LAN over USB)
 
 The Harmony Hub can use a **self-powered OTG micro-USB Ethernet adapter** for a
-wired LAN connection alongside Wi-Fi. Melodious switches the AR9344 SoC's USB
+wired LAN connection alongside Wi-Fi. Melodious switches the AR9330 (Hornet) SoC's USB
 controller into host mode, binds the stock kernel's dormant `ar7240-ehci`
 platform device, loads the matching Linux kernel driver from
 `/data/codex/modules/usb-net/`, disables hardware TX/RX checksum offload, and
@@ -95,7 +95,7 @@ and brings the interface down.
 ## Tradeoffs and notes
 
 - **Micro-USB device mode is unavailable while host mode is active.** Switching
-  the AR9344 USB controller to host mode disconnects the USB gadget path until
+  the AR9330 USB controller to host mode disconnects the USB gadget path until
   USB Ethernet is turned off and the hub reboots.
 - **DHCP only (first cut).** The wired interface acquires its IPv4 address via
   BusyBox `udhcpc` alongside `ath0` (Wi-Fi). Static IP configuration and
@@ -172,7 +172,7 @@ USB host mode on this hub was first demonstrated by
 [iranl/harmony-ng](https://github.com/iranl/harmony-ng) (MIT). The
 EHCI-registration mechanism (a transient `sys_call_table` slot write
 invoking `platform_device_register` on the dormant `ar7240-ehci`
-device), the AR9344 `usbctrlr1` host-mode PHY setting, and the
+device), the AR9330 `usbctrlr1` host-mode PHY setting, and the
 big-endian checksum-offload workaround used here derive from that
 project's published research. The implementation in
 `payload/source/codex_usbeth.c` and the service around it are
