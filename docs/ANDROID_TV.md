@@ -110,9 +110,13 @@ added: the hub's log says `TV <id> is a <vendor> <model>`, and
 this, saved as "Android TV", gets a suggestion once **Edit details** sets its
 manufacturer; while it's connected, Settings offers to save the brand it
 reports with one tap. Changing or adding a brand is a change to
-that one file; nothing is rebuilt. A new TV gets its brand's suggestion when it
-is added, and the device page says "Inputs not checked yet" until its inputs
-are saved from Settings.
+that one file; nothing is rebuilt. When a TV is added, its brand's suggestion
+is saved for it (unless it uses an untested pattern), as a starting point for
+Try. A TV with nothing saved stays on the hub's built-in behaviour, and its
+device page says "Inputs not checked yet". If there is no suggestion for its
+manufacturer, Settings shows its inputs as "Built-in" with no way chosen and
+saves nothing for them until one is: the hub goes by the brand the TV reports,
+which the page doesn't guess.
 
 ```json
 {

@@ -38,6 +38,10 @@ export const STATUSES = Object.freeze(["untested", "works", "failed"]);
 /* The link-per-input choice in the pattern picker. */
 export const CUSTOM_LINKS = "custom";
 
+/* A TV with nothing saved whose behaviour the page can't know (no preset for
+   its manufacturer): the hub's built-in switching, until a method is chosen. */
+export const BUILTIN = "builtin";
+
 /* -- slots ------------------------------------------------------------------ */
 
 export function slotCommand(n) {
@@ -188,6 +192,7 @@ export function parseProfile(text) {
 
 /* The profile text for a draft. */
 export function profileText(draft) {
+  if (draft.method === BUILTIN) return "";   // nothing to save: the hub keeps its own
   const lines = [`method\t${draft.method}`];
   if (draft.method === "link" && draft.pattern !== CUSTOM_LINKS) lines.push(`pattern\t${patternUri(draft)}`);
   if (draft.method === "menu") lines.push(`gap\t${draft.gapMs}`);
@@ -236,8 +241,12 @@ export function readTvInputs({ entryInputs, delayMs = 0, profile, presets, vendo
   };
   if (!profile) {
     // Built-in: what codex_androidtv does without a profile, which the
-    // preset for this vendor describes, on the device's own inputs.
-    draft.method = entryInputs === null ? "none" : preset.method;
+    // preset for this vendor describes, on the device's own inputs. With no
+    // preset for the device's manufacturer (a TV paired before brands were
+    // saved is "Android TV"), the page can't know what the hub does (it goes
+    // by the brand the TV reports), so it says "built-in" rather than guess:
+    // saving a guess would replace what works.
+    draft.method = entryInputs === null ? "none" : preset.vendor ? preset.method : BUILTIN;
     draft.pattern = preset.method === "link" ? preset.pattern || CUSTOM_LINKS : CUSTOM_LINKS;
     draft.gapMs = preset.gapMs;
     const byName = new Map(preset.inputs.map((i) => [i.name.toLowerCase(), i.value]));
@@ -293,8 +302,10 @@ export function setMethod(draft, method) {
   const sameMethod = preset && preset.method === method;
   const byName = new Map((sameMethod ? preset.inputs : []).map((i) => [i.name.toLowerCase(), i.value]));
   const keyByName = new Map(KEY_TARGETS.map((k) => [k.label.toLowerCase(), k.value]));
+  const bySlot = sameMethod ? rowsFromPreset(preset) : [];
   for (const row of draft.rows) {
-    let value = byName.get(row.name.toLowerCase());
+    // By name, else (a renamed input) by its slot in the preset.
+    let value = byName.get(row.name.trim().toLowerCase()) ?? bySlot.find((r) => r.slot === row.slot)?.value;
     if (value === undefined && method === "keys") value = keyByName.get(row.name.toLowerCase());
     if (value === undefined && method === "menu") value = draft.rows.indexOf(row) + 1;
     row.value = value ?? "";
@@ -360,6 +371,18 @@ function valueProblem(draft, value) {
 /* What stops the draft from saving, in words, first problem first. */
 export function tvInputProblems(draft, { appLinks = true } = {}) {
   const problems = [];
+  if (draft.method === BUILTIN) {
+    // Names and order can change; HDMI 1-4 are all the built-in behaviour has.
+    const names = new Set();
+    for (const row of draft.rows) {
+      const name = String(row.name ?? "").trim();
+      if (!name || name.length > 64 || /[\u0000-\u001f\u007f"\\]/.test(name)) problems.push("Input names must be 1–64 characters without quotes or backslashes.");
+      else if (names.has(name.toLowerCase())) problems.push(`Input "${name}" is listed twice.`);
+      names.add(name.toLowerCase());
+    }
+    if (draft.rows.some((r) => r.slot > 4 || r.was)) problems.push("Choose how the TV switches inputs to add inputs beyond HDMI 1–4.");
+    return problems;
+  }
   if (!METHODS.some((m) => m.value === draft.method)) return ["Choose how the TV switches inputs."];
   if (draft.method === "none") return problems;
   if (draft.method === "link" && draft.pattern !== CUSTOM_LINKS && !patternUri(draft)) problems.push("Choose the input links.");
@@ -401,6 +424,7 @@ export function ordinal(n) {
 
 /* What a row opens, in words. */
 export function targetLabel(draft, value) {
+  if (draft.method === BUILTIN) return "Built-in";
   if (value === "" || value === null || value === undefined) return "Not set";
   switch (draft.method) {
     case "keys": return KEY_TARGETS.find((k) => k.value === value)?.label ?? `Key ${value}`;
@@ -532,8 +556,8 @@ export function finderAnswer(state, draft, answer) {
   const existing = typed ? draft.rows.find((r) => String(r.name).trim().toLowerCase() === typed.toLowerCase()) : null;
   if (answer.kind === "input" || existing) next.found.push({ name: existing ? existing.name : answer.name, value });
   else if (typed) next.added.push({ name: typed, value });
-  const named = new Set([...next.found, ...next.added].map((f) => f.name.toLowerCase()));
-  const allFound = draft.rows.length > 0 && draft.rows.every((r) => named.has(String(r.name).toLowerCase()));
+  const named = new Set([...next.found, ...next.added].map((f) => f.name.trim().toLowerCase()));
+  const allFound = draft.rows.length > 0 && draft.rows.every((r) => named.has(String(r.name).trim().toLowerCase()));
   next.done = allFound || next.index >= next.candidates.length || next.nothingInARow >= FINDER_GIVE_UP;
   return next;
 }
@@ -542,20 +566,21 @@ export function finderAnswer(state, draft, answer) {
    The answers are the truth for what they tried: another row that claimed a
    target the finder gave to a different input loses it. */
 export function finderApply(draft, state, date = today()) {
+  const key = (name) => String(name).trim().toLowerCase();
   const assigned = [...state.found, ...state.added];
-  const names = new Set(assigned.map((f) => f.name.toLowerCase()));
+  const names = new Set(assigned.map((f) => key(f.name)));
   const values = new Set(assigned.map((f) => String(f.value)));
   for (const row of draft.rows) {
-    if (!names.has(String(row.name).toLowerCase()) && values.has(String(row.value))) {
+    if (!names.has(key(row.name)) && values.has(String(row.value))) {
       Object.assign(row, { value: "", status: "untested", date: "" });
     }
   }
   for (const f of state.found) {
-    const row = draft.rows.find((r) => String(r.name).toLowerCase() === f.name.toLowerCase());
+    const row = draft.rows.find((r) => key(r.name) === key(f.name));
     if (row) Object.assign(row, { value: f.value, status: "works", date });
   }
   for (const f of state.added) {
-    if (draft.rows.some((r) => String(r.name).toLowerCase() === f.name.toLowerCase())) continue;
+    if (draft.rows.some((r) => key(r.name) === key(f.name))) continue;
     const row = addRow(draft, f.name);
     if (row) Object.assign(row, { value: f.value, status: "works", date });
   }

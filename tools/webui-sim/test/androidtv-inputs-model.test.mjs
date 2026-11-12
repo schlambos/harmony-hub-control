@@ -2,6 +2,7 @@ import { describe, it } from "node:test";
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import {
+  BUILTIN,
   CUSTOM_LINKS,
   FINDER_GIVE_UP,
   addRow,
@@ -137,16 +138,32 @@ describe("the profile text", () => {
 });
 
 describe("the draft", () => {
-  it("describes the built-in behaviour when the TV has no profile: Hisense links, others the HDMI keys", () => {
+  it("describes the built-in behaviour when the TV has no profile: its brand's preset, else built-in", () => {
     const h = readTvInputs({ entryInputs: HDMI, profile: null, presets: PRESETS, vendor: "Hisense" });
     assert.equal(h.fromProfile, false);
+    assert.equal(h.method, "link");
     assert.deepEqual(h.rows.map((r) => r.value), [2, 3, 4, 5]);
-    const other = readTvInputs({ entryInputs: HDMI, profile: null, presets: PRESETS, vendor: "Sony" });
-    assert.equal(other.method, "keys");
-    assert.deepEqual(other.rows.map((r) => r.value), [243, 244, 245, 246]);
-    // A TV added before brands were saved is "Android TV": no suggestion, so
-    // the default (the page writes nothing until the inputs are changed).
-    assert.equal(readTvInputs({ entryInputs: HDMI, profile: null, presets: PRESETS, vendor: "Android TV" }).method, "keys");
+    // No preset for the manufacturer (a TV added before brands were saved is
+    // "Android TV"): the hub goes by the brand the TV reports, which the page
+    // doesn't know, so it shows built-in and saves nothing for it.
+    for (const vendor of ["Sony", "Android TV", ""]) {
+      const b = readTvInputs({ entryInputs: HDMI, profile: null, presets: PRESETS, vendor });
+      assert.equal(b.method, BUILTIN, vendor);
+      assert.equal(profileText(b), "");
+      assert.equal(targetLabel(b, b.rows[0].value), "Built-in");
+    }
+  });
+  it("lets built-in inputs be renamed and reordered, but not added past HDMI 4 until a way is chosen", () => {
+    const b = readTvInputs({ entryInputs: HDMI, profile: null, presets: PRESETS, vendor: "Android TV" });
+    b.rows[0].name = "Shield";
+    b.rows.reverse();
+    assert.deepEqual(tvInputProblems(b), []);
+    assert.deepEqual(writerInputs(b).inputs.map((i) => i.name), ["HDMI 4", "HDMI 3", "HDMI 2", "Shield"]);
+    addRow(b, "Live TV");
+    assert.deepEqual(tvInputProblems(b), ["Choose how the TV switches inputs to add inputs beyond HDMI 1–4."]);
+    setMethod(b, "keys");
+    assert.notEqual(profileText(b), "");
+    assert.deepEqual(b.rows.slice(0, 4).map((r) => r.value), [246, 245, 244, 243]);
   });
   it("gives inputs set up with other commands a free slot, nothing to open and their old command, instead of dropping them", () => {
     const old = [{ name: "Shield", command: "InputHdmi1" }, { name: "Cable", command: "Home" }, { name: "Game", command: "InputHdmi2" }];
@@ -201,7 +218,11 @@ describe("the draft", () => {
 });
 
 describe("checks", () => {
-  const base = () => readTvInputs({ entryInputs: HDMI, profile: null, presets: PRESETS, vendor: "Sony" });
+  const base = () => {
+    const d = readTvInputs({ entryInputs: HDMI, profile: null, presets: PRESETS, vendor: "Sony" });
+    setMethod(d, "keys");
+    return d;
+  };
   it("passes a complete draft", () => assert.deepEqual(tvInputProblems(base()), []));
   it("wants every input to open something, and no two the same", () => {
     const d = base();
@@ -317,6 +338,16 @@ describe("Find my inputs", () => {
     assert.deepEqual(s.added, []);
     finderApply(d, s, "2026-11-12");
     assert.deepEqual(d.rows.map((r) => [r.name, r.value, r.status]), [["HDMI 1", "", "untested"], ["HDMI 2", 2, "works"]]);
+  });
+  it("matches input names ignoring spaces around them", () => {
+    const d = readTvInputs({ entryInputs: HDMI.slice(0, 1), profile: null, presets: PRESETS, vendor: "Hisense" });
+    d.rows[0].name = "Shield ";
+    let s = finderStart(d);
+    s = finderAnswer(s, d, { kind: "nothing" });                   // No. 1
+    s = finderAnswer(s, d, { kind: "input", name: "Shield" });     // No. 2, the button's trimmed name
+    assert.equal(s.done, true);
+    finderApply(d, s, "2026-11-12");
+    assert.deepEqual([d.rows[0].value, d.rows[0].status], [2, "works"]);
   });
   it(`gives up after ${FINDER_GIVE_UP} "nothing changed" answers in a row`, () => {
     const d = readTvInputs({ entryInputs: HDMI, profile: null, presets: PRESETS, vendor: "Hisense" });

@@ -17,6 +17,7 @@ import {
 import * as hub from "../state.js";
 import { confirmDialog, escapeHtml, icon, openMenu, sectionLabel, setAppBar, snackbar, spinner } from "../ui/shell.js";
 import { hubChange, openCommandPicker, stepperRow } from "./device-sheets.js";
+import { isSafeLabel } from "./ir-model.js";   // the network TV writer takes 1-64 characters
 import {
   INPUT_DELAY_MAX_MS,
   INPUT_TYPES,
@@ -522,6 +523,22 @@ export function createDeviceSettings({ root, track }) {
     const id = deviceId;
     const t = tv;
     const parts = [];
+    let set = null;
+    if (tvWriterKey() !== t.writerKey) {
+      // The hub's own device list now (not the one this page loaded: Edit
+      // details or another page may have changed a TV since), checked with a
+      // dry run first, so the writer's refusals (a button still using an
+      // input, say) stop the save before anything is written.
+      try {
+        set = androidTvDeviceSet(await getConfig());
+        const mine = set.devices.find((d) => d.entity === t.id);
+        if (!mine) throw new Error("This TV isn't in the hub's network TV list any more.");
+        Object.assign(mine, writerInputs(t.draft));
+        await saveAndroidTvDevices({ ...set, dryRun: true });
+      } catch (error) {
+        throw new Error(`The inputs weren't saved: ${error.message}`);
+      }
+    }
     if (tvProfileKey() !== t.profileKey) {
       try {
         await saveTvInputs(t.id, tvProfileKey());
@@ -531,12 +548,8 @@ export function createDeviceSettings({ root, track }) {
       t.profileKey = tvProfileKey();
       parts.push("input switching");
     }
-    if (tvWriterKey() !== t.writerKey) {
-      const set = androidTvDeviceSet(config);
-      const mine = set.devices.find((d) => d.entity === t.id);
+    if (set) {
       try {
-        if (!mine) throw new Error("This TV isn't in the hub's network TV list any more.");
-        Object.assign(mine, writerInputs(t.draft));
         await saveAndroidTvDevices(set);
       } catch (error) {
         throw new Error(`${parts.length ? "How the TV switches inputs was saved, but not the inputs" : "The inputs weren't saved"}: ${error.message}`);
@@ -730,9 +743,13 @@ export function createDeviceSettings({ root, track }) {
       // A TV added before brands were saved at pairing: save what it reports
       // as the device's manufacturer and model, once, as Edit details would.
       const t = tv;
-      const vendor = String(t.status?.vendor ?? "");
-      const model = String(t.status?.model ?? "") || t.base.model;
-      if (!vendor) return;
+      const vendor = String(t.status?.vendor ?? "").trim();
+      const reportedModel = String(t.status?.model ?? "").trim();
+      const model = isSafeLabel(reportedModel, 64) ? reportedModel : t.base.model;
+      if (!isSafeLabel(vendor, 64) || !isSafeLabel(model, 64)) {
+        snackbar("The TV's brand or model can't be saved as is; set them in Edit details.", { error: true });
+        return;
+      }
       try {
         await hubChange("/ir/device", { deviceId, name: t.device.name, manufacturer: vendor, model, type: t.device.type }, () => {
           const d = hub.deviceById(deviceId)?.entry?.Device;
@@ -743,6 +760,9 @@ export function createDeviceSettings({ root, track }) {
         return;
       }
       if (tv !== t) return;
+      // This page's own copy of the device list too, which later saves read.
+      const entry = (config?.deviceList?.DevicesWithFeatures ?? []).find((e) => String(e?.Device?.["Id-"]) === deviceId);
+      if (entry?.Device) Object.assign(entry.Device, { Manufacturer: vendor, Model: model });
       const untouched = !tvInputsChanged();
       Object.assign(t.base, { vendor, model });
       if (untouched && !t.base.profile) {

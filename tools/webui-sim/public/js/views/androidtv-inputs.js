@@ -5,6 +5,7 @@
 import { tryTvInput } from "../api.js";
 import { escapeHtml, icon, openSheet, sectionLabel, spinner } from "../ui/shell.js";
 import {
+  BUILTIN,
   CUSTOM_LINKS,
   METHODS,
   finderAnswer,
@@ -61,6 +62,7 @@ function methodRows(draft, tv, stepper) {
 }
 
 function rowMarkup(draft, row, i, count, canTry) {
+  const builtin = draft.method === BUILTIN;
   const status = statusLabel(row);
   const tone = row.status === "works" ? " is-works" : row.status === "failed" ? " is-failed" : "";
   const name = row.name.trim() || `Input ${i + 1}`;
@@ -69,10 +71,10 @@ function rowMarkup(draft, row, i, count, canTry) {
         <input class="ds-input-name" data-focus="tv-name-${i}" data-tv-name="${i}" value="${escapeHtml(row.name)}" placeholder="HDMI 1" maxlength="64" autocomplete="off" aria-label="Input ${i + 1} name">
         <span class="ds-tv-status${tone}">${row.status === "works" ? icon("check", { size: 14 }) : ""}${escapeHtml(status)}</span>
       </div>
-      <button type="button" class="ds-input-cmd" data-focus="tv-opens-${i}" data-tv-opens="${i}" aria-haspopup="dialog" aria-label="${escapeHtml(`What ${name} opens: ${targetLabel(draft, row.value)}`)}">
+      <button type="button" class="ds-input-cmd" data-focus="tv-opens-${i}" data-tv-opens="${i}" aria-haspopup="dialog" aria-label="${escapeHtml(`What ${name} opens: ${targetLabel(draft, row.value)}`)}"${builtin ? " disabled" : ""}>
         <span>${escapeHtml(targetLabel(draft, row.value))}</span>${icon("keyboard_arrow_down", { size: 20 })}
       </button>
-      <button type="button" class="icon-btn" data-focus="tv-try-${i}" data-tv-try="${i}" aria-label="${escapeHtml(`Try ${name}`)}"${canTry && row.value !== "" ? "" : " disabled"}>${icon("play_arrow")}</button>
+      <button type="button" class="icon-btn" data-focus="tv-try-${i}" data-tv-try="${i}" aria-label="${escapeHtml(`Try ${name}`)}"${canTry && !builtin && row.value !== "" ? "" : " disabled"}>${icon("play_arrow")}</button>
       <button type="button" class="icon-btn" data-focus="in-menu-${i}" data-input-menu="${i}" aria-haspopup="menu" aria-label="More for input ${i + 1} of ${count}">${icon("more_vert")}</button>
     </div>`;
 }
@@ -96,7 +98,10 @@ export function tvInputsMarkup({ draft, tv, inUse, stepper, maxInputs }) {
     const offer = reported && reported.toLowerCase() !== String(tv.base?.vendor ?? "").toLowerCase()
       ? `<button type="button" class="btn btn-text" data-focus="tv-use-brand" data-tv-act="use-brand">Use “${escapeHtml(`${reported} ${tv.status.model ?? ""}`.trim())}”, as the TV reports</button>`
       : "";
-    parts.push(`<div class="ds-tv-note"><p class="ds-hint">No suggested setup for ${escapeHtml(brand)}. The manufacturer is set in the device's Edit details.</p>${offer}</div>`);
+    const builtin = draft.method === BUILTIN
+      ? `<p class="ds-hint">Until you choose a way above, the hub switches this TV's inputs its own built-in way (by the brand the TV reports), and nothing here is saved for it.</p>`
+      : "";
+    parts.push(`<div class="ds-tv-note">${builtin}<p class="ds-hint">No suggested setup for ${escapeHtml(brand)}. The manufacturer is set in the device's Edit details.</p>${offer}</div>`);
   }
   if (draft.method === "none") return parts.join("");
   parts.push(`<div class="m-list">${stepper("inputDelay")}</div>`);
@@ -120,7 +125,7 @@ export function tvInputsMarkup({ draft, tv, inUse, stepper, maxInputs }) {
       <button type="button" class="btn btn-text" data-focus="add-input" data-act="add-input"${draft.rows.length >= maxInputs ? " disabled" : ""}>${icon("add", { size: 18 })}Add input</button>
       <button type="button" class="btn btn-text" data-focus="tv-find" data-tv-act="find"${canFind ? "" : " disabled"}>Find my inputs…</button>
       <button type="button" class="btn btn-text" data-focus="tv-preset" data-tv-act="preset">Use the suggested setup</button>
-      <button type="button" class="btn btn-text" data-focus="tv-share" data-tv-act="share">Share this setup</button>
+      <button type="button" class="btn btn-text" data-focus="tv-share" data-tv-act="share"${draft.method === BUILTIN ? " disabled" : ""}>Share this setup</button>
     </div>`);
   return parts.join("");
 }

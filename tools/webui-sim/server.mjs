@@ -1053,7 +1053,9 @@ function simAndroidTvInputs(entry, d) {
   if (!list) {
     list = feature
       ? [...(feature.Inputs ?? [])].sort((a, b) => (a.InputOrder ?? 0) - (b.InputOrder ?? 0))
-        .map((i) => ({ name: i.InputName, command: i.Actions?.[0]?.IRCommandName })).filter((i) => slotOf(i.command))
+        // As the Lua writer: current inputs are kept as they are, including
+        // ones set up before slots with another command (Home, say).
+        .map((i) => ({ name: i.InputName, command: i.Actions?.[0]?.IRCommandName })).filter((i) => i.command)
       : (entry.Commands?.length ? [] : [1, 2, 3, 4].map((n) => ({ name: `HDMI ${n}`, command: slotCommand(n) })));
   }
   const delay = Number.isInteger(d.inputDelay) ? d.inputDelay : feature?.InputDelay ?? 0;
