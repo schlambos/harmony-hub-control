@@ -1,0 +1,76 @@
+# The merge gate: the test suites, and proof that every committed binary is
+# what its source builds. No hub, no secrets. docs/CI.md explains each part
+# and how to run it yourself.
+name: CI
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  suites:
+    name: Test suites
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: 26
+      - name: Install luajit, ripgrep and the pinned bun
+        run: |
+          sudo apt-get update -q
+          sudo apt-get install -y -q --no-install-recommends luajit ripgrep unzip wget
+          sh tools/ci/install_bun.sh "$HOME/.local/bin"
+          echo "$HOME/.local/bin" >> "$GITHUB_PATH"
+      - name: Run the suites
+        run: sh tools/ci/run_suites.sh
+
+  binaries:
+    name: Pins and reproducible builds
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    container:
+      # debian:bookworm-slim as of 2026-11-05, by digest
+      image: debian@sha256:734a72b3d6142a71993b4bc580ca01d8ca687f77a2c422d96a961d3376b179bc
+    steps:
+      - name: Install the build tools
+        run: |
+          apt-get update -q
+          apt-get install -y -q --no-install-recommends \
+            bzip2 ca-certificates file gcc git libc6-dev make patch \
+            python3 python3-pyelftools unzip wget xz-utils
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - name: Let git read the checkout inside the container
+        run: git config --global --add safe.directory "$GITHUB_WORKSPACE"
+      - name: Every pin matches its committed file
+        run: python3 tools/ci/verify_pins.py
+      - name: Cache the toolchain and source tarballs
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: |
+            build/toolchains/*.tar.*
+            build/tmp/*.tar.*
+          key: tarballs-${{ hashFiles('tools/ci/rebuild_check.sh', 'build/build_harmony_tools_kali.sh') }}
+          restore-keys: tarballs-
+      - name: Install the pinned bun
+        run: sh tools/ci/install_bun.sh /usr/local/bin
+      - name: Every shipped binary is what its source builds
+        run: sh tools/ci/rebuild_check.sh
+      - name: Keep the build output when it differs
+        if: failure()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: rebuild-output
+          path: |
+            build/output/
+            build/toolchains/build.log
+          if-no-files-found: ignore
