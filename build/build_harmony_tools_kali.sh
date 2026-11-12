@@ -90,8 +90,8 @@ BUSYBOX_TARBALL_SHA256=3311dff32e746499f4df0d5df04d7eb396382d7e108bb9250e7b519b8
 BUSYBOX_EXPECT_SHA256=f516bde18556bfe4c63731f882bc06d02beed1f61dff92898fd9cd9773e6a3bc
 BUSYBOX_EXPECT_SIZE=418688
 #: committed dropbearmulti identity and its pinned upstream source tarball
-DROPBEAR_EXPECT_SHA256=e2ea632aed8b31dc5ea56b9673cbd983ec83260a97d33f891a0cebf51d5c6c8d
-DROPBEAR_EXPECT_SIZE=577296
+DROPBEAR_EXPECT_SHA256=3403183654a48993dcf66d7180954c88664b7044747276b617640aebe7a43ff2
+DROPBEAR_EXPECT_SIZE=535652
 DROPBEAR_TARBALL_SHA256=0d1f7ca711cfc336dc8a85e672cab9cfd8223a02fe2da0a4a7aeb58c9e113634
 
 #: pinned executable SHA-256 for each Zig distribution
@@ -378,7 +378,13 @@ cd "$BUILD/dropbear-$DROPBEAR_VERSION"
   LDFLAGS="-static"
 
 make -j"$(nproc)" MULTI=1 PROGRAMS="dropbear dropbearkey dbclient scp" dropbearmulti
-"$STRIP" dropbearmulti || true
+# -R .pdr: also drop the MIPS procedure-descriptor section, a debugging aid
+# that no segment loads (plain strip keeps it). Same code and data, 41 KB
+# smaller; the file tools/hub-root bundles, and the one proposed for
+# harmony-hub-root in Ripthulhu/harmony-hub-root#10. Plain strip gave sha256
+# e2ea632a..., 577296 bytes (what harmony-hub-root ships until then), which
+# the installers still accept (DROPBEAR_BUILDS).
+"$STRIP" -R .pdr dropbearmulti || true
 cp dropbearmulti "$OUT/dropbearmulti"
 
 #: fail closed unless the rebuild reproduces the committed binary exactly

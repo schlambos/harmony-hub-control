@@ -18,6 +18,10 @@
   - `bb5df37` — opening the TDE gate on unprovisioned hubs (gate
     pre-check, JSON file-transfer staging fallback).
   - Their tests in `tests/test_hbus_transports.py` (44 tests).
+  - 2026-11-12: `dropbearmulti` replaced by the same Dropbear build stripped
+    with `strip -R .pdr` (535,652 bytes instead of 577,296; code and data
+    unchanged), as proposed for upstream in Ripthulhu/harmony-hub-root#10.
+    It is the file `build/build_harmony_tools_kali.sh` now builds.
 
 The fresh-hub chain that uses this tool is documented in
 `docs/FRESH_HUB_ACTIVATION.md`.

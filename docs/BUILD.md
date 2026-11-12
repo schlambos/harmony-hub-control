@@ -23,7 +23,7 @@ exact SHA-256 digests and sizes are:
 | `codex_webui` | 1312168 | `99a48766fef69d98fef5e39c9d90162164015dd60dbeb34c94241ddd942cb31c` |
 | `codex_dhcpd` | 31464 | `749161a5cd140cb72a73619c61d77c4beeb4a71f31ca87810ead4575b8f1ce81` |
 | `codex_portal` | 48680 | `4cf21f469d3ff4ef0c37b00bc40d14e1a143713d3777b7bd7e19c4b2ff0b4c33` |
-| `dropbearmulti` | 577296 | `e2ea632aed8b31dc5ea56b9673cbd983ec83260a97d33f891a0cebf51d5c6c8d` |
+| `dropbearmulti` | 535652 | `3403183654a48993dcf66d7180954c88664b7044747276b617640aebe7a43ff2` |
 | `codex_hbus` | 47160 | `5d649e9455c93badf6843b7f973d526ac2be7313465525ca81f5b24b85ff8b74` |
 | `codex_androidtv` | 223720 | `f22754d76d931755238a533eae8a30257ddc58eaa46e5139bd0605b665c9e2ec` |
 | `codex_usbeth` | 57736 | `f45949f5cab0fdbda3394e8024d8b5bda8d706c502a43b7d6e1e04ae23c81a90` |
@@ -80,9 +80,12 @@ unchanged. `tools/elf_load_cmp.py` checks that: it compares the entry point,
 the program headers and the bytes of every segment of two ELF files, ignoring
 only the section table that the loader never reads.
 
-`dropbearmulti` keeps its `.pdr` on purpose. The installers hard-link the
-copy harmony-hub-root leaves on the hub when it is byte-identical, which saves
-far more flash than the section's 41 KB.
+`dropbearmulti` (built with the Bootlin GCC toolchain, not Zig) drops its
+`.pdr` too: the build strips it with `strip -R .pdr`, which saves 41 KB. Hubs
+rooted with an older root tool carry the plainly stripped build (577296
+bytes, sha256 `e2ea632a…`). The installers treat both builds as the installed
+Dropbear (`DROPBEAR_BUILDS`), so they still hard-link that copy instead of
+writing a second one.
 
 ```sh
 python3 tools/elf_load_cmp.py old/codex_webui payload/bin/codex_webui
