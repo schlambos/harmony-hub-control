@@ -6,6 +6,7 @@ import { createActivitiesHomeView } from "./views/activities-home.js";
 import { createActivitiesView } from "./views/activities.js";
 import { createWizardView } from "./views/wizard.js";
 import { createTouchScreenView } from "./views/touch-screen.js";
+import { createHomeButtonsView } from "./views/home-buttons.js";
 import { createDevicesView } from "./views/devices.js";
 import { createSettingsView } from "./views/settings.js";
 import { createBluetoothView } from "./views/bluetooth.js";
@@ -36,6 +37,7 @@ const ROUTES = {
   settings: { section: "view-settings", factory: createSettingsView, title: "Settings" },
   remotes: { parent: "settings", section: "view-remotes", factory: createRemotesView, title: "Remotes" },
   activitybuttons: { parent: "remotes", section: "view-activity-buttons", factory: createActivityButtonsView, title: "Activity buttons" },
+  homebuttons: { parent: "remotes", section: "view-home-buttons", factory: createHomeButtonsView, title: "Home control buttons" },
   bluetooth: { parent: "settings", section: "view-bluetooth", factory: createBluetoothView, title: "Bluetooth" },
   mqtt: { parent: "settings", section: "view-mqtt", factory: createMqttView, title: "MQTT" },
   wifi: { parent: "settings", section: "view-wifi", factory: createWifiView, title: "Wi-Fi" },

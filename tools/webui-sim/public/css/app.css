@@ -769,6 +769,15 @@ button.m-row:focus-visible {
   color: var(--on-primary-container);
 }
 
+.seg-tab:disabled {
+  opacity: 0.38;
+  cursor: default;
+}
+
+.seg-tab:disabled:hover {
+  color: var(--on-surface-variant);
+}
+
 /* Chips (AssistChip / FilterChip) */
 .chip {
   display: inline-flex;

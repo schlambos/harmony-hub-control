@@ -148,7 +148,7 @@ and a user reports the Harmony Elite works.**
 | Harmony Touch | Validated, with stock remote firmware: offline sync, hard keys, on-screen buttons, the number pad, gestures, device screens and press modes. |
 | Harmony Smart Control remote | Validated, paired next to a Touch: pairing on the hub with no cloud (Settings → Remotes), its keys driving the same devices as the Touch's, and its activity buttons. It keeps no setup of its own; its buttons live on the hub. If it stops responding, take its coin cell out for 10 seconds, then pair it again. |
 | Harmony Elite | Works, per a user report; not yet tested here. |
-| Harmony Companion remote | Supported: activity buttons and per-activity keys in its own maps, edited the same way as the Smart Control's. Community-tested. |
+| Harmony Companion remote | Supported: activity buttons and per-activity keys in its own maps, edited the same way as the Smart Control's, and its home control buttons (Light 1, Light 2, Plug 1, Plug 2, + / −), each a command, an activity or a sequence with a long press and + / −, for all activities or one ([docs/HOME_CONTROL_BUTTONS.md](docs/HOME_CONTROL_BUTTONS.md)). Community-tested. |
 | Other remotes that pair with the hub, such as the Harmony Ultimate or 950 | Expected to work, but not yet tested. Features that need a screen apply only to remotes that have one. |
 | Phones, tablets and computers | The web, Android and macOS apps. |
 
@@ -524,6 +524,7 @@ tools/shipped_copy_hygiene.mjs`. Full test list and rebuilding `codex_webui` (Zi
 | [docs/HOME_ASSISTANT.md](docs/HOME_ASSISTANT.md) | Home Assistant entities as hub devices, webhook rules, press and hold behaviour, and setup |
 | [docs/ANDROID_TV.md](docs/ANDROID_TV.md) | Android TV and Google TV sets over the network: pairing, commands, power, codex_androidtv |
 | [docs/TOUCH_EDITOR.md](docs/TOUCH_EDITOR.md) | Remote sync, how presses and gestures resolve, on-screen buttons, device screens, slot rules and validation |
+| [docs/HOME_CONTROL_BUTTONS.md](docs/HOME_CONTROL_BUTTONS.md) | The Harmony Companion's home control buttons: keys, data model and the engine hook |
 | [docs/MELODIOUS_WEB_UI.md](docs/MELODIOUS_WEB_UI.md) | The web app's architecture, screen map, tokens and components |
 | [DESIGN.md](DESIGN.md) | The design system shared by the web and Android apps |
 | [docs/ANDROID_CATALOG.md](docs/ANDROID_CATALOG.md) | Logitech catalog lookup and sign-in in the Android app |
