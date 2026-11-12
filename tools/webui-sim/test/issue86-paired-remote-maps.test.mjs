@@ -5,9 +5,11 @@
    so a Smart Control paired onto a Companion hub started an activity from
    16414Root and was then dead in it until each activity was saved again.
 
-   The fixtures are that hub's own snapshots (fixtures/issue86/README.md):
-   002052 after pairing, 002323 after both re-saves. The fix must turn the
-   first into the second's 16414 maps with no re-save. */
+   The fixtures are synthetic (fixtures/issue86/README.md): generic
+   activities, devices and ids in the same shape as the reported hub —
+   paired snapshot with no 16414 activity maps, resaved snapshot with two of
+   them plus the 16420 keyboard map. The fix must turn the first into the
+   second's 16414 maps with no re-save. */
 
 import { describe, it } from "node:test";
 import assert from "node:assert/strict";
@@ -26,19 +28,19 @@ import { validateMapList } from "../public/js/views/remote-model.js";
 const FIXTURES = join(dirname(fileURLToPath(import.meta.url)), "../fixtures/issue86");
 const load = (name) => JSON.parse(fs.readFileSync(join(FIXTURES, name), "utf8"));
 
-const SHIELD_TV = "40131417";
-const MUSIC = "40131438";
-const RETROPIE = "35915705"; // never saved again on the reporter's hub
+const BETA = "102";
+const GAMMA = "103";
+const ALPHA = "101"; // never re-saved in the synthetic hub
 const PAIRED = ["16422", "16414"];
 
 function pairedSnapshot() {
   return {
     revision: "test",
-    activityList: load("importhub_backup_002052_ActivityList.json"),
-    mapList: load("importhub_backup_002052_MapList.json"),
+    activityList: load("synthetic_ActivityList.json"),
+    mapList: load("synthetic_paired_MapList.json"),
   };
 }
-const resaved = () => load("importhub_backup_002323_MapList.json");
+const resaved = () => load("synthetic_resaved_MapList.json");
 
 const identifiers = (mapList) => mapList.ButtonMaps.map((m) => m.ButtonMapIdentifier);
 const mapOf = (mapList, id) => mapList.ButtonMaps.find((m) => m.ButtonMapIdentifier === id);
@@ -56,11 +58,11 @@ const keyShapes = (map) => Object.fromEntries(map.Buttons
    to while `activityId` runs; null means the press is dropped. */
 const engineMap = (mapList, equadId, activityId) => mapOf(mapList, `${equadId}Activity${activityId}`) ?? null;
 
-describe("issue #86: the reporter's hub after pairing a Smart Control", () => {
+describe("issue #86: a synthetic hub after pairing a Smart Control", () => {
   it("has a root map for the new remote and no activity map (the reported state)", () => {
     const config = pairedSnapshot();
     assert.ok(mapOf(config.mapList, "16414Root"));
-    for (const id of [SHIELD_TV, MUSIC, RETROPIE]) {
+    for (const id of [BETA, GAMMA, ALPHA]) {
       assert.equal(engineMap(config.mapList, "16414", id), null, `16414 press in ${id} is dropped`);
       assert.ok(engineMap(config.mapList, "16422", id), `16422 has its map in ${id}`);
     }
@@ -69,7 +71,7 @@ describe("issue #86: the reporter's hub after pairing a Smart Control", () => {
   it("lists every activity the new remote has no keys for", () => {
     const missing = missingRemoteActivityMaps(pairedSnapshot(), PAIRED);
     assert.deepEqual(missing.map((m) => `${m.remote}:${m.activityId}`).sort(),
-      [`16414:${RETROPIE}`, `16414:${SHIELD_TV}`, `16414:${MUSIC}`].sort());
+      [`16414:${ALPHA}`, `16414:${BETA}`, `16414:${GAMMA}`].sort());
     assert.ok(missing.every((m) => m.name));
   });
 
@@ -77,15 +79,15 @@ describe("issue #86: the reporter's hub after pairing a Smart Control", () => {
     const config = pairedSnapshot();
     const { mapList, created } = buildRemoteActivityMapsMapList(config, PAIRED);
     assert.deepEqual(created.slice().sort(),
-      [`16414Activity${RETROPIE}`, `16414Activity${SHIELD_TV}`, `16414Activity${MUSIC}`].sort());
+      [`16414Activity${ALPHA}`, `16414Activity${BETA}`, `16414Activity${GAMMA}`].sort());
     /* The re-saved hub's map set, less the 16420 keyboard map (the wizard
        makes that for an activity with a text-entry device; no remote
        resolves presses through it), plus the activity nobody re-saved. */
     const expected = identifiers(resaved())
-      .filter((id) => id !== `16420Activity${SHIELD_TV}`)
-      .concat(`16414Activity${RETROPIE}`);
+      .filter((id) => id !== `16420Activity${BETA}`)
+      .concat(`16414Activity${ALPHA}`);
     assert.deepEqual(identifiers(mapList).sort(), expected.sort());
-    for (const id of [SHIELD_TV, MUSIC, RETROPIE]) {
+    for (const id of [BETA, GAMMA, ALPHA]) {
       assert.ok(engineMap(mapList, "16414", id), `16414 press in ${id} now resolves`);
     }
   });
@@ -93,7 +95,7 @@ describe("issue #86: the reporter's hub after pairing a Smart Control", () => {
   it("gives each new map the same keys and commands the re-save gave it", () => {
     const { mapList } = buildRemoteActivityMapsMapList(pairedSnapshot(), PAIRED);
     const after = resaved();
-    for (const id of [SHIELD_TV, MUSIC]) {
+    for (const id of [BETA, GAMMA]) {
       const made = mapOf(mapList, `16414Activity${id}`);
       const real = mapOf(after, `16414Activity${id}`);
       assert.deepEqual(keyShapes(made), keyShapes(real), `16414Activity${id}`);
@@ -105,10 +107,10 @@ describe("issue #86: the reporter's hub after pairing a Smart Control", () => {
 
   it("takes only command keys: the Companion's sequence key stays the Companion's", () => {
     const config = pairedSnapshot();
-    const companion = mapOf(config.mapList, `16422Activity${SHIELD_TV}`);
+    const companion = mapOf(config.mapList, `16422Activity${BETA}`);
     assert.ok(companion.Buttons.some((b) => b.ButtonKey === "Red" && b.ButtonAction.__type === "ButtonSequenceAction"));
     const { mapList } = buildRemoteActivityMapsMapList(config, PAIRED);
-    const made = mapOf(mapList, `16414Activity${SHIELD_TV}`);
+    const made = mapOf(mapList, `16414Activity${BETA}`);
     assert.ok(!made.Buttons.some((b) => b.ButtonKey === "Red"));
     assert.ok(made.Buttons.every((b) => b.ButtonAction?.CommandName && b.ButtonState === 1 && b.ButtonId > 0));
   });
@@ -141,7 +143,7 @@ describe("issue #86: the reporter's hub after pairing a Smart Control", () => {
     /* The re-saved hub still lacked one. */
     assert.deepEqual(
       missingRemoteActivityMaps({ ...config, mapList: resaved() }, PAIRED).map((m) => m.activityId),
-      [RETROPIE],
+      [ALPHA],
     );
   });
 
@@ -159,10 +161,10 @@ describe("issue #86: the reporter's hub after pairing a Smart Control", () => {
     const reply = JSON.stringify({
       id: 1,
       data: {
-        EquadID: "34827", RFID: "MASKED", DeviceCount: 2,
+        EquadID: "34827", RFID: "SYNTHETIC", DeviceCount: 2,
         Devices: [
-          { EquadID: "16422", SkinId: "", DeviceIndex: "1", RFID: "MASKED" },
-          { EquadID: "16414", SkinId: "", DeviceIndex: "2", RFID: "MASKED" },
+          { EquadID: "16422", SkinId: "", DeviceIndex: "1", RFID: "SYNTHETIC" },
+          { EquadID: "16414", SkinId: "", DeviceIndex: "2", RFID: "SYNTHETIC" },
         ],
       },
       code: 200,
@@ -175,9 +177,9 @@ describe("issue #86: the reporter's hub after pairing a Smart Control", () => {
 describe("issue #86: a paired remote's missing maps, other shapes", () => {
   it("makes an empty map when no other remote has keys there, so Off still reaches the root map", () => {
     const config = pairedSnapshot();
-    config.mapList.ButtonMaps = config.mapList.ButtonMaps.filter((m) => m.ButtonMapIdentifier !== `16422Activity${MUSIC}`);
+    config.mapList.ButtonMaps = config.mapList.ButtonMaps.filter((m) => m.ButtonMapIdentifier !== `16422Activity${GAMMA}`);
     const { mapList } = buildRemoteActivityMapsMapList(config, ["16414"]);
-    const made = mapOf(mapList, `16414Activity${MUSIC}`);
+    const made = mapOf(mapList, `16414Activity${GAMMA}`);
     assert.ok(made);
     assert.deepEqual(made.Buttons, []);
     assert.deepEqual(made.Sequences, []);
@@ -188,20 +190,20 @@ describe("issue #86: a paired remote's missing maps, other shapes", () => {
     const full = buildRemoteActivityMapsMapList(config, PAIRED).mapList;
     const smartOnly = { ...config, mapList: { ...full, ButtonMaps: full.ButtonMaps.filter((m) => !String(m.ButtonMapIdentifier).startsWith("16422")) } };
     const { mapList, created } = buildRemoteActivityMapsMapList(smartOnly, ["16414", "16423"]);
-    assert.deepEqual(created.slice().sort(), [RETROPIE, SHIELD_TV, MUSIC].map((id) => `16423Activity${id}`).sort());
+    assert.deepEqual(created.slice().sort(), [ALPHA, BETA, GAMMA].map((id) => `16423Activity${id}`).sort());
     assert.deepEqual(
-      keyShapes(mapOf(mapList, `16423Activity${SHIELD_TV}`)),
-      keyShapes(mapOf(full, `16414Activity${SHIELD_TV}`)),
+      keyShapes(mapOf(mapList, `16423Activity${BETA}`)),
+      keyShapes(mapOf(full, `16414Activity${BETA}`)),
     );
   });
 
   it("borrows a screen remote's hard keys in the no-screen spelling", () => {
     const config = pairedSnapshot();
-    const source = mapOf(config.mapList, `16422Activity${SHIELD_TV}`);
-    source.ButtonMapIdentifier = `16417Activity${SHIELD_TV}`;
+    const source = mapOf(config.mapList, `16422Activity${BETA}`);
+    source.ButtonMapIdentifier = `16417Activity${BETA}`;
     source.Buttons.find((b) => b.ButtonKey === "Info").ButtonKey = "DVR";
     const { mapList } = buildRemoteActivityMapsMapList(config, ["16414"]);
-    const keys = mapOf(mapList, `16414Activity${SHIELD_TV}`).Buttons.map((b) => b.ButtonKey);
+    const keys = mapOf(mapList, `16414Activity${BETA}`).Buttons.map((b) => b.ButtonKey);
     assert.ok(keys.includes("Dvr"));
     assert.ok(!keys.includes("DVR"));
     assert.ok(keys.includes("VolumeUp"));
@@ -218,10 +220,10 @@ describe("issue #86: a paired remote's missing maps, other shapes", () => {
   it("a new root map borrows surface ids instead of saving nulls", () => {
     const config = pairedSnapshot();
     config.mapList.ButtonMaps = config.mapList.ButtonMaps.filter((m) => m.ButtonMapIdentifier !== "16414Root");
-    const { mapList } = buildActivityButtonsMapList(config, [{ key: "WatchTVActivity", press: SHIELD_TV, longPress: "" }], "16414");
+    const { mapList } = buildActivityButtonsMapList(config, [{ key: "WatchTVActivity", press: BETA, longPress: "" }], "16414");
     const root = mapOf(mapList, "16414Root");
-    assert.equal(root["RemoteId-"], 7087580);
-    assert.equal(root["SurfaceId-"], 6593520);
-    assert.equal(root["ButtonMapSurfaceId-"], 6593520);
+    assert.equal(root["RemoteId-"], 7000001);
+    assert.equal(root["SurfaceId-"], 6000001);
+    assert.equal(root["ButtonMapSurfaceId-"], 6000001);
   });
 });
