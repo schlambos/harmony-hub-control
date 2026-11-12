@@ -532,6 +532,8 @@ tools/shipped_copy_hygiene.mjs`. Full test list and rebuilding `codex_webui` (Zi
 | [desktop/README.md](desktop/README.md) | Building, testing and releasing the macOS app |
 | [tools/catalog/README.md](tools/catalog/README.md) | The Logitech catalog helper for the command line |
 | [docs/BUILD.md](docs/BUILD.md) | Building the MIPS binaries with the pinned toolchain |
+| [docs/CI.md](docs/CI.md) | What CI checks on every pull request, and how to run the same checks yourself |
+| [docs/CI_BUILD_RELEASE_DESIGN.md](docs/CI_BUILD_RELEASE_DESIGN.md) | The design of the CI, build and release pipeline, and what comes next |
 | [docs/PROTOCOLS.md](docs/PROTOCOLS.md) | The hub's own protocols and ports |
 | [docs/SECURITY.md](docs/SECURITY.md) | Security notes and what never to commit |
 | [UNRAID.md](UNRAID.md) | Docker and Unraid |
@@ -558,7 +560,11 @@ tokens, hub backups, firmware dumps or rooting tools. Read [CONTRIBUTING.md](CON
   - BusyBox 1.37.0 (GPL-2.0), built into `busybox-extra`, with its licence, patch, configuration
     and how to rebuild it in [`third_party/busybox-1.37.0/`](third_party/busybox-1.37.0/);
   - BearSSL 0.6 (MIT), built into `codex_androidtv`, in
-    [`third_party/bearssl-0.6/`](third_party/bearssl-0.6/).
+    [`third_party/bearssl-0.6/`](third_party/bearssl-0.6/);
+  - the Linux kernel 2.6.31 (GPL-2.0), from Logitech's published hub kernel archive, built into
+    `asix.ko`, with two upstream Linux 3.1 patches by Marek Vasut; the config, patches, licence and
+    how to rebuild it are in
+    [`third_party/linux-2.6.31-harmony/`](third_party/linux-2.6.31-harmony/README.md).
 
 **Contributors.** Thank you to everyone who has contributed code, pull requests, testing and issue
 reports so far:

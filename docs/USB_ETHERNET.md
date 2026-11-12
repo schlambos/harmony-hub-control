@@ -29,18 +29,20 @@ or Chromecast):
 The service detects the attached adapter (`codex_usbeth status` →
 `usb_driver=`) and loads either the standalone `r8152` driver or `usbnet.ko`
 plus the matching minidriver. **Validation levels differ per chipset and are
-stated plainly below.** No chipset is currently claimed traffic-tested:
-the Realtek adapter binds on hub hardware, but the traffic evidence
-behind the earlier claim was retracted (see the note under the table).
-The ASIX and CDC drivers are built from GPL kernel source and fully
-import-audited against the hub kernel, but they have not been
-traffic-tested (the maintainer's only adapter is Realtek), and no inert
-load test has been run for them yet.
+stated plainly below.** One chipset is traffic-tested: the ASIX
+AX88772C (TRENDnet TU2-ET100), with `asix.ko` and this repo's `usbnet.ko`,
+wired traffic counter-verified in both directions. The Realtek adapter
+binds on hub hardware, but the traffic evidence behind its earlier claim
+was retracted (see the note under the table), so Realtek is not claimed
+traffic-tested. The other ASIX chipsets and the `ax88179_178a`,
+`cdc_ether` and `cdc_ncm` drivers are built from GPL kernel source and
+fully import-audited against the hub kernel, but they have not been
+traffic-tested, and no inert load test has been run for them yet.
 
 | Driver | Chipsets / match | Validation |
 | --- | --- | --- |
 | `r8152.ko` | Realtek RTL8152B (`0bda:8152`), RTL8153 (`0bda:8153`, USB 2.0 High-Speed on the hub), Samsung (`04e8:a101`) | Driver loads and binds on hardware; **wired-traffic validation pending** (see below) |
-| `asix.ko` | ASIX AX88172 / AX88772 / AX88772A / AX88178 + clones (see payload README for the VID:PID list; incl. `05ac:1402` Apple USB Ethernet). **Not** AX88772B (`0b95:772b`) | Built + audited only; traffic test pending hardware |
+| `asix.ko` | ASIX AX88172 / AX88772 / AX88772A / AX88772B/C (`0b95:772b`) / AX88178 + clones (see payload README for the VID:PID list; incl. `05ac:1402` Apple USB Ethernet) | AX88772C (TRENDnet TU2-ET100): **traffic-tested** on hardware with this repo's `usbnet.ko` (counter-verified both directions). Other chipsets built + audited only |
 | `ax88179_178a.ko` | ASIX AX88179 (`0b95:1790`), AX88178A (`0b95:178a`), D-Link DUB-1312, Sitecom, Samsung, Lenovo (VID:PID list in payload README) | Built + audited only; traffic test pending hardware |
 | `cdc_ether.ko` | CDC-ECM: matched by USB class (Communications 02 / subclass 06), any vendor; plus Ericsson/Toshiba/Dell IDs | Built + audited only; traffic test pending hardware |
 | `cdc_ncm.ko` | CDC-NCM: matched by USB class (02 / subclass 0d), any vendor | Built + audited only; traffic test pending hardware |
@@ -57,8 +59,9 @@ SMSC95xx and other chipsets remain unsupported.
 > correctness, and an idle interface with no packet errors does not
 > establish a healthy driver under load. Wired bidirectional traffic
 > (counter-verified, both directions) plus a clean boot auto-start are
-> the acceptance bar; until that live run passes, no chipset is claimed
-> traffic-tested.
+> the acceptance bar; until that live run passes, the Realtek path is not
+> claimed traffic-tested. The AX88772C result in the table is a separate
+> run that met that bar.
 
 ## How to enable or disable
 
@@ -261,6 +264,12 @@ and refreshes while the page is open.
 - **Micro-USB device mode is unavailable while host mode is active.** Switching
   the AR9330 USB controller to host mode disconnects the USB gadget path until
   USB Ethernet is turned off and the hub reboots.
+- **A driver update needs a reboot.** The service loads each module once and
+  never reloads one it finds loaded, since unloading it would drop a working
+  cable. So when an install replaces a USB Ethernet module that is loaded
+  (`/proc/modules`, read before anything is replaced), the installer reboots
+  the hub afterwards; the Mac app reboots for any change in that folder. With
+  `--no-apply-cloud-restart` the installer says to reboot by hand instead.
 - **Keep `ar7240-ehci` bound until reboot.** Stopping the service downs the
   network interface and kills its `udhcpc` process, but deliberately leaves the
   `ar7240-ehci` platform device registered for the rest of the boot to avoid

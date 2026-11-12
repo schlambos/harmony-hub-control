@@ -69,6 +69,11 @@ int main(void) {
     p = probe(1, 1, 1, "0bda:8153", "r8152", "eth2", 1, "192.168.0.234");
     CHECK(strcmp(usbeth_state_name(&p), "operational") == 0);
 
+    /* Driver map: the AX88772B/C (e.g. TRENDnet TU2-ET100 v3) uses asix.ko. */
+    CHECK(driver_for_vid_pid("0b95", "772b") != NULL && strcmp(driver_for_vid_pid("0b95", "772b"), "asix") == 0);
+    CHECK(strcmp(driver_for_vid_pid("0b95", "772a"), "asix") == 0);
+    CHECK(driver_for_vid_pid("0b95", "772c") == NULL);
+
     /* IPv4 helpers behind net-apply. */
     uint32_t ip;
     CHECK(parse_ipv4("192.168.0.234", &ip) == 0 && ip == 0xc0a800eaU);

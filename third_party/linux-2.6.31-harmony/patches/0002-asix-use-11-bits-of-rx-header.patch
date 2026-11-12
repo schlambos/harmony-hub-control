@@ -1,0 +1,36 @@
+From: Marek Vasut <marek.vasut@gmail.com>
+Subject: ASIX: Use only 11 bits of header for data size
+
+Upstream Linux commit bca0beb9363f8487ac902931a50eb00180a2d14a
+("ASIX: Use only 11 bits of header for data size", Linux 3.1), by Marek
+Vasut, with "Signed-off-by: Marek Vasut <marek.vasut@gmail.com>" and
+"Signed-off-by: David S. Miller <davem@davemloft.net>".
+
+Adapted to Linux 2.6.31 for Melodious: upstream applied it to the check as
+bc466e678d0a had simplified it; this applies the same change to 2.6.31's
+form of the check.
+
+The AX88772B/C uses only the low 11 bits of each received packet's header for
+its length and sets some of the other bits (e.g. 0x803c for a 60-byte frame).
+Linux 2.6.31 reads all 16 bits, logs "asix_rx_fixup() Bad Header Length" and
+then "Bad RX Length 32828", and drops the whole USB transfer, so almost nothing
+is received.
+
+--- a/drivers/net/usb/asix.c
++++ b/drivers/net/usb/asix.c
+@@ -312,12 +312,11 @@
+ 	skb_pull(skb, 4);
+ 
+ 	while (skb->len > 0) {
+-		if ((short)(header & 0x0000ffff) !=
+-		    ~((short)((header & 0xffff0000) >> 16))) {
++		if ((header & 0x07ff) != ((~header >> 16) & 0x07ff))
+ 			deverr(dev,"asix_rx_fixup() Bad Header Length");
+-		}
++
+ 		/* get the packet length */
+-		size = (u16) (header & 0x0000ffff);
++		size = (u16) (header & 0x000007ff);
+ 
+ 		if ((skb->len) - ((size + 1) & 0xfffe) == 0)
+ 			return 2;
