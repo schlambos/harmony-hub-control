@@ -9,6 +9,11 @@
    unless a key is set for one remote only), so each activity row only says
    where they differ. Models in remotes-model.js.
 
+   A remote without a screen needs a map of its own for every activity, or
+   it does nothing while that activity runs. Pairing one adds the maps it
+   lacks, and a remote found without them gets a notice with one button that
+   adds them (issue #86).
+
    Pairing never touches a remote of another kind: stock hal keeps one remote
    per kind and replaces only an older one of the same kind. With multi-remote
    on (the hub says `multiRemote`) only a remote with a screen or a keyboard
@@ -26,13 +31,17 @@ import {
   PAIRING_STEPS,
   RF_SLOTS,
   SMART_CONTROL_EQUAD,
+  buildRemoteActivityMapsMapList,
   keyComparison,
+  missingRemoteActivityMaps,
   pairOutcome,
   pairedMessage,
   parseRfInfo,
   readActivityButtons,
+  remoteActivityMapsSaveOutcome,
   remoteModels,
 } from "./remotes-model.js";
+import { saveMapList } from "./map-save.js";
 import { hasRemoteMaps } from "./touch-model.js";
 import { COMPANION_EQUAD } from "./home-buttons-model.js";
 
@@ -51,12 +60,13 @@ export function createRemotesView(section) {
   let outcome = null; // pairOutcome of the last window
   let multiRemote = false; // the hub runs the multi-remote hal
   let unpairing = 0; // slot being unpaired
+  let addingKeys = false; // saving the activity maps a paired remote lacks
   let timer = null;
 
   section.innerHTML = `<div class="page" id="remotesRoot"></div>`;
   const root = section.querySelector("#remotesRoot");
 
-  const busy = () => Boolean(pairing) || Boolean(unpairing);
+  const busy = () => Boolean(pairing) || Boolean(unpairing) || addingKeys;
   const paired = () => remotes?.remotes ?? [];
   // One entry per model: remotes of one model share its maps.
   const models = () => remoteModels(paired());
@@ -233,10 +243,43 @@ export function createRemotesView(section) {
       </div>`;
   }
 
+  /* A remote without a screen that has no map for some activities: say what
+     that means and offer the fix. Pairing here adds them itself; this is for
+     a remote paired before that, or when that save didn't land. */
+  function missingKeysNotice(remote) {
+    const missing = missingRemoteActivityMaps(hub.state.config, [remote.equadId]);
+    if (!missing.length) return "";
+    const names = missing.map((m) => escapeHtml(m.name)).join(", ");
+    return `<div class="notice notice-warn" role="status">
+        <strong>This remote has no keys for ${missing.length === 1 ? "one activity" : `${missing.length} activities`}:</strong> ${names}.
+        While ${missing.length === 1 ? "it" : "one of them"} runs the hub ignores every key on this remote, Off included.
+        <div class="actions"><button type="button" class="btn btn-filled btn-sm" data-act="add-keys"${busy() || remotesBusy ? " disabled" : ""}>${addingKeys ? "Adding…" : "Add its keys"}</button></div>
+      </div>`;
+  }
+
+  /* Give every paired remote without a screen a map for each activity it
+     has none for. One save for all of them; nothing else in MapList changes. */
+  async function addMissingKeys() {
+    if (addingKeys || !hub.state.config) return;
+    const { mapList, created } = buildRemoteActivityMapsMapList(hub.state.config, paired());
+    if (!created.length) return;
+    addingKeys = true;
+    render();
+    try {
+      await saveMapList(mapList, {
+        done: `Added the missing keys (${created.length === 1 ? "one activity map" : `${created.length} activity maps`}).`,
+        check: (config) => remoteActivityMapsSaveOutcome(config, created),
+      });
+    } finally {
+      addingKeys = false;
+      render();
+    }
+  }
+
   /* One section per model: remotes of one model share its maps. */
   function remoteSection(remote) {
     let body;
-    if (remote.role === "no-screen") body = `${activityButtonsCard(remote)}${activitiesCard(remote)}`;
+    if (remote.role === "no-screen") body = `${missingKeysNotice(remote)}${activityButtonsCard(remote)}${activitiesCard(remote)}`;
     else if (remote.role === "screen") body = activitiesCard(remote);
     else body = `<div class="m-card"><p class="list-note">Nothing to set for this remote here yet.</p></div>`;
     if (remote.equadId === COMPANION_EQUAD) body += homeButtonsCard();
@@ -310,6 +353,12 @@ export function createRemotesView(section) {
     }
     if (!outcome || outcome.status === "unknown") await loadRemotes();
     render();
+    // A remote that just joined has no keys in the activities that already
+    // exist; add them now instead of leaving it dead once one starts.
+    if (outcome && (outcome.status === "paired" || outcome.status === "already")) {
+      await hub.ensureConfig();
+      await addMissingKeys();
+    }
     const pairedText = pairedMessage(outcome);
     if (pairedText && !section.hidden) {
       await confirmDialog({ title: "Remote paired", text: pairedText, confirmLabel: "OK", cancel: false });
@@ -367,6 +416,7 @@ export function createRemotesView(section) {
       loadRemotes();
       hub.reloadConfig();
     } else if (act === "pair") pair();
+    else if (act === "add-keys") addMissingKeys();
     const slot = event.target.closest("[data-unpair]")?.dataset.unpair;
     if (slot) unpair(Number(slot));
   });
