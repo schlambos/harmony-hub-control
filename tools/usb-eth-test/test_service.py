@@ -243,14 +243,19 @@ with open(D / "calls.log", "a") as f:
 print("FAIL" if s.get("wpa_fail") else "OK")
 '''
 
-# codex_hal_ltcp: logs each command; refuses while hal_fail is set.
+# codex_hal_ltcp: logs each command; refuses while hal_fail is set. With a
+# hal_hang_fire file in FAKE_DIR, the next fire_command hangs (once).
 STUB_HAL = r'''#!PYTHON
-import json, os, sys
+import json, os, sys, time
 from pathlib import Path
 D = Path(os.environ["FAKE_DIR"])
 s = json.loads((D / "fake.json").read_text())
 with open(D / "calls.log", "a") as f:
     f.write("hal " + " ".join(sys.argv[1:3]) + "\n")
+hang = D / "hal_hang_fire"
+if "fire_command" in " ".join(sys.argv[2:3]) and hang.exists():
+    hang.unlink()
+    time.sleep(60)
 print('{"id":1,"code":500}' if s.get("hal_fail") else '{"id":1,"code":200}')
 '''
 
@@ -265,6 +270,23 @@ HUB_COMMANDS = ("[", "[[", "awk", "cat", "chmod", "cp", "cut", "date", "dirname"
 
 STUB_PLAIN = {
     "killall": '#!/bin/sh\nexit 0\n',
+    # The service's lock is a mkdir that fails when the directory exists, as
+    # BusyBox's does. uutils' mkdir (/usr/bin/mkdir on Ubuntu 26.04, 0.10.0)
+    # checks before it creates, so two at once can both succeed and two
+    # starts both take the lock; this one is a single mkdir(2).
+    "mkdir": r'''#!/usr/bin/env python3
+import os, sys
+args = sys.argv[1:]
+parents = "-p" in args
+rc = 0
+for d in (a for a in args if a != "-p"):
+    try:
+        os.makedirs(d, exist_ok=True) if parents else os.mkdir(d)
+    except OSError as e:
+        print(f"mkdir: {d}: {e.strerror}", file=sys.stderr)
+        rc = 1
+sys.exit(rc)
+''',
     # A real pause, if a short one, so a loop that outlives its test can't spin
     # a core. And once the test process that made the sandbox has gone (it
     # crashed, or was killed before it could clean up), the loop that called
@@ -819,6 +841,21 @@ class CableTests(SandboxCleanup):
     def led(self):
         return [c for c in self.calls() if c.startswith("hal ")]
 
+    def led_file(self):
+        f = self.sb.run_dir / "codex-usb-eth-led"
+        return f.read_text().strip() if f.exists() else ""
+
+    def cable_settled(self):
+        # The cable took local traffic and the worker finished that pass: the
+        # gateway checks and (with WIFI_OFF) the Wi-Fi-off minute were timed
+        # from the clock as it was, and the LED went last. Moving the clock
+        # before then starts those timers late, and the test waits forever.
+        if self.lan_dev() != "eth2" or self.led_file() != "1":
+            return False
+        if "WIFI_OFF=1" not in (self.sb.dir / "usb_eth.conf").read_text():
+            return True
+        return (self.sb.run_dir / "codex-usb-eth-wired-since").exists()
+
     EXT = 'hal sys.led {"action":"extender_mode"}'
     NONEXT = 'hal sys.led {"action":"non_extender_mode"}'
     FIRE = 'hal sys.led {"action":"fire_command"}'
@@ -909,7 +946,7 @@ class CableTests(SandboxCleanup):
         self.conf("WIFI_OFF=1\n")
         self.guard_with_watchdog()
         self.start()
-        self.assertTrue(self.wait(lambda: self.lan_dev() == "eth2"))
+        self.assertTrue(self.wait(self.cable_settled), self.led())
         time.sleep(0.5)
         self.assertFalse(self.suspended(), "Wi-Fi went off before the minute")
         self.clock(1061)
@@ -925,7 +962,7 @@ class CableTests(SandboxCleanup):
     def test_no_wifi_off_without_the_guards_watchdog(self):
         self.conf("WIFI_OFF=1\n")
         self.start()
-        self.assertTrue(self.wait(lambda: self.lan_dev() == "eth2"))
+        self.assertTrue(self.wait(self.cable_settled), self.led())
         self.clock(1100)
         time.sleep(1.0)
         self.assertFalse(self.suspended())
@@ -935,7 +972,7 @@ class CableTests(SandboxCleanup):
         self.conf("WIFI_OFF=1\n")
         self.guard_with_watchdog()
         self.start()
-        self.assertTrue(self.wait(lambda: self.lan_dev() == "eth2"))
+        self.assertTrue(self.wait(self.cable_settled), self.led())
         self.clock(1061)
         self.assertTrue(self.wait(self.suspended))
         self.conf("WIFI_OFF=0\n")
@@ -945,7 +982,7 @@ class CableTests(SandboxCleanup):
         self.conf("WIFI_OFF=1\n")
         self.guard_with_watchdog()
         self.start()
-        self.assertTrue(self.wait(lambda: self.lan_dev() == "eth2"))
+        self.assertTrue(self.wait(self.cable_settled), self.led())
         self.clock(1061)
         self.assertTrue(self.wait(self.suspended))
         self.sb.patch_fake(wpa_fail=True)
@@ -961,7 +998,7 @@ class CableTests(SandboxCleanup):
         self.conf("WIFI_OFF=1\n")
         self.guard_with_watchdog()
         self.start()
-        self.assertTrue(self.wait(lambda: self.lan_dev() == "eth2"))
+        self.assertTrue(self.wait(self.cable_settled), self.led())
         self.clock(1061)
         self.assertTrue(self.wait(self.suspended))
         self.assertEqual(self.sb.run("stop", **self.path()).returncode, 0)
@@ -1048,7 +1085,7 @@ class CableTests(SandboxCleanup):
         self.conf("WIFI_OFF=1\n")
         self.guard_with_watchdog()
         self.sb.run("start", **self.path())
-        self.assertTrue(self.wait(lambda: self.lan_dev() == "eth2"))
+        self.assertTrue(self.wait(self.cable_settled), self.led())
         self.clock(1061)
         self.assertTrue(self.wait(self.suspended))
         old = (self.sb.run_dir / "codex-usb-eth-worker.pid").read_text().strip()
@@ -1184,7 +1221,7 @@ class CableTests(SandboxCleanup):
         self.conf("WIFI_OFF=1\n")
         self.guard_with_watchdog()
         self.sb.run("start", **self.path())
-        self.assertTrue(self.wait(lambda: self.lan_dev() == "eth2"))
+        self.assertTrue(self.wait(self.cable_settled), self.led())
         self.clock(1061)
         self.assertTrue(self.wait(self.suspended))
         self.sb.patch_fake(phy_ready_after=10**6)  # every phy-host read is now a sentinel
@@ -1233,7 +1270,7 @@ class CableTests(SandboxCleanup):
         self.guard_with_watchdog()
         self.sb.patch_fake(wpa_fail=True)
         self.start()
-        self.assertTrue(self.wait(lambda: self.lan_dev() == "eth2"))
+        self.assertTrue(self.wait(self.cable_settled), self.led())
         self.clock(1061)
         self.assertTrue(self.wait(lambda: "wpa_cli -i ath0 disconnect" in self.calls()))
         time.sleep(0.5)
@@ -1298,7 +1335,7 @@ class CableTests(SandboxCleanup):
         self.conf("WIFI_OFF=1\n")
         self.guard_with_watchdog()
         self.start()
-        self.assertTrue(self.wait(lambda: self.lan_dev() == "eth2"))
+        self.assertTrue(self.wait(self.cable_settled), self.led())
         self.clock(1061)
         self.assertTrue(self.wait(self.suspended))
         self.sb.patch_fake(netmask="255.255.0.0")
@@ -1321,7 +1358,7 @@ class CableTests(SandboxCleanup):
         self.conf("WIFI_OFF=1\n")
         self.guard_with_watchdog()
         w = self.start()
-        self.assertTrue(self.wait(lambda: self.lan_dev() == "eth2"))
+        self.assertTrue(self.wait(self.cable_settled), self.led())
         self.clock(1061)
         self.assertTrue(self.wait(self.suspended))
         w.kill()
@@ -1341,6 +1378,20 @@ class CableTests(SandboxCleanup):
         again = self.sb.run("recover", **self.path())
         self.assertEqual((again.returncode, again.stdout.strip()), (0, ""))
 
+    def test_recover_resends_the_led_after_the_worker_died_halfway(self):
+        # Killed after hal took extender mode but before the blink that
+        # makes it use it: recover can't know which, so it sends it again.
+        (self.sb.fake_dir / "hal_hang_fire").write_text("")
+        w = self.start()
+        self.assertTrue(self.wait(lambda: self.led() == [self.EXT, self.FIRE]), self.led())
+        w.kill()
+        w.wait()
+        r = self.sb.run("recover", **self.path())
+        self.assertEqual(r.returncode, 0, r.stderr)
+        self.assertIn("recovered", r.stdout)
+        self.assertEqual(self.led()[-2:], [self.NONEXT, self.FIRE])
+        self.assertEqual(self.led_file(), "0")
+
     def test_recover_leaves_a_running_worker_alone(self):
         self.start()
         self.assertTrue(self.wait(lambda: self.lan_dev() == "eth2"))
@@ -1353,7 +1404,7 @@ class CableTests(SandboxCleanup):
         self.conf("WIFI_OFF=1\n")
         self.guard_with_watchdog()
         w = self.start()
-        self.assertTrue(self.wait(lambda: self.lan_dev() == "eth2"))
+        self.assertTrue(self.wait(self.cable_settled), self.led())
         self.clock(1061)
         self.assertTrue(self.wait(self.suspended))
         w.kill()

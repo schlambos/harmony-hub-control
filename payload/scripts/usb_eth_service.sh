@@ -698,9 +698,12 @@ manage_wifi() {
 # looking at it. So after each pass (and on stop): extender mode exactly
 # while the cable carries local traffic. Sent when that differs from what
 # hal last accepted (LED_STATE), with a blink; a refusal is tried again
-# 30 s later. LED_FORCE_AT sends it again from that uptime on (worker start,
-# and 2 s after Wi-Fi goes off). In extender mode it's repeated every 5
-# minutes without a blink, in case hal restarted.
+# 30 s later. LED_STATE says "pending" while a change is being sent, so a
+# worker that dies halfway (hal told extender mode, no blink yet) leaves a
+# state that matches neither, and recover or stop sends it again.
+# LED_FORCE_AT sends it again from that uptime on (worker start, and 2 s
+# after Wi-Fi goes off). In extender mode it's repeated every 5 minutes
+# without a blink, in case hal restarted.
 LED_FORCE_AT=0
 LED_RETRY_AT=0
 LED_NEXT_ASSERT=0
@@ -716,7 +719,7 @@ led_sync() {
   _want=0
   [ -f "$LAN_DEV_FILE" ] && _want=1
   _have=$(cat "$LED_STATE" 2>/dev/null)
-  [ "$_have" = 1 ] || _have=0
+  case "$_have" in 0|1) ;; '') _have=0 ;; *) _have=pending ;; esac
   _lnow=$(uptime_s)
   _lnow=${_lnow:-0}
   _force=0
@@ -730,6 +733,7 @@ led_sync() {
   fi
   [ "$_lnow" -ge "$LED_RETRY_AT" ] || return 0
   if [ "$_want" = 1 ]; then _mode=extender_mode; else _mode=non_extender_mode; fi
+  echo pending > "$LED_STATE"
   if hal_led "$_mode" && hal_led fire_command; then
     echo "$_want" > "$LED_STATE"
     LED_FORCE_AT=0
