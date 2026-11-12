@@ -11,9 +11,11 @@ startup, and owned route/ARP setup + cleanup.
 
 Run via tools/usb-eth-test/run_tests.sh (or directly with python3).
 """
+import atexit
 import json
 import os
 import shutil
+import signal
 import subprocess
 import sys
 import tempfile
@@ -263,7 +265,11 @@ HUB_COMMANDS = ("[", "[[", "awk", "cat", "chmod", "cp", "cut", "date", "dirname"
 
 STUB_PLAIN = {
     "killall": '#!/bin/sh\nexit 0\n',
-    "sleep": '#!/bin/sh\nexec /bin/sleep 0.02\n',
+    # A real pause, if a short one, so a loop that outlives its test can't spin
+    # a core. And once the test process that made the sandbox has gone (it
+    # crashed, or was killed before it could clean up), the loop that called
+    # this is ended.
+    "sleep": '#!/bin/sh\nkill -0 "$FAKE_OWNER" 2>/dev/null || { kill -TERM "$PPID" 2>/dev/null; exit 1; }\nexec /bin/sleep 0.05\n',
     "udhcpc": r'''#!/usr/bin/env python3
 import json, os, subprocess, sys
 from pathlib import Path
@@ -303,9 +309,47 @@ if s.get("wired_route", True) and s.get("carrier"):
 }
 
 
+# Every sandbox not yet closed. The service backgrounds its worker (and the
+# worker its udhcpc) with "&", so they outlive the command that started them:
+# each test closes its sandboxes when it ends (SandboxCleanup), and whatever is
+# left is closed at exit or on SIGTERM.
+_SANDBOXES = []
+
+
+def close_all_sandboxes():
+    while _SANDBOXES:
+        _SANDBOXES[-1].close()
+
+
+atexit.register(close_all_sandboxes)
+if signal.getsignal(signal.SIGTERM) is signal.SIG_DFL:
+    signal.signal(signal.SIGTERM, lambda *_: (close_all_sandboxes(), os._exit(143)))
+
+
+def _kill_group(pgid, sig):
+    try:
+        os.killpg(pgid, sig)
+    except (ProcessLookupError, PermissionError):
+        pass
+
+
+class SandboxCleanup(unittest.TestCase):
+    """Closes every sandbox a test made, however the test ended."""
+
+    def run(self, result=None):
+        try:
+            return super().run(result)
+        finally:
+            close_all_sandboxes()
+
+
 class Sandbox:
     def __init__(self, fake):
         self.dir = Path(tempfile.mkdtemp(prefix="usbeth-svc-"))
+        self.pgids = set()
+        self.closed = False
+        self.owner = os.getpid()
+        _SANDBOXES.append(self)
         self.fake_dir = self.dir / "fake"
         self.fake_dir.mkdir()
         self.run_dir = self.dir / "run"
@@ -387,6 +431,7 @@ class Sandbox:
         env = dict(os.environ)
         env.update({
             "FAKE_DIR": str(self.fake_dir),
+            "FAKE_OWNER": str(self.owner),
             "USBETH_PATH": f"{self.bin}:/usr/bin:/bin",
             "USBETH_CONF": str(self.dir / "usb_eth.conf"),
             "USBETH_HELPER": str(self.bin / "codex_usbeth"),
@@ -417,15 +462,71 @@ class Sandbox:
         env.update({k: str(v) for k, v in over.items()})
         return env
 
+    def popen(self, args, **kw):
+        """Popen in a session of its own, killed as a group by close()."""
+        proc = subprocess.Popen(args, start_new_session=True, **kw)
+        self.pgids.add(proc.pid)
+        return proc
+
     def run(self, *args, **over):
-        return subprocess.run(["sh", str(SERVICE), *args],
-                              env=self.env(**over), capture_output=True,
-                              text=True, timeout=30)
+        proc = self.popen(["sh", str(SERVICE), *args], env=self.env(**over),
+                          stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
+        try:
+            out, err = proc.communicate(timeout=30)
+        except subprocess.TimeoutExpired:
+            _kill_group(proc.pid, signal.SIGKILL)
+            proc.communicate()
+            raise
+        return subprocess.CompletedProcess(proc.args, proc.returncode, out, err)
 
     def spawn_worker(self, **over):
-        return subprocess.Popen(["sh", str(SERVICE), "worker"],
-                                env=self.env(**over),
-                                stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        return self.popen(["sh", str(SERVICE), "worker"], env=self.env(**over),
+                          stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+
+    def _strays(self):
+        """Live processes started for this sandbox, found by their FAKE_DIR
+        (Linux; elsewhere the process groups and the fake sleep cover it)."""
+        mark = b"\0FAKE_DIR=" + str(self.fake_dir).encode() + b"\0"
+        found = []
+        try:
+            pids = [int(n) for n in os.listdir("/proc") if n.isdigit()]
+        except OSError:
+            return found
+        for pid in pids:
+            if pid == os.getpid():
+                continue
+            try:
+                with open(f"/proc/{pid}/environ", "rb") as f:
+                    if mark in b"\0" + f.read():
+                        found.append(pid)
+            except OSError:
+                pass
+        return found
+
+    def close(self):
+        """Kill everything this sandbox started, then remove it."""
+        if self.closed:
+            return
+        self.closed = True
+        for sig in (signal.SIGTERM, signal.SIGKILL):
+            for pgid in self.pgids:
+                _kill_group(pgid, sig)
+            deadline = time.time() + 2
+            while True:
+                strays = self._strays()
+                for pid in strays:
+                    try:
+                        os.kill(pid, sig)
+                    except (ProcessLookupError, PermissionError):
+                        pass
+                if not strays or time.time() > deadline:
+                    break
+                time.sleep(0.05)
+            if not strays:
+                break
+        shutil.rmtree(self.dir, ignore_errors=True)
+        if self in _SANDBOXES:
+            _SANDBOXES.remove(self)
 
     def state(self):
         out = {}
@@ -454,7 +555,7 @@ class Sandbox:
         raise AssertionError(f"state never became {want}/{reason}; last={self.state()}")
 
 
-class ServiceTests(unittest.TestCase):
+class ServiceTests(SandboxCleanup):
     def test_late_phy_then_operational_and_clean_stop(self):
         sb = Sandbox({"phy_ready_after": 3})
         proc = sb.spawn_worker()
@@ -524,9 +625,9 @@ class ServiceTests(unittest.TestCase):
 
     def test_concurrent_starts_spawn_one_worker_and_one_dhcp(self):
         sb = Sandbox({"phy_ready_after": 5})
-        procs = [subprocess.Popen(["sh", str(SERVICE), "start"],
-                                  env=sb.env(), stdout=subprocess.DEVNULL,
-                                  stderr=subprocess.DEVNULL) for _ in range(3)]
+        procs = [sb.popen(["sh", str(SERVICE), "start"],
+                          env=sb.env(), stdout=subprocess.DEVNULL,
+                          stderr=subprocess.DEVNULL) for _ in range(3)]
         for p in procs:
             self.assertEqual(p.wait(timeout=15), 0)
         sb.wait_state("operational")
@@ -640,7 +741,7 @@ class ServiceTests(unittest.TestCase):
 
 
 
-class CableTests(unittest.TestCase):
+class CableTests(SandboxCleanup):
     """Using the cable (docs/USB_ETHERNET.md): the gateway check before the
     cable takes local traffic and every 30 s after, Wi-Fi off, the front
     LED, static addresses. The hub's clock is the sandbox's uptime file; the
@@ -669,8 +770,8 @@ class CableTests(unittest.TestCase):
 
     def start(self, **over):
         env = dict(self.path(), **over)
-        proc = subprocess.Popen(["sh", str(SERVICE), "worker"], env=self.sb.env(**env),
-                                stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        proc = self.sb.popen(["sh", str(SERVICE), "worker"], env=self.sb.env(**env),
+                             stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
         self.procs.append(proc)
         return proc
 

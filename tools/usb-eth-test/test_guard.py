@@ -424,7 +424,7 @@ class GuardAndService(unittest.TestCase):
         import test_service
         self.ts = test_service
         self.sb = test_service.Sandbox({"bound": True, "wifi_ip": "192.168.0.50"})
-        self.addCleanup(shutil.rmtree, self.sb.dir, True)
+        self.addCleanup(self.sb.close)  # kills what the service started, then removes it
         (self.sb.dir / "sys/class/net/eth2").mkdir(parents=True)
         (self.sb.dir / "sys/class/net/ath0").mkdir(parents=True)
         p = f"{self.sb.bin}:{self.sb.hubbin}"
@@ -460,8 +460,8 @@ class GuardAndService(unittest.TestCase):
         guard = subprocess.Popen(SHELL + [str(GUARD), "monitor"], env=env, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
         self.procs.append(guard)
         self.assertTrue(self.wait(lambda: (sb.dir / "guard.caps").exists()))
-        worker = subprocess.Popen(["sh", str(self.ts.SERVICE), "worker"], env=sb.env(**self.path),
-                                  stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        worker = sb.popen(["sh", str(self.ts.SERVICE), "worker"], env=sb.env(**self.path),
+                          stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
         self.procs.append(worker)
         lan = run / "codex-lan-dev"
         wifi_off = run / "codex-usb-eth-wifi-off"
