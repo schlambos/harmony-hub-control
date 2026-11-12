@@ -313,6 +313,22 @@ HANDOFF_REQUIRED_PATHS = [
     "/pkg/codexactivity/manifest.json",
 ]
 
+# Remote shell snippets for start_services (also in install_webui.ps1).
+# A guard from before the Wi-Fi watchdog traps TERM (to remove its pid file)
+# and keeps looping, so it gets KILL if TERM didn't end it.
+GUARD_REPLACE = (
+    "gpid=$(cat /var/run/codex-offline-egress.pid 2>/dev/null); "
+    "case \"$gpid\" in ''|*[!0-9]*) ;; *) kill \"$gpid\" 2>/dev/null; sleep 1; "
+    "kill -0 \"$gpid\" 2>/dev/null && kill -9 \"$gpid\" 2>/dev/null; "
+    # Only its own leftover: init.sh's loop may already have started the new
+    # guard, which wrote its pid there.
+    "[ \"$(cat /var/run/codex-offline-egress.pid 2>/dev/null)\" = \"$gpid\" ] && rm -f /var/run/codex-offline-egress.pid ;; esac; "
+)
+USB_ETH_RESTART = (
+    "if [ -x /data/codex/usb_eth_service.sh ] && grep '^ENABLED=1$' /data/codex/usb_eth.conf >/dev/null 2>&1; then "
+    "/data/codex/usb_eth_service.sh restart >/dev/null 2>&1 & fi; "
+)
+
 # Artifacts an upgrade must never replace unless explicitly supplied.
 UPGRADE_PROTECTED_PATHS = [
     "/data/codex/hub_id",
@@ -2578,9 +2594,16 @@ class Installer:
     def start_services(self) -> None:
         start = (
             "killall codex_webui 2>/dev/null || true; killall codex_bthid_keyboard 2>/dev/null || true; "
-            "if ! ps | grep '[o]ffline_egress_guard.sh monitor' >/dev/null 2>&1; then "
+            # A running egress guard keeps its old code until the hub restarts:
+            # stop it, and the line below (or init.sh's respawn loop) starts the
+            # new one, which has the Wi-Fi watchdog USB Ethernet's Wi-Fi off needs.
+            + GUARD_REPLACE
+            + "if ! ps | grep '[o]ffline_egress_guard.sh monitor' >/dev/null 2>&1; then "
             "/data/codex/offline_egress_guard.sh monitor >> /cache/codex-init.log 2>&1 & fi; "
-            "if ! ps | grep '[d]ropbear' >/dev/null 2>&1; then /usr/sbin/dropbear -R -p 22; fi; "
+            # USB Ethernet, if switched on: the new worker takes over without
+            # touching the wired path (see usb_eth_service.sh restart).
+            + USB_ETH_RESTART
+            + "if ! ps | grep '[d]ropbear' >/dev/null 2>&1; then /usr/sbin/dropbear -R -p 22; fi; "
             "mkdir -p /cache/bin; ln -sf /data/codex/bin/codex_bthid_keyboard /cache/bin/bthid_keyboard; "
             "/data/codex/bin/codex_webui 8080 >> /cache/codex-init.log 2>&1 & "
             "/data/codex/bin/codex_bthid_keyboard >> /cache/codex-init.log 2>&1 & "

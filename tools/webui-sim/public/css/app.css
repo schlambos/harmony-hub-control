@@ -610,6 +610,53 @@ button.m-row:focus-visible {
   line-height: 19px;
 }
 
+/* Wired Ethernet: the "What you need" list (views/ethernet.js). */
+.eth-needs {
+  display: grid;
+  gap: var(--space-2);
+  padding-left: var(--space-5);
+  list-style: disc;
+}
+
+/* Wired Ethernet's network overview (views/ethernet.js). */
+.eth-sub {
+  margin: var(--space-3) var(--space-1) var(--space-2);
+  color: var(--on-surface-variant);
+  font-size: var(--fs-body-sm);
+  font-weight: 500;
+}
+
+.eth-routes .m-row-sub {
+  white-space: pre-line;
+}
+
+/* Settings' "Ethernet (USB OTG)" row: its text and chevron open the Wired
+   Ethernet page, its switch turns it on or off (views/settings.js). */
+.m-row.eth-row {
+  padding: 0 var(--space-4) 0 0;
+}
+
+.eth-row-link {
+  flex: 1;
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  align-self: stretch;
+  min-width: 0;
+  min-height: 64px;
+  padding: var(--space-3) 0 var(--space-3) var(--space-4);
+  color: inherit;
+  text-decoration: none;
+}
+
+.eth-row-link:hover {
+  background: var(--state-hover);
+}
+
+.eth-row-link:focus-visible {
+  box-shadow: inset 0 0 0 2px var(--primary);
+}
+
 /* EmptyState */
 .m-empty {
   display: grid;

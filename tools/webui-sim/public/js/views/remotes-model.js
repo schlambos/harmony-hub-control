@@ -138,19 +138,25 @@ const USB_ETH_REASONS = {
   kernel_or_slot_check_failed: "kernel check failed",
   driver_load_failed: "adapter driver failed to load",
   no_network_interface: "no wired network interface appeared",
+  worker_stopped: "stopped unexpectedly, back on Wi-Fi",
   route_apply_failed: "wired routing could not be applied",
   unsupported_chipset: "unsupported chipset",
   no_usb_device: "no adapter found",
+  static_invalid: "static address settings need fixing",
 };
 
 /* Enabled (the saved switch) is not operational (traffic can use the
  * cable). The hub reports both; this line must never call a merely
- * enabled hub "Ethernet + Wi-Fi". */
+ * enabled hub "Ethernet + Wi-Fi". Operational on another network than the
+ * hub's gateway (separateNetwork) is only an extra address: local traffic
+ * stays on Wi-Fi. The Wired Ethernet page (ethernet-model.js) says more. */
 export function usbEthStatus(state, busy = "") {
   if (busy === "saving") return "Applying…";
   if (state === undefined) return "Checking…";
   if (!state) return "Couldn't check USB Ethernet";
-  if (!state.supported) return "Not available on this hub's kernel";
+  if (!state.supported) {
+    return state.kernel === "unknown" ? "USB Ethernet files missing · install again" : "Not available on this hub's kernel";
+  }
   const dev = state.usbProduct || state.usbDevice || "";
   if (state.enabled) {
     const operational = state.operational ??
@@ -158,7 +164,10 @@ export function usbEthStatus(state, busy = "") {
         ? Boolean(state.ifname && state.carrier && state.ipv4)
         : false);
     if (operational && state.ifname) {
-      const parts = ["Ethernet + Wi-Fi", state.ifname, state.ipv4 || "DHCP…"];
+      const how = state.separateNetwork ? "Wi-Fi · cable on another network"
+        : state.wifiSuspended ? "Ethernet · Wi-Fi off"
+          : "Ethernet + Wi-Fi";
+      const parts = [how, state.ifname, state.ipv4 || "DHCP…"];
       if (dev) parts.push(dev);
       return parts.join(" · ");
     }
@@ -168,15 +177,25 @@ export function usbEthStatus(state, busy = "") {
       case "failed":
         return `On, but not working: ${USB_ETH_REASONS[state.reason] || (state.reason || "startup failed").replaceAll("_", " ")}`;
       case "degraded_routing":
+        if (state.reason === "prefix_mismatch") return `On${state.ifname ? ` · ${state.ifname}` : ""} · Subnet mask differs from Wi-Fi's · using Wi-Fi`;
         return "On, but wired replies are not confirmed on the cable: routing could not be applied";
+      case "gateway_unreachable":
+        return `On${state.ifname ? ` · ${state.ifname}` : ""} · Router not answering through the cable · using Wi-Fi`;
       case "adapter_absent":
+        if (state.reason === "interface_gone") return "On · Adapter disconnected";
         return "On · Waiting for self-powered OTG Ethernet adapter";
       case "adapter_unsupported":
         return dev ? `On · ${dev} (unsupported chipset)` : "On · Unsupported USB Ethernet chipset";
       case "awaiting_carrier_dhcp":
       case "nic_not_bound":
-        if (state.ifname) return `On · ${state.ifname} · ${state.carrier ? "Waiting for DHCP…" : "No link"}`;
+        if (state.ifname && state.reason === "gateway_check") return `On · ${state.ifname} · Checking the router…`;
+        if (state.ifname) {
+          const waiting = state.ipMode === "static" ? "Setting the static address…" : "Waiting for DHCP…";
+          return `On · ${state.ifname} · ${state.carrier ? waiting : "No link"}`;
+        }
         return "On · Waiting for the wired link";
+      case "stopped":
+        return "On, but stopped";
       case "platform_unbound":
       case "deps_unavailable":
       case "platform_absent":

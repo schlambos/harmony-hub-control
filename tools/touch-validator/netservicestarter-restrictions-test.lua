@@ -141,7 +141,8 @@ package.loaded["os"] = setmetatable({
 package.preload["system"] = function()
   local s = anything()
   rawset(s, "io", fakeIo)
-  rawset(s, "addTask", function(_, fn) fn() return "task" end)
+  -- One-off tasks run inline; the background "codex lan advertise" loop doesn't.
+  rawset(s, "addTask", function(name, fn) if name ~= "codex lan advertise" then fn() end return "task" end)
   rawset(s, "isMessageRegistered", function() return true end)
   return s
 end

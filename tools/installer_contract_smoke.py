@@ -2556,7 +2556,8 @@ def relocate_hub_script(text: str, root: Path) -> str:
         "/tmp",
         "/dev",
     )
-    pattern = re.compile(r"(?<![A-Za-z0-9_.-])(" + "|".join(re.escape(p) for p in prefixes) + r")(?=/|[\s\"';)&|]|$)")
+    # Also a ${VAR:-/path} default (offline_egress_guard.sh's GUARD_* paths).
+    pattern = re.compile(r"(?:(?<=:-)|(?<![A-Za-z0-9_.-]))(" + "|".join(re.escape(p) for p in prefixes) + r")(?=/|[\s\"';)&|}]|$)")
     body = pattern.sub(lambda m: str(root) + m.group(1), body)
     body = body.replace(sentinel, "/dev/null")
     return shebang + body
@@ -3735,6 +3736,20 @@ class PowerShellStaticContract(unittest.TestCase):
         """[PS1 STATIC] -PreflightOnly and -CleanInstall switches exist."""
         self.assertIn("[switch]$PreflightOnly", self.text)
         self.assertIn("[switch]$CleanInstall", self.text)
+
+    def test_start_services_replaces_the_guard_and_the_usb_eth_worker(self):
+        """[PS1 STATIC] Like the Python installer: the running egress guard is
+        stopped (so the new one, with the Wi-Fi watchdog, takes over) before it's
+        started, and USB Ethernet's worker is restarted only if switched on."""
+        start = self.text.split("function Start-Services()", 1)[1].split("function Ensure-ParentDirs()", 1)[0]
+        kill = start.index("cat /var/run/codex-offline-egress.pid")
+        self.assertLess(kill, start.index("offline_egress_guard.sh monitor"))
+        self.assertIn("grep '^ENABLED=1`$' /data/codex/usb_eth.conf", start)
+        self.assertIn("/data/codex/usb_eth_service.sh restart", start)
+        py = INST_SOURCE.split("def start_services(self)", 1)[1].split("\n    def ", 1)[0]
+        self.assertLess(py.index("GUARD_REPLACE"), py.index("offline_egress_guard.sh monitor"))
+        self.assertIn("USB_ETH_RESTART", py)
+        self.assertIn("usb_eth_service.sh restart", INST_SOURCE.split("USB_ETH_RESTART = (", 1)[1].split(")", 1)[0])
 
     def test_flag_parity_with_python(self):
         """[PS1 STATIC] Python's preflight/clean-install flags have PS1 parity."""
