@@ -1091,7 +1091,9 @@ function simAndroidTvPairState() {
   if (p.state === "checking" && age > 500) {
     p.state = "paired";
     p.tvId = "androidtv" + Buffer.from(p.host).toString("hex").slice(-8).padStart(8, "0");
-    simAndroidTv.tvs.set(p.tvId, { id: p.tvId, name: p.name || "Android TV", host: p.host, on: false });
+    // SIM_ANDROIDTV_ASLEEP=1: the TV is in deep standby (off the network) and
+    // hasn't told the hub its brand yet, until "Turn on the TV" wakes it.
+    simAndroidTv.tvs.set(p.tvId, { id: p.tvId, name: p.name || "Android TV", host: p.host, on: false, asleep: process.env.SIM_ANDROIDTV_ASLEEP === "1" });
   }
   return { ok: true, state: p.state, host: p.host, name: p.name, error: p.error, tvId: p.tvId };
 }
@@ -1946,7 +1948,8 @@ async function handleApi(req, res, pathname, url) {
       sendJson(res, 200, {
         ok: true, version: "sim", identity: "ready",
         tvs: [...simAndroidTv.tvs.values()].map((tv) => ({
-          id: tv.id, name: tv.name, vendor: process.env.SIM_ANDROIDTV_VENDOR || "Sim", model: "Sim TV", host: tv.host, mac: "02:00:00:00:00:60", connected: true,
+          id: tv.id, name: tv.name, vendor: tv.asleep ? "" : process.env.SIM_ANDROIDTV_VENDOR || "Sim", model: tv.asleep ? "" : "Sim TV",
+          host: tv.host, mac: "02:00:00:00:00:60", connected: !tv.asleep,
           on: tv.on, volume: 12, volumeMax: 100, muted: false, keysSent: 0, connects: 1, appLinks: true,
           inputs: parseProfile(simAndroidTv.profiles.get(tv.id) ?? "")?.method ?? "builtin", error: ""
         }))
@@ -2028,7 +2031,15 @@ async function handleApi(req, res, pathname, url) {
         return;
       }
       if (params.method === "power") {
-        tv.on = true;
+        if (tv.asleep) {
+          // Wake-on-LAN: the TV takes a few seconds to join the network.
+          setTimeout(() => { tv.asleep = false; tv.on = true; }, 3000);
+        } else {
+          tv.on = true;
+        }
+      } else if (tv.asleep) {
+        sendJson(res, 200, { ok: false, error: "The TV isn't connected." });
+        return;
       } else if (!tv.on) {
         sendJson(res, 200, { ok: false, error: "The TV is off. Turn it on first." });
         return;

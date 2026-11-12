@@ -23,7 +23,11 @@ import {
 /* What Try and the finder need: a TV that is connected and on. "" when it can. */
 export function tryBlocker(tv) {
   if (!tv?.status) return "The hub's network TV service isn't answering, so inputs can't be tried now.";
-  if (!tv.status.connected) return "The TV isn't connected, so inputs can't be tried now.";
+  if (!tv.status.connected) {
+    return tv.status.mac
+      ? "The TV is off or asleep. Turn it on to try inputs."
+      : "The TV isn't connected, so inputs can't be tried now.";
+  }
   if (!tv.status.on) return "Turn the TV on to try inputs.";
   return "";
 }
@@ -81,16 +85,25 @@ export function tvInputsMarkup({ draft, tv, inUse, stepper, maxInputs }) {
   }
   if (tv.loadError) parts.push(`<p class="ds-note">${escapeHtml(tv.loadError)}</p>`);
   parts.push(`<div class="m-list" role="radiogroup" aria-label="How this TV switches inputs">${methodRows(draft, tv, stepper)}</div>`);
-  const note = presetNote(draft, tv.status?.vendor);
+  const note = presetNote(draft, draft.preset?.vendor);
   if (note && draft.method !== "none") parts.push(`<p class="ds-hint ds-tv-note">${escapeHtml(note)}${draft.fromProfile ? "" : " · not saved yet"}</p>`);
+  else if (!draft.fromProfile && draft.method !== "none") {
+    // No brand suggestion: say which manufacturer was looked up, and where it's set.
+    const brand = tv.base?.vendor ? `“${tv.base.vendor}”` : "this TV";
+    parts.push(`<p class="ds-hint ds-tv-note">No suggested setup for ${escapeHtml(brand)}. The manufacturer is set in the device's Edit details.</p>`);
+  }
   if (draft.method === "none") return parts.join("");
   parts.push(`<div class="m-list">${stepper("inputDelay")}</div>`);
   parts.push(`<h4 class="ds-sub">Inputs, in the TV's order</h4>`);
   const blocker = tryBlocker(tv);
   if (blocker) {
-    const action = tv.status?.connected && !tv.status.on
+    // Wake-on-LAN reaches a TV that's asleep and off the network, once its
+    // address (mac) is known.
+    const canWake = tv.status && !tv.status.on && (tv.status.connected || tv.status.mac);
+    const action = (canWake
       ? `<button type="button" class="btn btn-text" data-focus="tv-power-on" data-tv-act="power-on">Turn on the TV</button>`
-      : `<button type="button" class="btn btn-text" data-focus="tv-refresh" data-tv-act="refresh">Check again</button>`;
+      : "")
+      + (tv.status?.connected ? "" : `<button type="button" class="btn btn-text" data-focus="tv-refresh" data-tv-act="refresh">Check again</button>`);
     parts.push(`<div class="ds-tv-blocker"><p class="ds-hint">${escapeHtml(blocker)}</p>${action}</div>`);
   }
   parts.push(draft.rows.length

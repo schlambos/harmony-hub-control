@@ -31,8 +31,11 @@ Nothing goes through Google or Logitech, and the cloud blocker stays on.
 3. The TV shows a 6-character code. Type it in. A mistyped code is caught on
    the hub before it reaches the TV, so you can correct it and the TV keeps
    showing the same code.
-4. Name the TV and tap **Add TV**. It opens on its own device page, with its
-   connection on top: *Network TV · Connected · On · 192.168.1.40*.
+4. Name the TV and tap **Add TV**. Its manufacturer and model are filled in
+   from what the TV reports once paired (change them if they're wrong); they're
+   saved with the device like any other's, and **Edit details** changes them
+   later. It opens on its own device page, with its connection on top:
+   *Network TV · Connected · On · 192.168.1.40*.
 
 Then use it in activities like any other device: the activity wizard offers its
 HDMI inputs, and its power uses PowerOn and PowerOff.
@@ -97,8 +100,11 @@ the TV switches them to codex_androidtv.
 
 `payload/androidtv/input-presets.json` (on the hub
 `/data/codex/androidtv-input-presets.json`) holds the suggested setups, by the
-vendor the TV reports (the hub's log says `TV <id> is a <vendor> <model>`, and
-`/api/androidtv/status` shows it). Changing or adding a brand is a change to
+device's manufacturer and model (filled in from what the TV reports when it is
+added: the hub's log says `TV <id> is a <vendor> <model>`, and
+`/api/androidtv/status` shows it while the TV is connected). A TV added before
+this, saved as "Android TV", gets a suggestion once **Edit details** sets its
+manufacturer. Changing or adding a brand is a change to
 that one file; nothing is rebuilt. A new TV gets its brand's suggestion when it
 is added, and the device page says "Inputs not checked yet" until its inputs
 are saved from Settings.

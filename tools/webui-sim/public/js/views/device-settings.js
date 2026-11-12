@@ -441,16 +441,19 @@ export function createDeviceSettings({ root, track }) {
     ]);
     const presets = readPresets(presetsFile);
     const i = readInputSettings(entry);
-    const draftTv = readTvInputs({
+    const base = {
       entryInputs: i.hasInputFeature ? i.list : null,
       delayMs: i.delayMs,
       profile: saved.ok ? parseProfile(saved.profile) : null,
       presets,
-      vendor: status?.vendor ?? entry.Device?.Manufacturer ?? "",
-      model: status?.model ?? entry.Device?.Model ?? "",
-    });
+      // The brand and model saved with the device (filled in from the TV when
+      // it was added; Edit details changes them) pick the suggestion.
+      vendor: String(entry.Device?.Manufacturer ?? ""),
+      model: String(entry.Device?.Model ?? ""),
+    };
     const t = {
-      id, status, presets, draft: draftTv,
+      id, status, presets, base,
+      draft: readTvInputs(base),
       loadError: saved.ok ? "" : `Couldn't read this TV's input settings from the hub (${saved.error.message}). Saving replaces them.`,
     };
     tv = t;
@@ -697,7 +700,7 @@ export function createDeviceSettings({ root, track }) {
       saveError = "";
       render("tv-preset");
     } else if (act === "share") {
-      track(openShareSheet({ entry: shareEntry(d, tv.status?.vendor ?? "", tv.status?.model ?? "") }));
+      track(openShareSheet({ entry: shareEntry(d, tv.base.vendor, tv.base.model) }));
     } else if (act === "refresh") {
       refreshTvStatus("tv-refresh");
     } else if (act === "power-on") {
@@ -707,8 +710,9 @@ export function createDeviceSettings({ root, track }) {
       } catch (error) {
         snackbar(error.message, { error: true });
       }
-      // The TV takes a few seconds to say it is on.
-      for (let i = 0; i < 8 && tv?.id === id && !tv.status?.on; i++) {
+      // The TV takes a few seconds to say it is on; longer from deep standby,
+      // where it first has to wake up and join the network.
+      for (let i = 0; i < 25 && tv?.id === id && !tv.status?.on; i++) {
         await new Promise((resolve) => setTimeout(resolve, 1000));
         await refreshTvStatus("tv-power-on");
       }
