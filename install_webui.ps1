@@ -973,14 +973,14 @@ function Show-PreflightReport() {
     Info "Status so far uses private volatile staging under /var/volatile/codex-install-* only."
     Info "No persistent hub paths have been written, pruned, handed off, installed, or restarted yet."
     if ($PreflightOnly) {
-        Info "Mode: -PreflightOnly — stages, verifies, compares, and prints a terminal verdict; performs no persistent writes and no service actions."
+        Info "Mode: -PreflightOnly - stages, verifies, compares, and prints a terminal verdict; performs no persistent writes and no service actions."
     }
     if ($FirstInstall) {
-        Info "Install mode: first install — the hub has no configuration of ours yet, so configuration candidates are written."
+        Info "Install mode: first install - the hub has no configuration of ours yet, so configuration candidates are written."
     } elseif ($CleanInstall) {
-        Info "Install mode: explicit clean install — configuration candidates are regenerated."
+        Info "Install mode: explicit clean install - configuration candidates are regenerated."
     } else {
-        Info "Install mode: default upgrade — existing configuration is preserved unless a candidate explicitly replaces it."
+        Info "Install mode: default upgrade - existing configuration is preserved unless a candidate explicitly replaces it."
     }
     $mode = "upgrade"
     if ($CleanInstall) { $mode = "clean" }
@@ -1069,7 +1069,7 @@ function Show-Verdict() {
     KV "verdict=$Verdict"
     Info "Terminal verdict: $Verdict"
     if ($Verdict -eq $VerdictAllowed) {
-        Info "ALLOWED — validation and RAM headroom are sufficient for the selected mode."
+        Info "ALLOWED - validation and RAM headroom are sufficient for the selected mode."
         if ($PreflightOnly) {
             Info "Preflight-only complete: volatile staging will be removed; no persistent changes or service actions were performed."
         } else {
@@ -1078,19 +1078,19 @@ function Show-Verdict() {
     } elseif ($Verdict -eq $VerdictCapacity -and $CapacityStage -eq "preflight") {
         $free = [long]0
         if ($null -ne $FlashAvail) { $free = $FlashAvail }
-        Info "BLOCKED_CAPACITY — not enough free flash: about $(Format-KB $FlashRequired) needed, $(Format-KB $free) free. Nothing was installed."
+        Info "BLOCKED_CAPACITY - not enough free flash: about $(Format-KB $FlashRequired) needed, $(Format-KB $free) free. Nothing was installed."
         if (($RootToolStages.Count -gt 0 -or (Test-RootToolDropbearRemovable)) -and -not $RemoveRootToolLeftovers) {
             Info "Removing harmony-hub-root's leftovers (-RemoveRootToolLeftovers) frees about $(Format-KB (Get-LeftoverCredit))."
         }
         Info "Otherwise free space on the hub, or pass -SkipFlashCheck to try anyway: the install still stops with no live changes if flash fills up."
     } elseif ($Verdict -eq $VerdictCapacity) {
-        Info "BLOCKED_CAPACITY — flash filled up while writing the new copies; they were removed and no live file changed."
+        Info "BLOCKED_CAPACITY - flash filled up while writing the new copies; they were removed and no live file changed."
     } elseif ($Verdict -eq $VerdictRollbackCapacity) {
-        Info "BLOCKED_ROLLBACK_CAPACITY — not enough free RAM to hold rollback copies of the files being replaced. No persistent changes."
+        Info "BLOCKED_ROLLBACK_CAPACITY - not enough free RAM to hold rollback copies of the files being replaced. No persistent changes."
     } elseif ($Verdict -eq $VerdictConfigUncertain) {
-        Info "BLOCKED_CONFIGURATION_UNCERTAINTY — required configuration state is missing or ambiguous for default upgrade; pass -HubId or use -CleanInstall. No persistent changes."
+        Info "BLOCKED_CONFIGURATION_UNCERTAINTY - required configuration state is missing or ambiguous for default upgrade; pass -HubId or use -CleanInstall. No persistent changes."
     } else {
-        Info "BLOCKED_VALIDATION_FAILURE — staging, path, hash, or probe validation failed; see verdict_reason lines above. No persistent changes."
+        Info "BLOCKED_VALIDATION_FAILURE - staging, path, hash, or probe validation failed; see verdict_reason lines above. No persistent changes."
     }
 }
 
