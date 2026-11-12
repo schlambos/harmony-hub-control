@@ -94,9 +94,14 @@ DROPBEAR_EXPECT_SHA256=e2ea632aed8b31dc5ea56b9673cbd983ec83260a97d33f891a0cebf51
 DROPBEAR_EXPECT_SIZE=577296
 DROPBEAR_TARBALL_SHA256=0d1f7ca711cfc336dc8a85e672cab9cfd8223a02fe2da0a4a7aeb58c9e113634
 
-#: pinned executable SHA-256 for each Zig distribution
-WEBUI_ZIG_SHA256=e6cd688d25664983833aae272f501d4bceeae304875b8f1741209d15fd13a4ec
-OFFICIAL_ZIG_SHA256=e6cd688d25664983833aae272f501d4bceeae304875b8f1741209d15fd13a4ec
+#: pinned executable SHA-256 of the official Zig 0.16.0 `zig`, one per host
+#: it is published for: aarch64-macos, x86_64-linux (CI), aarch64-linux. Each
+#: comes from the tarball whose SHA-256 ziglang.org's index.json lists.
+ZIG_SHA256_AARCH64_MACOS=e6cd688d25664983833aae272f501d4bceeae304875b8f1741209d15fd13a4ec
+ZIG_SHA256_X86_64_LINUX=2317bbb91798556d9d0f38aabdac23db83f0979b25f767259ae474546724087c
+ZIG_SHA256_AARCH64_LINUX=6e2989a7efbd4e81acbacb6c6378e34340d8e88bb023b10c4a941021be55cdcb
+WEBUI_ZIG_SHA256="$ZIG_SHA256_AARCH64_MACOS $ZIG_SHA256_X86_64_LINUX $ZIG_SHA256_AARCH64_LINUX"
+OFFICIAL_ZIG_SHA256=$WEBUI_ZIG_SHA256
 
 #: pinned clang/LLD fingerprint (first line of `zig cc --version`)
 WEBUI_ZIG_FINGERPRINT="clang version 21.1.0"
@@ -126,10 +131,13 @@ check_zig() {
     exit 1
   fi
   _sha=$(sha256_of "$_bin")
-  if [ "$_sha" != "$_expect_sha" ]; then
-    echo "error: $_label executable SHA-256 mismatch (found $_sha, expected $_expect_sha)" >&2
-    exit 1
-  fi
+  case " $_expect_sha " in
+    *" $_sha "*) ;;
+    *)
+      echo "error: $_label executable SHA-256 mismatch (found $_sha, expected one of: $_expect_sha)" >&2
+      exit 1
+      ;;
+  esac
   _ver=$("$_bin" version 2>/dev/null || true)
   if [ "$_ver" != "0.16.0" ]; then
     echo "error: $_label requires Zig 0.16.0 (found: ${_ver:-unknown})" >&2

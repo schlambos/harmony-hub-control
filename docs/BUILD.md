@@ -363,6 +363,10 @@ Dropbear binaries/wrappers and starts the service if needed. Its build status is
 
 ## Full test list
 
+CI runs most of these on every pull request, and checks that each binary
+here is what its source builds: [CI.md](CI.md). `sh tools/ci/run_suites.sh`
+runs the same suites locally.
+
 The README's Development section has the short version. The full set:
 
 ```bash
