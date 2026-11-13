@@ -19,12 +19,21 @@
   <a href="docs/API.md">API</a>
 </p>
 
-Melodious runs on a Harmony Hub already rooted with
-[harmony-hub-root](https://github.com/Ripthulhu/harmony-hub-root), next to Logitech's own firmware. It
-takes over the cloud's jobs (devices, activities, remote sync) and connects the hub and Home Assistant
-both ways. Set it up from the hub's web app, the Android app or the macOS app.
+Melodious runs on a rooted Harmony Hub, next to Logitech's own firmware. It takes over the cloud's
+jobs (devices, activities, remote sync) and connects the hub and Home Assistant both ways. Set it up
+from the hub's web app, the Android app or the desktop app (macOS; Windows from the next release).
 
-This repository contains no rooting tools, exploits, private keys or personal backups.
+**Installing Melodious keeps your setup.** Your existing devices, activities and remote button
+bindings stay as they are, including any made with the Logitech app. Melodious runs beside
+Logitech's firmware without reflashing it, the hub backs up its setup before every later save, and
+the Backup page downloads a full copy. To go back, `--turn-off` (experimental; back up first)
+returns the hub to Logitech's stock behaviour with nothing of Melodious's deleted — see
+[Install, update and roll back](#install-update-and-roll-back).
+
+The root tool, [harmony-hub-root](https://github.com/Ripthulhu/harmony-hub-root), is bundled in
+[`tools/hub-root/`](tools/hub-root/README.md) (see
+[PROVENANCE.md](tools/hub-root/PROVENANCE.md)). This repository contains no private keys or personal
+backups.
 
 <p align="center">
   <img src="docs/screenshots/web/remote.png" alt="The web app's remote on a phone" height="480">
@@ -90,7 +99,7 @@ can back up, restore and edit account-free.
 
 | Requirement | Details |
 | --- | --- |
-| Harmony Hub | Rooted with [harmony-hub-root](https://github.com/Ripthulhu/harmony-hub-root). Melodious doesn't root hubs. |
+| Harmony Hub | Rooted with the bundled command-line root tool, [`tools/hub-root/`](tools/hub-root/README.md) (tested on firmware 4.15.600). A factory-fresh hub with no Logitech account: [docs/FRESH_HUB_ACTIVATION.md](docs/FRESH_HUB_ACTIVATION.md). The installer and the apps don't root hubs themselves. |
 | SSH key | The root tool's private key, `harmony_owner_*`, in `~/.ssh` (`%USERPROFILE%\.ssh` on Windows). |
 | Hub ID | The numeric Hub ID the root tool prints. Don't guess it: Melodious sends it with every command to the hub's engine. |
 | Free flash | About 1.6 MB of the hub's 5 MB data flash for the first install (about 1.2 MB if the root tool's Dropbear can be reused); each later web app update needs about 0.65 MB (the first one that adds BusyBox, about 0.25 MB more). The installer measures it and stops before writing anything if there isn't enough — see [docs/INSTALL.md](docs/INSTALL.md#if-the-hubs-flash-is-full). |
@@ -98,12 +107,21 @@ can back up, restore and edit account-free.
 | Network | A trusted home network. The web app is plain HTTP. |
 | Home Assistant (optional) | Any recent Home Assistant with [HACS](https://hacs.xyz/), reachable from the hub over plain `http://`. An MQTT broker is needed only for the MQTT bridge. |
 | Android app (optional) | Android 8.0 or later. Building it needs JDK 17 or 21 and the Android SDK. |
-| macOS app (optional) | macOS 13 or later, on Apple silicon or Intel. Catalog lookup needs a Logitech account; building the app needs Node.js. |
+| Desktop app (optional) | macOS 13 or later, on Apple silicon or Intel; or Windows 10/11 x64 (experimental, unsigned), with downloads starting in the release after `v2.1.0`. Catalog lookup needs a Logitech account; building the app needs Node.js. |
 
 ## Quick start
 
-1. Root the hub with harmony-hub-root. Keep the SSH key it creates (`harmony_owner_*` in `~/.ssh`)
-   and the numeric Hub ID it prints.
+1. Root the hub with the bundled root tool. It is in this repository, not in the release zip, so
+   clone it and run:
+
+   ```bash
+   python3 tools/hub-root/run_harmony_hub_tool.py --action lan-root --hub-host <hub-ip>
+   ```
+
+   Keep the SSH key it creates (`harmony_owner_*` in `~/.ssh`) and the numeric Hub ID it prints
+   ([tools/hub-root/README.md](tools/hub-root/README.md)). The hub needs its initial setup first; for
+   a factory-fresh hub with no Logitech account, follow
+   [docs/FRESH_HUB_ACTIVATION.md](docs/FRESH_HUB_ACTIVATION.md) instead.
 2. Download `melodious-hub-<version>.zip` from the [latest
    release](https://github.com/schlambos/harmony-hub-control/releases/latest) and unzip it, or clone
    this repository. From a computer on the same network, install Melodious:
@@ -119,8 +137,8 @@ can back up, restore and edit account-free.
    ```
 
    The first install turns on the cloud blocker, leaves MQTT off, and reboots the hub once.
-3. Open `http://<hub-ip>:8080/` on your phone or computer. Your existing activities and devices are
-   there, including any set up with the Logitech app before rooting.
+3. Open `http://<hub-ip>:8080/` on your phone or computer. Your existing activities, devices and
+   remote buttons are there, including any set up with the Logitech app before rooting.
 4. Optional: add Home Assistant (see [Set up Home Assistant](#set-up-home-assistant)).
 
 ## Harmony
@@ -151,11 +169,19 @@ and a user reports the Harmony Elite works.**
 | Harmony Companion remote | Supported: activity buttons and per-activity keys in its own maps, edited the same way as the Smart Control's, and its home control buttons (Light 1, Light 2, Plug 1, Plug 2, + / −), each a command, an activity or a sequence with a long press and + / −, for all activities or one ([docs/HOME_CONTROL_BUTTONS.md](docs/HOME_CONTROL_BUTTONS.md)). Community-tested. |
 | Harmony 950 | Works next to a Touch on one hub ([docs/TWO_SCREEN_REMOTES.md](docs/TWO_SCREEN_REMOTES.md)). Its home control buttons can be set like the Companion's, labeled as physical dots (`• 1 dot`–`•••• 4 dots`): all four dot buttons and + / − are validated on a 950; a long press and one activity's own buttons are not yet ([docs/HOME_CONTROL_BUTTONS.md](docs/HOME_CONTROL_BUTTONS.md#harmony-elite-and-950)). |
 | Other remotes that pair with the hub, such as the Harmony Ultimate | Expected to work, but not yet tested. Features that need a screen apply only to remotes that have one. |
-| Phones, tablets and computers | The web, Android and macOS apps. |
+| Phones, tablets and computers | The web, Android and desktop apps. |
 
 Two or more remotes of the same model (e.g. two Smart Controls) can share a hub: turn on
 **Settings → Experimental → Multiple remotes of one model** (or install with `--multi-remote on`).
 They share one button setup. See [docs/MULTI_REMOTE.md](docs/MULTI_REMOTE.md).
+
+Two remotes with a screen (Touch, Ultimate, Elite, 950) can share a hub too and stay in sync: an
+activity started on one shows on both. It is off unless you turn it on (`--two-screen once`, Python
+installer, firmware 4.15.600) and was run on a Touch with a 950. See
+[docs/TWO_SCREEN_REMOTES.md](docs/TWO_SCREEN_REMOTES.md).
+
+A lost or unused remote can be unpaired in **Settings → Remotes**: every radio slot has its own
+**Unpair** button.
 
 No remote needs modified firmware; reports for other remotes welcome ([CONTRIBUTING.md](CONTRIBUTING.md)).
 
@@ -301,8 +327,8 @@ flipping twice; gestures can't use it, so the editor warns on gesture toggles.
 
 ## The apps
 
-One hub, three apps, one design ([DESIGN.md](DESIGN.md)): the hub serves the web app; Android and
-macOS are release downloads.
+One hub, three apps, one design ([DESIGN.md](DESIGN.md)): the hub serves the web app; the Android
+and desktop apps are release downloads.
 
 ### The web app
 
@@ -389,10 +415,15 @@ Wi-Fi/MQTT/Backup/System stay web-only. Details: [`Android/README.md`](Android/R
 
 </details>
 
-### The macOS app
+<a id="the-macos-app"></a>
 
-The web app in a Mac window ([`desktop/`](desktop/), Electron, macOS 13+, same bundle), plus native
-Logitech catalog lookup. **Install:** release `-arm64`/`-x64` dmg → drag to Applications; unsigned,
+### The desktop app (macOS and Windows)
+
+The web app in a desktop window ([`desktop/`](desktop/), Electron, macOS 13+, same bundle), plus
+native Logitech catalog lookup. **Windows (experimental):** the same app builds for Windows 10/11
+x64; its installer and zip join the downloads in the release after `v2.1.0`, unsigned, so SmartScreen
+warns before the first launch ([`desktop/README.md`](desktop/README.md#windows-experimental)). It
+does not root hubs. **Install on a Mac:** release `-arm64`/`-x64` dmg → drag to Applications; unsigned,
 so Control-click → Open first time, then **Allow** local-network access (hub via SSDP or typed
 address). Building: [`desktop/README.md`](desktop/README.md). **Catalog:** Import codes → Logitech
 catalog — sign in, search brand/model, import from a skip-explaining preview; tokens stay
@@ -425,7 +456,7 @@ staging, ~0.5 MB each — the usual full-flash fix), `--skip-flash-check`. `--he
   **Reinstall / repair hub software…** does the same at any hub version, from the latest release or a
   hub zip you choose ([details](docs/INSTALL.md#updating)).
   Android only notifies — it never holds the SSH key.
-- **Turn off (experimental):** `python3 install_webui.py --hub-host <hub-ip> --turn-off` (`-TurnOff` in
+- **Turn off (experimental):** go back to stock hub behaviour without uninstalling. `python3 install_webui.py --hub-host <hub-ip> --turn-off` (`-TurnOff` in
   PowerShell) sets `/etc/melodious-off`, restores the internet route and reboots into stock `hal` +
   Logitech's cloud so the Harmony app can sync the hub again; root SSH and all Melodious files/configs
   stay put. **Experimental — not yet validated on live hardware:** fully tested off-hub, but whether
@@ -522,17 +553,21 @@ tools/shipped_copy_hygiene.mjs`. Full test list and rebuilding `codex_webui` (Zi
 
 | Document | What it covers |
 | --- | --- |
+| [tools/hub-root/README.md](tools/hub-root/README.md) | The bundled root tool: LAN and USB rooting, Wi-Fi setup, factory reset and firmware upload |
+| [docs/FRESH_HUB_ACTIVATION.md](docs/FRESH_HUB_ACTIVATION.md) | Taking a factory-fresh hub to rooted, on Melodious and paired, with no Logitech account or cloud |
 | [docs/INSTALL.md](docs/INSTALL.md) | Installing, updating, turning Melodious off/on, and rolling back: the full installer walkthrough, every flag, and flash-full troubleshooting |
 | [docs/API.md](docs/API.md) | The hub's HTTP API, and the activity rules the paired remote needs |
 | [docs/HOME_ASSISTANT.md](docs/HOME_ASSISTANT.md) | Home Assistant entities as hub devices, webhook rules, press and hold behaviour, and setup |
 | [docs/ANDROID_TV.md](docs/ANDROID_TV.md) | Android TV and Google TV sets over the network: pairing, commands, power, codex_androidtv |
 | [docs/TOUCH_EDITOR.md](docs/TOUCH_EDITOR.md) | Remote sync, how presses and gestures resolve, on-screen buttons, device screens, slot rules and validation |
+| [docs/MULTI_REMOTE.md](docs/MULTI_REMOTE.md) | More than one remote of the same model on a hub, and unpairing remotes |
+| [docs/TWO_SCREEN_REMOTES.md](docs/TWO_SCREEN_REMOTES.md) | Two remotes with a screen on one hub |
 | [docs/HOME_CONTROL_BUTTONS.md](docs/HOME_CONTROL_BUTTONS.md) | The home control buttons of the Harmony Companion, Elite and 950: keys, data model and the engine hook |
 | [docs/MELODIOUS_WEB_UI.md](docs/MELODIOUS_WEB_UI.md) | The web app's architecture, screen map, tokens and components |
 | [DESIGN.md](DESIGN.md) | The design system shared by the web and Android apps |
 | [docs/ANDROID_CATALOG.md](docs/ANDROID_CATALOG.md) | Logitech catalog lookup and sign-in in the Android app |
-| [docs/DESKTOP_APP.md](docs/DESKTOP_APP.md) | The macOS app's design, catalog lookup and security model |
-| [desktop/README.md](desktop/README.md) | Building, testing and releasing the macOS app |
+| [docs/DESKTOP_APP.md](docs/DESKTOP_APP.md) | The desktop app's design, catalog lookup and security model |
+| [desktop/README.md](desktop/README.md) | Building, testing and releasing the desktop app, on macOS and Windows |
 | [tools/catalog/README.md](tools/catalog/README.md) | The Logitech catalog helper for the command line |
 | [docs/BUILD.md](docs/BUILD.md) | Building the MIPS binaries with the pinned toolchain |
 | [docs/CI.md](docs/CI.md) | What CI checks on every pull request, and how to run the same checks yourself |
@@ -551,8 +586,8 @@ Keep changes small and scoped, and add a short test note. Never commit SSH keys,
 tokens, hub backups, firmware dumps or rooting tools. Read [CONTRIBUTING.md](CONTRIBUTING.md) and
 [docs/SECURITY.md](docs/SECURITY.md) first.
 
-- **Rooting the hub:** [harmony-hub-root](https://github.com/Ripthulhu/harmony-hub-root), a separate
-  project.
+- **Rooting the hub:** [harmony-hub-root](https://github.com/Ripthulhu/harmony-hub-root) by
+  Ripthulhu and contributors, bundled in [`tools/hub-root/`](tools/hub-root/PROVENANCE.md).
 - **Home Assistant integration:**
   [schlambos/ha-melodious](https://github.com/schlambos/ha-melodious) (0.7.1+ for mirror
   devices).
