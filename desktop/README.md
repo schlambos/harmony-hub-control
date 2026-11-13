@@ -99,6 +99,34 @@ npm run test:dist
 - The `.zip.blockmap` files are for auto-update, which the app doesn't
   have. Don't attach them to a release.
 
+## Windows (experimental)
+
+The same app builds for Windows 10 and 11 (x64). It is built and tested on
+GitHub's Windows runner (`.github/workflows/desktop-windows.yml`); it has not
+been run against a real hub from Windows yet.
+
+```sh
+cd desktop                 # in Git Bash, from a checkout with LF line endings
+npm ci && node node_modules/electron/install.js
+npm run dist:win           # needs the pinned bun (tools/ci/install_bun.sh)
+npm run test:dist:win
+```
+
+| File | What it is |
+| --- | --- |
+| `dist/Melodious-<version>-win-x64-setup.exe` | Installer, for the current user only (no administrator prompt) |
+| `dist/Melodious-<version>-win-x64.zip` | The same app as a folder: unzip and run `Melodious.exe` |
+
+- Unsigned: there is no code-signing certificate, so SmartScreen warns
+  before the first launch ("More info", then "Run anyway").
+- The hub update uses Windows' own OpenSSH client
+  (`System32\OpenSSH\ssh.exe`) and `tar.exe`, and the installer's key in
+  `%USERPROFILE%\.ssh\harmony_owner_…`.
+- The app doesn't replace itself on Windows. An update notice opens the
+  release page, and only for a release that carries the Windows installer.
+- Saved sign-ins are encrypted with Windows data protection (DPAPI).
+- The USB rooting tools are not part of this app.
+
 The app icon is `resources/icon.png`, made from the Melodious artwork:
 
 ```sh
