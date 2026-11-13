@@ -113,6 +113,14 @@ with `BLOCKED_CAPACITY` before writing anything.
   `--remove-root-tool-leftovers` deletes them before installing. It
   removes the root tool's Dropbear only while SSH runs Melodious's
   copy.
+- **The Harmony Hub Extender package.** A hub that has ever had a
+  Harmony Hub Extender (Zigbee/Z-Wave) connected keeps Logitech's
+  runtime for it in `/pkg/moosehead`: about 5 MB, which can leave too
+  little room for Melodious even with the backups and logs cleared.
+  The preflight reports it and its size (`extender_package`). Melodious
+  never removes it, because that breaks the devices behind the
+  Extender. If you no longer use an Extender, copy the folder off the
+  hub first, then delete it over SSH.
 - **Old backups.** `/data/codex-backups` and
   `/data/codex/resource-backups` hold older copies. Download a backup
   first, then delete the ones you don't need over SSH.
