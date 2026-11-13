@@ -24,7 +24,7 @@ test("preload exposes version 1 and exactly six fixed catalog invoke channels wi
   await assert.rejects(bridge.catalog.search({ manufacturer: "Sony", model: "FAIL" }), /^Error: Sign in to Logitech first$/);
 });
 
-test("preload exposes six fixed update channels and passes only the documented arguments", async () => {
+test("preload exposes seven fixed update channels and passes only the documented arguments", async () => {
   let bridge;
   const calls = [];
   const ipcRenderer = {
@@ -37,12 +37,13 @@ test("preload exposes six fixed update channels and passes only the documented a
   vm.runInNewContext(readFileSync(new URL("../src/preload.js", import.meta.url), "utf8"), {
     require: () => ({ ipcRenderer, contextBridge: { exposeInMainWorld(_name, value) { bridge = value; } } }),
   });
-  assert.deepEqual(Object.keys(bridge.updates), ["get", "setEnabled", "check", "install", "updateHub", "onHubStep", "openRelease"]);
+  assert.deepEqual(Object.keys(bridge.updates), ["get", "setEnabled", "check", "install", "updateHub", "reinstallHub", "onHubStep", "openRelease"]);
   await bridge.updates.get();
   await bridge.updates.setEnabled(true);
   await bridge.updates.check();
   await bridge.updates.install();
   await bridge.updates.updateHub();
+  await bridge.updates.reinstallHub({ zip: "/etc/passwd" });
   await bridge.updates.openRelease("https://github.com/schlambos/harmony-hub-control/releases/tag/v1.3.0");
   assert.deepEqual(JSON.parse(JSON.stringify(calls)), [
     ["desktop:updates-get", null],
@@ -50,6 +51,7 @@ test("preload exposes six fixed update channels and passes only the documented a
     ["desktop:updates-check", null],
     ["desktop:updates-install", null],
     ["desktop:updates-update-hub", null],
+    ["desktop:updates-reinstall-hub", null],
     ["desktop:updates-open-release", { url: "https://github.com/schlambos/harmony-hub-control/releases/tag/v1.3.0" }],
   ]);
 });

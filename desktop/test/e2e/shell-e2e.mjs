@@ -392,6 +392,13 @@ test("Playwright _electron end-to-end shell suite against webui-sim", { timeout:
     assert.ok(await page.isVisible("#forgetHubBtn"));
     assert.ok(await page.isVisible("#clientIdInput"));
 
+    // Reinstall / repair is offered whatever version the hub reports: in Settings → Updates and next to Check for Updates… in the menu.
+    await page.waitForSelector("#updatesReinstallBtn:not([disabled])", { timeout: 10000 });
+    assert.equal((await page.textContent("#updatesReinstallBtn")).trim(), "Reinstall / repair hub software…");
+    const updateMenuLabels = await electronApp.evaluate(({ Menu }) =>
+      Menu.getApplicationMenu().items[0].submenu.items.map((i) => i.label).filter((l) => /Updates|Hub Software/.test(l)));
+    assert.deepEqual(updateMenuLabels.sort(), ["Check for Updates…", "Reinstall / Repair Hub Software…"]);
+
     // Mask address on settings page before screenshot
     await page.evaluate(() => {
       const addr = document.getElementById("currentHubAddress");

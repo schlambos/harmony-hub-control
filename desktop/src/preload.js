@@ -39,6 +39,7 @@ contextBridge.exposeInMainWorld("melodiousDesktop", {
     check: () => ipcRenderer.invoke("desktop:updates-check"),
     install: () => ipcRenderer.invoke("desktop:updates-install"),
     updateHub: () => ipcRenderer.invoke("desktop:updates-update-hub"),
+    reinstallHub: () => ipcRenderer.invoke("desktop:updates-reinstall-hub"),
     onHubStep: (callback) => {
       if (typeof callback !== "function") return;
       ipcRenderer.on("desktop:hub-update-step", (_event, info) => callback(String(info?.text ?? "")));

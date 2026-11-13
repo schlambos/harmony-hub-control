@@ -422,6 +422,8 @@ staging, ~0.5 MB each — the usual full-flash fix), `--skip-flash-check`. `--he
 
 - **Update:** re-run the installer, or macOS Settings → Updates → **Update hub…** (checksum-checked
   download, SSH install with rollback, finishes on-hub if the Mac disconnects; settings unchanged).
+  **Reinstall / repair hub software…** does the same at any hub version, from the latest release or a
+  hub zip you choose ([details](docs/INSTALL.md#updating)).
   Android only notifies — it never holds the SSH key.
 - **Turn off (experimental):** `python3 install_webui.py --hub-host <hub-ip> --turn-off` (`-TurnOff` in
   PowerShell) sets `/etc/melodious-off`, restores the internet route and reboots into stock `hal` +
