@@ -1,0 +1,63 @@
+{
+  "Activities": [
+    {
+      "Id-": 101,
+      "Name": "Activity Alpha",
+      "ActivityOrder": 0,
+      "Type": 1,
+      "State": 0,
+      "Roles": [
+        {
+          "DeviceId-": 9001,
+          "__type": "DisplayActivityRole"
+        },
+        {
+          "DeviceId-": 9002,
+          "__type": "VolumeActivityRole"
+        }
+      ]
+    },
+    {
+      "Id-": 102,
+      "Name": "Activity Beta",
+      "ActivityOrder": 1,
+      "Type": 2,
+      "State": 0,
+      "Roles": [
+        {
+          "DeviceId-": 9001,
+          "__type": "DisplayActivityRole"
+        },
+        {
+          "DeviceId-": 9001,
+          "__type": "PlayMovieActivityRole"
+        },
+        {
+          "DeviceId-": 9002,
+          "__type": "VolumeActivityRole"
+        },
+        {
+          "DeviceId-": 9001,
+          "__type": "KeyboardTextEntryActivityRole"
+        }
+      ]
+    },
+    {
+      "Id-": 103,
+      "Name": "Activity Gamma",
+      "ActivityOrder": 2,
+      "Type": 4,
+      "State": 0,
+      "Roles": [
+        {
+          "DeviceId-": 9002,
+          "__type": "PlayMediaActivityRole"
+        },
+        {
+          "DeviceId-": 9002,
+          "__type": "VolumeActivityRole"
+        }
+      ]
+    }
+  ]
+}

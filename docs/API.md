@@ -1114,6 +1114,19 @@ buttons (`#activitybuttons/<EquadID>`) and keys per activity
 writes every remote's map in one save unless the owner sets that key for
 one remote only.
 
+Pairing writes nothing to `MapList`, and Logitech's setup made activity
+maps only for the remotes the account had. So a remote without a screen
+paired here has no `<EquadID>Activity<id>` map for the activities that
+already exist: its activity button starts one from the root map, and then
+every key on it, Off included, is dropped while that activity runs (issue
+#86). The Remotes page closes that gap: after a pairing window in which a
+remote joined, it saves a map for every activity each paired remote without
+a screen lacks, with the command keys another remote already has in that
+activity (an empty map when none has any, which still lets Off and the
+activity buttons reach the root map). A remote found without such maps
+later shows a notice with an "Add its keys" button that does the same.
+Existing maps are never changed, and remotes with a screen are left alone.
+
 ### USB Ethernet (experimental)
 
 The Settings switch and the Wired Ethernet page for
