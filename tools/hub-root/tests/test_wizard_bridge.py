@@ -682,6 +682,159 @@ class WizardBridgeTests(unittest.TestCase):
         self.assertTrue(flash_res["postRebootVerified"])
         self.assertEqual(flash_res["postRebootFirmware"], "4.15.600")
 
+    def test_provision_local_rejects_nested_put_error(self) -> None:
+        device = make_test_device()
+        calls: list[str] = []
+
+        class PutErrorHbus:
+            def __init__(self, args):
+                self.args = args
+
+            def call(self, cmd, params, timeout=20):
+                calls.append(cmd)
+                if cmd != "connect.jsonfiletransfer?put":
+                    raise AssertionError(cmd)
+                return {"id": "1", "code": 200, "data": {"errorCode": "594"}}
+
+        buf = io.StringIO()
+        with (
+            patch.object(usb.HarmonyUsbBridge, "enumerate_devices", return_value=[device]),
+            patch.object(usb, "UsbHbusTransport", side_effect=PutErrorHbus),
+        ):
+            rc = wb.run_wizard_bridge(
+                [
+                    "--action",
+                    "usb-provision-local",
+                    "--confirm-action",
+                    "usb-provision-local",
+                    "--remote-id",
+                    "20261111",
+                    "--no-reboot",
+                ],
+                stream=buf,
+                stdin_stream=io.StringIO(""),
+            )
+
+        self.assertEqual(rc, 1)
+        self.assertEqual(calls, ["connect.jsonfiletransfer?put"])
+        result = parse_ndjson(buf.getvalue())[-1]["provisionLocal"]
+        self.assertFalse(result["ok"])
+        self.assertIn("put_code=594", result["error"])
+
+    def test_provision_local_unwraps_nested_preferences_and_rejects_string_remote_id(self) -> None:
+        device = make_test_device()
+
+        for nested_remote_id, expected_rc in ((20261111, 0), ("20261111", 1)):
+            with self.subTest(nestedRemoteIdType=type(nested_remote_id).__name__):
+                class NestedPreferencesHbus:
+                    def __init__(self, args):
+                        self.args = args
+
+                    def call(self, cmd, params, timeout=20):
+                        if cmd == "connect.jsonfiletransfer?put":
+                            return {"id": "1", "code": 200, "data": {"errorCode": "200"}}
+                        if cmd == "connect.jsonfiletransfer?get":
+                            return {
+                                "id": "2",
+                                "code": 200,
+                                "data": {
+                                    "errorCode": "200",
+                                    "preferences": json.dumps({"mode": 3, "remoteId": nested_remote_id}),
+                                },
+                            }
+                        if cmd == "setup.account?getProvisionInfo":
+                            return {
+                                "id": "3",
+                                "code": 200,
+                                "data": {"mode": 3, "activeRemoteId": 20261111, "accountId": "hub2-local"},
+                            }
+                        raise AssertionError(cmd)
+
+                buf = io.StringIO()
+                with (
+                    patch.object(usb.HarmonyUsbBridge, "enumerate_devices", return_value=[device]),
+                    patch.object(usb, "UsbHbusTransport", side_effect=NestedPreferencesHbus),
+                ):
+                    rc = wb.run_wizard_bridge(
+                        [
+                            "--action",
+                            "usb-provision-local",
+                            "--confirm-action",
+                            "usb-provision-local",
+                            "--remote-id",
+                            "20261111",
+                            "--no-reboot",
+                        ],
+                        stream=buf,
+                        stdin_stream=io.StringIO(""),
+                    )
+                self.assertEqual(rc, expected_rc)
+                result = parse_ndjson(buf.getvalue())[-1]["provisionLocal"]
+                self.assertEqual(result["ok"], expected_rc == 0)
+                if expected_rc != 0:
+                    self.assertIn("read-back validation failed", result["error"])
+
+    def test_provision_local_polls_past_transient_usb_disconnects_after_reboot(self) -> None:
+        device = make_test_device()
+        fake_handle = Mock()
+        written_prefs: dict = {}
+        provision_attempts = 0
+
+        class ReconnectingHbus:
+            def __init__(self, args):
+                self.args = args
+
+            def call(self, cmd, params, timeout=20):
+                nonlocal provision_attempts
+                if cmd == "connect.jsonfiletransfer?put":
+                    written_prefs.update(params["content"])
+                    return {"id": "1", "code": 200, "data": {"errorCode": "200"}}
+                if cmd == "connect.jsonfiletransfer?get":
+                    return {"id": "2", "code": 200, "data": {"errorCode": "200", "content": written_prefs}}
+                if cmd == "setup.account?getProvisionInfo":
+                    provision_attempts += 1
+                    if provision_attempts < 3:
+                        raise usb.UsbBridgeError("transient USB disconnect during reboot")
+                    return {
+                        "id": "3",
+                        "code": 200,
+                        "data": {
+                            "mode": 3,
+                            "activeRemoteId": written_prefs["remoteId"],
+                            "accountId": written_prefs["accountId"],
+                        },
+                    }
+                raise AssertionError(cmd)
+
+        buf = io.StringIO()
+        with (
+            patch.object(usb, "usb_process_lock", return_value=contextlib.nullcontext()),
+            patch.object(usb.HarmonyUsbBridge, "enumerate_devices", return_value=[device]),
+            patch.object(usb.HarmonyUsbBridge, "open_handle", return_value=(fake_handle, device)),
+            patch.object(usb, "raw_reboot_device_on_handle", return_value=Mock()),
+            patch.object(usb, "UsbHbusTransport", side_effect=ReconnectingHbus),
+            patch.object(wb.time, "sleep") as mock_sleep,
+        ):
+            rc = wb.run_wizard_bridge(
+                [
+                    "--action",
+                    "usb-provision-local",
+                    "--confirm-action",
+                    "usb-provision-local",
+                    "--verify-timeout-s",
+                    "5",
+                ],
+                stream=buf,
+                stdin_stream=io.StringIO('{"remoteId": 20261111}\n'),
+            )
+
+        self.assertEqual(rc, 0)
+        self.assertEqual(provision_attempts, 3)
+        self.assertEqual(mock_sleep.call_count, 2)
+        result = parse_ndjson(buf.getvalue())[-1]["provisionLocal"]
+        self.assertTrue(result["ok"])
+        self.assertTrue(result["rebootSent"])
+
     def test_tde_enable_provision_local_numeric_remote_id_seed_automation_and_root_flows(self) -> None:
         device = make_test_device()
         fake_handle = Mock()
@@ -811,16 +964,27 @@ class WizardBridgeTests(unittest.TestCase):
             patch.object(usb.HarmonyUsbBridge, "open_handle", return_value=(fake_handle, device)),
             patch.object(usb, "raw_reboot_device_on_handle", return_value=Mock()),
             patch.object(usb, "UsbHbusTransport", side_effect=ProvisionHbus),
+            patch.object(
+                wb.sys,
+                "stdin",
+                io.StringIO(
+                    '{"remoteId": 20261111, "accountId": "hub2-local", '
+                    '"name": "Hub 2", "email": "hub2@local"}\n'
+                ),
+            ),
         ):
             rc = wb.run_wizard_bridge(
                 ["--action", "usb-provision-local", "--confirm-action", "usb-provision-local"],
                 stream=buf,
-                stdin_stream=io.StringIO('{"remoteId": 20261111, "accountId": "hub2-local-20261111"}\n'),
+                stdin_stream=None,
             )
         self.assertEqual(rc, 0)
         self.assertIs(type(written_prefs["remoteId"]), int)
         self.assertEqual(written_prefs["remoteId"], 20261111)
         self.assertEqual(written_prefs["mode"], 3)
+        self.assertEqual(written_prefs["accountId"], "hub2-local")
+        self.assertEqual(written_prefs["name"], "Hub 2")
+        self.assertEqual(written_prefs["email"], "hub2@local")
         prov_res = parse_ndjson(buf.getvalue())[-1]["provisionLocal"]
         self.assertTrue(prov_res["ok"])
         self.assertTrue(prov_res["rebootSent"])

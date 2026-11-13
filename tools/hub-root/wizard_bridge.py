@@ -1444,6 +1444,7 @@ def run_usb_provision_local_action(
     hub_name: str,
     email: str,
     no_reboot: bool,
+    verify_timeout_s: int,
     mask: bool,
     emit: Callable[[dict[str, Any]], None],
 ) -> tuple[bool, dict[str, Any]]:
@@ -1499,15 +1500,30 @@ def run_usb_provision_local_action(
                 },
                 timeout=timeout_sec,
             )
+            put_data = put_reply.get("data") if isinstance(put_reply, dict) else {}
+            put_code = str(
+                put_data.get("errorCode", put_reply.get("code", ""))
+                if isinstance(put_data, dict)
+                else put_reply.get("code", "")
+            )
+            if put_code not in ("200", ""):
+                msg = f"Local provisioning preferences write failed (put_code={put_code})"
+                emit({"type": "progress", "step": "usb-provision-write", "status": "failed", "error": msg})
+                return False, {"ok": False, "error": msg}
+
             read_reply = transport.call(
                 "connect.jsonfiletransfer?get",
                 {"path": "../../data/luaworks/provision", "file": "preferences"},
                 timeout=timeout_sec,
             )
 
-        put_code = str(put_reply.get("code", ""))
         read_data = extract_hbus_data_dict(read_reply)
-        if put_code not in ("200", "") or read_data.get("mode") != 3 or type(read_data.get("remoteId")) is not int:
+        read_payload: Any = read_data.get("preferences") or read_data.get("content") or read_data
+        if isinstance(read_payload, str):
+            read_payload = json.loads(read_payload)
+        if not isinstance(read_payload, dict):
+            read_payload = {}
+        if read_payload.get("mode") != 3 or type(read_payload.get("remoteId")) is not int:
             msg = f"Local provisioning preferences read-back validation failed (put_code={put_code})"
             emit({"type": "progress", "step": "usb-provision-write", "status": "failed", "error": msg})
             return False, {"ok": False, "error": msg}
@@ -1546,39 +1562,51 @@ def run_usb_provision_local_action(
             emit({"type": "progress", "step": "usb-provision-reboot", "status": "warning", "warning": msg})
 
     emit({"type": "step", "step": "usb-provision-verify", "message": "Verifying setup.account?getProvisionInfo reports mode 3 and numeric activeRemoteId"})
-    try:
-        with silence_library_stdout():
-            transport = usb.UsbHbusTransport(usb_args)
-            prov_reply = transport.call("setup.account?getProvisionInfo", {}, timeout=timeout_sec)
-        prov_summary = summarize_provision_info_reply(prov_reply, mask=mask)
-        verified = (
-            bool(prov_summary.get("ok"))
-            and bool(prov_summary.get("provisioned"))
-            and prov_summary.get("mode") == 3
-            and prov_summary.get("remoteIdType") == "number"
-        )
-        if not verified:
-            msg = "getProvisionInfo verification did not report mode 3 with a numeric activeRemoteId"
-            emit({"type": "progress", "step": "usb-provision-verify", "status": "failed", "provisionInfo": prov_summary, "error": msg})
-            return False, {"ok": False, "provisionInfo": prov_summary, "error": msg}
+    deadline = time.monotonic() + max(0, verify_timeout_s)
+    last_error: Exception | None = None
+    prov_summary: dict[str, Any] = {}
+    while True:
+        try:
+            with silence_library_stdout():
+                transport = usb.UsbHbusTransport(usb_args)
+                prov_reply = transport.call("setup.account?getProvisionInfo", {}, timeout=timeout_sec)
+            prov_summary = summarize_provision_info_reply(prov_reply, mask=mask)
+            verified = (
+                bool(prov_summary.get("ok"))
+                and bool(prov_summary.get("provisioned"))
+                and prov_summary.get("mode") == 3
+                and prov_summary.get("remoteIdType") == "number"
+            )
+            if verified:
+                summary = {
+                    "ok": True,
+                    "mode": 3,
+                    "remoteId": mask_id(remote_id_int, "hub-id") if mask else remote_id_int,
+                    "remoteIdType": "number",
+                    "accountId": mask_id(clean_account_id, "account-id") if mask else clean_account_id,
+                    "discoveryServerUri": DEFAULT_DISCOVERY_URI,
+                    "rebootSent": reboot_sent,
+                    "provisionInfo": prov_summary,
+                }
+                emit({"type": "progress", "step": "usb-provision-verify", "status": "ok", "provisionLocal": summary})
+                return True, summary
+            last_error = None
+        except Exception as exc:
+            last_error = exc
 
-        summary = {
-            "ok": True,
-            "mode": 3,
-            "remoteId": mask_id(remote_id_int, "hub-id") if mask else remote_id_int,
-            "remoteIdType": "number",
-            "accountId": mask_id(clean_account_id, "account-id") if mask else clean_account_id,
-            "discoveryServerUri": DEFAULT_DISCOVERY_URI,
-            "rebootSent": reboot_sent,
-            "provisionInfo": prov_summary,
-        }
-        emit({"type": "progress", "step": "usb-provision-verify", "status": "ok", "provisionLocal": summary})
-        return True, summary
-    except Exception as exc:
-        msg = mask_free_text(str(exc), mask)
-        wedge = is_usb_wedge_error(str(exc))
+        if no_reboot or not reboot_sent or time.monotonic() >= deadline:
+            break
+        time.sleep(1.0)
+
+    if last_error is not None:
+        msg = mask_free_text(str(last_error), mask)
+        wedge = is_usb_wedge_error(str(last_error))
         emit({"type": "progress", "step": "usb-provision-verify", "status": "failed", "error": msg, "usbWedge": wedge})
         return False, {"ok": False, "error": msg, "usbWedge": wedge}
+
+    msg = "getProvisionInfo verification did not report mode 3 with a numeric activeRemoteId"
+    emit({"type": "progress", "step": "usb-provision-verify", "status": "failed", "provisionInfo": prov_summary, "error": msg})
+    return False, {"ok": False, "provisionInfo": prov_summary, "error": msg}
 
 
 def run_usb_seed_automation_action(
@@ -2054,9 +2082,12 @@ def run_wizard_bridge(
             account_id_val = args.account_id
             hub_name_val = args.hub_name
             email_val = args.email
-            if stdin_stream is not None:
+            provision_stdin = stdin_stream
+            if provision_stdin is None and not sys.stdin.isatty():
+                provision_stdin = sys.stdin
+            if provision_stdin is not None:
                 try:
-                    stdin_obj = read_stdin_json(stdin_stream)
+                    stdin_obj = read_stdin_json(provision_stdin)
                     if "remoteId" in stdin_obj:
                         remote_id_val = stdin_obj["remoteId"]
                         allow_num_str = False  # JSON stdin must carry a strict JSON number, never a string
@@ -2077,6 +2108,7 @@ def run_wizard_bridge(
                 hub_name=hub_name_val,
                 email=email_val,
                 no_reboot=args.no_reboot,
+                verify_timeout_s=args.verify_timeout_s,
                 mask=args.mask,
                 emit=emit,
             )
