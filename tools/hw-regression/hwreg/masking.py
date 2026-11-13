@@ -20,7 +20,10 @@ from typing import Any
 MAC_RE = re.compile(r"\b(?:[0-9A-Fa-f]{2}[:-]){5}[0-9A-Fa-f]{2}\b")
 IPV4_RE = re.compile(r"\b(\d{1,3})\.(\d{1,3})\.(\d{1,3})\.(\d{1,3})\b")
 EMAIL_RE = re.compile(r"\b[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}\b")
-WEBHOOK_RE = re.compile(r"(https?://[^\s\"'>]+/api/webhook/)([^\s\"'/?#&>]+)", re.IGNORECASE)
+WEBHOOK_RE = re.compile(
+    r"(https?:(?:/|\\/){2}[^\s\"'>]+(?:/|\\/)api(?:/|\\/)webhook(?:/|\\/))([^\s\"'/?#&>\\]+)",
+    re.IGNORECASE,
+)
 KV_SECRET_RE = re.compile(
     r"(?i)\b(password|passwd|psk|secret|token|authorization|cookie|api[_-]?key)\s*([:=])\s*([^\s,;\"']+)"
 )

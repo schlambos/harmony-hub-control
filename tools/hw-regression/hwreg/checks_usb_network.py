@@ -78,6 +78,11 @@ def _read_iface_stats(ctx: CheckContext, ifname: str, *, ssh_host: str = "") -> 
         for f in STAT_FIELDS
     ]
     res = ctx.transport.run_ssh("; ".join(cmds), host_override=ssh_host)
+    if not res.ok:
+        raise RuntimeError(
+            f"SSH counter read on {ssh_host or 'default'} failed (rc={res.returncode}): "
+            f"{res.stderr.strip() or 'no stderr'}"
+        )
     kv = parse_kv_sections(res.stdout)
     out: dict[str, int] = {}
     for f in STAT_FIELDS:
@@ -285,8 +290,20 @@ def check_usb_eth_traffic_on_wire(ctx: CheckContext) -> CheckResult:
     # cannot be mistaken for wired test payload traffic.
     control_ssh_host = caps.wifi_ip if (caps.wifi_up and caps.wifi_ip) else ""
 
-    before_wired = _read_iface_stats(ctx, ifname, ssh_host=control_ssh_host)
-    before_wifi = _read_iface_stats(ctx, "ath0", ssh_host=control_ssh_host)
+    try:
+        before_wired = _read_iface_stats(ctx, ifname, ssh_host=control_ssh_host)
+        before_wifi = _read_iface_stats(ctx, "ath0", ssh_host=control_ssh_host)
+    except RuntimeError as exc:
+        return CheckResult(
+            check_id="usb_eth.traffic_on_wire",
+            title="Counter-verified bidirectional wired traffic & BE checksum transfer",
+            category="usb_eth",
+            kind=CheckKind.AUTOMATABLE,
+            tier=SafetyTier.SAFE,
+            outcome=CheckOutcome.FAIL,
+            evidence_class=EvidenceClass.VERIFIED,
+            summary=f"Failed to read pre-transfer interface counters: {exc}",
+        )
 
     # 1. Perform 3 multi-KB HTTP GET transfers directly against wired_ip:8080
     transfer_Count = 3
@@ -312,20 +329,32 @@ def check_usb_eth_traffic_on_wire(ctx: CheckContext) -> CheckResult:
     # 2. Check host ARP MAC when runner is on the same L2 broadcast domain
     host_arp = ctx.transport.host_arp_mac(wired_ip)
 
-    # 3. Verify hub-initiated egress bound to wired interface (`ping -I <ifname> <gateway>`)
+    # 3. Verify hub-initiated egress reaches gateway (BusyBox ping takes no flags; route metric prefers wired ifname)
     gw_ip = caps.saved_gateway
     gw_ping_ok: bool | None = None
     gw_ping_out = ""
     if gw_ip and re.fullmatch(r"\d+\.\d+\.\d+\.\d+", gw_ip):
         gw_probe = ctx.transport.run_ssh(
-            f"ping -c 3 -W 2 -I {remote_quote(ifname)} {remote_quote(gw_ip)} 2>&1",
+            f"ping {remote_quote(gw_ip)} 2>&1",
             host_override=control_ssh_host,
         )
         gw_ping_ok = gw_probe.ok
         gw_ping_out = gw_probe.stdout.strip()
 
-    after_wired = _read_iface_stats(ctx, ifname, ssh_host=control_ssh_host)
-    after_wifi = _read_iface_stats(ctx, "ath0", ssh_host=control_ssh_host)
+    try:
+        after_wired = _read_iface_stats(ctx, ifname, ssh_host=control_ssh_host)
+        after_wifi = _read_iface_stats(ctx, "ath0", ssh_host=control_ssh_host)
+    except RuntimeError as exc:
+        return CheckResult(
+            check_id="usb_eth.traffic_on_wire",
+            title="Counter-verified bidirectional wired traffic & BE checksum transfer",
+            category="usb_eth",
+            kind=CheckKind.AUTOMATABLE,
+            tier=SafetyTier.SAFE,
+            outcome=CheckOutcome.FAIL,
+            evidence_class=EvidenceClass.VERIFIED,
+            summary=f"Failed to read post-transfer interface counters: {exc}",
+        )
 
     deltas = {f: after_wired.get(f, 0) - before_wired.get(f, 0) for f in STAT_FIELDS}
     wifi_tx_bytes_delta = after_wifi.get("tx_bytes", 0) - before_wifi.get("tx_bytes", 0)
@@ -357,9 +386,9 @@ def check_usb_eth_traffic_on_wire(ctx: CheckContext) -> CheckResult:
         )
 
     if gw_ping_ok is False:
-        issues.append(f"gateway ping bound to {ifname} failed: {gw_ping_out.splitlines()[-1] if gw_ping_out else 'rc!=0'}")
+        issues.append(f"gateway ping from hub failed: {gw_ping_out.splitlines()[-1] if gw_ping_out else 'rc!=0'}")
     elif gw_ping_ok is None:
-        warnings.append("no saved gateway IP known; skipped hub-originated gateway ping bound to wired interface")
+        warnings.append("no saved gateway IP known; skipped hub-originated gateway ping")
 
     for err_counter in ("rx_errors", "tx_errors", "rx_dropped", "tx_dropped", "collisions"):
         if deltas[err_counter] > 0:
@@ -645,10 +674,10 @@ def check_lan_peer_reachability(ctx: CheckContext) -> CheckResult:
                 f"peer {role} ({host}) has NO matching route while cloud_blocker={caps.cloud_blocker_conf}"
             )
         elif expect_ping and re.fullmatch(r"\d+\.\d+\.\d+\.\d+", host):
-            p_res = ctx.transport.run_ssh(f"ping -c 1 -W 2 {remote_quote(host)} >/dev/null 2>&1")
+            p_res = ctx.transport.run_ssh(f"ping {remote_quote(host)} >/dev/null 2>&1")
             ping_ok = p_res.ok
             if not ping_ok:
-                warnings.append(f"peer {role} ({host}) has route via {win_if}, but did not answer 1-packet ICMP ping")
+                warnings.append(f"peer {role} ({host}) has route via {win_if}, but did not answer ICMP ping")
         peer_checks.append(
             {
                 "role": role,

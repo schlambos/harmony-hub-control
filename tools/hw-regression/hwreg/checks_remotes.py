@@ -23,6 +23,7 @@ if TYPE_CHECKING:
 
 
 HANDHELD_MAP_EQUADS = frozenset({"16414", "16417", "16422", "16423"})
+NO_SCREEN_MAP_EQUADS = frozenset({"16414", "16422", "16423"})
 ACTION_FIELDS = ("ButtonAction", "ButtonLongPressAction", "ButtonDoublePressAction")
 
 
@@ -196,9 +197,10 @@ def check_rf_inventory_and_maps(ctx: CheckContext) -> CheckResult:
             {r.equad_id for r in caps.paired_remotes if r.equad_id in HANDHELD_MAP_EQUADS}
         )
         for equad in paired_handheld_equads:
-            root_id = f"{equad}Root"
-            if root_id not in map_ids:
-                missing_roots.append(root_id)
+            if equad in NO_SCREEN_MAP_EQUADS:
+                root_id = f"{equad}Root"
+                if root_id not in map_ids:
+                    missing_roots.append(root_id)
             for aid in act_ids:
                 want_map = f"{equad}Activity{aid}"
                 if want_map not in map_ids:

@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import base64
 from dataclasses import dataclass, field
+from pathlib import Path
 import platform
 import re
 import subprocess
@@ -27,6 +28,7 @@ UNSUPPORTED_HUB_SHELL_PATTERNS: tuple[tuple[re.Pattern[str], str], ...] = (
     (re.compile(r"(?<![A-Za-z0-9_/-])mktemp(?![A-Za-z0-9_/-])"), "BusyBox on the hub has no 'mktemp' applet"),
     (re.compile(r"(?<![A-Za-z0-9_/-])sha256sum(?![A-Za-z0-9_/-])"), "BusyBox on the hub has no 'sha256sum' applet (use md5sum)"),
     (re.compile(r"\bgrep\s+-[A-Za-z]*E"), "BusyBox grep on the hub has no -E flag"),
+    (re.compile(r"\bping\s+-[A-Za-z]"), "BusyBox ping on the hub takes no flags (use 'ping <host>')"),
 )
 
 # Hard safety prohibitions: never allow irreversible / destructive commands.
@@ -90,6 +92,7 @@ class HubTransport:
         self.config = config
         self._resolved_http_host: str = config.hub_host
         self.state_actions: list[StateActionRecord] = []
+        self._ssh_alias_cfg: dict[str, Any] | None = None
 
     @property
     def http_host(self) -> str:
@@ -114,6 +117,50 @@ class HubTransport:
     def sleep(self, seconds: float) -> None:
         time.sleep(seconds)
 
+    def _resolve_ssh_alias(self) -> dict[str, Any]:
+        """Resolve ~/.ssh/config settings for config.ssh_target once via `ssh -G`."""
+        if self._ssh_alias_cfg is not None:
+            return self._ssh_alias_cfg
+        parsed: dict[str, Any] = {"hostname": "", "user": "", "port": 22, "identityfiles": []}
+        target = self.config.ssh_target.strip()
+        if not target:
+            self._ssh_alias_cfg = parsed
+            return parsed
+        try:
+            proc = subprocess.run(
+                ["ssh", "-G", target],
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                timeout=4,
+                check=False,
+            )
+        except OSError:
+            self._ssh_alias_cfg = parsed
+            return parsed
+        if proc.returncode != 0:
+            self._ssh_alias_cfg = parsed
+            return parsed
+        for ln in proc.stdout.decode("utf-8", "replace").splitlines():
+            parts = ln.strip().split(None, 1)
+            if len(parts) != 2:
+                continue
+            key, val = parts[0].lower(), parts[1].strip()
+            if key == "hostname":
+                parsed["hostname"] = val
+            elif key == "user":
+                parsed["user"] = val
+            elif key == "port":
+                try:
+                    parsed["port"] = int(val)
+                except ValueError:
+                    pass
+            elif key == "identityfile":
+                exp = Path(val).expanduser()
+                if exp.is_file():
+                    parsed["identityfiles"].append(str(exp))
+        self._ssh_alias_cfg = parsed
+        return parsed
+
     def ssh_base_args(self, host_override: str = "") -> list[str]:
         args = [
             "ssh",
@@ -124,15 +171,33 @@ class HubTransport:
             "-o",
             "StrictHostKeyChecking=accept-new",
         ]
+        if host_override:
+            alias_cfg = self._resolve_ssh_alias() if (self.config.ssh_target and not self.config.ssh_key_path) else {}
+            alias_host = str(alias_cfg.get("hostname", "")).strip()
+            if self.config.ssh_target and alias_host and host_override == alias_host:
+                if self.config.ssh_port and self.config.ssh_port != 22:
+                    args.extend(["-p", str(self.config.ssh_port)])
+                args.append(self.config.effective_ssh_destination())
+                return args
+
+            eff_port = self.config.ssh_port if (self.config.ssh_port and self.config.ssh_port != 22) else int(alias_cfg.get("port") or 22)
+            if eff_port != 22:
+                args.extend(["-p", str(eff_port)])
+            if self.config.ssh_key_path:
+                args.extend(["-i", self.config.ssh_key_path, "-o", "IdentitiesOnly=yes"])
+            elif alias_cfg.get("identityfiles"):
+                for id_path in alias_cfg["identityfiles"]:
+                    args.extend(["-i", id_path])
+                args.extend(["-o", "IdentitiesOnly=yes"])
+            eff_user = str(alias_cfg.get("user") or self.config.ssh_user or "root")
+            args.append(f"{eff_user}@{host_override}")
+            return args
+
         if self.config.ssh_port and self.config.ssh_port != 22:
             args.extend(["-p", str(self.config.ssh_port)])
         if self.config.ssh_key_path:
             args.extend(["-i", self.config.ssh_key_path, "-o", "IdentitiesOnly=yes"])
-
-        if host_override:
-            args.append(f"{self.config.ssh_user}@{host_override}")
-        else:
-            args.append(self.config.effective_ssh_destination())
+        args.append(self.config.effective_ssh_destination())
         return args
 
     def run_ssh(

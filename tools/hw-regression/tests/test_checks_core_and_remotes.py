@@ -31,6 +31,14 @@ class CoreAndRemoteCheckTests(unittest.TestCase):
 
     def test_services_catches_proc_exe_md5_mismatch(self) -> None:
         st = FakeHubState()
+        # Real-hub ps line uses lowercase `/usr/bin/lua main.lua ... tasks/` (truncated before harmonyengine)
+        st.procs = [
+            p if "luaworks" not in p else "332 root /usr/bin/lua main.lua --syslog --datadir=/data tasks/"
+            for p in st.procs
+        ]
+        res_ok, _ = self._run_only("core.services_and_webui", st)
+        self.assertEqual(res_ok.outcome, CheckOutcome.PASS)
+
         st.webui_exe_md5 = "ffffffffffffffffffffffffffffffff"
         res, _ = self._run_only("core.services_and_webui", st)
         self.assertEqual(res.outcome, CheckOutcome.FAIL)
@@ -89,6 +97,12 @@ class CoreAndRemoteCheckTests(unittest.TestCase):
         res2, _ = self._run_only("remote.rf_inventory_and_maps", st2)
         self.assertEqual(res2.outcome, CheckOutcome.FAIL)
         self.assertIn("action-less", res2.summary)
+
+        # Screen remote (16417) without a 16417Root map -> PASS (only 16414/16422/16423 use *Root)
+        st3 = FakeHubState()
+        st3.enable_two_screen(setting="1")
+        res3, _ = self._run_only("remote.rf_inventory_and_maps", st3)
+        self.assertEqual(res3.outcome, CheckOutcome.PASS)
 
     def test_hot_radio_counters_pass_and_io_error_fail(self) -> None:
         st = FakeHubState()

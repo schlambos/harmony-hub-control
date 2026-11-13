@@ -151,7 +151,7 @@ for pat in '[h]al' '[w]atchdog' '[d]ropbear' '[c]odex_webui' '[o]ffline_egress_g
     echo "proc_${name}=0"
   fi
 done
-if echo "$ps_out" | grep 'Lua\\|luaworks\\|harmonyengine\\|activityengine' >/dev/null 2>&1; then
+if echo "$ps_out" | grep '/usr/bin/lua\\|lua main\\.lua\\|Lua\\|luaworks\\|harmonyengine\\|activityengine' >/dev/null 2>&1; then
   echo "proc_engine=1"
 else
   echo "proc_engine=0"

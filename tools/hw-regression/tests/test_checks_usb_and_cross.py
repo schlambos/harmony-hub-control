@@ -92,6 +92,12 @@ class UsbEthernetAndCrossInteractionTests(unittest.TestCase):
     def test_lan_peer_reachability_catches_pr128_net_remove_route_bug(self) -> None:
         st = FakeHubState()
         st.enable_usb_eth_and_integrations()
+
+        res_ok, _ = self._run_only("cross.lan_peer_reachability", st)
+        self.assertEqual(res_ok.outcome, CheckOutcome.PASS)
+        roles = [p["role"] for p in res_ok.evidence["peers"]]
+        self.assertIn("ha_webhook", roles)
+
         # Simulate USB-eth stopped, but net-remove left dead eth2 metric 0 ahead of ath0 metric 20
         st.usb_eth_state = "stopped"
         st.usb_eth_ip = ""

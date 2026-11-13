@@ -388,9 +388,28 @@ def discover_capabilities(transport: HubTransport, masker: SecretMasker) -> HubC
             proto_res = transport.run_ssh(
                 "cat /data/resources/ProtocolList.json 2>/dev/null || true"
             )
-            m = re.search(r"http://[^\s\"'\\]+/api/webhook/[^\s\"'\\]+", proto_res.stdout)
-            if m:
-                caps.ha_webhook_url = m.group(0)
+            extracted_url = ""
+            if proto_res.stdout.strip():
+                try:
+                    proto_json = json.loads(proto_res.stdout)
+                except json.JSONDecodeError:
+                    proto_json = {}
+                for proto in (proto_json.get("Protocols") or []):
+                    if not isinstance(proto, dict):
+                        continue
+                    ctrl = proto.get("ControlSection")
+                    if isinstance(ctrl, dict):
+                        cand = str(ctrl.get("Url") or "").strip()
+                        if "/api/webhook/" in cand:
+                            extracted_url = cand
+                            break
+                if not extracted_url:
+                    unescaped = proto_res.stdout.replace("\\/", "/")
+                    m = re.search(r"https?://[^\s\"'\\]+/api/webhook/[^\s\"'\\]+", unescaped)
+                    if m:
+                        extracted_url = m.group(0)
+            if extracted_url:
+                caps.ha_webhook_url = extracted_url
         if caps.ha_webhook_url:
             parsed = urlparse(caps.ha_webhook_url)
             if parsed.hostname:

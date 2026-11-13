@@ -201,7 +201,7 @@ class FakeHubState:
         ]
         self.button_maps.extend(
             [
-                {"__type": "RootButtonMap", "ButtonMapIdentifier": "16417Root", "Buttons": []},
+                # Screen remotes (16417) hold their own home/device UI locally and do NOT have a 16417Root map.
                 {
                     "__type": "ActivityButtonMap",
                     "ButtonMapIdentifier": "16417Activity1001",
@@ -291,7 +291,7 @@ class FakeHubState:
         )
         self.protocol_list_json = (
             '{"Protocols":[{"Name":"Melodious Home Assistant",'
-            '"Url":"http://192.0.2.50:8123/api/webhook/secret-hook-token-999"}]}'
+            '"ControlSection":{"Url":"http:\\/\\/192.0.2.50:8123\\/api\\/webhook\\/secret-hook-token-999"}}]}'
         )
 
 
@@ -465,7 +465,10 @@ class FakeHubTransport(HubTransport):
                 "dropbear": "dropbear" in ps_blob,
                 "codex_webui": "codex_webui" in ps_blob,
                 "offline_egress_guard": "offline_egress_guard" in ps_blob,
-                "engine": any(k in ps_blob for k in ("Lua", "luaworks", "harmonyengine", "activityengine")),
+                "engine": any(
+                    k in ps_blob
+                    for k in ("/usr/bin/lua", "lua main.lua", "Lua", "luaworks", "harmonyengine", "activityengine")
+                ),
             }
             lines = [f"proc_{k}={'1' if v else '0'}" for k, v in checks.items()]
             lines.append(f"webui_disk_md5={st.webui_disk_md5}")
@@ -553,11 +556,11 @@ class FakeHubTransport(HubTransport):
         if "codex_hal_ltcp" in command and "rf.info" in command:
             return SshResult(0, self._render_rf_info() + "\n", "")
 
-        # 15. Ping probes
+        # 15. Ping probes (BusyBox ping takes no flags; simulate gateway failure when requested)
         if command.startswith("ping "):
-            if "-I " in command and not st.gateway_ping_ok:
-                return SshResult(1, "3 packets transmitted, 0 packets received, 100% packet loss\n", "")
-            return SshResult(0, "3 packets transmitted, 3 packets received, 0% packet loss\n", "")
+            if st.saved_gateway and st.saved_gateway in command and not st.gateway_ping_ok:
+                return SshResult(1, f"No response from {st.saved_gateway}\n", "")
+            return SshResult(0, f"{st.saved_gateway or '192.0.2.1'} is alive!\n", "")
 
         # 16. Plain `route -n`
         if command.strip().startswith("route -n"):

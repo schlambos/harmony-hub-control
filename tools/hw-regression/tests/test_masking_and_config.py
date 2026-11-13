@@ -122,6 +122,8 @@ class BusyBoxAndSafetyGuardTests(unittest.TestCase):
             "mktemp /tmp/foo.XXXXXX",
             "sha256sum /usr/bin/hal",
             "grep -E 'foo|bar' /cache/codex-init.log",
+            "ping -c 1 -W 2 192.0.2.1",
+            "ping -I eth2 192.0.2.1",
         ):
             with self.subTest(cmd=bad_cmd):
                 with self.assertRaises(ValueError):
