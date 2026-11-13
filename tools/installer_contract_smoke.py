@@ -1775,7 +1775,7 @@ class PythonInstallerFlash(unittest.TestCase):
     def test_no_extender_package_reports_nothing(self):
         """[PYTHON BEHAVIORAL] a hub without /pkg/moosehead is scanned and the
         report doesn't mention the Extender."""
-        code, stdout, stderr = self.harness.run(self.harness.base_argv("--preflight-only"))
+        code, stdout, stderr = self.harness.run(self.harness.base_argv("--hub-id", FAKE_HUB_ID, "--preflight-only"))
         self.assertEqual(code, 0, stderr or stdout)
         self.assertIn(("extender_scan",), self.hub.events)
         self.assertEqual(kv_multi(stdout, "extender_package bytes"), [])
@@ -1831,7 +1831,7 @@ class PythonInstallerFlash(unittest.TestCase):
         real = self.hub.dispatch
         self.hub.dispatch = lambda c, i=None: (1, "extender_package bytes=x\n", "awk: not found") \
             if c.strip() == scan else real(c, i)
-        code, stdout, stderr = self.harness.run(self.harness.base_argv("--preflight-only"))
+        code, stdout, stderr = self.harness.run(self.harness.base_argv("--hub-id", FAKE_HUB_ID, "--preflight-only"))
         self.assertEqual(code, 0, stderr or stdout)
         self.assertEqual(kv_multi(stdout, "extender_package bytes"), [])
 
