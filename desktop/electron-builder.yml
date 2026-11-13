@@ -1,6 +1,7 @@
 # Melodious for macOS: zip and dmg for arm64 and x64, ad-hoc signed.
-# Build: npm run dist (see README.md). Run scripts/bundle-shell.sh first;
-# `npm run dist` does it.
+# Melodious for Windows: installer and zip for x64, unsigned.
+# Build: npm run dist, or npm run dist:win on Windows (see README.md). Run
+# scripts/bundle-shell.sh first; both scripts do it.
 appId: app.melodious.desktop
 productName: Melodious
 copyright: Melodious contributors
@@ -21,6 +22,7 @@ npmRebuild: false
 
 # Before signing: give the main executable its own LC_UUID, or macOS Local
 # Network privacy confuses Melodious with other Electron apps and blocks the hub.
+# The hook does nothing for Windows.
 afterPack: scripts/after-pack.js
 
 mac:
@@ -44,6 +46,25 @@ mac:
 dmg:
   title: Melodious ${version}
   writeUpdateInfo: false
+
+# Unsigned: no certificate, so SmartScreen warns before the first launch.
+# "win" in the names keeps these apart from the Mac's x64 zip, which the Mac
+# app's updater picks by name.
+win:
+  target:
+    - target: nsis
+      arch: [x64]
+    - target: zip
+      arch: [x64]
+  icon: resources/icon.png
+  artifactName: Melodious-${version}-win-${arch}.${ext}
+
+# Installs for the current user only, so it never asks for administrator rights.
+nsis:
+  artifactName: Melodious-${version}-win-${arch}-setup.${ext}
+  oneClick: true
+  perMachine: false
+  differentialPackage: false
 
 # No update feed and nothing published from here: the owner publishes releases.
 publish: null

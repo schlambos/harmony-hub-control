@@ -35,6 +35,11 @@ set -eu
 
 SCRIPT_DIR=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
 REPO_ROOT=$(CDPATH= cd -- "$SCRIPT_DIR/.." && pwd)
+# Git Bash on Windows: bun is a Windows program, so it and the @import lines
+# it reads need drive-letter paths (D:/...), which the shell tools take too.
+if command -v cygpath > /dev/null 2>&1; then
+  REPO_ROOT=$(cygpath -m "$REPO_ROOT")
+fi
 
 BUN=${BUN:-$(command -v bun || true)}
 if [ -z "$BUN" ] || [ ! -x "$BUN" ]; then
@@ -46,6 +51,9 @@ SIM_PUBLIC="$REPO_ROOT/tools/webui-sim/public"
 BUILD_DIR="$REPO_ROOT/tools/webui-sim/build"
 OUT="$REPO_ROOT/payload/source/harmony_shell_assets.h"
 TMP=$(mktemp -d)
+if command -v cygpath > /dev/null 2>&1; then
+  TMP=$(cygpath -m "$TMP")
+fi
 trap 'rm -rf "$TMP"' EXIT INT TERM
 
 mkdir -p "$BUILD_DIR"

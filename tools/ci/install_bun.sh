@@ -13,12 +13,16 @@ BUN_VERSION=1.3.14
 BUN_SHA256_X64=951ee2aee855f08595aeec6225226a298d3fea83a3dcd6465c09cbccdf7e848f
 BUN_SHA256_AARCH64=a27ffb63a8310375836e0d6f668ae17fa8d8d18b88c37c821c65331973a19a3b
 BUN_SHA256_DARWIN_AARCH64=d8b96221828ad6f97ac7ac0ab7e95872341af763001e8803e8267652c2652620
+BUN_SHA256_WINDOWS_X64=0a0620930b6675d7ba440e81f4e0e00d3cfbe096c4b140d3fff02205e9e18922
 
 DEST=${1:?usage: install_bun.sh <directory>}
+exe=bun
 case "$(uname -s) $(uname -m)" in
   "Linux x86_64") asset=bun-linux-x64 sha=$BUN_SHA256_X64 ;;
   "Linux aarch64" | "Linux arm64") asset=bun-linux-aarch64 sha=$BUN_SHA256_AARCH64 ;;
   "Darwin arm64") asset=bun-darwin-aarch64 sha=$BUN_SHA256_DARWIN_AARCH64 ;;
+  # Git Bash on Windows
+  MINGW*" x86_64" | MSYS*" x86_64") asset=bun-windows-x64 sha=$BUN_SHA256_WINDOWS_X64 exe=bun.exe ;;
   *) echo "error: no pinned bun for $(uname -s) $(uname -m)" >&2; exit 1 ;;
 esac
 
@@ -41,5 +45,5 @@ if [ "$found" != "$sha" ]; then
 fi
 unzip -q -d "$TMP" "$TMP/$asset.zip"
 mkdir -p "$DEST"
-install -m 755 "$TMP/$asset/bun" "$DEST/bun"
-"$DEST/bun" --version
+install -m 755 "$TMP/$asset/$exe" "$DEST/$exe"
+"$DEST/$exe" --version

@@ -1,6 +1,6 @@
 "use strict";
 
-// Update the hub from the Mac app, the way install_webui.py does it: over
+// Update the hub from the desktop app, the way install_webui.py does it: over
 // SSH with the owner's hub key. The app downloads the hub release from GitHub
 // and checks it against the release's SHA256SUMS.txt; the hub only ever sees
 // files from that zip. The hub gets no new HTTP route.
@@ -8,7 +8,7 @@
 // On the hub, hub-update/hub_update.sh runs the installer's transaction from
 // a private RAM staging folder (verify, rollback copies, .codex-new then
 // rename, restart and health check, or reboot), so it finishes even if this
-// Mac drops off the network.
+// computer drops off the network.
 
 const crypto = require("node:crypto");
 const fs = require("node:fs");
@@ -106,11 +106,25 @@ function run(cmd, args) {
   });
 }
 
-/** Read every hub payload file from the release zip (unpacked with ditto). */
+/** The system's own unzip: ditto on macOS, bsdtar (tar.exe, part of Windows 10 1803 and later) on Windows. */
+function unzipCommand(zipPath, dir, platform = process.platform, env = process.env) {
+  if (platform === "win32") {
+    return [path.win32.join(env.SystemRoot || "C:\\Windows", "System32", "tar.exe"), ["-x", "-f", zipPath, "-C", dir]];
+  }
+  return ["/usr/bin/ditto", ["-x", "-k", zipPath, dir]];
+}
+
+/** The system's own ssh: Windows 10 1809 and later ship OpenSSH as ssh.exe. */
+function defaultSshPath(platform = process.platform, env = process.env) {
+  if (platform === "win32") return path.win32.join(env.SystemRoot || "C:\\Windows", "System32", "OpenSSH", "ssh.exe");
+  return "/usr/bin/ssh";
+}
+
+/** Read every hub payload file from the release zip (unpacked with the system's unzip). */
 async function readHubPayload(zipPath, version) {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), "melodious-hub-"));
   try {
-    await run("/usr/bin/ditto", ["-x", "-k", zipPath, dir]);
+    await run(...unzipCommand(zipPath, dir));
     const top = path.join(dir, `melodious-hub-${version}`);
     if (!fs.existsSync(top)) throw new HubUpdateError(`The hub zip has no melodious-hub-${version} folder.`);
     const files = [];
@@ -149,7 +163,7 @@ async function readHubPayload(zipPath, version) {
 }
 
 /** One SSH command, as install_webui.py runs them; `input` goes to its stdin. */
-function createSsh({ host, keyPath, port = 22, sshPath = "/usr/bin/ssh", knownHosts = null }) {
+function createSsh({ host, keyPath, port = 22, sshPath = defaultSshPath(), knownHosts = null }) {
   const base = ["-p", String(port), "-i", keyPath, "-o", "IdentitiesOnly=yes", "-o", "BatchMode=yes",
     "-o", "StrictHostKeyChecking=accept-new", "-o", "ConnectTimeout=10", "-o", "ServerAliveInterval=10"];
   if (knownHosts) base.push("-o", `UserKnownHostsFile=${knownHosts}`);
@@ -173,6 +187,11 @@ function createSsh({ host, keyPath, port = 22, sshPath = "/usr/bin/ssh", knownHo
 
 function friendlySshError(err) {
   const msg = String(err?.message || err);
+  if (/ENOENT/.test(msg)) {
+    return process.platform === "win32"
+      ? "This PC has no OpenSSH client. Add it in Windows Settings under Optional features (OpenSSH Client), then try again."
+      : "This computer has no ssh program.";
+  }
   if (/Permission denied/i.test(msg)) return "The hub refused the SSH key. Use the key the installer uses (~/.ssh/harmony_owner_…).";
   if (/REMOTE HOST IDENTIFICATION HAS CHANGED/i.test(msg)) return "The hub's SSH identity changed since the last connection; not updating. Check ~/.ssh/known_hosts.";
   if (/timed out|No route|Connection refused|Could not resolve/i.test(msg)) return "Couldn't reach the hub over SSH (port 22).";
@@ -190,7 +209,7 @@ async function updateHub({
   authHeader = null,
   keyPath,
   sshPort = 22,
-  sshPath = "/usr/bin/ssh",
+  sshPath = defaultSshPath(),
   knownHosts = null,
   fetchImpl,
   allowUrl,
@@ -296,4 +315,4 @@ async function updateHub({
   }
 }
 
-module.exports = { DROPBEAR_BUILDS, HUB_FILES, HubUpdateError, changedFiles, findHubKey, readHubPayload, updateHub };
+module.exports = { DROPBEAR_BUILDS, HUB_FILES, HubUpdateError, changedFiles, defaultSshPath, findHubKey, readHubPayload, unzipCommand, updateHub };

@@ -1,7 +1,7 @@
 "use strict";
 
 // Update notices: once a day (only after the user says yes) ask GitHub for
-// this project's releases, and say when a newer Melodious for this Mac or a
+// this project's releases, and say when a newer Melodious for this computer or a
 // newer hub release exists. Nothing is downloaded or installed here.
 //
 // Trust is "it came from the owner's GitHub": only HTTPS to this repository's
@@ -80,13 +80,28 @@ function latestRelease(releases, { prefixes, assetFor, allowUrl = isGitHubUrl })
   return best;
 }
 
-/** The Mac app's newest release: a full `v*` release or a Mac-only `desktop-v*`. */
-function latestMacRelease(releases, arch, allowUrl = isGitHubUrl) {
+/** The download a release must carry for this computer: the Mac zip, or the Windows installer. */
+function appAssetName(version, arch, platform = process.platform) {
+  return platform === "win32" ? `Melodious-${version}-win-${arch}-setup.exe` : `Melodious-${version}-${arch}.zip`;
+}
+
+/** The app's newest release for a platform: a full `v*` release or an app-only `desktop-v*`. */
+function latestAppRelease(releases, arch, platform = process.platform, allowUrl = isGitHubUrl) {
   return latestRelease(releases, {
     prefixes: ["desktop-v", "v"],
-    assetFor: (v) => `Melodious-${v}-${arch}.zip`,
+    assetFor: (v) => appAssetName(v, arch, platform),
     allowUrl,
   });
+}
+
+/** The Mac app's newest release. */
+function latestMacRelease(releases, arch, allowUrl = isGitHubUrl) {
+  return latestAppRelease(releases, arch, "darwin", allowUrl);
+}
+
+/** "macOS" or "Windows", for the User-Agent GitHub sees. */
+function osLabel(platform = process.platform) {
+  return platform === "darwin" ? "macOS" : platform === "win32" ? "Windows" : platform;
 }
 
 /** The hub's newest release: only full `v*` releases carry the hub zip. */
@@ -186,6 +201,7 @@ function createUpdateChecker({
   store,
   appVersion,
   arch,
+  platform = process.platform,
   fetchImpl = globalThis.fetch,
   now = Date.now,
   getHubVersion = async () => null,
@@ -220,7 +236,7 @@ function createUpdateChecker({
     const before = store.read();
     const headers = {
       Accept: "application/vnd.github+json",
-      "User-Agent": `Melodious/${appVersion} (macOS)`,
+      "User-Agent": `Melodious/${appVersion} (${osLabel(platform)})`,
     };
     // A 304 reuses the release picks saved with this ETag.
     if (before.etag && before.lastCheckedAt) headers["If-None-Match"] = before.etag;
@@ -253,7 +269,7 @@ function createUpdateChecker({
     const s = store.write({
       lastCheckedAt: now(),
       etag: res.headers.get("etag") || "",
-      latestApp: latestMacRelease(releases, arch, allowUrl),
+      latestApp: latestAppRelease(releases, arch, platform, allowUrl),
       latestHub: latestHubRelease(releases, allowUrl),
     });
     return summarize(s, hub, { state: "checked" });
@@ -279,13 +295,16 @@ function createUpdateChecker({
 module.exports = {
   CHECK_INTERVAL_MS,
   RELEASES_URL,
+  appAssetName,
   compareVersions,
   createUpdateChecker,
   createUpdateStore,
   fetchHubVersion,
   hubUpdateNote,
   isGitHubUrl,
+  latestAppRelease,
   latestHubRelease,
   latestMacRelease,
+  osLabel,
   parseVersion,
 };

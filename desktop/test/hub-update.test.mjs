@@ -7,11 +7,13 @@ import os from "node:os";
 import path from "node:path";
 import test from "node:test";
 import { createRequire } from "node:module";
+import { fileURLToPath } from "node:url";
 
 const require = createRequire(import.meta.url);
-const { DROPBEAR_BUILDS, HUB_FILES, changedFiles, findHubKey, readHubPayload, updateHub } = require("../src/hub-update.js");
-const ROOT = new URL("../..", import.meta.url).pathname;
+const { DROPBEAR_BUILDS, HUB_FILES, changedFiles, defaultSshPath, findHubKey, readHubPayload, unzipCommand, updateHub } = require("../src/hub-update.js");
+const ROOT = fileURLToPath(new URL("../..", import.meta.url));
 const mac = process.platform === "darwin";
+const win = process.platform === "win32";
 const md5 = (b) => crypto.createHash("md5").update(b).digest("hex");
 const sha = (b) => crypto.createHash("sha256").update(b).digest("hex");
 
@@ -32,7 +34,8 @@ function makeHubZip(dir, version, { extra = {}, badManifest = false } = {}) {
   fs.writeFileSync(path.join(top, "payload/bin/MANIFEST.txt"), manifest);
   fs.writeFileSync(path.join(top, "install_webui.py"), "# installer\n");
   const zip = path.join(dir, `melodious-hub-${version}.zip`);
-  execFileSync("/usr/bin/ditto", ["-c", "-k", "--keepParent", top, zip]);
+  if (win) execFileSync(unzipCommand(zip, dir)[0], ["-a", "-c", "-f", zip, "-C", dir, path.basename(top)]);
+  else execFileSync("/usr/bin/ditto", ["-c", "-k", "--keepParent", top, zip]);
   return zip;
 }
 
@@ -83,7 +86,22 @@ test("finds the installer's key: newest harmony_owner_* that isn't .pub", () => 
   }
 });
 
-test("reads the payload: every mapped file, md5s, refuses unknown files and a wrong MANIFEST", { skip: !mac }, async () => {
+test("each platform uses its own unzip and ssh", () => {
+  assert.deepEqual(unzipCommand("/t/a.zip", "/t/out", "darwin"), ["/usr/bin/ditto", ["-x", "-k", "/t/a.zip", "/t/out"]]);
+  assert.deepEqual(unzipCommand("C:\\t\\a.zip", "C:\\t\\out", "win32", { SystemRoot: "D:\\Windows" }),
+    ["D:\\Windows\\System32\\tar.exe", ["-x", "-f", "C:\\t\\a.zip", "-C", "C:\\t\\out"]]);
+  assert.equal(defaultSshPath("darwin"), "/usr/bin/ssh");
+  assert.equal(defaultSshPath("win32", { SystemRoot: "D:\\Windows" }), "D:\\Windows\\System32\\OpenSSH\\ssh.exe");
+  assert.equal(defaultSshPath("win32", {}), "C:\\Windows\\System32\\OpenSSH\\ssh.exe");
+});
+
+test("Windows has the OpenSSH client and bsdtar where the app looks for them", { skip: !win }, () => {
+  const ssh = execFileSync(defaultSshPath(), ["-V"], { encoding: "utf8", stdio: ["ignore", "pipe", "pipe"] });
+  assert.ok(fs.existsSync(defaultSshPath()), ssh);
+  assert.match(execFileSync(unzipCommand("", "")[0], ["--version"], { encoding: "utf8" }), /bsdtar/);
+});
+
+test("reads the payload: every mapped file, md5s, refuses unknown files and a wrong MANIFEST", { skip: !mac && !win }, async () => {
   const dir = tmp();
   try {
     const files = await readHubPayload(makeHubZip(dir, "9.0.0"), "9.0.0");

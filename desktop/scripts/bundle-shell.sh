@@ -24,11 +24,20 @@ if ! git -C "$REPO_ROOT" diff --quiet -- payload/source/harmony_shell_assets.h; 
   exit 1
 fi
 
-BEFORE_SHA=$(shasum -a 256 "$HEADER" | awk '{print $1}')
+# Git Bash on Windows has sha256sum but not always shasum.
+sha256() {
+  if command -v sha256sum > /dev/null 2>&1; then
+    sha256sum "$1" | awk '{print $1}'
+  else
+    shasum -a 256 "$1" | awk '{print $1}'
+  fi
+}
+
+BEFORE_SHA=$(sha256 "$HEADER")
 
 sh "$REPO_ROOT/tools/package_harmony_shell.sh"
 
-AFTER_SHA=$(shasum -a 256 "$HEADER" | awk '{print $1}')
+AFTER_SHA=$(sha256 "$HEADER")
 
 if [ "$BEFORE_SHA" != "$AFTER_SHA" ] || ! git -C "$REPO_ROOT" diff --quiet -- payload/source/harmony_shell_assets.h; then
   echo "bundle-shell: payload/source/harmony_shell_assets.h changed after packaging ($BEFORE_SHA -> $AFTER_SHA)" >&2

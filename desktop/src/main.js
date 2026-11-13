@@ -36,6 +36,7 @@ const {
   createUpdateStore,
   fetchHubVersion,
   isGitHubUrl,
+  osLabel,
 } = require("./updates");
 const {
   bundlePathFromExec,
@@ -154,7 +155,25 @@ function buildAppMenu() {
             ],
           },
         ]
-      : []),
+      : [
+          // Windows has no app menu: Settings and the update check live here.
+          {
+            label: "File",
+            submenu: [
+              {
+                label: "Settings…",
+                accelerator: "CmdOrCtrl+,",
+                click: () => openSettingsPage(),
+              },
+              {
+                label: "Check for Updates…",
+                click: () => checkForUpdatesNow(),
+              },
+              { type: "separator" },
+              { role: "quit" },
+            ],
+          },
+        ]),
     {
       label: "Edit",
       submenu: [
@@ -193,8 +212,7 @@ function buildAppMenu() {
       label: "Window",
       submenu: [
         { role: "minimize" },
-        { role: "zoom" },
-        ...(isMac ? [{ type: "separator" }, { role: "front" }] : [{ role: "close" }]),
+        ...(isMac ? [{ role: "zoom" }, { type: "separator" }, { role: "front" }] : [{ role: "close" }]),
       ],
     },
   ];
@@ -287,7 +305,10 @@ function setDockProgress(value) {
 async function installAppUpdate(release) {
   if (installingUpdate || !release) return { ok: false };
   const appPath = bundlePathFromExec(process.execPath);
-  const problem = installLocationProblem(appPath, { packaged: app.isPackaged });
+  // Replacing itself is built for the Mac app bundle only.
+  const problem = process.platform === "darwin"
+    ? installLocationProblem(appPath, { packaged: app.isPackaged })
+    : "On Windows, Melodious doesn't replace itself yet. Download the new version from the release page and run it.";
   if (problem) {
     const { response } = await showMessage({
       type: "warning",
@@ -307,7 +328,7 @@ async function installAppUpdate(release) {
       release,
       arch: process.arch,
       appPath,
-      userAgent: `Melodious/${app.getVersion()} (macOS)`,
+      userAgent: `Melodious/${app.getVersion()} (${osLabel()})`,
       onProgress: (done, total) => {
         if (total > 0) setDockProgress(done / total);
       },
@@ -345,7 +366,7 @@ async function updateHubFlow(release) {
       message: "Melodious needs your hub's SSH key",
       detail:
         "Updating the hub uses the same SSH key as the installer: ~/.ssh/harmony_owner_…, created when the hub was rooted. " +
-        "Put it in ~/.ssh on this Mac, or run the installer from the release page instead.",
+        `Put it in ${process.platform === "darwin" ? "~/.ssh on this Mac" : `${path.join(os.homedir(), ".ssh")} on this PC`}, or run the installer from the release page instead.`,
     });
     return { ok: false, error: "no key" };
   }
@@ -371,7 +392,7 @@ async function updateHubFlow(release) {
       httpPort: hub.port,
       authHeader: settingsStore.getHubAuthHeader(),
       keyPath,
-      userAgent: `Melodious/${app.getVersion()} (macOS)`,
+      userAgent: `Melodious/${app.getVersion()} (${osLabel()})`,
       onStep: sendHubStep,
     });
     sendHubStep("");
@@ -434,6 +455,7 @@ function registerIpcHandlers() {
     const catStatus = catSvc ? await catSvc.status() : { signedIn: false };
     return {
       mode: pageMode,
+      platform: process.platform,
       hub,
       hasHubAuth: Boolean(hubAuth?.header),
       hubUsername: hubAuth?.username || "",
@@ -687,6 +709,7 @@ app.whenReady().then(() => {
     store: updateStore,
     appVersion: app.getVersion(),
     arch: process.arch,
+    platform: process.platform,
     getHubVersion: () => {
       const hub = settingsStore.getHub();
       return hub

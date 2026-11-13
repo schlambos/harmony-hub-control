@@ -128,7 +128,7 @@
             <input id="connectPassword" name="password" type="password" autocomplete="off" value="${escapeHtml(formPass)}" ${connecting ? "disabled" : ""}>
             ${
               !state.encryptionAvailable
-                ? '<p class="m-field-hint">Keychain encryption is unavailable on this Mac; password will not be stored on disk.</p>'
+                ? `<p class="m-field-hint">${state.platform === "win32" ? "Windows data protection is unavailable on this PC" : "Keychain encryption is unavailable on this Mac"}; password will not be stored on disk.</p>`
                 : ""
             }
           </div>
@@ -186,7 +186,7 @@
       <h3 class="m-section">Hub sign-in</h3>
       <form id="hubAuthForm" class="m-card m-form" novalidate>
         <p class="m-field-hint" style="margin-top:0">
-          Used when your hub has HTTP Basic sign-in enabled. Stored encrypted in your macOS Keychain.
+          Used when your hub has HTTP Basic sign-in enabled. ${state.platform === "win32" ? "Stored encrypted with Windows data protection for your account." : "Stored encrypted in your macOS Keychain."}
         </p>
         <div style="display:grid;grid-template-columns:1fr 1fr;gap:var(--space-3)">
           <div class="m-field">
@@ -347,7 +347,7 @@
             ? "Can't reach your hub"
             : "Connect to your hub";
       const subheading = state.unreachableError
-        ? "Make sure this Mac is on the same network as the hub and the hub is powered on."
+        ? `Make sure this ${state.platform === "win32" ? "PC" : "Mac"} is on the same network as the hub and the hub is powered on.`
         : "Choose a hub discovered on your network or enter its IP address below.";
 
       root.innerHTML = `

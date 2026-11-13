@@ -76,8 +76,9 @@ test("hub password is encrypted with safeStorage and never stored if safeStorage
     assert.equal(fs.existsSync(authFile), true);
     const rawOnDisk = fs.readFileSync(authFile, "utf8");
     assert.equal(rawOnDisk.includes("secret-password"), false);
+    // Windows has no file modes; the profile folder's ACL covers the file there.
     const mode = fs.statSync(authFile).mode & 0o777;
-    assert.equal(mode, 0o600);
+    if (process.platform !== "win32") assert.equal(mode, 0o600);
 
     // Reloading reads back decrypted credentials
     const reloaded = createSettingsStore({
@@ -130,7 +131,7 @@ test("Logitech tokens are encrypted with safeStorage (0600) and never stored whe
     const rawOnDisk = fs.readFileSync(tokenFile, "utf8");
     assert.equal(rawOnDisk.includes("acc-123"), false);
     assert.equal(rawOnDisk.includes("ref-789"), false);
-    assert.equal(fs.statSync(tokenFile).mode & 0o777, 0o600);
+    if (process.platform !== "win32") assert.equal(fs.statSync(tokenFile).mode & 0o777, 0o600);
 
     const reloaded = createSettingsStore({
       dir,

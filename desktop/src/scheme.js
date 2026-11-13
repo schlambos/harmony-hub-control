@@ -21,7 +21,9 @@ function computeInlineScriptSha256(html) {
       `Expected exactly 1 inline <script> in shell HTML, found ${matches.length}`
     );
   }
-  const inlineCode = matches[0][1];
+  // The browser hashes the script as its HTML parser reads it, and the parser
+  // turns CRLF and lone CR into LF (a Windows checkout may carry CRLF).
+  const inlineCode = matches[0][1].replace(/\r\n?/g, "\n");
   return crypto.createHash("sha256").update(inlineCode, "utf8").digest("base64");
 }
 

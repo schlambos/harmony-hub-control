@@ -38,6 +38,8 @@ test("computeInlineScriptSha256 and buildCsp hash the single inline script", () 
     const html = fs.readFileSync(path.join(dir, "index.html"), "utf8");
     const expectedHash = crypto.createHash("sha256").update(inline, "utf8").digest("base64");
     assert.equal(computeInlineScriptSha256(html), expectedHash);
+    const lf = crypto.createHash("sha256").update("a();\nb();\n", "utf8").digest("base64");
+    assert.equal(computeInlineScriptSha256("<script>a();\r\nb();\r</script>"), lf, "hashed as the HTML parser reads it");
     const csp = buildCsp(html);
     assert.equal(
       csp,
