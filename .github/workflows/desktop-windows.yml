@@ -65,6 +65,10 @@ jobs:
       - name: End-to-end tests from source, against the simulator
         working-directory: desktop
         run: node --test test/e2e/shell-e2e.mjs
+      - name: TEMPORARY diagnostics
+        if: failure()
+        working-directory: desktop
+        run: node test/e2e/diag-win.mjs
       - name: Build the installer and zip
         working-directory: desktop
         run: npx electron-builder --win --x64 --publish never
