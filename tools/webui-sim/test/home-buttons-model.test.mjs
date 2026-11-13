@@ -8,10 +8,12 @@ import {
   COMPANION_EQUAD,
   NOTHING_NAME,
   ROCKER_KEYS,
+  SCREEN_EQUAD,
   buildHomeButtonsMapList,
   clearAction,
   dimKeys,
   effectiveAssignment,
+  hasHomeButtons,
   isChanged,
   keysChanged,
   readHomeButtons,
@@ -22,6 +24,7 @@ import {
 } from "../public/js/views/home-buttons-model.js";
 import { validateMapList } from "../public/js/views/remote-model.js";
 import { hasRemoteMaps, touchMapIdentifier } from "../public/js/views/touch-model.js";
+import { parseRfInfo, remoteModels } from "../public/js/views/remotes-model.js";
 
 const ROOT_MAP = "16422Root";
 const activityMapIdentifier = (activityId) => touchMapIdentifier(activityId, COMPANION_EQUAD);
@@ -447,5 +450,138 @@ describe("maps the page didn't write", () => {
     mapOf(cfg, ROOT_MAP).Buttons = null;
     const saved = mapOf(built(cfg, setAction(readHomeButtons(cfg), "Ha4", "press", MUTE)), ROOT_MAP);
     assert.equal(keyOf(saved, "Ha4").ButtonAction.CommandName, "Mute");
+  });
+});
+
+/* A Harmony Elite or 950: a remote with a screen, so its home buttons are in
+   the 16417 maps. The fixture's hub has those for a Touch and no 16417Root. */
+describe("a screen remote with home buttons (Elite, 950)", () => {
+  const SCREEN_ROOT = "16417Root";
+  const screenMap = (activityId) => touchMapIdentifier(activityId, SCREEN_EQUAD);
+  const read = (cfg, activityId = "") => readHomeButtons(cfg, activityId, SCREEN_EQUAD);
+  const runsNothing = (map, key) => {
+    const sequence = map.Sequences.find((s) => s.SequenceId === keyOf(map, key).ButtonAction.SequenceId);
+    return sequence.Name === NOTHING_NAME && sequence.Actions.length === 1 && sequence.Actions[0].Duration === 0;
+  };
+  const rfInfo = (rows) => JSON.stringify({ code: 200, data: { EquadID: "34827", RFID: "1", Devices: rows.map(([slot, equad, skin]) => ({ DeviceIndex: String(slot), EquadID: equad, RFID: String(slot), SkinId: skin })) } });
+  const models = (rows) => remoteModels(parseRfInfo(rfInfo(rows)).remotes);
+
+  it("only the Elite's and the 950's skins have them", () => {
+    const [touch] = models([[2, "16417", "99"]]);
+    assert.equal(hasHomeButtons(touch), false);
+    const [pair] = models([[2, "16417", "99"], [3, "16417", "112"]]);
+    assert.deepEqual(pair.slots, [2, 3]);
+    assert.equal(hasHomeButtons(pair), true);
+    assert.equal(pair.name, "Harmony remote with a screen");
+    assert.equal(models([[1, "16417", "111"]])[0].name, "Harmony Elite");
+    assert.equal(hasHomeButtons(models([[1, "16422", ""]])[0]), true);
+    assert.equal(hasHomeButtons(models([[1, "16414", ""]])[0]), false);
+  });
+
+  it("can be set up on a hub without a 16417Root, and reads nothing as set", () => {
+    const cfg = config();
+    assert.equal(mapOf(cfg, SCREEN_ROOT), undefined);
+    const draft = read(cfg);
+    assert.equal(draft.canEdit, true);
+    assert.deepEqual(draft.entries, {});
+    assert.equal(isChanged(cfg, draft), false);
+    assert.deepEqual(built(cfg, draft), cfg.mapList);
+  });
+
+  it("a global button makes the root map, with + and − in it doing nothing", () => {
+    const cfg = config();
+    let draft = setAction(read(cfg), "HomeControl1", "press", MUTE);
+    draft = setAction(draft, "HomeControl1", "long", START_MUSIC);
+    draft = setAction(draft, "HomeControl1Up", "press", MUTE);
+    const mapList = built(cfg, draft);
+    const root = mapOf(mapList, SCREEN_ROOT);
+    const sibling = mapOf(cfg, screenMap(SMART_TV));
+    assert.equal(root.__type, "RootButtonMap");
+    assert.equal("ActivityId-" in root, false);
+    assert.equal(root["SurfaceId-"], sibling["SurfaceId-"]);
+    assert.equal(root["RemoteId-"], sibling["RemoteId-"]);
+    assert.equal(keyOf(root, "HomeControl1").ButtonAction.CommandName, "Mute");
+    assert.equal(keyOf(root, "HomeControl1").ButtonLongPressAction.__type, "ButtonActivityAction");
+    assert.equal(keyOf(root, "HomeControl1Up").ButtonAction.CommandName, "Mute");
+    assert.ok(runsNothing(root, "HomeControlPlus") && runsNothing(root, "HomeControlMinus"));
+    assert.equal(root.Sequences.length, 1);
+    assert.deepEqual(validateMapList(mapList), []);
+    // Every map the hub had is as it was.
+    assert.deepEqual(mapList.ButtonMaps.slice(0, cfg.mapList.ButtonMaps.length), cfg.mapList.ButtonMaps);
+    const after = read({ ...cfg, mapList });
+    assert.equal(after.entries.HomeControl1.state, "set");
+    assert.equal(isChanged({ ...cfg, mapList }, draft), false);
+    assert.equal(saveOutcome({ ...cfg, mapList }, draft), "saved");
+  });
+
+  it("an activity's override goes in that activity's map, beside the Touch's keys", () => {
+    const cfg = config();
+    const before = mapOf(cfg, screenMap(SMART_TV));
+    const draft = setAction(read(cfg, SMART_TV), "HomeControl3", "press", MUTE);
+    const mapList = built(cfg, draft);
+    const map = mapOf(mapList, screenMap(SMART_TV));
+    assert.equal(keyOf(map, "HomeControl3").ButtonAction.CommandName, "Mute");
+    assert.deepEqual(map.Buttons.slice(0, before.Buttons.length), before.Buttons);
+    assert.deepEqual(map.Sequences, before.Sequences);
+    // The remote sends + and − only while the root map has them.
+    const root = mapOf(mapList, SCREEN_ROOT);
+    assert.deepEqual(root.Buttons.map((b) => b.ButtonKey), ["HomeControlPlus", "HomeControlMinus"]);
+    assert.deepEqual(validateMapList(mapList), []);
+  });
+
+  it("keeps a + the root map already has, and adds only the one missing", () => {
+    const cfg = config();
+    const first = built(cfg, setAction(read(cfg), "HomeControl2", "press", MUTE));
+    const own = { __type: "ButtonHomeControlAction", ProgramId: 7, EventType: 1 };
+    const root = mapOf(first, SCREEN_ROOT);
+    keyOf(root, "HomeControlPlus").ButtonAction = own;
+    root.Buttons = root.Buttons.filter((b) => b.ButtonKey !== "HomeControlMinus");
+    const next = { ...cfg, mapList: first };
+    const second = mapOf(built(next, setAction(read(next), "HcUp", "press", MUTE)), SCREEN_ROOT);
+    assert.deepEqual(keyOf(second, "HomeControlPlus").ButtonAction, own);
+    assert.ok(runsNothing(second, "HomeControlMinus"));
+    assert.equal(keyOf(second, "HcUp").ButtonAction.CommandName, "Mute");
+    assert.equal(second.Sequences.length, 1);
+  });
+
+  it("can't turn a button off in one activity, and knows no Companion keys", () => {
+    const cfg = config();
+    assert.throws(() => setNothing(read(cfg, SMART_TV), "HomeControl1"), /can't be turned off/);
+    assert.throws(() => setAction(read(cfg), "Ha1", "press", MUTE), /isn't a home control key/);
+    assert.throws(() => setAction(readHomeButtons(cfg), "HomeControl1", "press", MUTE), /isn't a home control key/);
+  });
+
+  it("passes codexactivity.lua validateGraph (LuaJIT)", (t) => {
+    const probe = spawnSync("luajit", ["-v"], { encoding: "utf8" });
+    if (probe.error || probe.status !== 0) {
+      t.skip("luajit is not available");
+      return;
+    }
+    const cfg = config();
+    const withRoot = { ...cfg, mapList: built(cfg, setAction(read(cfg), "HomeControl1", "press", MUTE)) };
+    const withOverride = { ...cfg, mapList: built(cfg, setAction(read(cfg, SMART_TV), "HomeControl4", "press", START_MUSIC)) };
+    const cases = [["screen-root", withRoot], ["screen-override", withOverride]].map(([name, payload]) => ({
+      name: `home-buttons-${name}`,
+      expect: "valid",
+      stock: "ok",
+      graph: {
+        activityList: payload.activityList,
+        mapList: { ButtonMaps: payload.mapList.ButtonMaps.filter((m) => m.ButtonMapIdentifier.startsWith("16417")) },
+        functionList: payload.functionList,
+        deviceList: devicesNamedBy(payload),
+      },
+    }));
+    const dir = mkdtempSync(join(tmpdir(), "home-buttons-"));
+    try {
+      const file = join(dir, "cases.json");
+      writeFileSync(file, JSON.stringify({ cases }));
+      const out = execFileSync("luajit", ["tools/touch-validator/codexactivity-validate-test.lua", file], {
+        cwd: new URL("../../../", import.meta.url).pathname,
+        encoding: "utf8",
+      });
+      assert.match(out, /2\/2 cases passed/);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
   });
 });

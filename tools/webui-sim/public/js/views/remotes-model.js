@@ -52,8 +52,13 @@ const KINDS = {
   16423: { name: "Harmony Companion remote", short: "Companion", role: "no-screen" },
   34830: { name: "Harmony USB dongle", short: "dongle", role: "other" },
 };
-/* `tested`: the screen-remote editor has been proven on this model. */
-const SKINS = { 99: { name: "Harmony Touch", short: "Touch", tested: true } };
+/* `tested`: the screen-remote editor has been proven on this model. The
+   Elite and the 950 are the Touch with six home control buttons more. */
+const SKINS = {
+  99: { name: "Harmony Touch", short: "Touch", tested: true },
+  111: { name: "Harmony Elite", short: "Elite" },
+  112: { name: "Harmony 950", short: "950" },
+};
 
 /* How to put a remote in pairing mode, for the kinds proven on hardware. */
 export const PAIRING_STEPS = {
@@ -235,15 +240,19 @@ export function pairedMessage(outcome) {
 
 /**
  * Paired remotes grouped by model (EquadID), in slot order: one entry per
- * model with its `slots`. Remotes of one model share that model's maps, so
+ * model with its `slots` and their `skinIds`. Remotes of one model share that model's maps, so
  * the page sets them up once.
  */
 export function remoteModels(remotes) {
   const byModel = new Map();
   for (const r of remotes ?? []) {
     const model = byModel.get(r.equadId);
-    if (model) model.slots.push(r.slot);
-    else byModel.set(r.equadId, { ...r, slots: [r.slot] });
+    if (model) {
+      model.slots.push(r.slot);
+      model.skinIds.push(r.skinId);
+      // Two screen remotes of different skins (a Touch and a 950) are one model here.
+      if (model.name !== r.name) Object.assign(model, KINDS[r.equadId] ?? {});
+    } else byModel.set(r.equadId, { ...r, slots: [r.slot], skinIds: [r.skinId] });
   }
   return [...byModel.values()];
 }
