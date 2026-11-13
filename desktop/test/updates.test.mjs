@@ -136,6 +136,7 @@ test("checker: one GitHub call, saves picks, reuses them on 304, and is due agai
     store,
     appVersion: "1.2.0",
     arch: "arm64",
+    platform: "darwin",
     now: () => clock,
     fetchImpl: async (url, opts) => {
       calls.push({ url, headers: opts.headers });
@@ -169,7 +170,7 @@ test("checker: up to date, rate limited, offline", async () => {
   const dir = tmpDir();
   const store = createUpdateStore({ dir });
   store.write({ checks: true });
-  const make = (fetchImpl) => createUpdateChecker({ store, appVersion: "1.3.0", arch: "arm64", fetchImpl });
+  const make = (fetchImpl) => createUpdateChecker({ store, appVersion: "1.3.0", arch: "arm64", platform: "darwin", fetchImpl });
 
   const current = await make(async () => fakeResponse(200, [fullRelease("1.3.0")])).check();
   assert.equal(current.app, null);
