@@ -11,6 +11,8 @@
     "test": "node --test test/*.test.mjs",
     "test:e2e": "sh scripts/bundle-shell.sh && node --test test/e2e/shell-e2e.mjs",
     "dist": "sh scripts/bundle-shell.sh && electron-builder --mac --arm64 --x64",
+    "dist:win": "sh scripts/bundle-shell.sh && electron-builder --win --x64 --publish never",
+    "test:dist:win": "node --test test/e2e/packaged-win-e2e.mjs",
     "test:dist": "node --test test/e2e/packaged-e2e.mjs"
   },
   "devDependencies": {

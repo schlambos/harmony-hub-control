@@ -17,6 +17,7 @@ const {
   hubUpdateNote,
   isGitHubUrl,
   latestHubRelease,
+  latestAppRelease,
   latestMacRelease,
 } = require("../src/updates.js");
 
@@ -90,6 +91,16 @@ test("the Mac picks the newest v* or desktop-v* release with its arch, ignoring 
   assert.equal(latestMacRelease(releases, "arm64").version, "1.3.1");
   assert.equal(latestMacRelease(releases, "x64").version, "1.3.0");
   assert.equal(latestHubRelease(releases).version, "1.3.0", "desktop-v releases carry no hub");
+});
+
+test("Windows picks the newest release with its installer, never the Mac zip", () => {
+  const releases = [
+    release("desktop-v1.4.0", ["Melodious-1.4.0-x64.zip", "Melodious-1.4.0-arm64.zip"]),
+    release("desktop-v1.3.1", ["Melodious-1.3.1-x64.zip", "Melodious-1.3.1-win-x64-setup.exe"]),
+  ];
+  assert.equal(latestAppRelease(releases, "x64", "win32").version, "1.3.1");
+  assert.equal(latestAppRelease(releases, "x64", "darwin").version, "1.4.0");
+  assert.equal(latestAppRelease(releases, "arm64", "win32"), null);
 });
 
 test("releases whose links leave the repository are ignored", () => {

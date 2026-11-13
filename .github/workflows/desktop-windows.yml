@@ -1,0 +1,87 @@
+# Melodious for Windows: build the desktop app on a Windows runner, test it
+# there, and keep the installer and zip as a workflow artifact. Nothing is
+# signed and nothing is published. No hub, no secrets.
+name: Desktop (Windows)
+
+on:
+  pull_request:
+    paths:
+      - desktop/**
+      - tools/webui-sim/**
+      - tools/package_harmony_shell.sh
+      - tools/ci/install_bun.sh
+      - payload/source/harmony_shell_assets.h
+      - .github/workflows/desktop-windows.yml
+  push:
+    branches: [main]
+    paths:
+      - desktop/**
+      - tools/webui-sim/**
+      - tools/package_harmony_shell.sh
+      - tools/ci/install_bun.sh
+      - payload/source/harmony_shell_assets.h
+      - .github/workflows/desktop-windows.yml
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: desktop-windows-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  windows:
+    name: Build and test on Windows
+    runs-on: windows-latest
+    timeout-minutes: 30
+    defaults:
+      run:
+        shell: bash
+    steps:
+      # The web shell must come out byte-identical to the one in codex_webui,
+      # so the checkout keeps the repository's LF line endings.
+      - name: Keep LF line endings
+        run: git config --global core.autocrlf false
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: 26
+      - name: Install the pinned bun
+        run: |
+          sh tools/ci/install_bun.sh "$HOME/.local/bin"
+          cygpath -w "$HOME/.local/bin" >> "$GITHUB_PATH"
+      - name: Install the app's tools
+        working-directory: desktop
+        run: |
+          npm ci
+          node node_modules/electron/install.js
+      - name: Unit tests
+        working-directory: desktop
+        run: node --test test/*.test.mjs
+      - name: Stage the web shell
+        working-directory: desktop
+        run: sh scripts/bundle-shell.sh
+      - name: End-to-end tests from source, against the simulator
+        working-directory: desktop
+        run: node --test test/e2e/shell-e2e.mjs
+      - name: Build the installer and zip
+        working-directory: desktop
+        run: npx electron-builder --win --x64 --publish never
+      - name: Test the built app against the simulator
+        working-directory: desktop
+        run: node --test test/e2e/packaged-win-e2e.mjs
+      - name: Checksums
+        working-directory: desktop/dist
+        run: |
+          sha256sum Melodious-*-win-x64-setup.exe Melodious-*-win-x64.zip > SHA256SUMS-windows.txt
+          cat SHA256SUMS-windows.txt
+      - name: Keep the installer and zip
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: melodious-windows-x64
+          path: |
+            desktop/dist/Melodious-*-win-x64-setup.exe
+            desktop/dist/Melodious-*-win-x64.zip
+            desktop/dist/SHA256SUMS-windows.txt
+          if-no-files-found: error
