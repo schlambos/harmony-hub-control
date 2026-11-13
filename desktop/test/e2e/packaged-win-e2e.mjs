@@ -43,9 +43,9 @@ test("packaged Melodious for Windows: contents, launch against webui-sim, catalo
   const archive = path.join(resources, "app.asar");
   const files = asar.listPackage(archive).map((f) => f.split(path.sep).join("/").replace(/^\//, ""));
   assert.ok(files.includes("src/hub-update/hub_update.sh"));
-  assert.ok(!asar.extractFile(archive, "src/hub-update/hub_update.sh").includes("\r\n"), "the hub's script keeps LF line endings");
+  assert.ok(!asar.extractFile(archive, path.join("src", "hub-update", "hub_update.sh")).includes("\r\n"), "the hub's script keeps LF line endings");
   for (const f of SHELL_FILES) {
-    const packed = asar.extractFile(archive, `build/shell/${f}`);
+    const packed = asar.extractFile(archive, path.join("build", "shell", f));
     assert.ok(packed.equals(fs.readFileSync(path.join(SHELL_DIR, f))), `${f} matches build/shell`);
   }
 

@@ -42,15 +42,19 @@ jobs:
       # The web shell must come out byte-identical to the one in codex_webui,
       # so the checkout keeps the repository's LF line endings.
       - name: Keep LF line endings
-        run: git config --global core.autocrlf false
+        run: |
+          git config --global core.autocrlf false
+          git config --global core.eol lf
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
           node-version: 26
-      - name: TEMPORARY line-ending report
+      - name: The checkout has LF line endings
         run: |
-          git config --show-origin --get-all core.autocrlf || true
-          git ls-files --eol desktop/src/connect/connect.js desktop/src/connect/index.html tools/webui-sim/public/index.html desktop/src/hub-update/hub_update.sh
+          if git ls-files --eol | grep -v 'eol=crlf' | grep 'w/crlf'; then
+            echo "error: these files were checked out with CRLF" >&2
+            exit 1
+          fi
       - name: Install the pinned bun
         run: |
           sh tools/ci/install_bun.sh "$HOME/.local/bin"
@@ -69,10 +73,6 @@ jobs:
       - name: End-to-end tests from source, against the simulator
         working-directory: desktop
         run: node --test test/e2e/shell-e2e.mjs
-      - name: TEMPORARY diagnostics
-        if: failure()
-        working-directory: desktop
-        run: node test/e2e/diag-win.mjs
       - name: Build the installer and zip
         working-directory: desktop
         run: npx electron-builder --win --x64 --publish never
