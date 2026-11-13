@@ -47,6 +47,10 @@ jobs:
       - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
           node-version: 26
+      - name: TEMPORARY line-ending report
+        run: |
+          git config --show-origin --get-all core.autocrlf || true
+          git ls-files --eol desktop/src/connect/connect.js desktop/src/connect/index.html tools/webui-sim/public/index.html desktop/src/hub-update/hub_update.sh
       - name: Install the pinned bun
         run: |
           sh tools/ci/install_bun.sh "$HOME/.local/bin"
