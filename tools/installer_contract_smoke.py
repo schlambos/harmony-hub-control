@@ -122,6 +122,9 @@ class FakeHub:
         self.fail_link = False
         # harmony-hub-root staging folders: path -> (bytes, files).
         self.root_stages: dict[str, tuple[int, int]] = {}
+        # /pkg/moosehead (the Harmony Hub Extender package) as (bytes, files),
+        # or None when the hub never had an Extender.
+        self.moosehead: tuple[int, int] | None = None
         # Module names /proc/modules lists, and whether reading it times out.
         self.loaded_modules: set[str] = set()
         self.proc_modules_timeout = False
@@ -280,6 +283,13 @@ class FakeHub:
                     inode = 900000 + len(path) if self.union_inodes else self.inode(entry)
                     lines.append(f"dropbear_copy inode={inode} links={links} path={path}")
             return 0, "".join(line + "\n" for line in lines), ""
+
+        if c == INST.EXTENDER_SCAN:
+            self.events.append(("extender_scan",))
+            if self.moosehead is None:
+                return 0, "", ""
+            size, files = self.moosehead
+            return 0, f"extender_package bytes={size} files={files} path={INST.EXTENDER_PACKAGE}\n", ""
 
         if c == INST.ROOT_TOOL_DROPBEAR_REMOVE:
             wrapper = self.fs.get("/usr/sbin/dropbear")
@@ -1750,6 +1760,116 @@ class PythonInstallerFlash(unittest.TestCase):
         self.assertEqual([e[1] for e in self.hub.events if e[0] == "rm_rf"], [self.hub.stage])
         self.assertEqual(self.persistent_writes(), [])
         self.assertEqual(sorted(self.hub.root_stages), sorted(stages))
+
+    MOOSEHEAD = (5_557_453, 212)
+
+    def assert_moosehead_untouched(self) -> None:
+        """Only the read-only scan ever names /pkg/moosehead on the hub."""
+        named = [e[1] for e in self.hub.events if e[0] == "cmd" and "moosehead" in e[1]]
+        self.assertEqual(named, [INST.EXTENDER_SCAN])
+        self.assertNotIn("rm ", INST.EXTENDER_SCAN)
+        self.assertFalse([e for e in self.hub.events if e[0] in ("rm", "rm_rf") and "moosehead" in str(e[1])])
+        self.assertFalse([p for p in self.persistent_writes() if p.startswith(INST.EXTENDER_PACKAGE)])
+        self.assertEqual(self.hub.moosehead, self.MOOSEHEAD)
+
+    def test_no_extender_package_reports_nothing(self):
+        """[PYTHON BEHAVIORAL] a hub without /pkg/moosehead is scanned and the
+        report doesn't mention the Extender."""
+        code, stdout, stderr = self.harness.run(self.harness.base_argv("--hub-id", FAKE_HUB_ID, "--preflight-only"))
+        self.assertEqual(code, 0, stderr or stdout)
+        self.assertIn(("extender_scan",), self.hub.events)
+        self.assertEqual(kv_multi(stdout, "extender_package bytes"), [])
+        self.assertNotIn("moosehead", stdout)
+
+    def test_extender_package_called_out_when_flash_is_short(self):
+        """[PYTHON BEHAVIORAL] /pkg/moosehead on a hub too full to install: the
+        block reports its size and names it as the likely cause, and nothing
+        removes it, cleanup flag or not."""
+        stages = {"/data/codexssh_19f9ec4dbc1_094b_stage": (900_000, 640)}
+        self.root_tool_hub(stages)
+        self.hub.moosehead = self.MOOSEHEAD
+        self.hub.available_bytes = self.required("--hub-id", FAKE_HUB_ID) - 700_000
+        code, stdout, _ = self.harness.run(
+            self.harness.base_argv("--hub-id", FAKE_HUB_ID, "--remove-root-tool-leftovers"))
+        self.assertEqual(code, 2, stdout)
+        self.assertEqual(kv_value(stdout, "verdict"), INST.VERDICT_CAPACITY)
+        size, files = self.MOOSEHEAD
+        self.assertEqual(kv_multi(stdout, "extender_package bytes"),
+                         [f"{size} files={files} path=/pkg/moosehead"])
+        self.assertIn(f"Harmony Hub Extender package found at /pkg/moosehead ({INST.kib(size)} in {files} file(s))",
+                      stdout)
+        self.assertIn(f"/pkg/moosehead ({INST.kib(size)}) is a likely cause of the shortfall", stdout)
+        self.assertIn("docs/INSTALL.md", stdout)
+        self.assertIn("don't delete it if you still use an Extender", stdout)
+        self.assert_moosehead_untouched()
+        self.assertEqual(self.persistent_writes(), [])
+
+    def test_extender_package_reported_and_kept_when_flash_fits(self):
+        """[PYTHON BEHAVIORAL] /pkg/moosehead on a hub with room: the install
+        warns, goes ahead, and --remove-root-tool-leftovers removes only the
+        root tool's leftovers."""
+        stages = {"/data/codexssh_19f9ec4dbc1_094b_stage": (771_000, 556)}
+        self.root_tool_hub(stages)
+        self.hub.moosehead = self.MOOSEHEAD
+        code, stdout, stderr = self.harness.run(
+            self.harness.base_argv("--hub-id", FAKE_HUB_ID, "--remove-root-tool-leftovers"))
+        self.assertEqual(code, 0, stderr or stdout)
+        self.assertEqual(kv_value(stdout, "verdict"), INST.VERDICT_ALLOWED)
+        size, files = self.MOOSEHEAD
+        self.assertEqual(kv_multi(stdout, "extender_package bytes"),
+                         [f"{size} files={files} path=/pkg/moosehead"])
+        self.assertIn("only if you no longer use a Harmony Hub Extender", stdout)
+        self.assertNotIn("likely cause of the shortfall", stdout)
+        self.assertEqual(kv_multi(stdout, "removed_leftover"), list(stages))
+        self.assert_moosehead_untouched()
+
+    def test_extender_scan_failure_does_not_block(self):
+        """[PYTHON BEHAVIORAL] the Extender scan is advisory: output that isn't
+        the expected line is ignored and the preflight carries on."""
+        self.hub.moosehead = self.MOOSEHEAD
+        scan = INST.EXTENDER_SCAN
+        real = self.hub.dispatch
+        self.hub.dispatch = lambda c, i=None: (1, "extender_package bytes=x\n", "awk: not found") \
+            if c.strip() == scan else real(c, i)
+        code, stdout, stderr = self.harness.run(self.harness.base_argv("--hub-id", FAKE_HUB_ID, "--preflight-only"))
+        self.assertEqual(code, 0, stderr or stdout)
+        self.assertEqual(kv_multi(stdout, "extender_package bytes"), [])
+
+    def test_extender_scan_walks_folders_without_following_links(self):
+        """[PYTHON BEHAVIORAL] the scan itself, run by a local sh on a copy of
+        the tree: every regular file in every folder counts, hidden ones too,
+        and a symlink is neither followed nor counted."""
+        root = Path(tempfile.mkdtemp(prefix="extender-scan-"))
+        self.addCleanup(shutil.rmtree, root, True)
+        pkg = root / "pkg" / "moosehead"
+        outside = root / "outside"
+        (pkg / "lib" / "sub dir" / ".hidden").mkdir(parents=True)
+        outside.mkdir()
+        (pkg / "a").write_bytes(b"a" * 5)
+        (pkg / "lib" / "b").write_bytes(b"b" * 3)
+        (pkg / "lib" / "sub dir" / "c c").write_bytes(b"c" * 2)
+        (pkg / "lib" / "sub dir" / ".hidden" / ".d").write_bytes(b"d")
+        (outside / "big").write_bytes(b"z" * 4096)
+        os.symlink(outside, pkg / "link")
+        os.symlink(pkg / "a", pkg / "alink")
+        self.assertEqual(INST.EXTENDER_SCAN.count("d=/pkg/moosehead;"), 1)
+        local = INST.EXTENDER_SCAN.replace("d=/pkg/moosehead;", f"d={shlex.quote(str(pkg))};")
+
+        def scan() -> str:
+            return subprocess.run(["sh", "-c", local], capture_output=True, text=True, check=True).stdout
+
+        self.assertEqual(scan(), "extender_package bytes=11 files=4 path=/pkg/moosehead\n")
+        shutil.rmtree(pkg)
+        self.assertEqual(scan(), "")
+        os.symlink(outside, pkg)
+        self.assertEqual(scan(), "")
+
+    def test_extender_scan_uses_only_hub_applets(self):
+        """[PYTHON BEHAVIORAL] the hub's BusyBox has no du, find, stat, sort,
+        df, head, tail or mktemp, and its ls has no -R."""
+        words = set(re.findall(r"[A-Za-z_]+", INST.EXTENDER_SCAN))
+        self.assertFalse(words & {"du", "find", "stat", "sort", "df", "head", "tail", "mktemp", "rm", "mv"})
+        self.assertNotIn("-R", INST.EXTENDER_SCAN)
 
     def test_spare_root_tool_dropbear_removed_once_ssh_runs_ours(self):
         """[PYTHON BEHAVIORAL] on a hub already running Melodious, the root
@@ -4096,6 +4216,25 @@ class PowerShellStaticContract(unittest.TestCase):
         same hub commands as Python, byte for byte."""
         self.assertEqual(self.ps_here_string("RootToolScan"), INST.ROOT_TOOL_SCAN)
         self.assertEqual(self.ps_here_string("RootToolDropbearRemove"), INST.ROOT_TOOL_DROPBEAR_REMOVE)
+
+    def test_extender_package_parity(self):
+        """[PS1 STATIC] /pkg/moosehead is scanned with Python's command, byte
+        for byte, after the leftover scan and before the plans, reported with
+        the same key=value line, and never removed."""
+        self.assertEqual(self.ps_here_string("ExtenderScan"), INST.EXTENDER_SCAN)
+        self.assertEqual(self.ps_scalar("ExtenderPackage"), INST.EXTENDER_PACKAGE)
+        main = self.main
+        self.assertLess(main.index("Get-RootToolLeftovers"), main.index("Get-ExtenderPackage"))
+        self.assertLess(main.index("Get-ExtenderPackage"), main.index("Build-Plans"))
+        report = self.text.split("function Show-FlashReport()", 1)[1].split("function Show-Verdict()", 1)[0]
+        self.assertIn('KV "extender_package bytes=$MooseheadBytes files=$MooseheadFiles path=$ExtenderPackage"', report)
+        self.assertIn("only if you no longer use a Harmony Hub Extender", report)
+        verdict = self.text.split("function Show-Verdict()", 1)[1].split("function Add-RollbackCopies()", 1)[0]
+        self.assertIn("likely cause of the shortfall", verdict)
+        self.assertIn("docs/INSTALL.md", verdict)
+        for line in self.text.splitlines():
+            if "moosehead" in line.lower() or "$ExtenderPackage" in line:
+                self.assertNotRegex(line, r"\brm\b|Remove-Item", line)
 
     def test_flash_switches_parity(self):
         """[PS1 STATIC] Python's flash and cleanup flags have PS1 switches."""

@@ -158,6 +158,15 @@ function Test-HubCopyCurrent([string]$Dest, [string]$Have, [string]$Want) {
 $RootToolScan = @'
 for d in /data/codexssh_*_stage; do [ -d "$d" ] || continue; set -- $(ls -l "$d" "$d/chunks" 2>/dev/null | awk '/^-/ {s += $5; n++} END {print s + 0, n + 0}'); echo "root_tool_stage bytes=$1 files=$2 path=$d"; done; for f in /data/rootssh/bin/dropbearmulti /data/codex/bin/dropbearmulti; do [ -f "$f" ] && [ ! -L "$f" ] || continue; set -- $(ls -il "$f"); echo "dropbear_copy inode=$1 links=$3 path=$f"; done
 '@
+# Logitech's runtime for the Harmony Hub Extender (Zigbee/Z-Wave), installed
+# once an Extender has been connected: about 5 MB. Only measured and reported:
+# removing it breaks the Extender, so the installer never does.
+$ExtenderPackage = "/pkg/moosehead"
+# No du, find or ls -R on the hub: walk the folders, never through a symlink.
+# Same command as EXTENDER_SCAN in install_webui.py.
+$ExtenderScan = @'
+d=/pkg/moosehead; if [ -d "$d" ] && [ ! -L "$d" ]; then set -- "$d"; while [ $# -gt 0 ]; do d=$1; shift; ls -la "$d" 2>/dev/null; for e in "$d"/* "$d"/.[!.]*; do [ -d "$e" ] && [ ! -L "$e" ] && set -- "$@" "$e"; done; done | awk '/^-/ {s += $5; n++} END {print "extender_package bytes=" (s + 0) " files=" (n + 0) " path=/pkg/moosehead"}'; fi
+'@
 # Removes the root tool's Dropbear only while SSH runs ours.
 $RootToolDropbearRemove = @'
 if [ -x /data/codex/bin/dropbear ] && grep /data/codex/bin/dropbear /usr/sbin/dropbear >/dev/null; then rm -f /data/rootssh/bin/dropbearmulti /data/rootssh/bin/dropbear /data/rootssh/bin/dropbearkey && echo removed; fi
@@ -1171,6 +1180,9 @@ $FlashNote = ""
 # "preflight" when the measured check blocked, "phase1" when a copy failed.
 $CapacityStage = ""
 $RootToolStages = [System.Collections.ArrayList]::new()
+# Size of /pkg/moosehead, or $null when the hub has no Extender package.
+$MooseheadBytes = $null
+$MooseheadFiles = [long]0
 # Inode of each Dropbear copy, by path.
 $DropbearCopies = @{}
 # Hard-link count of each, by path.
@@ -1731,6 +1743,20 @@ function Get-RootToolLeftovers() {
     }
 }
 
+# Measures /pkg/moosehead. Read-only: nothing here or later removes it.
+function Get-ExtenderPackage() {
+    $script:MooseheadBytes = $null
+    $script:MooseheadFiles = [long]0
+    $r = Invoke-RemoteRc $ExtenderScan $null 60000
+    if ($r.Code -ne 0) { return }
+    foreach ($line in ($r.Out -split "`n")) {
+        if ($line.Trim() -cmatch '^extender_package bytes=(\d+) files=(\d+) path=(\S+)$' -and $Matches[3] -ceq $ExtenderPackage) {
+            $script:MooseheadBytes = [long]$Matches[1]
+            $script:MooseheadFiles = [long]$Matches[2]
+        }
+    }
+}
+
 function Test-RootToolDropbearRemovable() {
     # True when the root tool's Dropbear is a separate copy that SSH no longer
     # uses and phase 1 won't link.
@@ -1992,6 +2018,10 @@ function Show-FlashReport() {
             Info "Run the installer with -RemoveRootToolLeftovers to remove them and free that flash."
         }
     }
+    if ($null -ne $MooseheadBytes) {
+        KV "extender_package bytes=$MooseheadBytes files=$MooseheadFiles path=$ExtenderPackage"
+        Info "Harmony Hub Extender package found at $ExtenderPackage ($(Format-KB $MooseheadBytes) in $MooseheadFiles file(s)). It uses a large share of the hub's flash. The installer never removes it; back it up and remove it yourself only if you no longer use a Harmony Hub Extender (see docs/INSTALL.md)."
+    }
 }
 
 function Show-Verdict() {
@@ -2012,6 +2042,9 @@ function Show-Verdict() {
         Info "BLOCKED_CAPACITY - not enough free flash: about $(Format-KB $FlashRequired) needed, $(Format-KB $free) free. Nothing was installed."
         if (($RootToolStages.Count -gt 0 -or (Test-RootToolDropbearRemovable)) -and -not $RemoveRootToolLeftovers) {
             Info "Removing harmony-hub-root's leftovers (-RemoveRootToolLeftovers) frees about $(Format-KB (Get-LeftoverCredit))."
+        }
+        if ($null -ne $MooseheadBytes) {
+            Info "The Harmony Hub Extender package at $ExtenderPackage ($(Format-KB $MooseheadBytes)) is a likely cause of the shortfall. See ""If the hub's flash is full"" in docs/INSTALL.md; don't delete it if you still use an Extender."
         }
         Info "Otherwise free space on the hub, or pass -SkipFlashCheck to try anyway: the install still stops with no live changes if flash fills up."
     } elseif ($Verdict -eq $VerdictCapacity) {
@@ -2795,6 +2828,7 @@ Set-DropbearLink
 Get-RamStatus
 Measure-Flash
 Get-RootToolLeftovers
+Get-ExtenderPackage
 
 Count-BackupGenerations
 Get-HandoffEstimate
