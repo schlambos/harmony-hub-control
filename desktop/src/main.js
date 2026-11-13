@@ -739,6 +739,24 @@ function registerIpcHandlers() {
     ipcMain,
     getMainWindow: () => mainWindow,
     getSavedAuthHeader: () => settingsStore.getHubAuthHeader(),
+    isWizardAvailable: () =>
+      isWizardDevAvailable({
+        isPackaged: app.isPackaged,
+        platform: process.platform,
+      }),
+    pickFirmwareFile: async (win) => {
+      const options = {
+        title: "Choose a Harmony Hub firmware bundle (.hfw2)",
+        buttonLabel: "Choose",
+        properties: ["openFile"],
+        filters: [{ name: "Harmony Hub firmware (.hfw2)", extensions: ["hfw2"] }],
+      };
+      const parent = win && !win.isDestroyed?.() ? win : updateDialogParent();
+      const picked = await (parent
+        ? dialog.showOpenDialog(parent, options)
+        : dialog.showOpenDialog(options));
+      return picked.canceled ? null : picked.filePaths[0] || null;
+    },
   });
 }
 

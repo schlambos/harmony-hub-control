@@ -57,6 +57,14 @@ contextBridge.exposeInMainWorld("melodiousDesktop", {
   wizard: {
     detectAndClassify: (args) => ipcRenderer.invoke("wizard:detect-classify", args),
     usbProbe: (args) => ipcRenderer.invoke("wizard:usb-probe", args),
+    runAction: (args) => {
+      if (!args || typeof args !== "object" || Array.isArray(args)) {
+        return ipcRenderer.invoke("wizard:run-action", {});
+      }
+      // Never forward renderer-supplied file paths; .hfw2 bundles are chosen via native dialog in main.
+      const { firmwareFile: _ignoredFirmwareFile, ...safeArgs } = args;
+      return ipcRenderer.invoke("wizard:run-action", safeArgs);
+    },
     onEvent: (callback) => {
       if (typeof callback !== "function") return;
       ipcRenderer.on("desktop:wizard-event", (_event, info) => callback(info));
