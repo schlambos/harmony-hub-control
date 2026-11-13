@@ -4,6 +4,7 @@
   const bridge = window.melodiousDesktop?.hub;
   const catalogBridge = window.melodiousDesktop?.catalog;
   const updatesBridge = window.melodiousDesktop?.updates;
+  const wizardBridge = window.melodiousDesktop?.wizard;
   const root = document.getElementById("connectRoot");
   const appbar = document.getElementById("connectAppbar");
   const backBtn = document.getElementById("settingsBackBtn");
@@ -16,6 +17,7 @@
 
   let state = {
     mode: "connect",
+    wizardDevAvailable: false,
     hub: null,
     hasHubAuth: false,
     hubUsername: "",
@@ -41,6 +43,14 @@
   let updates = null; // desktop:updates-get / -check result
   let updatesBusy = false;
   let hubStep = ""; // progress of a hub update, from the main process
+  let wizardIntent = "fresh"; // "fresh" | "provisioned"
+  let wizardHost = "";
+  let wizardIncludeUsb = true;
+  let wizardMask = true;
+  let wizardBusy = false;
+  let wizardStepText = "";
+  let wizardResult = null;
+  let wizardError = "";
 
   function escapeHtml(value) {
     return String(value ?? "").replace(/[&<>"']/g, (c) =>
@@ -231,6 +241,8 @@
 
       ${renderUpdatesSection()}
 
+      ${renderWizardDetectSection()}
+
       <h3 class="m-section">Advanced</h3>
       <form id="clientIdForm" class="m-card m-form" novalidate>
         <div class="m-field">
@@ -322,6 +334,168 @@
     `;
   }
 
+  function renderWizardDetectSection() {
+    if (!wizardBridge || !state.wizardDevAvailable) return "";
+    const r = wizardResult;
+    const mismatch = r?.mismatch;
+    const usbSig = r?.signals?.usb;
+    const lanSig = r?.signals?.lan;
+    const ssdpSig = r?.signals?.ssdp;
+    const fwGate = r?.firmwareGate;
+    const wedge = r?.usbWedge;
+
+    let resultHtml = "";
+    if (wizardError) {
+      resultHtml = `<div class="notice notice-error" id="wizardErrorNotice" role="alert" style="margin-top:var(--space-3)">${escapeHtml(wizardError)}</div>`;
+    } else if (r) {
+      const usbSummary = usbSig?.connected
+        ? `Connected (${escapeHtml(usbSig.device?.backend || "hidapi")} ${escapeHtml(usbSig.device?.vendorId || "046D")}:${escapeHtml(usbSig.device?.productId || "C129")}) · preflight: ${usbSig.preflightOk ? "OK" : "Failed"} · sysinfo: ${usbSig.sysinfoOk ? `OK (fw ${escapeHtml(usbSig.sysinfo?.fwVer || "?")}, skin ${escapeHtml(usbSig.sysinfo?.skinDecimal ?? usbSig.sysinfo?.skin ?? "?")}, RAM ${escapeHtml(usbSig.sysinfo?.ramSize || "?")})` : "Failed"}`
+        : usbSig?.error
+          ? `Not connected (${escapeHtml(usbSig.error)})`
+          : "Skipped or no 046D:C129 device found";
+
+      const ports = lanSig?.ports || {};
+      const prov = lanSig?.provisionInfo8088;
+      const provSummary = prov?.ok
+        ? prov.provisioned
+          ? `Provisioned (mode ${escapeHtml(prov.mode ?? "?")}, remoteId type: ${escapeHtml(prov.remoteIdType || "none")}${prov.isLocalAccountHint ? ", local account" : ""})`
+          : "Unprovisioned (only discoveryServer/se keys)"
+        : lanSig?.host
+          ? `Unreachable (${escapeHtml(prov?.error || "no response")})`
+          : "No LAN host specified";
+
+      const portSummary = lanSig?.host
+        ? `:8080 Web UI=${ports["8080"] ? "open" : "closed"} · :8088 HBus=${ports["8088"] ? "open" : "closed"} · :5222 XMPP=${ports["5222"] ? "open" : "closed"} · :22 SSH=${ports["22"] ? "open" : "closed"}`
+        : "Not probed";
+
+      resultHtml = `
+        <div id="wizardResultCard" style="margin-top:var(--space-3);display:grid;gap:var(--space-3)">
+          ${
+            mismatch?.hasMismatch
+              ? `<div class="notice ${mismatch.severity === "warning" ? "notice-error" : "notice-ok"}" id="wizardMismatchBanner" role="alert">
+                   <div style="font-weight:600;margin-bottom:4px">${escapeHtml(mismatch.title)}</div>
+                   <div>${escapeHtml(mismatch.message)}</div>
+                   ${
+                     mismatch.recommendedIntent
+                       ? `<div style="margin-top:var(--space-2)">
+                            <button type="button" class="btn btn-tonal btn-sm" id="wizardSwitchIntentBtn" data-recommended-intent="${escapeHtml(mismatch.recommendedIntent)}">
+                              Switch to ${mismatch.recommendedIntent === "fresh" ? "Factory-reset / unprovisioned (USB)" : "Already provisioned (LAN / XMPP)"}
+                            </button>
+                          </div>`
+                       : ""
+                   }
+                 </div>`
+              : ""
+          }
+          ${
+            wedge?.wedged
+              ? `<div class="notice notice-error" id="wizardUsbWedgeBanner" role="alert">
+                   <div style="font-weight:600;margin-bottom:4px">USB HID LTCP link wedged</div>
+                   <div>${escapeHtml(wedge.message)}</div>
+                 </div>`
+              : ""
+          }
+          <div class="m-list">
+            <div class="m-row">
+              <span class="m-row-text">
+                <span class="m-row-title" id="wizardVerdictTitle">Verdict: ${escapeHtml(r.verdictLabel || r.verdict)} <code style="font-size:0.85em">(${escapeHtml(r.verdict)})</code></span>
+                <span class="m-row-sub" id="wizardVerdictSummary">${escapeHtml(r.verdictSummary || "")}</span>
+              </span>
+            </div>
+            ${
+              fwGate
+                ? `<div class="m-row">
+                     <span class="m-row-text">
+                       <span class="m-row-title" id="wizardFirmwareGateTitle">Firmware gate (${escapeHtml(fwGate.requiredFirmware)}): ${fwGate.passes === true ? "Pass" : fwGate.passes === false ? "Update required" : "Unknown"}</span>
+                       <span class="m-row-sub">${escapeHtml(fwGate.message)}</span>
+                     </span>
+                   </div>`
+                : ""
+            }
+            <div class="m-row">
+              <span class="m-row-text">
+                <span class="m-row-title">USB HID probe (046D:C129)</span>
+                <span class="m-row-sub" id="wizardUsbSummary">${usbSummary}</span>
+              </span>
+            </div>
+            <div class="m-row">
+              <span class="m-row-text">
+                <span class="m-row-title">LAN signals (${escapeHtml(lanSig?.host || (ssdpSig?.found ? "SSDP found" : "none"))})</span>
+                <span class="m-row-sub" id="wizardLanSummary">SSDP: ${escapeHtml(ssdpSig?.candidateCount ?? 0)} found · :8088 getProvisionInfo: ${provSummary} · Ports: ${escapeHtml(portSummary)}</span>
+              </span>
+            </div>
+            <div class="m-row">
+              <span class="m-row-text">
+                <span class="m-row-title">Recommended path (read-only preview)</span>
+                <span class="m-row-sub" id="wizardRecommendedNextStep">${escapeHtml(r.recommendedNextStep || "")}</span>
+              </span>
+            </div>
+          </div>
+        </div>
+      `;
+    }
+
+    return `
+      <h3 class="m-section">Hub Setup &amp; Root Wizard · Detect &amp; Classify (Read-Only)</h3>
+      <div class="m-card m-form" id="wizardDetectCard">
+        <p class="m-field-hint" style="margin-top:0">
+          Read-only check over LAN and USB HID (046D:C129) to detect your hub's state before rooting or installing Melodious. No changes are written to the hub.
+        </p>
+        <fieldset style="border:0;padding:0;margin:0;display:grid;gap:var(--space-2)">
+          <legend style="font-weight:600;margin-bottom:var(--space-1)">How is this hub currently set up?</legend>
+          <label style="display:flex;align-items:flex-start;gap:var(--space-2);cursor:pointer">
+            <input type="radio" name="wizardIntent" id="wizardIntentFresh" value="fresh" ${wizardIntent === "fresh" ? "checked" : ""} ${wizardBusy ? "disabled" : ""}>
+            <span>
+              <strong>Factory-reset or unprovisioned (root over USB)</strong><br>
+              <span class="muted" style="font-size:var(--fs-body-sm)">Brand-new, freshly reset, or second-hand hub with no Logitech cloud account.</span>
+            </span>
+          </label>
+          <label style="display:flex;align-items:flex-start;gap:var(--space-2);cursor:pointer">
+            <input type="radio" name="wizardIntent" id="wizardIntentProvisioned" value="provisioned" ${wizardIntent === "provisioned" ? "checked" : ""} ${wizardBusy ? "disabled" : ""}>
+            <span>
+              <strong>Already provisioned via Logitech cloud (root over LAN / XMPP)</strong><br>
+              <span class="muted" style="font-size:var(--fs-body-sm)">Already set up in the Harmony app and reachable on your network.</span>
+            </span>
+          </label>
+        </fieldset>
+
+        <div style="display:grid;grid-template-columns:1fr auto;gap:var(--space-3);align-items:end">
+          <div class="m-field">
+            <label for="wizardHostInput">Hub IP for LAN probe (optional — leave blank to use SSDP or USB only)</label>
+            <input id="wizardHostInput" type="text" autocomplete="off" spellcheck="false" placeholder="${escapeHtml(formHost || "192.168.0.235")}" value="${escapeHtml(wizardHost)}" ${wizardBusy ? "disabled" : ""}>
+          </div>
+          <div style="display:flex;flex-direction:column;gap:6px;padding-bottom:6px">
+            <label style="display:flex;align-items:center;gap:6px;font-size:var(--fs-body-sm);cursor:pointer">
+              <input type="checkbox" id="wizardIncludeUsb" ${wizardIncludeUsb ? "checked" : ""} ${wizardBusy ? "disabled" : ""}>
+              <span>Probe USB HID (046D:C129)</span>
+            </label>
+            <label style="display:flex;align-items:center;gap:6px;font-size:var(--fs-body-sm);cursor:pointer">
+              <input type="checkbox" id="wizardMaskIds" ${wizardMask ? "checked" : ""} ${wizardBusy ? "disabled" : ""}>
+              <span>Mask MAC / IP / Hub ID / serials</span>
+            </label>
+          </div>
+        </div>
+
+        <div style="display:flex;gap:var(--space-2);flex-wrap:wrap">
+          <button type="button" class="btn btn-filled" id="wizardDetectBtn" ${wizardBusy ? "disabled" : ""}>
+            ${wizardBusy ? '<span class="m-spinner" style="border-color:var(--on-primary);border-right-color:transparent" aria-hidden="true"></span>' : ""}
+            <span>${wizardBusy ? "Probing…" : "Detect & Classify (Read-Only)"}</span>
+          </button>
+          <button type="button" class="btn btn-tonal" id="wizardUsbOnlyBtn" ${wizardBusy ? "disabled" : ""}>
+            USB Preflight + Sysinfo Only
+          </button>
+        </div>
+
+        ${
+          wizardStepText
+            ? `<p class="list-note" id="wizardStepStatus" role="status" style="margin:0">${escapeHtml(wizardStepText)}</p>`
+            : ""
+        }
+        ${resultHtml}
+      </div>
+    `;
+  }
+
   async function loadUpdates() {
     if (!updatesBridge) return;
     try {
@@ -371,6 +545,7 @@
             : ""
         }
         ${renderConnectAndAddressSection()}
+        ${renderWizardDetectSection()}
       `;
     }
   }
@@ -440,19 +615,77 @@
     const userEl = document.getElementById("connectUsername");
     const passEl = document.getElementById("connectPassword");
     const cidEl = document.getElementById("clientIdInput");
+    const wizHostEl = document.getElementById("wizardHostInput");
+    const wizFreshEl = document.getElementById("wizardIntentFresh");
+    const wizProvEl = document.getElementById("wizardIntentProvisioned");
+    const wizUsbEl = document.getElementById("wizardIncludeUsb");
+    const wizMaskEl = document.getElementById("wizardMaskIds");
     if (hostEl) formHost = hostEl.value;
     if (portEl) formPort = portEl.value;
     if (userEl) formUser = userEl.value;
     if (passEl) formPass = passEl.value;
     if (cidEl) formClientId = cidEl.value;
+    if (wizHostEl) wizardHost = wizHostEl.value;
+    if (wizFreshEl?.checked) wizardIntent = "fresh";
+    if (wizProvEl?.checked) wizardIntent = "provisioned";
+    if (wizUsbEl) wizardIncludeUsb = wizUsbEl.checked;
+    if (wizMaskEl) wizardMask = wizMaskEl.checked;
+  }
+
+  async function runWizardDetect({ usbOnly = false } = {}) {
+    if (!wizardBridge || !state.wizardDevAvailable || wizardBusy) return;
+    syncInputsFromDom();
+    wizardBusy = true;
+    wizardError = "";
+    wizardStepText = usbOnly ? "Starting read-only USB HID probe…" : "Starting read-only Detect & Classify…";
+    render();
+    try {
+      const targetHost = usbOnly ? "" : (wizardHost.trim() || formHost.trim());
+      wizardResult = await wizardBridge.detectAndClassify({
+        userIntent: wizardIntent,
+        host: targetHost,
+        skipUsb: usbOnly ? false : !wizardIncludeUsb,
+        mask: wizardMask,
+      });
+      wizardStepText = "";
+    } catch (err) {
+      wizardError = err?.message || String(err);
+      wizardStepText = "";
+    } finally {
+      wizardBusy = false;
+      render();
+    }
   }
 
   root.addEventListener("input", () => {
     syncInputsFromDom();
   });
 
+  root.addEventListener("change", () => {
+    syncInputsFromDom();
+  });
+
   root.addEventListener("click", async (event) => {
     const target = event.target;
+    const switchIntentBtn = target.closest("#wizardSwitchIntentBtn");
+    if (switchIntentBtn) {
+      syncInputsFromDom();
+      const rec = switchIntentBtn.dataset.recommendedIntent;
+      if (rec === "fresh" || rec === "provisioned") {
+        wizardIntent = rec;
+        await runWizardDetect({ usbOnly: false });
+      }
+      return;
+    }
+    if (target.closest("#wizardDetectBtn") && wizardBridge && !wizardBusy) {
+      await runWizardDetect({ usbOnly: false });
+      return;
+    }
+    if (target.closest("#wizardUsbOnlyBtn") && wizardBridge && !wizardBusy) {
+      wizardIncludeUsb = true;
+      await runWizardDetect({ usbOnly: true });
+      return;
+    }
     const releaseBtn = target.closest("[data-release-url]");
     if (releaseBtn && updatesBridge) {
       await updatesBridge.openRelease(releaseBtn.dataset.releaseUrl);
@@ -656,6 +889,17 @@
   updatesBridge?.onHubStep?.((text) => {
     hubStep = text;
     render();
+  });
+
+  wizardBridge?.onEvent?.((evt) => {
+    if (!evt || typeof evt !== "object") return;
+    if (evt.type === "step" && evt.message) {
+      wizardStepText = String(evt.message);
+      render();
+    } else if (evt.type === "error" && evt.message) {
+      wizardStepText = `Error: ${evt.message}`;
+      render();
+    }
   });
 
   async function init() {

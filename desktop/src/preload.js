@@ -54,6 +54,14 @@ contextBridge.exposeInMainWorld("melodiousDesktop", {
     search: (args) => invokeCatalog("catalog:search", args),
     download: (args) => invokeCatalog("catalog:download", args),
   },
+  wizard: {
+    detectAndClassify: (args) => ipcRenderer.invoke("wizard:detect-classify", args),
+    usbProbe: (args) => ipcRenderer.invoke("wizard:usb-probe", args),
+    onEvent: (callback) => {
+      if (typeof callback !== "function") return;
+      ipcRenderer.on("desktop:wizard-event", (_event, info) => callback(info));
+    },
+  },
 });
 
 function escapeHtml(value) {

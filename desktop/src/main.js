@@ -47,6 +47,7 @@ const {
 } = require("./self-update");
 const { findHubKey, readLocalHubZip, updateHub } = require("./hub-update");
 const { reinstallHub } = require("./hub-reinstall");
+const { isWizardDevAvailable, registerWizardIpcHandlers } = require("./wizard");
 
 // Test hooks (stand-in safeStorage, stub catalog) exist only when running from
 // source; a packaged app ignores MELODIOUS_E2E.
@@ -532,6 +533,10 @@ function registerIpcHandlers() {
     return {
       mode: pageMode,
       platform: process.platform,
+      wizardDevAvailable: isWizardDevAvailable({
+        isPackaged: app.isPackaged,
+        platform: process.platform,
+      }),
       hub,
       hasHubAuth: Boolean(hubAuth?.header),
       hubUsername: hubAuth?.username || "",
@@ -728,6 +733,12 @@ function registerIpcHandlers() {
     ipcMain,
     getMainWindow: () => mainWindow,
     getCatalogService: () => getActiveCatalogService(),
+  });
+
+  registerWizardIpcHandlers({
+    ipcMain,
+    getMainWindow: () => mainWindow,
+    getSavedAuthHeader: () => settingsStore.getHubAuthHeader(),
   });
 }
 
