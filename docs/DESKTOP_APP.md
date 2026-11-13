@@ -38,8 +38,8 @@ account and pull a device's codes from Logitech's catalog.
   same tab opens a package made with
   `tools/catalog/harmony_catalog.py` (see
   [its README](../tools/catalog/README.md)).
-- **Update hub…** over SSH is described in
-  [INSTALL.md](INSTALL.md#updating).
+- **Update hub…** and **Reinstall / repair hub software…** over SSH are
+  described in [INSTALL.md](INSTALL.md#updating).
 
 Limits:
 - Reuse, don't rewrite: the UI is the existing bundle, built by
@@ -346,6 +346,11 @@ bundle copy, catalog package or token is ever committed.
   It then talks to your hub over SSH with `~/.ssh/harmony_owner_*`, the
   installer's key, using your `~/.ssh/known_hosts`. Nothing about the update
   goes anywhere but GitHub and your hub.
+- **Reinstall / repair hub software…** (Settings → Updates and the menu,
+  whatever version the hub runs) does the same from a source you pick: the
+  latest GitHub release, downloaded and checked the same way, or a
+  `melodious-hub-<v>.zip` on this computer, which is read locally and
+  downloads nothing.
 - Otherwise the app makes no network request on its own except the SSDP
   search when the connect screen opens, and `/api/system-status` checks of
   hubs that answer it.

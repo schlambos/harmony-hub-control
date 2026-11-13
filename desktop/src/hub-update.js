@@ -56,6 +56,9 @@ const HUB_FILES = {
   "payload/scripts/netservicestarter.lua": ["/opt/luaworks/tasks/connectserver/netservicestarter.lua", "644", 1],
 };
 const HUB_INVENTORY_FILES = new Set(["payload/bin/MANIFEST.txt", "payload/bin/FILES"]);
+// Run by the installers from the hub's RAM staging folder; never installed
+// and not used here. Must match HUB_INSTALLER_HELPERS in tools/releases/release.py.
+const HUB_INSTALLER_HELPERS = new Set(["payload/helpers/codex_flash_free"]);
 // Known builds of Dropbear, by MD5: version. Builds of one version are the
 // same program (2025.89 with the unloaded MIPS .pdr section stripped, as
 // built and as tools/hub-root ships it, and with only a plain strip, as older
@@ -120,19 +123,26 @@ function defaultSshPath(platform = process.platform, env = process.env) {
   return "/usr/bin/ssh";
 }
 
-/** Read every hub payload file from the release zip (unpacked with the system's unzip). */
-async function readHubPayload(zipPath, version) {
+/** Unpack a hub zip and read its payload. `version` null takes it from the zip's one melodious-hub-<x.y.z> folder. */
+async function unpackHubZip(zipPath, version) {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), "melodious-hub-"));
   try {
     await run(...unzipCommand(zipPath, dir));
+    if (version === null) {
+      const tops = fs.readdirSync(dir).filter((n) => /^melodious-hub-\d+\.\d+\.\d+$/.test(n) && fs.statSync(path.join(dir, n)).isDirectory());
+      if (tops.length !== 1) throw new HubUpdateError("That isn't a Melodious hub zip: it has no melodious-hub-<version> folder.");
+      version = tops[0].slice("melodious-hub-".length);
+    }
     const top = path.join(dir, `melodious-hub-${version}`);
     if (!fs.existsSync(top)) throw new HubUpdateError(`The hub zip has no melodious-hub-${version} folder.`);
+    if (!fs.existsSync(path.join(top, "payload"))) throw new HubUpdateError("The hub zip has no payload folder.");
     const files = [];
     const walk = (rel) => {
       for (const name of fs.readdirSync(path.join(top, rel))) {
         const r = rel ? `${rel}/${name}` : name;
-        const full = path.join(top, r);
-        if (fs.statSync(full).isDirectory()) walk(r);
+        const stat = fs.lstatSync(path.join(top, r));
+        if (stat.isDirectory()) walk(r);
+        else if (!stat.isFile()) throw new HubUpdateError(`The hub zip's ${r} isn't a plain file.`);
         else if (r.startsWith("payload/")) files.push(r);
       }
     };
@@ -140,7 +150,7 @@ async function readHubPayload(zipPath, version) {
     const contents = {};
     for (const rel of files) contents[rel] = fs.readFileSync(path.join(top, rel));
     for (const rel of files) {
-      if (!HUB_FILES[rel] && !HUB_INVENTORY_FILES.has(rel)) {
+      if (!HUB_FILES[rel] && !HUB_INVENTORY_FILES.has(rel) && !HUB_INSTALLER_HELPERS.has(rel)) {
         throw new HubUpdateError(`The hub zip has ${rel}, which this app doesn't know how to install. Update this app first.`);
       }
     }
@@ -153,13 +163,26 @@ async function readHubPayload(zipPath, version) {
         throw new HubUpdateError(`The hub zip's MANIFEST.txt doesn't match ${m[2]}.`);
       }
     }
-    return Object.keys(HUB_FILES).map((rel) => {
-      const [dest, mode, reboot] = HUB_FILES[rel];
-      return { rel, dest, mode, reboot, body: contents[rel], md5: md5(contents[rel]), name: rel.replace(/\//g, "_") };
-    });
+    return {
+      version,
+      files: Object.keys(HUB_FILES).map((rel) => {
+        const [dest, mode, reboot] = HUB_FILES[rel];
+        return { rel, dest, mode, reboot, body: contents[rel], md5: md5(contents[rel]), name: rel.replace(/\//g, "_") };
+      }),
+    };
   } finally {
     fs.rmSync(dir, { recursive: true, force: true });
   }
+}
+
+/** Read every hub payload file from the release zip (unpacked with the system's unzip). */
+async function readHubPayload(zipPath, version) {
+  return (await unpackHubZip(zipPath, version)).files;
+}
+
+/** A hub zip the user chose: { version, files }, the version read from the zip's folder name. */
+function readLocalHubZip(zipPath) {
+  return unpackHubZip(zipPath, null);
 }
 
 /** One SSH command, as install_webui.py runs them; `input` goes to its stdin. */
@@ -199,11 +222,18 @@ function friendlySshError(err) {
 }
 
 /**
- * Update the hub to `release`. onStep(text) reports progress. Returns
- * { ok, alreadyCurrent?, rebooted?, version?, message }.
+ * Update the hub to `release`, or to `payload` ({ version, files } from
+ * readLocalHubZip) with nothing downloaded. onStep(text) reports progress.
+ * `force` sends every file, not only the ones that differ. confirmChange({
+ * differing, total }), asked before anything is sent, may answer false to
+ * leave the hub as it is. Returns { ok, alreadyCurrent?, cancelled?,
+ * rebooted?, version?, total, replaced?, message }.
  */
 async function updateHub({
   release,
+  payload = null,
+  force = false,
+  confirmChange = null,
   host,
   httpPort = 8080,
   authHeader = null,
@@ -220,13 +250,18 @@ async function updateHub({
   versionProbe = () => fetchHubVersion({ host, port: httpPort, authHeader }),
 }) {
   if (!keyPath) throw new HubUpdateError("No hub SSH key found. Melodious uses the installer's key, ~/.ssh/harmony_owner_….");
-  const zipName = `melodious-hub-${release.version}.zip`;
+  const target = payload ? payload.version : release.version;
   const work = fs.mkdtempSync(path.join(os.tmpdir(), "melodious-hubzip-"));
   const ssh = createSsh({ host, keyPath, port: sshPort, sshPath, knownHosts });
   try {
-    onStep("Downloading the hub software from GitHub…");
-    const zip = await downloadVerified({ release, name: zipName, dir: work, fetchImpl, allowUrl, userAgent });
-    const files = await readHubPayload(zip, release.version);
+    let files;
+    if (payload) {
+      files = payload.files;
+    } else {
+      onStep("Downloading the hub software from GitHub…");
+      const zip = await downloadVerified({ release, name: `melodious-hub-${target}.zip`, dir: work, fetchImpl, allowUrl, userAgent });
+      files = await readHubPayload(zip, target);
+    }
 
     onStep("Connecting to the hub…");
     let stage;
@@ -248,10 +283,15 @@ async function updateHub({
     }
     const current = new Map();
     for (const m of status.matchAll(/^file (\S+) (\S+)$/gm)) current.set(m[2], m[1]);
-    const changed = changedFiles(files, current);
+    const differing = changedFiles(files, current);
+    const changed = force ? [...files] : differing;
     if (!changed.length) {
       await ssh(`rm -rf ${stage}`).catch(() => {});
-      return { ok: true, alreadyCurrent: true, message: `The hub already has Melodious ${release.version}'s software.` };
+      return { ok: true, alreadyCurrent: true, total: files.length, message: `The hub already has Melodious ${target}'s software.` };
+    }
+    if (confirmChange && !(await confirmChange({ differing, total: files.length }))) {
+      await ssh(`rm -rf ${stage}`).catch(() => {});
+      return { ok: false, cancelled: true, total: files.length, message: "Nothing was changed on the hub." };
     }
     // codex_webui goes last, as with the installer.
     changed.sort((a, b) => (a.dest.endsWith("/codex_webui") ? 1 : 0) - (b.dest.endsWith("/codex_webui") ? 1 : 0));
@@ -301,13 +341,15 @@ async function updateHub({
       await sleep(pollMs);
     }
     if (!version) {
-      return { ok: false, rebooted, message: "The update was installed, but the hub hasn't answered since. Give it a minute, then check it." };
+      return { ok: false, rebooted, total: files.length, replaced: changed.length, message: "The update was installed, but the hub hasn't answered since. Give it a minute, then check it." };
     }
     const runs = version.version || "1.2 or older";
     return {
       ok: true,
       rebooted,
       version: version.version || null,
+      total: files.length,
+      replaced: changed.length,
       message: `The hub was updated${rebooted ? " and restarted" : ""}. It reports Melodious ${runs}.`,
     };
   } finally {
@@ -315,4 +357,4 @@ async function updateHub({
   }
 }
 
-module.exports = { DROPBEAR_BUILDS, HUB_FILES, HubUpdateError, changedFiles, defaultSshPath, findHubKey, readHubPayload, unzipCommand, updateHub };
+module.exports = { DROPBEAR_BUILDS, HUB_FILES, HUB_INSTALLER_HELPERS, HubUpdateError, changedFiles, defaultSshPath, findHubKey, readHubPayload, readLocalHubZip, unzipCommand, updateHub };

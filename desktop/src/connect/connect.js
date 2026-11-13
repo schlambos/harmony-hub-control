@@ -311,8 +311,14 @@
             ? `<button type="button" class="btn btn-outlined" id="updatesToggleBtn">${u.checks ? "Turn off daily checks" : "Check daily"}</button>`
             : ""
         }
+        ${
+          state.hub
+            ? `<button type="button" class="btn btn-outlined" id="updatesReinstallBtn" ${updatesBusy || hubStep ? "disabled" : ""}>Reinstall / repair hub software…</button>`
+            : ""
+        }
       </div>
-      <p class="m-field-hint">Checks ask GitHub (api.github.com) for Melodious's releases. GitHub sees your IP address and this app's version; nothing about your hub or devices is sent. Nothing downloads until you choose Install and Restart or Update hub.</p>
+      ${hubStep && !hubRow ? `<p class="list-note" id="updatesHubStep" role="status">${escapeHtml(hubStep)}</p>` : ""}
+      <p class="m-field-hint">Checks ask GitHub (api.github.com) for Melodious's releases. GitHub sees your IP address and this app's version; nothing about your hub or devices is sent. Nothing downloads until you choose Install and Restart, Update hub or Reinstall / repair hub software, which puts a release (or a hub zip from this computer) back on the hub whatever version it runs.</p>
     `;
   }
 
@@ -458,6 +464,19 @@
       try {
         // The main process confirms, shows progress here and reports the outcome in a dialog.
         await updatesBridge.updateHub();
+      } finally {
+        updatesBusy = false;
+        hubStep = "";
+        await loadUpdates();
+      }
+      return;
+    }
+    if (target.closest("#updatesReinstallBtn") && updatesBridge && !updatesBusy) {
+      updatesBusy = true;
+      render();
+      try {
+        // The main process asks for the source, confirms, shows progress here and reports the outcome in a dialog.
+        await updatesBridge.reinstallHub();
       } finally {
         updatesBusy = false;
         hubStep = "";

@@ -130,6 +130,23 @@ release is out, Settings → Updates offers **Update hub…**. The Android
 app only tells you a hub update is out; it never holds the hub's SSH
 key.
 
+**Reinstall / repair hub software…** (Settings → Updates, and the
+Melodious menu on a Mac or the File menu on Windows) puts hub software
+back on the hub whatever version it runs:
+
+- You pick the source: the latest GitHub release, or a
+  `melodious-hub-<version>.zip` on your computer. The app shows the hub's
+  version next to the source's before anything changes.
+- **Repair** checks every file on the hub and replaces only the ones that
+  differ; when they all match, nothing is written. **Reinstall All Files**
+  sends and rewrites every file, then restarts the hub.
+- A source older than the hub needs an explicit **Downgrade**. When both
+  report the same version but files differ, the app lists them and asks
+  first, because a hub built from source keeps the last release's number.
+- It is the same SSH install as **Update hub…**, with the same key, checks
+  and rollback. The zip must carry every file this version of the app
+  installs, so an older release's zip is refused.
+
 How the macOS app's hub update works:
 
 - **Download:** the app fetches the hub zip from the GitHub release,

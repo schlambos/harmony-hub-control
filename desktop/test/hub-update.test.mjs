@@ -10,7 +10,7 @@ import { createRequire } from "node:module";
 import { fileURLToPath } from "node:url";
 
 const require = createRequire(import.meta.url);
-const { DROPBEAR_BUILDS, HUB_FILES, changedFiles, defaultSshPath, findHubKey, readHubPayload, unzipCommand, updateHub } = require("../src/hub-update.js");
+const { DROPBEAR_BUILDS, HUB_FILES, HUB_INSTALLER_HELPERS, changedFiles, defaultSshPath, findHubKey, readHubPayload, readLocalHubZip, unzipCommand, updateHub } = require("../src/hub-update.js");
 const ROOT = fileURLToPath(new URL("../..", import.meta.url));
 const mac = process.platform === "darwin";
 const win = process.platform === "win32";
@@ -22,8 +22,8 @@ function tmp() {
 }
 
 /** A hub zip like the release's: melodious-hub-<v>/payload/... plus MANIFEST.txt. */
-function makeHubZip(dir, version, { extra = {}, badManifest = false } = {}) {
-  const top = path.join(dir, `melodious-hub-${version}`);
+function makeHubZip(dir, version, { extra = {}, badManifest = false, folder = `melodious-hub-${version}` } = {}) {
+  const top = path.join(dir, folder);
   const files = { ...Object.fromEntries(Object.keys(HUB_FILES).map((rel) => [rel, Buffer.from(`${rel} ${version}\n`)])), ...extra };
   let manifest = "";
   for (const [rel, body] of Object.entries(files)) {
@@ -46,6 +46,14 @@ test("the destination map matches tools/releases/release.py", () => {
     Object.fromEntries(Object.entries(HUB_FILES).map(([rel, [dest, mode]]) => [rel, [dest, mode]])),
     pyMap,
   );
+});
+
+test("the installers' helpers are skipped, as in tools/releases/release.py", () => {
+  const py = fs.readFileSync(path.join(ROOT, "tools/releases/release.py"), "utf8");
+  const block = py.match(/^HUB_INSTALLER_HELPERS = \{([^}]*)\}/m)[1];
+  assert.deepEqual([...HUB_INSTALLER_HELPERS].sort(), [...block.matchAll(/"([^"]+)"/g)].map((m) => m[1]).sort());
+  assert.ok(HUB_INSTALLER_HELPERS.size > 0);
+  for (const rel of HUB_INSTALLER_HELPERS) assert.equal(HUB_FILES[rel], undefined, `${rel} is never installed`);
 });
 
 test("another build of the same Dropbear counts as current, as in install_webui.py", () => {
@@ -115,6 +123,147 @@ test("reads the payload: every mapped file, md5s, refuses unknown files and a wr
     await assert.rejects(readHubPayload(unknown, "9.0.1"), /doesn't know how to install/);
     const bad = makeHubZip(dir, "9.0.2", { badManifest: true });
     await assert.rejects(readHubPayload(bad, "9.0.2"), /MANIFEST\.txt doesn't match/);
+  } finally {
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test("reads a hub zip the user chose: version from its folder, helpers skipped, anything else refused", { skip: !mac && !win }, async () => {
+  const dir = tmp();
+  try {
+    const helper = [...HUB_INSTALLER_HELPERS][0];
+    // The file's name says nothing: the version is the folder's.
+    const zip = makeHubZip(dir, "9.3.0", { extra: { [helper]: Buffer.from("probe") } });
+    const renamed = path.join(dir, "from-my-build.zip");
+    fs.renameSync(zip, renamed);
+    const { version, files } = await readLocalHubZip(renamed);
+    assert.equal(version, "9.3.0");
+    assert.equal(files.length, Object.keys(HUB_FILES).length);
+    assert.ok(!files.some((f) => f.rel === helper), "the helper is not installed");
+    assert.equal((await readHubPayload(renamed, "9.3.0")).length, files.length);
+
+    const other = makeHubZip(dir, "9.3.1", { folder: "something-else" });
+    await assert.rejects(readLocalHubZip(other), /isn't a Melodious hub zip/);
+    const unknown = makeHubZip(dir, "9.3.2", { extra: { "payload/helpers/other": Buffer.from("x") } });
+    await assert.rejects(readLocalHubZip(unknown), /doesn't know how to install/);
+  } finally {
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test("refuses a hub zip with a link in its payload", { skip: !mac }, async () => {
+  const dir = tmp();
+  try {
+    makeHubZip(dir, "9.4.0");
+    const target = path.join(dir, "melodious-hub-9.4.0", "payload/scripts/init.sh");
+    fs.rmSync(target);
+    fs.symlinkSync("/etc/hosts", target);
+    const zip = path.join(dir, "linked.zip");
+    execFileSync("/usr/bin/ditto", ["-c", "-k", "--keepParent", path.join(dir, "melodious-hub-9.4.0"), zip]);
+    await assert.rejects(readLocalHubZip(zip), /isn't a plain file/);
+  } finally {
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+/** A stand-in ssh: the real hub_update.sh answers `status` from hubRoot; `apply` only records a result. */
+function makeFakeHub(dir) {
+  const hubRoot = path.join(dir, "hubroot");
+  const realStage = path.join(dir, "volatile", "codex-update-1700000000");
+  const fakeStage = "/var/volatile/codex-update-1700000000";
+  const log = path.join(dir, "ssh.log");
+  fs.mkdirSync(path.join(hubRoot, "data/codex"), { recursive: true });
+  fs.mkdirSync(path.join(hubRoot, "proc"), { recursive: true });
+  fs.writeFileSync(path.join(hubRoot, "data/codex/hub_id"), "1234\n");
+  fs.writeFileSync(path.join(hubRoot, "proc/meminfo"), "MemFree: 16384 kB\n");
+  const sshPath = path.join(dir, "fake-ssh.sh");
+  fs.writeFileSync(sshPath, [
+    "#!/bin/sh",
+    "shift $(( $# - 1 ))",
+    "cmd=$1",
+    `printf '%s\\n' "$cmd" >> "${log}"`,
+    "case \"$cmd\" in",
+    `  S=/var/volatile/codex-update-*) mkdir -p "${realStage}/files" && echo "${fakeStage}" ;;`,
+    `  "sh ${fakeStage}/hub_update.sh status "*) HUB_UPDATE_ROOT="${hubRoot}" /bin/sh "${realStage}/hub_update.sh" status \${cmd#* status } ;;`,
+    `  "cat > ${fakeStage}/"*) cat > "${realStage}/\${cmd#cat > ${fakeStage}/}" ;;`,
+    `  *"hub_update.sh apply ${fakeStage}"*) echo "RESULT ok restarted" > "${realStage}/log" ;;`,
+    `  "cat ${fakeStage}/log "*) cat "${realStage}/log" ;;`,
+    `  "rm -rf ${fakeStage}") rm -rf "${realStage}" ;;`,
+    "  *) exit 99 ;;",
+    "esac",
+  ].join("\n"), { mode: 0o755 });
+  const keyPath = path.join(dir, "key");
+  fs.writeFileSync(keyPath, "fake-key\n");
+  return {
+    hubRoot, realStage, sshPath, keyPath,
+    put(files) {
+      for (const f of files) {
+        fs.mkdirSync(path.dirname(path.join(hubRoot, f.dest)), { recursive: true });
+        fs.writeFileSync(path.join(hubRoot, f.dest), f.body);
+      }
+    },
+    commands: () => (fs.existsSync(log) ? fs.readFileSync(log, "utf8") : ""),
+  };
+}
+
+test("repairs from a chosen zip with no download: nothing to do, a declined change, and a full reinstall", { skip: !mac }, async () => {
+  const dir = tmp();
+  try {
+    const payload = await readLocalHubZip(makeHubZip(dir, "9.2.0"));
+    const total = payload.files.length;
+    const hub = makeFakeHub(dir);
+    hub.put(payload.files);
+    const common = {
+      payload,
+      host: "127.0.0.1",
+      keyPath: hub.keyPath,
+      sshPath: hub.sshPath,
+      fetchImpl: () => assert.fail("a chosen zip downloads nothing"),
+      pollMs: 10,
+      versionProbe: async () => ({ version: "9.2.0" }),
+    };
+
+    // The hub has these very files: a repair sends nothing.
+    const asked = [];
+    const same = await updateHub({ ...common, confirmChange: async (c) => { asked.push(c); return true; } });
+    assert.deepEqual({ ok: same.ok, alreadyCurrent: same.alreadyCurrent, total: same.total }, { ok: true, alreadyCurrent: true, total });
+    assert.equal(asked.length, 0);
+    assert.ok(!hub.commands().includes("/files/"));
+    assert.equal(fs.existsSync(hub.realStage), false);
+
+    // One file on the hub differs and the user says no: nothing is sent.
+    const webui = payload.files.find((f) => f.dest.endsWith("/codex_webui"));
+    fs.writeFileSync(path.join(hub.hubRoot, webui.dest), "something else");
+    const declined = await updateHub({ ...common, confirmChange: async (c) => { asked.push(c); return false; } });
+    assert.deepEqual({ ok: declined.ok, cancelled: declined.cancelled }, { ok: false, cancelled: true });
+    assert.deepEqual(asked.map((c) => [c.differing.map((f) => f.dest), c.total]), [[[webui.dest], total]]);
+    assert.ok(!hub.commands().includes("/files/"));
+    assert.ok(!hub.commands().includes("apply"));
+    assert.equal(fs.existsSync(hub.realStage), false);
+
+    // A repair sends only that file.
+    const repaired = await updateHub(common);
+    assert.deepEqual({ ok: repaired.ok, replaced: repaired.replaced, version: repaired.version }, { ok: true, replaced: 1, version: "9.2.0" });
+
+    // Reinstall All Files sends every file, byte for byte, codex_webui last.
+    hub.put(payload.files);
+    const steps = [];
+    const sent = [];
+    const forced = await updateHub({
+      ...common,
+      force: true,
+      onStep: (s) => {
+        steps.push(s);
+        if (s.startsWith("Installing")) {
+          for (const f of payload.files) assert.ok(fs.readFileSync(path.join(hub.realStage, "files", f.name)).equals(f.body), f.name);
+          sent.push(...fs.readFileSync(path.join(hub.realStage, "plan"), "utf8").trim().split("\n"));
+        }
+      },
+    });
+    assert.deepEqual({ ok: forced.ok, replaced: forced.replaced, total: forced.total }, { ok: true, replaced: total, total });
+    assert.equal(sent.length, total);
+    assert.match(sent[total - 1], / \/data\/codex\/bin\/codex_webui$/);
+    assert.ok(!steps.some((s) => s.startsWith("Downloading")));
   } finally {
     fs.rmSync(dir, { recursive: true, force: true });
   }
