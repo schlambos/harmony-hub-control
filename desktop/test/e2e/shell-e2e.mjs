@@ -357,17 +357,27 @@ test("Playwright _electron end-to-end shell suite against webui-sim", { timeout:
       document.querySelector('a[href="/export/bundle"]')?.click();
     });
 
+    // The file exists before the download finishes (Windows writes it in
+    // place), so wait until it holds the whole bundle.
+    const readBundle = () => {
+      try {
+        return JSON.parse(fs.readFileSync(downloadSavedPath, "utf8"));
+      } catch {
+        return null;
+      }
+    };
     const deadline = Date.now() + 5000;
     let saveCalls = [];
+    let bundleData = null;
     while (Date.now() < deadline) {
       saveCalls = await electronApp.evaluate(() => globalThis.__saveDialogCalls || []);
-      if (saveCalls.length > 0 && fs.existsSync(downloadSavedPath)) break;
+      bundleData = saveCalls.length > 0 ? readBundle() : null;
+      if (bundleData) break;
       await wait(100);
     }
     assert.equal(saveCalls.length, 1, "Download should trigger showSaveDialogSync");
     assert.equal(saveCalls[0].defaultPath, "harmony-owner-bundle.json");
-    assert.equal(fs.existsSync(downloadSavedPath), true);
-    const bundleData = JSON.parse(fs.readFileSync(downloadSavedPath, "utf8"));
+    assert.ok(bundleData, "the download is saved whole");
     assert.equal(bundleData.format, "harmony-owner-bundle-v2");
 
     // 4. Desktop Settings (⌘, / Menu -> Settings…)
