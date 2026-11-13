@@ -1592,6 +1592,10 @@ class Installer:
                     "/data/codex/androidtv_service.sh", "755", "runtime", local=PAYLOAD / "scripts" / "androidtv_service.sh"
                 ),
                 Candidate(
+                    "/data/codex/androidtv-input-presets.json", "644", "runtime",
+                    local=PAYLOAD / "androidtv" / "input-presets.json",
+                ),
+                Candidate(
                     "/data/codex/usb_eth_service.sh", "755", "runtime", local=PAYLOAD / "scripts" / "usb_eth_service.sh"
                 ),
                 Candidate(

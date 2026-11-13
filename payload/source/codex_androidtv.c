@@ -20,11 +20,13 @@
  *   client.key.der  client.crt.der   the hub's own identity (RSA-2048, made on first use)
  *   tvs.tsv                          one paired TV per line: id host mac btaddr name
  *   tv-<id>.crt.der                  each TV's certificate; its public key is pinned
+ *   inputs-<id>.tsv                  how the TV switches inputs, set from the web app (see INPUT PROFILES)
  *
  * TLS is BearSSL (third_party/bearssl-0.6). See docs/ANDROID_TV.md.
  */
 #define _GNU_SOURCE
 #include <arpa/inet.h>
+#include <ctype.h>
 #include <errno.h>
 #include <fcntl.h>
 #include <ifaddrs.h>
@@ -49,7 +51,7 @@
 
 #include "bearssl.h"
 
-#define VERSION "1.0.0"
+#define VERSION "1.1.0"
 #define MAX_TVS 8
 /* A TV id is TV_ID_PREFIX plus 8 hex digits of SHA-256 over its certificate. */
 #define TV_ID_PREFIX "androidtv"
@@ -748,7 +750,17 @@ enum { F_PING = 1, F_KEY = 2, F_POWER = 32, F_VOLUME = 64, F_APPLINK = 512 };
 #define PSEUDO_POWER_ON 1001
 #define PSEUDO_POWER_OFF 1002
 
-struct cmd { int code; int dir; int retry; char link[200]; long long at, start; };
+#define PSEUDO_MENU 1003      /* the input menu, then Down x (arg - 1), then Select */
+
+/* raw: a key from an input profile, sent as is (no vendor input link).
+ * step/arg/gap: progress through PSEUDO_MENU. not_before: don't send before
+ * this. gap_after: after sending, hold what follows for this long (Home before
+ * an input when trying one). */
+struct cmd {
+	int code, dir, retry, raw, step, arg, gap, gap_after;
+	char link[200];
+	long long at, start, not_before;
+};
 #define QLEN 12
 /* How long a command at the head of the queue may wait for the session:
  * PowerOn longer, since a TV woken by Wake-on-LAN takes a while to come back.
@@ -776,6 +788,35 @@ static const struct { const char *vendor; const char *fmt; int offset; } INPUT_U
 	{ "hisense", "content://android.media.tv/passthrough/com.hisense.tv.hitvinput%%2F.hdmi.HdmiTvInputService%%2FHW%d", 1 },
 };
 
+/* ================================================================== input profiles
+ *
+ * inputs-<id>.tsv says how a TV switches inputs; the web app writes it (POST
+ * /inputs) and the daemon only checks and follows it. One setting per line,
+ * tab-separated:
+ *
+ *   method  keys | link | menu | none
+ *   pattern <link with {n}>         link only: slot values are numbers put in for {n}
+ *   gap     <ms>                    menu only: between keys (default 500)
+ *   slot    <n> <value> <status> <date>
+ *
+ * Slot n is the engine's input command: InputHdmi1..4 for 1..4, Input<n> for
+ * 5..32. Its value is a key code (keys), a number for the pattern or a whole
+ * link (link), or a position in the TV's input menu (menu). status and date
+ * (untested|works|failed, YYYY-MM-DD or -) are the web app's record of the
+ * user's last try; the daemon ignores them. Without a file the TV keeps the
+ * built-in behaviour: the HDMI keys, or INPUT_URIS for vendors that ignore them. */
+#define MAX_SLOTS 32
+#define MENU_GAP_MS 500
+#define PROFILE_MAX 12288
+enum { IM_KEYS = 1, IM_LINK, IM_MENU, IM_NONE };
+static const char *IM_NAMES[] = { "", "keys", "link", "menu", "none" };
+struct slotdef { int used, value; char *uri; };
+struct inputs {
+	int method, gap;
+	char pattern[192];
+	struct slotdef slot[MAX_SLOTS + 1];
+};
+
 struct tv {
 	int used;
 	char id[TV_ID_MAX], host[16], mac[18], bt[18], name[65];
@@ -798,9 +839,11 @@ struct tv {
 	unsigned long keys, connects;
 	struct cmd q[QLEN];
 	int qhead, qcount;
+	struct inputs *in;              /* inputs-<id>.tsv, or NULL: built-in behaviour */
 };
 
 static struct tv tvs[MAX_TVS];
+static void inputs_load(struct tv *t);
 
 static struct tv *tv_by_id(const char *id) {
 	for (int i = 0; i < MAX_TVS; i++)
@@ -877,8 +920,175 @@ static void tvs_load(void) {
 		t->backoff = 1000;
 		t->vol = -1;
 		logmsg("TV %s (%s) at %s", t->id, t->name, t->host);
+		inputs_load(t);
 	}
 	free(text);
+}
+
+static void inputs_free(struct inputs *in) {
+	if (!in) return;
+	for (int i = 0; i <= MAX_SLOTS; i++) free(in->slot[i].uri);
+	free(in);
+}
+
+/* A link the TV is asked to open: printable ASCII without spaces, quotes or
+ * backslashes, starting with a scheme ("content:", "https:", ...). */
+static int uri_ok(const char *u, size_t max) {
+	size_t n = strlen(u);
+	if (n < 3 || n > max) return 0;
+	if (!((u[0] >= 'a' && u[0] <= 'z') || (u[0] >= 'A' && u[0] <= 'Z'))) return 0;
+	const char *colon = strchr(u, ':');
+	if (!colon) return 0;
+	for (const char *p = u; p < colon; p++)
+		if (!(isalnum((unsigned char)*p) || *p == '+' || *p == '-' || *p == '.')) return 0;
+	for (const char *p = u; *p; p++)
+		if (*p <= 0x20 || *p >= 0x7f || *p == '"' || *p == '\\' || *p == '`') return 0;
+	return 1;
+}
+
+static int whole(const char *s, int lo, int hi, int *out) {
+	if (!s || !*s) return 0;
+	char *end;
+	long v = strtol(s, &end, 10);
+	if (*end || v < lo || v > hi) return 0;
+	*out = (int)v;
+	return 1;
+}
+
+static int date_ok(const char *d) {
+	if (!strcmp(d, "-")) return 1;
+	if (strlen(d) != 10 || d[4] != '-' || d[7] != '-') return 0;
+	for (int i = 0; i < 10; i++) if (i != 4 && i != 7 && !isdigit((unsigned char)d[i])) return 0;
+	return 1;
+}
+
+/* Parse and check a profile. NULL with *err set when it doesn't hold. */
+static struct inputs *inputs_parse(const char *text, size_t len, const char **err) {
+	static char why[96];
+	struct inputs *in = calloc(1, sizeof *in);
+	char *copy = malloc(len + 1);
+	if (!in || !copy) { free(in); free(copy); *err = "out of memory"; return NULL; }
+	memcpy(copy, text, len);
+	copy[len] = 0;
+	in->gap = MENU_GAP_MS;
+	*err = NULL;
+	int lineno = 0;
+	char *save = NULL;
+	for (char *line = strtok_r(copy, "\n", &save); line && !*err; line = strtok_r(NULL, "\n", &save)) {
+		lineno++;
+		size_t l = strlen(line);
+		if (l && line[l - 1] == '\r') line[--l] = 0;
+		if (!l || line[0] == '#') continue;
+		char *f[6] = {0};
+		int nf = 0;
+		for (char *p = line; nf < 6; ) {
+			f[nf++] = p;
+			char *tab = strchr(p, '\t');
+			if (!tab) break;
+			*tab = 0;
+			p = tab + 1;
+		}
+		if (!strcmp(f[0], "method") && nf == 2) {
+			if (in->method) { snprintf(why, sizeof why, "line %d: method given twice", lineno); *err = why; break; }
+			for (int m = IM_KEYS; m <= IM_NONE; m++) if (!strcmp(f[1], IM_NAMES[m])) in->method = m;
+			if (!in->method) { snprintf(why, sizeof why, "line %d: unknown method", lineno); *err = why; }
+		} else if (!strcmp(f[0], "pattern") && nf == 2) {
+			const char *ph = strstr(f[1], "{n}");
+			if (!ph || strstr(ph + 3, "{n}") || !uri_ok(f[1], sizeof in->pattern - 1)) {
+				snprintf(why, sizeof why, "line %d: the pattern must be a link with {n} once", lineno); *err = why;
+			} else snprintf(in->pattern, sizeof in->pattern, "%s", f[1]);
+		} else if (!strcmp(f[0], "gap") && nf == 2) {
+			if (!whole(f[1], 100, 2000, &in->gap)) { snprintf(why, sizeof why, "line %d: gap is 100-2000 ms", lineno); *err = why; }
+		} else if (!strcmp(f[0], "slot") && nf == 5) {
+			int n;
+			if (!whole(f[1], 1, MAX_SLOTS, &n)) { snprintf(why, sizeof why, "line %d: slot is 1-%d", lineno, MAX_SLOTS); *err = why; break; }
+			if (in->slot[n].used) { snprintf(why, sizeof why, "line %d: slot %d given twice", lineno, n); *err = why; break; }
+			if (strcmp(f[3], "untested") && strcmp(f[3], "works") && strcmp(f[3], "failed")) {
+				snprintf(why, sizeof why, "line %d: status is untested, works or failed", lineno); *err = why; break;
+			}
+			if (!date_ok(f[4])) { snprintf(why, sizeof why, "line %d: date is YYYY-MM-DD or -", lineno); *err = why; break; }
+			in->slot[n].used = 1;
+			/* The value is checked once the method is known (below). */
+			in->slot[n].uri = strdup(f[2]);
+			if (!in->slot[n].uri) { *err = "out of memory"; break; }
+		} else {
+			snprintf(why, sizeof why, "line %d: not a setting", lineno);
+			*err = why;
+		}
+	}
+	free(copy);
+	if (!*err && !in->method) *err = "no method";
+	if (!*err && in->method != IM_LINK && in->pattern[0]) *err = "only the link method takes a pattern";
+	for (int n = 1; n <= MAX_SLOTS && !*err; n++) {
+		struct slotdef *sd = &in->slot[n];
+		if (!sd->used) continue;
+		int ok = 0;
+		switch (in->method) {
+		case IM_KEYS: ok = whole(sd->uri, 1, 999, &sd->value); break;
+		case IM_MENU: ok = whole(sd->uri, 1, MAX_SLOTS, &sd->value); break;
+		case IM_LINK:
+			ok = in->pattern[0] ? whole(sd->uri, 0, 9999, &sd->value) : uri_ok(sd->uri, sizeof ((struct cmd *)0)->link - 1);
+			break;
+		case IM_NONE: ok = 1; break;
+		}
+		if (!ok) {
+			snprintf(why, sizeof why, "slot %d: not a %s for the %s method", n,
+			         in->method == IM_KEYS ? "key code" : in->method == IM_MENU ? "menu position" :
+			         in->pattern[0] ? "number" : "link", IM_NAMES[in->method]);
+			*err = why;
+		}
+		if (in->method != IM_LINK || in->pattern[0]) { free(sd->uri); sd->uri = NULL; }
+	}
+	if (*err) { inputs_free(in); return NULL; }
+	return in;
+}
+
+static void inputs_path(const struct tv *t, char *out, size_t cap) {
+	char name[48];
+	snprintf(name, sizeof name, "inputs-%s.tsv", t->id);
+	path_in_dir(out, cap, name);
+}
+
+static void inputs_load(struct tv *t) {
+	char path[256];
+	inputs_path(t, path, sizeof path);
+	inputs_free(t->in);
+	t->in = NULL;
+	size_t len;
+	unsigned char *text = read_file(path, &len);
+	if (!text) return;
+	const char *err;
+	t->in = inputs_parse((const char *)text, len, &err);
+	free(text);
+	if (!t->in) logmsg("TV %s: ignoring %s: %s", t->id, path, err);
+	else DBG("TV %s: inputs by %s", t->id, IM_NAMES[t->in->method]);
+}
+
+/* The engine's input command for slot n: InputHdmi1..4, Input5..Input32. 0 if
+ * the name isn't one. */
+static int slot_of(const char *name) {
+	int n;
+	if (!strncasecmp(name, "InputHdmi", 9)) return whole(name + 9, 1, 4, &n) ? n : 0;
+	if (!strncasecmp(name, "Input", 5) && isdigit((unsigned char)name[5])) return whole(name + 5, 5, MAX_SLOTS, &n) ? n : 0;
+	return 0;
+}
+
+/* Fill c from the method and one slot's value (pattern for links, gap for the
+ * menu). 1 when there is something to send. */
+static int input_target(int method, int value, const char *uri, const char *pattern, int gap, struct cmd *c) {
+	switch (method) {
+	case IM_KEYS: c->code = value; c->raw = 1; return 1;
+	case IM_MENU: c->code = PSEUDO_MENU; c->arg = value; c->gap = gap; return 1;
+	case IM_LINK:
+		if (pattern && pattern[0]) {
+			const char *ph = strstr(pattern, "{n}");
+			if (!ph) return 0;
+			snprintf(c->link, sizeof c->link, "%.*s%d%s", (int)(ph - pattern), pattern, value, ph + 3);
+		} else if (uri) snprintf(c->link, sizeof c->link, "%s", uri);
+		else return 0;
+		return 1;
+	}
+	return 0;
 }
 
 /* The TV's MAC, for Wake-on-LAN, from the kernel's ARP table. */
@@ -967,6 +1177,7 @@ static void send_wol(const char *mac) {
 
 static void tv_requeue_power_on(struct tv *t);
 static void tv_release(struct tv *t, long long now);
+static void tv_pop(struct tv *t);
 
 /* Wake-on-LAN, at most once per min_gap ms; then try to connect soon. */
 static void tv_wake(struct tv *t, long long now, long long min_gap) {
@@ -984,6 +1195,12 @@ static void tv_lost(struct tv *t, const char *why) {
 	t->next_attempt = now_ms() + t->backoff;
 	t->backoff = t->backoff < 30000 ? t->backoff * 2 : 30000;
 	if (!t->unreachable_since) t->unreachable_since = now_ms();
+	/* An input menu cut off part way: the menu may have closed, and the rest
+	 * (Down..., Select) would act on whatever has focus. Drop it. */
+	if (t->qcount && t->q[t->qhead].code == PSEUDO_MENU && t->q[t->qhead].step > 0) {
+		logmsg("TV %s: dropped an input menu cut off at step %d", t->id, t->q[t->qhead].step);
+		tv_pop(t);
+	}
 	/* The TV went away while turning on: one that is still shutting down
 	 * ignores the power key and drops off the network. Try again. */
 	if (t->waking) tv_requeue_power_on(t);
@@ -1136,10 +1353,13 @@ static void tv_enqueue(struct tv *t, const struct cmd *c) {
 	}
 	if (t->qcount == QLEN) {
 		/* Full: drop the oldest command that isn't a power command, which the
-		 * commands behind it may depend on. */
+		 * commands behind it may depend on, nor an input menu part sent
+		 * (which would leave the menu open). */
 		int k = 0;
-		for (int i = 0; i < t->qcount; i++)
-			if (!is_power(t->q[(t->qhead + i) % QLEN].code)) { k = i; break; }
+		for (int i = 0; i < t->qcount; i++) {
+			const struct cmd *q = &t->q[(t->qhead + i) % QLEN];
+			if (!is_power(q->code) && !(q->code == PSEUDO_MENU && q->step > 0)) { k = i; break; }
+		}
 		for (int i = k; i < t->qcount - 1; i++) t->q[(t->qhead + i) % QLEN] = t->q[(t->qhead + i + 1) % QLEN];
 		t->qcount--;
 	}
@@ -1245,6 +1465,30 @@ static void tv_flush(struct tv *t) {
 			continue;
 		}
 		if (!t->ready || !t->c || !t->c->tls_up) return;
+		if (c->not_before && now < c->not_before) return;
+		if (c->code == PSEUDO_MENU) {
+			/* The input menu, Down to the position, Select: one key per pass,
+			 * c->gap apart, each step with a fresh wait. A long press is one
+			 * press: its release sends nothing. */
+			if (c->dir == 2) { tv_pop(t); continue; }
+			int key = c->step == 0 ? 178 : c->step < c->arg ? 20 : 23;
+			struct pbuf mout = { .n = 0 }, msub = { .n = 0 };
+			pb_uint(&msub, 1, (uint64_t)key);
+			pb_uint(&msub, 2, 3);
+			pb_sub(&mout, 10, &msub);
+			if (conn_queue(t->c, &mout) < 0) return;
+			t->keys++;
+			DBG("TV %s: input menu step %d, key %d", t->id, c->step, key);
+			if (++c->step > c->arg) {
+				/* Done. What waited behind a long menu gets its wait from now. */
+				tv_pop(t);
+				tv_release(t, now);
+				continue;
+			}
+			c->not_before = now + c->gap;
+			c->start = now;
+			return;
+		}
 		struct pbuf out = { .n = 0 }, sub = { .n = 0 };
 		int code = c->code, set_on = -1, wake = 0, power = is_power(code);
 		char link[sizeof c->link];
@@ -1265,11 +1509,13 @@ static void tv_flush(struct tv *t) {
 				set_on = want_on;   /* remote_start corrects this */
 				wake = want_on;     /* and hold the queue until it says "on" */
 			}
-		} else if (code >= 243 && code <= 246 && !link[0] && tv_input_uri(t, code - 243 + 1, link, sizeof link)) {
+		} else if (code >= 243 && code <= 246 && !link[0] && !c->raw && tv_input_uri(t, code - 243 + 1, link, sizeof link)) {
 			/* A long press launches it once, on the press. */
 			if (c->dir == 2) code = 0, link[0] = 0;
 			else DBG("TV %s: HDMI %d by its input URI", t->id, code - 243 + 1);
 		}
+		/* A link opens on the press; a long press's release sends nothing. */
+		if (link[0] && c->dir == 2) link[0] = 0, code = 0;
 		if (link[0]) {
 			pb_str(&sub, 1, link);
 			pb_sub(&out, 90, &sub);
@@ -1286,8 +1532,14 @@ static void tv_flush(struct tv *t) {
 			if (link[0]) DBG("TV %s: link %s", t->id, link);
 			else DBG("TV %s: key %d", t->id, code);
 		}
+		int gap_after = c->gap_after;
 		tv_pop(t);
 		if (power && !wake) tv_release(t, now);
+		if (gap_after && t->qcount) {
+			struct cmd *next = &t->q[t->qhead];
+			next->not_before = now + gap_after;
+			next->start = now;
+		}
 	}
 }
 
@@ -1586,6 +1838,13 @@ static void pair_on_message(void *owner, const unsigned char *d, size_t len) {
 			snprintf(t->host, sizeof t->host, "%s", pair.host);
 			snprintf(t->name, sizeof t->name, "%s", pair.name[0] ? pair.name : "Android TV");
 			sanitize(t->name);
+			if (!existed) {
+				/* A new TV starts on the built-in behaviour: an input profile
+				 * left on disk for this id (its tvs.tsv line lost) isn't its. */
+				char ipath[256];
+				inputs_path(t, ipath, sizeof ipath);
+				unlink(ipath);
+			}
 			/* the TV's certificate names its Bluetooth address: CN=atvremote/<bt> */
 			const char *bt = memmem(pair.c->cap.der, pair.c->cap.der_len, "atvremote/", 10);
 			if (bt && (size_t)(bt + 27 - (const char *)pair.c->cap.der) <= pair.c->cap.der_len) {
@@ -1745,7 +2004,7 @@ static int json_str(const char *body, const char *key, char *out, size_t cap) {
 	return 0;
 }
 
-struct sbuf { char b[4096]; size_t n; };
+struct sbuf { char b[8192]; size_t n; };   /* /status: up to 8 TVs at ~600 bytes each */
 static void sb(struct sbuf *s, const char *fmt, ...) {
 	va_list ap;
 	va_start(ap, fmt);
@@ -1785,8 +2044,9 @@ static void status_json(struct sbuf *s) {
 		sb(s, ",\"model\":");
 		sb_str(s, t->model);
 		sb(s, ",\"host\":\"%s\",\"mac\":\"%s\",\"connected\":%s,\"on\":%s,\"volume\":%d,\"volumeMax\":%d,\"muted\":%s,"
-		   "\"keysSent\":%lu,\"connects\":%lu,\"error\":", t->host, t->mac, t->ready ? "true" : "false",
-		   t->ready && t->is_on ? "true" : "false", t->vol, t->vol_max, t->muted ? "true" : "false", t->keys, t->connects);
+		   "\"keysSent\":%lu,\"connects\":%lu,\"appLinks\":%s,\"inputs\":\"%s\",\"error\":", t->host, t->mac, t->ready ? "true" : "false",
+		   t->ready && t->is_on ? "true" : "false", t->vol, t->vol_max, t->muted ? "true" : "false", t->keys, t->connects,
+		   t->ready && (t->features & F_APPLINK) ? "true" : "false", t->in ? IM_NAMES[t->in->method] : "builtin");
 		sb_str(s, t->ready || !t->c ? "" : t->c->error);
 		sb(s, "}");
 		first = 0;
@@ -1808,7 +2068,7 @@ static int valid_ipv4(const char *s) {
 }
 
 static void http_handle(int fd) {
-	char req[3072];
+	static char req[PROFILE_MAX + 1024];
 	size_t n = 0;
 	long long deadline = now_ms() + 300;
 	for (;;) {
@@ -1833,6 +2093,15 @@ static void http_handle(int fd) {
 	char *body = strstr(req, "\r\n\r\n");
 	body = body ? body + 4 : req + n;
 	struct sbuf s = { .n = 0 };
+	{
+		/* A body shorter than its Content-Length (too slow, or too big) is
+		 * refused: a profile cut at a line boundary would still parse. */
+		char *cl = strcasestr(req, "\r\nContent-Length:");
+		if (cl && cl < body && (size_t)(req + n - body) < (size_t)strtoul(cl + 17, NULL, 10)) {
+			http_reply(fd, "{\"ok\":false,\"error\":\"The request arrived incomplete.\"}");
+			return;
+		}
+	}
 
 	if (!strcmp(path, "/cmd")) {
 		/* The engine: {"device":"<tv id>","command":"<Name>"}. Always 200, at once. */
@@ -1853,12 +2122,29 @@ static void http_handle(int fd) {
 				*colon = 0;
 				c.dir = !strcasecmp(colon + 1, "start") ? 1 : !strcasecmp(colon + 1, "end") ? 2 : 3;
 			}
-			c.code = key_lookup(base);
-			ok = c.code > 0;
+			int slot = slot_of(base);
+			if (slot && t->in) {
+				/* The TV's input profile says what this input does. */
+				struct slotdef *sd = &t->in->slot[slot];
+				if (t->in->method == IM_NONE) ok = 2;       /* "don't switch inputs": nothing to send */
+				else if (sd->used) ok = input_target(t->in->method, sd->value, sd->uri, t->in->pattern, t->in->gap, &c);
+				else if (slot <= 4) {
+					/* InputHdmi1-4 not in the profile (a button still bound to
+					 * one, say): the built-in behaviour, as with no profile. */
+					c.code = key_lookup(base);
+					ok = c.code > 0;
+				} else {
+					logmsg("TV %s: input slot %d (%s) isn't in its input settings", t->id, slot, base);
+				}
+			} else {
+				c.code = key_lookup(base);
+				ok = c.code > 0;
+			}
 		}
 		sb(&s, "{\"ok\":%s}", ok ? "true" : "false");
 		http_reply(fd, s.b);
 		if (!ok) { logmsg("engine sent an unknown device or command: %s %s", dev, name); return; }
+		if (ok == 2) return;
 		tv_enqueue(t, &c);
 		if (c.code == PSEUDO_POWER_ON && !t->ready) tv_wake(t, now_ms(), 3000);
 		if (!t->ready && (!t->c || t->c->fd < 0)) { t->backoff = 1000; t->next_attempt = 0; }
@@ -1924,6 +2210,9 @@ static void http_handle(int fd) {
 			snprintf(cname, sizeof cname, "tv-%s.crt.der", t->id);
 			path_in_dir(cpath, sizeof cpath, cname);
 			unlink(cpath);
+			inputs_path(t, cpath, sizeof cpath);
+			unlink(cpath);
+			inputs_free(t->in);
 			free(t->certder);
 			logmsg("forgot TV %s (%s)", t->id, t->name);
 			memset(t, 0, sizeof *t);
@@ -1938,6 +2227,112 @@ static void http_handle(int fd) {
 		json_str(body, "name", name, sizeof name);
 		struct tv *t = tv_by_id(id);
 		if (t && name[0]) { snprintf(t->name, sizeof t->name, "%s", name); sanitize(t->name); tvs_save(); }
+		http_reply(fd, "{\"ok\":true}");
+		return;
+	}
+	if (!strncmp(path, "/inputs", 7)) {
+		/* GET /inputs?device=<id>: the profile as stored (null: built-in).
+		 * POST /inputs?device=<id>, the profile as the body (text): checked,
+		 * then saved and followed at once. An empty body goes back to built-in. */
+		char *d = strstr(path, "device="), dev[TV_ID_MAX] = "";
+		if (d) sscanf(d + 7, "%23[^&]", dev);
+		struct tv *t = tv_by_id(dev);
+		if (!t) { http_reply(fd, "{\"ok\":false,\"error\":\"No such TV.\"}"); return; }
+		char ipath[256];
+		inputs_path(t, ipath, sizeof ipath);
+		if (!strcmp(method, "POST")) {
+			size_t blen = strlen(body);
+			if (!blen) {
+				unlink(ipath);
+				inputs_free(t->in);
+				t->in = NULL;
+				logmsg("TV %s: inputs back to built-in", t->id);
+				http_reply(fd, "{\"ok\":true}");
+				return;
+			}
+			const char *err;
+			struct inputs *in = blen > PROFILE_MAX ? NULL : inputs_parse(body, blen, &err);
+			if (blen > PROFILE_MAX) err = "too long";
+			if (!in) { sb(&s, "{\"ok\":false,\"error\":"); sb_str(&s, err); sb(&s, "}"); http_reply(fd, s.b); return; }
+			if (write_file_atomic(ipath, body, blen, 0600) < 0) {
+				inputs_free(in);
+				http_reply(fd, "{\"ok\":false,\"error\":\"Couldn't save the input settings on the hub.\"}");
+				return;
+			}
+			inputs_free(t->in);
+			t->in = in;
+			logmsg("TV %s: inputs by %s, saved", t->id, IM_NAMES[in->method]);
+			http_reply(fd, "{\"ok\":true}");
+			return;
+		}
+		size_t len = 0;
+		char *text = (char *)read_file(ipath, &len);
+		static char out[2 * PROFILE_MAX + 512];
+		size_t o = (size_t)snprintf(out, sizeof out, "{\"ok\":true,\"device\":\"%s\",\"profile\":", t->id);
+		if (!text || !t->in) o += (size_t)snprintf(out + o, sizeof out - o, "null");
+		else {
+			out[o++] = '"';
+			for (size_t i = 0; i < len && o < sizeof out - 8; i++) {
+				char ch = text[i];
+				if (ch == '\n') { out[o++] = '\\'; out[o++] = 'n'; }
+				else if (ch == '\t') { out[o++] = '\\'; out[o++] = 't'; }
+				else if (ch == '"' || ch == '\\') { out[o++] = '\\'; out[o++] = ch; }
+				else if ((unsigned char)ch >= 0x20) out[o++] = ch;
+			}
+			out[o++] = '"';
+		}
+		free(text);
+		snprintf(out + o, sizeof out - o, "}");
+		http_reply(fd, out);
+		return;
+	}
+	if (!strcmp(path, "/try")) {
+		/* Send one input target now, unsaved, for the web app's Try:
+		 * {"device","method","value","pattern","gap","home"} (all strings).
+		 * Home first by default, so "nothing changed" shows. Method "power"
+		 * turns the TV on (the page's "Turn on the TV"). */
+		char dev[TV_ID_MAX] = "", meth[8] = "", value[200] = "", pattern[192] = "", gap[8] = "", home[8] = "1";
+		json_str(body, "device", dev, sizeof dev);
+		json_str(body, "method", meth, sizeof meth);
+		json_str(body, "value", value, sizeof value);
+		json_str(body, "pattern", pattern, sizeof pattern);
+		json_str(body, "gap", gap, sizeof gap);
+		json_str(body, "home", home, sizeof home);
+		struct tv *t = tv_by_id(dev);
+		if (t && !strcmp(meth, "power")) {
+			/* "Turn on the TV" before trying: an ordinary PowerOn (Wake-on-LAN
+			 * when it isn't reachable). */
+			struct cmd p = { .code = PSEUDO_POWER_ON, .dir = 3, .at = now_ms() };
+			tv_enqueue(t, &p);
+			if (!t->ready) { tv_wake(t, now_ms(), 3000); t->backoff = 1000; t->next_attempt = 0; }
+			http_reply(fd, "{\"ok\":true}");
+			return;
+		}
+		int m = 0, v = 0, g = MENU_GAP_MS;
+		for (int k = IM_KEYS; k < IM_NONE; k++) if (!strcmp(meth, IM_NAMES[k])) m = k;
+		const char *err = NULL;
+		if (!t) err = "No such TV.";
+		else if (!t->ready) err = "The TV isn't connected.";
+		else if (!t->is_on) err = "The TV is off. Turn it on first.";
+		else if (!m) err = "Choose how the TV switches inputs.";
+		else if (m == IM_LINK && !(t->features & F_APPLINK)) err = "This TV doesn't accept input links.";
+		else if (gap[0] && !whole(gap, 100, 2000, &g)) err = "The gap is 100-2000 ms.";
+		else if (m == IM_KEYS && !whole(value, 1, 999, &v)) err = "Not a key code.";
+		else if (m == IM_MENU && !whole(value, 1, MAX_SLOTS, &v)) err = "Not a position in the input menu.";
+		else if (m == IM_LINK && pattern[0]) {
+			const char *ph = strstr(pattern, "{n}");
+			if (!ph || strstr(ph + 3, "{n}") || !uri_ok(pattern, sizeof pattern - 1)) err = "The pattern must be a link with {n} once.";
+			else if (!whole(value, 0, 9999, &v)) err = "Not a number for the pattern.";
+		} else if (m == IM_LINK && !uri_ok(value, sizeof value - 1)) err = "Not a link.";
+		struct cmd c = { .dir = 3, .at = now_ms() };
+		if (!err && !input_target(m, v, value, pattern, g, &c)) err = "Nothing to send.";
+		if (err) { sb(&s, "{\"ok\":false,\"error\":"); sb_str(&s, err); sb(&s, "}"); http_reply(fd, s.b); return; }
+		if (strcmp(home, "0")) {
+			struct cmd h = { .code = 3, .dir = 3, .at = c.at, .gap_after = 1500 };
+			tv_enqueue(t, &h);
+		}
+		tv_enqueue(t, &c);
+		logmsg("TV %s: trying an input (%s %s%s%s)", t->id, meth, pattern[0] ? "no. " : "", value, strcmp(home, "0") ? ", after Home" : "");
 		http_reply(fd, "{\"ok\":true}");
 		return;
 	}

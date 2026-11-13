@@ -16,9 +16,12 @@ import {
   discoverTvs,
   finishTvPairing,
   forgetTv,
+  getAndroidTvStatus,
   getConfig,
   getTvPairing,
+  getTvInputPresets,
   saveAndroidTvDevices,
+  saveTvInputs,
   startTvPairing,
 } from "../api.js";
 import * as hub from "../state.js";
@@ -36,9 +39,42 @@ import {
   pairStateText,
 } from "./androidtv-model.js";
 import { fieldId, setMessage, textField } from "./device-sheets.js";
+import {
+  applyPreset,
+  profileText,
+  readPresets,
+  readTvInputs,
+  slotCommand,
+  tvInputProblems,
+  writerInputs,
+} from "./androidtv-inputs-model.js";
 
 const DISCOVER_FOR_MS = 7000;
 const POLL_MS = 600;
+
+const BRAND_WAIT_MS = 8000;
+
+/* After a TV is added: when the presets file has a suggestion for the
+   manufacturer saved with it, save that as the TV's input profile. Best
+   effort: Settings → Inputs still offers it if this doesn't happen. Only when
+   the suggestion's inputs are the new TV's own (HDMI 1-4), so the device's
+   input list needs no change. */
+async function applyTvInputPreset(tvId, manufacturer, model) {
+  try {
+    const presets = readPresets(await getTvInputPresets());
+    const tv = ((await getAndroidTvStatus()).tvs ?? []).find((t) => t.id === tvId) ?? null;
+    if (!tv || tv.inputs !== "builtin") return;
+    const hdmi = [1, 2, 3, 4].map((n) => ({ name: `HDMI ${n}`, command: slotCommand(n) }));
+    const draft = readTvInputs({ entryInputs: hdmi, profile: null, presets, vendor: manufacturer, model });
+    if (!draft.preset?.vendor || draft.preset.untestedPattern) return;
+    applyPreset(draft);
+    if (JSON.stringify(writerInputs(draft).inputs) !== JSON.stringify(hdmi)) return;
+    if (tvInputProblems(draft, { appLinks: !tv.connected || tv.appLinks !== false }).length) return;
+    await saveTvInputs(tvId, profileText(draft));
+  } catch {
+    // Settings → Inputs offers the same suggestion.
+  }
+}
 
 export function openAndroidTvSheet({ onDone } = {}) {
   let step = "find";
@@ -175,14 +211,16 @@ export function openAndroidTvSheet({ onDone } = {}) {
             <h2 class="sheet-title">Name the TV</h2>
             <p class="sheet-text">It's paired. Add it to the hub as a device, then put it in your activities like any other.</p>
             ${textField({ id: ids.name, label: "Name", value: chosen.name || "TV", maxlength: 64 })}
-            ${textField({ id: ids.maker, label: "Manufacturer (optional)", placeholder: "Sony", maxlength: 64 })}
-            ${textField({ id: ids.model, label: "Model (optional)", placeholder: "XR-65A80L", maxlength: 64 })}
+            ${textField({ id: ids.maker, label: "Manufacturer", placeholder: "Sony", maxlength: 64 })}
+            ${textField({ id: ids.model, label: "Model", placeholder: "XR-65A80L", maxlength: 64 })}
+            <p class="ds-hint" data-brand aria-live="polite">${spinner()} Asking the TV for its brand and model…</p>
             <p class="form-msg" data-msg role="status" aria-live="polite"></p>
             <button type="submit" class="btn btn-filled btn-block">Add TV</button>
           </form>`;
         const form = content.querySelector("form");
         const nameInput = form.querySelector(`#${ids.name}`);
         nameInput.select();
+        fillBrand(form);
         form.addEventListener("submit", async (event) => {
           event.preventDefault();
           if (busy) return;
@@ -204,6 +242,7 @@ export function openAndroidTvSheet({ onDone } = {}) {
             saving = saveAndroidTvDevices(androidTvDeviceSet(config, { add: { entity: tvId, name, manufacturer, model } }));
             await saving;
             committed = true;
+            applyTvInputPreset(tvId, manufacturer, model);
             await hub.refreshConfig().catch(() => {});
             added = hub.devices().find((d) => isAndroidTvEntry(d.entry) && androidTvIdOf(d.entry) === tvId) ?? null;
             const open = content.isConnected;
@@ -218,6 +257,34 @@ export function openAndroidTvSheet({ onDone } = {}) {
             busy = false;
           }
         });
+      }
+
+      /* The TV says its brand and model on the remote connection the hub opens
+         right after pairing (device_info). Fill them in, unless the person
+         has typed there already; they're saved with the device, which is
+         where Settings → Inputs looks for a brand suggestion. */
+      async function fillBrand(form) {
+        const maker = form.querySelector(`#${ids.maker}`);
+        const modelField = form.querySelector(`#${ids.model}`);
+        const typed = new Set();
+        maker.addEventListener("input", () => typed.add("maker"));
+        modelField.addEventListener("input", () => typed.add("model"));
+        const line = form.querySelector("[data-brand]");
+        const until = Date.now() + BRAND_WAIT_MS;
+        let tv = null;
+        while (!closed && form.isConnected && Date.now() < until) {
+          tv = await getAndroidTvStatus().then((r) => (r.tvs ?? []).find((t) => t.id === tvId) ?? null, () => null);
+          if (tv?.vendor || tv?.model) break;
+          await new Promise((resolve) => setTimeout(resolve, 700));
+        }
+        if (closed || !form.isConnected) return;
+        if (tv?.vendor || tv?.model) {
+          if (!typed.has("maker") && tv.vendor) maker.value = tv.vendor;
+          if (!typed.has("model") && tv.model) modelField.value = tv.model;
+          line.textContent = "Filled in from what the TV reports. Change them if they're not right.";
+        } else {
+          line.textContent = "The TV didn't say its brand. Type it to get the suggested input setup.";
+        }
       }
 
       async function discover(until) {

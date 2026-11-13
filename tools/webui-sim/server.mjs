@@ -21,6 +21,7 @@ import {
 import { LIMITS, isSafeLabel } from "./public/js/views/ir-model.js";
 import { MAX_ACTIVITIES, isRestrictableId, normalizeWindows, restrictedAt } from "./public/js/views/restrictions-model.js";
 import { validateStatic } from "./public/js/views/ethernet-model.js";
+import { MAX_SLOTS, parseProfile, slotCommand, slotOf } from "./public/js/views/androidtv-inputs-model.js";
 
 const SIM_DIR = path.dirname(fileURLToPath(import.meta.url));
 const PUBLIC_DIR = path.join(SIM_DIR, "public");
@@ -1018,7 +1019,68 @@ const SIM_ANDROIDTV_COMMANDS = [
   "InputHdmi4", "InputNext", "Red", "Green", "Yellow", "Blue", "Number0", "Number1",
   "Number2", "Number3", "Number4", "Number5", "Number6", "Number7", "Number8", "Number9"
 ];
-const simAndroidTv = { tvs: new Map(), pair: { state: "idle", host: "", name: "", error: "", tvId: "", at: 0 } };
+const simAndroidTv = {
+  tvs: new Map(),
+  profiles: new Map(), // tv id -> inputs-<id>.tsv text (codex_androidtv's input profile)
+  pair: { state: "idle", host: "", name: "", error: "", tvId: "", at: 0 }
+};
+const SIM_ANDROIDTV_PRESETS = path.join(SIM_DIR, "..", "..", "payload", "androidtv", "input-presets.json");
+
+// A network TV's inputs as the writer keeps them (codexactivity
+// androidTvResolveInputs): the request's, else the device's current ones, else
+// HDMI 1-4; Input<n> commands follow the inputs.
+function simAndroidTvInputs(entry, d) {
+  let list = null;
+  if (d.inputs !== undefined && d.inputs !== null) {
+    if (!Array.isArray(d.inputs) || d.inputs.length > MAX_SLOTS) return { error: `${d.name}: inputs must list at most ${MAX_SLOTS} inputs` };
+    const names = new Set();
+    const slots = new Set();
+    list = [];
+    for (const input of d.inputs) {
+      const name = String(input?.name ?? "").trim();
+      const slot = slotOf(input?.command);
+      if (!name || name.length > 64 || /["\\]/.test(name)) return { error: `${d.name}: input names must be 1-64 characters without quotes or backslashes` };
+      if (names.has(name.toLowerCase())) return { error: `${d.name}: input ${name} is listed twice` };
+      if (!slot) return { error: `${d.name}: input ${name} needs an input slot command (InputHdmi1-4, Input5-Input${MAX_SLOTS})` };
+      if (slots.has(slot)) return { error: `${d.name}: two inputs use ${slotCommand(slot)}` };
+      names.add(name.toLowerCase());
+      slots.add(slot);
+      list.push({ name, command: slotCommand(slot) });
+    }
+  }
+  const features = Array.isArray(entry.DeviceFeatures) ? entry.DeviceFeatures : [];
+  const feature = features.find((f) => f?.__type === "InputFeature");
+  if (!list) {
+    list = feature
+      ? [...(feature.Inputs ?? [])].sort((a, b) => (a.InputOrder ?? 0) - (b.InputOrder ?? 0))
+        // As the Lua writer: current inputs are kept as they are, including
+        // ones set up before slots with another command (Home, say).
+        .map((i) => ({ name: i.InputName, command: i.Actions?.[0]?.IRCommandName })).filter((i) => i.command)
+      : (entry.Commands?.length ? [] : [1, 2, 3, 4].map((n) => ({ name: `HDMI ${n}`, command: slotCommand(n) })));
+  }
+  const delay = Number.isInteger(d.inputDelay) ? d.inputDelay : feature?.InputDelay ?? 0;
+  return { list, delay };
+}
+
+function simApplyAndroidTvInputs(entry, list, delay) {
+  const id = entry.Device["Id-"];
+  const base = entry.Commands.filter((c) => SIM_ANDROIDTV_COMMANDS.includes(c.Name));
+  const extra = list.filter((i) => !SIM_ANDROIDTV_COMMANDS.includes(i.command)).map((i) => {
+    const before = entry.Commands.find((c) => c.Name === i.command);
+    return before ?? { Name: i.command, "Id-": id * 100 + 60 + slotOf(i.command), TransportType: 64, KeyCode: "", Raw: null,
+      Parameters: [{ Key: "{c}", Value: i.command }], IsLearned: false };
+  });
+  entry.Commands = [...base, ...extra];
+  entry.DeviceFeatures = (entry.DeviceFeatures ?? []).filter((f) => f?.__type !== "InputFeature");
+  if (list.length) {
+    entry.DeviceFeatures.unshift({
+      __type: "InputFeature", "DeviceId-": id, Id: 0, State: 1, InputType: 1, InputDelay: delay, DefaultInputDelay: delay,
+      Inputs: list.map((i, n) => ({ InputName: i.name, InputOrder: n + 1, IsActiveInput: true, ActionSetTypeId: 1,
+        Actions: [{ __type: "IRPressAction", IRCommandName: i.command, Order: 0, Duration: null, ActionId: 0 }] })),
+      NextActions: [], PreviousActions: []
+    });
+  }
+}
 
 function simAndroidTvPairState() {
   const p = simAndroidTv.pair;
@@ -1031,7 +1093,9 @@ function simAndroidTvPairState() {
   if (p.state === "checking" && age > 500) {
     p.state = "paired";
     p.tvId = "androidtv" + Buffer.from(p.host).toString("hex").slice(-8).padStart(8, "0");
-    simAndroidTv.tvs.set(p.tvId, { id: p.tvId, name: p.name || "Android TV", host: p.host, on: false });
+    // SIM_ANDROIDTV_ASLEEP=1: the TV is in deep standby (off the network) and
+    // hasn't told the hub its brand yet, until "Turn on the TV" wakes it.
+    simAndroidTv.tvs.set(p.tvId, { id: p.tvId, name: p.name || "Android TV", host: p.host, on: false, asleep: process.env.SIM_ANDROIDTV_ASLEEP === "1" });
   }
   return { ok: true, state: p.state, host: p.host, name: p.name, error: p.error, tvId: p.tvId };
 }
@@ -1066,6 +1130,28 @@ function handleAndroidTvDevices(res, params) {
   const result = { ok: true, localOnly: true, added: [], updated: [], removed: [], unchanged: [], devices: [] };
   const kept = [...others];
   for (const d of devices) {
+    const existing = owned.get(d.entity);
+    if (existing) {
+      const inputs = simAndroidTvInputs(existing, d);
+      if (inputs.error) {
+        sendJson(res, 422, { ok: false, localOnly: true, error: inputs.error });
+        return;
+      }
+      const deviceId = String(existing.Device["Id-"]);
+      const keptNames = new Set(inputs.list.map((i) => i.name));
+      for (const activity of state.activityList?.Activities ?? []) {
+        for (const role of activity.Roles ?? []) {
+          const selected = role?.SelectedInput?.Name;
+          if (String(role?.["DeviceId-"]) === deviceId && typeof selected === "string" && !keptNames.has(selected)) {
+            sendJson(res, 422, { ok: false, localOnly: true,
+              error: `${d.name}: activities still use inputs this change removes: "${activity.Name}" switches it to ${selected}` });
+            return;
+          }
+        }
+      }
+    }
+  }
+  for (const d of devices) {
     let entry = owned.get(d.entity);
     if (!entry) {
       // Count the TVs this request already added, so two new TVs never share an id.
@@ -1084,8 +1170,12 @@ function handleAndroidTvDevices(res, params) {
         DeviceFeatures: []
       };
       result.added.push(d.name);
+      const inputs = simAndroidTvInputs({ ...entry, Commands: [] }, d);
+      simApplyAndroidTvInputs(entry, inputs.error ? [] : inputs.list, inputs.delay ?? 0);
     } else {
       entry.Device.Name = d.name;
+      const inputs = simAndroidTvInputs(entry, d);
+      simApplyAndroidTvInputs(entry, inputs.list, inputs.delay);
       result.updated.push(d.name);
     }
     kept.push(entry);
@@ -1860,8 +1950,10 @@ async function handleApi(req, res, pathname, url) {
       sendJson(res, 200, {
         ok: true, version: "sim", identity: "ready",
         tvs: [...simAndroidTv.tvs.values()].map((tv) => ({
-          id: tv.id, name: tv.name, vendor: "Sim", model: "Sim TV", host: tv.host, mac: "02:00:00:00:00:60", connected: true,
-          on: tv.on, volume: 12, volumeMax: 100, muted: false, keysSent: 0, connects: 1, error: ""
+          id: tv.id, name: tv.name, vendor: tv.asleep ? "" : process.env.SIM_ANDROIDTV_VENDOR || "Sim", model: tv.asleep ? "" : "Sim TV",
+          host: tv.host, mac: "02:00:00:00:00:60", connected: !tv.asleep,
+          on: tv.on, volume: 12, volumeMax: 100, muted: false, keysSent: 0, connects: 1, appLinks: true,
+          inputs: parseProfile(simAndroidTv.profiles.get(tv.id) ?? "")?.method ?? "builtin", error: ""
         }))
       });
       return;
@@ -1909,7 +2001,69 @@ async function handleApi(req, res, pathname, url) {
       sendJson(res, 200, { ...done, state: "idle" });
       return;
     }
+    case "GET /api/androidtv/inputs": {
+      const id = String(params.device ?? "");
+      if (!simAndroidTv.tvs.has(id)) {
+        sendJson(res, 200, { ok: false, error: "No such TV." });
+        return;
+      }
+      sendJson(res, 200, { ok: true, device: id, profile: simAndroidTv.profiles.get(id) ?? null });
+      return;
+    }
+    case "POST /api/androidtv/inputs": {
+      const id = String(params.device ?? "");
+      if (typeof params.profile !== "string") {
+        sendError(res, 400, "profile (the input settings as text, or \"\" for the built-in behaviour) is required");
+        return;
+      }
+      const text = params.profile;
+      if (!simAndroidTv.tvs.has(id)) {
+        sendJson(res, 200, { ok: false, error: "No such TV." });
+        return;
+      }
+      if (!text) simAndroidTv.profiles.delete(id);
+      else if (!parseProfile(text)) {
+        sendJson(res, 200, { ok: false, error: "not a profile codex_androidtv takes" });
+        return;
+      } else simAndroidTv.profiles.set(id, text);
+      logEvent({ type: "androidtv-inputs", device: id, profile: text });
+      sendJson(res, 200, { ok: true });
+      return;
+    }
+    case "POST /api/androidtv/try": {
+      const tv = simAndroidTv.tvs.get(String(params.device ?? ""));
+      if (!tv) {
+        sendJson(res, 200, { ok: false, error: "No such TV." });
+        return;
+      }
+      if (params.method === "power") {
+        if (tv.asleep) {
+          // Wake-on-LAN: the TV takes a few seconds to join the network.
+          setTimeout(() => { tv.asleep = false; tv.on = true; }, 3000);
+        } else {
+          tv.on = true;
+        }
+      } else if (tv.asleep) {
+        sendJson(res, 200, { ok: false, error: "The TV isn't connected." });
+        return;
+      } else if (!tv.on) {
+        sendJson(res, 200, { ok: false, error: "The TV is off. Turn it on first." });
+        return;
+      }
+      logEvent({ type: "androidtv-try", ...params });
+      sendJson(res, 200, { ok: true });
+      return;
+    }
+    case "GET /api/androidtv/input-presets": {
+      try {
+        sendJson(res, 200, JSON.parse(fs.readFileSync(SIM_ANDROIDTV_PRESETS, "utf8")));
+      } catch (error) {
+        sendJson(res, 200, { ok: false, error: `no presets file (${error.message})` });
+      }
+      return;
+    }
     case "POST /api/androidtv/forget":
+      simAndroidTv.profiles.delete(String(params.id ?? ""));
       simAndroidTv.tvs.delete(String(params.id ?? ""));
       sendJson(res, 200, { ok: true });
       return;
@@ -2066,7 +2220,7 @@ async function handleApi(req, res, pathname, url) {
         update: { protocol: 0 },
         features: [
           "activity-save", "activity-sync", "catalog-import", "device-commands",
-          "androidtv-devices", "device-screen", "device-settings", "ha-devices", "ha-devices-v2",
+          "androidtv-devices", "androidtv-inputs", "device-screen", "device-settings", "ha-devices", "ha-devices-v2",
           "ha-state", "irdb-import", "remote-pair"
         ]
       });

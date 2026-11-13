@@ -869,10 +869,10 @@ class PythonInstallerPreflight(unittest.TestCase):
         binary_count = len(INST.bin_manifest_names())
         # The fixed candidates after the binaries: dropbear, dropbearkey,
         # init.sh, the egress guard, recovery_ap.sh, androidtv_service.sh,
-        # usb_eth_service.sh, r8152.ko, usbnet.ko, asix.ko, cdc_ether.ko,
+        # androidtv-input-presets.json, usb_eth_service.sh, r8152.ko, usbnet.ko, asix.ko, cdc_ether.ko,
         # cdc_ncm.ko, ax88179_178a.ko, modules README.md, rcS.local,
         # netservicestarter.lua, the two plugins, ... then config.json.
-        sensitive_index = binary_count + 22
+        sensitive_index = binary_count + 23
         self.hub.md5sum_drop_paths.add(
             f"{self.hub.stage}/{sensitive_index:02d}-config.json"
         )
