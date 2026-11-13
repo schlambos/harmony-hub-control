@@ -150,9 +150,52 @@ MapList has Companion home keys.
     which repeat, so holding + dims.
   - If the wrapper fails, the key goes to the engine unchanged.
 
+## Harmony Elite and 950 (experimental)
+
+The Elite and the 950 have the same six buttons. This part is built from the
+remote's firmware (4.15.330) and the hub's engine as read, and **has not been
+run on a remote yet**.
+
+- **Where:** Settings → Remotes, in the screen remote's section, card **Home
+  control buttons** (`#homebuttons/screen`, `#homebuttons/screen/<activityId>`).
+  The card shows only while a remote with skin 111 (Elite) or 112 (950) is
+  paired. The page is the Companion's.
+- **Keys:** both are remotes with a screen, EquadID `16417`, so the setup
+  lives in `16417Root` and `16417Activity<id>`, beside the keys every screen
+  remote has. The buttons are `HomeControl1`–`HomeControl4`; + and − are
+  `HomeControlPlus` and `HomeControlMinus`. `HomeControl<n>Up/Down` and
+  `HcUp`/`HcDown` mean what the Companion's do.
+- **A Touch paired to the same hub** shares these maps and has no such keys,
+  so it never sends them.
+- **The root map:** a hub whose screen remotes came from a Touch has no
+  `16417Root`. The first save makes it, with the surface and remote ids of
+  another `16417` map.
+- **+ and − need the root map.** The remote sends a home key only when the
+  running activity's map has it or a root map does. So every save makes sure
+  `16417Root` has `HomeControlPlus` and `HomeControlMinus`, running the
+  `Nothing` sequence when they had no entry. A key already there is kept.
+- **The hook** treats `equadId` 16417 like the Companion with these names:
+  - a home key without a long press has its holds answered `200`;
+  - `HomeControlPlus`/`HomeControlMinus` become `<last home key>Up/Down`, else
+    `HcUp`/`HcDown`. With neither, a + or − that does nothing is answered
+    `200`, because the engine hands every `HomeControlPlus`/`Minus` release to
+    its home automation manager;
+  - a + or − Logitech's home control binds stays the engine's.
+- **No "Nothing in this activity".** A screen remote shows a key that runs a
+  sequence as one and waits for the hub to finish it, so the page doesn't
+  offer the `Nothing` sequence in an activity map here.
+- **After a save** the remote must sync before it sends a new key, as for
+  every button change on a screen remote.
+
+Not known until it runs on a remote: how the remote sends these keys (they
+are not in the 29 names `hal` packs in short form, so a full `control.button`
+request is expected), and whether its own home control screens react to a
+root map that holds plain commands.
+
 ## Limits
 
-- Companion only (`16422`); other remotes' home keys are untouched.
+- Companion (`16422`), and the Elite and 950 as above; other remotes' home
+  keys are untouched.
 - The engine loads `codexactivity.lua` once per boot: after installing a new
   version the hub must reboot before the hooks run.
 - Until the first config load after the plugin starts, keys go to the engine
@@ -177,6 +220,7 @@ MapList has Companion home keys.
   key hook installed` and `codexactivity: home-control command hook
   installed`, then `codexactivity: kept home-control keys Ha1 …` for the keys
   it put back.
-- **Hub tests**: `luajit tools/touch-validator/codexactivity-home-buttons-test.lua`.
+- **Hub tests**: `luajit tools/touch-validator/codexactivity-home-buttons-test.lua`
+  (the Elite and 950 keys included).
 - **Web tests**: `tools/webui-sim/test/home-buttons-model.test.mjs` and
   `tools/webui-sim/test/button-picker.test.mjs`.

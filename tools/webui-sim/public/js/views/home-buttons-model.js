@@ -11,16 +11,24 @@
      sequence (one zero delay); the engine drops a button without actions
      and would fall back to the global one.
    Everything else in those maps (other keys, other actions, sequences,
-   unknown fields, key order) is carried through untouched. */
+   unknown fields, key order) is carried through untouched.
+
+   A Harmony Elite or 950 has the same six buttons. It is a remote with a
+   screen (16417), so they live in the 16417 maps under its key names
+   (HomeControl1–4). It sends + and − only while the root map has
+   HomeControlPlus/HomeControlMinus, so a save puts them there, doing
+   nothing, when they are missing; the hub plugin turns them into the keys
+   above. A hub whose screen remotes never had a root map gets one. */
 
 import { cloneJsonResource, commandAction, createAllocator } from "../wizard-model.js";
 import { validateMapList } from "./remote-model.js";
-import { rootMapId } from "./remotes-model.js";
+import { TOUCH_EQUAD, rootMapId } from "./remotes-model.js";
 import { describeAction, touchMapIdentifier } from "./touch-model.js";
 
 /* Only 16422: the hub plugin's home keys are proven on it (16423 is untested). */
 export const COMPANION_EQUAD = "16422";
-const ROOT_MAP = rootMapId(COMPANION_EQUAD);
+/** The remotes with a screen (every model is 16417; only some have home buttons). */
+export const SCREEN_EQUAD = TOUCH_EQUAD;
 
 export const HOME_BUTTONS = Object.freeze([
   { key: "Ha1", label: "Light 1" },
@@ -28,6 +36,54 @@ export const HOME_BUTTONS = Object.freeze([
   { key: "Ha3", label: "Plug 1" },
   { key: "Ha4", label: "Plug 2" },
 ]);
+
+/* What differs per remote:
+   - `gateKeys`: keys the root map must have for the remote to send + and −;
+   - `canTurnOff`: whether an activity can turn a button off. A remote with a
+     screen shows a key that runs a sequence as one and waits for it, so the
+     "Nothing" sequence isn't offered there;
+   - `makesRoot`: whether a save may add the root map. */
+const REMOTES = Object.freeze({
+  [COMPANION_EQUAD]: {
+    equad: COMPANION_EQUAD,
+    name: "Harmony Companion",
+    buttons: HOME_BUTTONS,
+    gateKeys: [],
+    canTurnOff: true,
+    makesRoot: false,
+  },
+  [SCREEN_EQUAD]: {
+    equad: SCREEN_EQUAD,
+    name: "Harmony Elite or 950",
+    buttons: Object.freeze([
+      { key: "HomeControl1", label: "Light 1" },
+      { key: "HomeControl2", label: "Light 2" },
+      { key: "HomeControl3", label: "Plug 1" },
+      { key: "HomeControl4", label: "Plug 2" },
+    ]),
+    gateKeys: ["HomeControlPlus", "HomeControlMinus"],
+    canTurnOff: false,
+    makesRoot: true,
+  },
+});
+
+/** The home-button facts of a remote, by EquadID (the Companion's by default). */
+export function homeRemote(equad = COMPANION_EQUAD) {
+  const remote = REMOTES[String(equad)];
+  if (!remote) throw new Error(`Remote ${equad} has no home control buttons.`);
+  return remote;
+}
+
+/* Skins of remotes with a screen that have home control buttons (Elite, 950). */
+const HOME_BUTTON_SKINS = new Set(["111", "112"]);
+
+/** Whether a paired remote (parseRfInfo) has home control buttons. */
+export function hasHomeButtons(remote) {
+  const equad = String(remote?.equadId ?? "");
+  if (equad === COMPANION_EQUAD) return true;
+  const skins = remote?.skinIds ?? [remote?.skinId];
+  return equad === SCREEN_EQUAD && skins.some((skin) => HOME_BUTTON_SKINS.has(String(skin ?? "")));
+}
 
 /** What + and − do when the last pressed home button has no + / − of its own. */
 export const ROCKER_KEYS = Object.freeze({ up: "HcUp", down: "HcDown" });
@@ -39,12 +95,13 @@ export function dimKeys(homeKey) {
   return { up: `${homeKey}Up`, down: `${homeKey}Down` };
 }
 
-const HOME_KEYS = new Set(HOME_BUTTONS.map((b) => b.key));
-const OWNED_KEYS = new Set([
-  ...HOME_KEYS,
-  ...HOME_BUTTONS.flatMap((b) => Object.values(dimKeys(b.key))),
+const homeKeysOf = (remote) => new Set(remote.buttons.map((b) => b.key));
+const ownedKeysOf = (remote) => new Set([
+  ...homeKeysOf(remote),
+  ...remote.buttons.flatMap((b) => Object.values(dimKeys(b.key))),
   ...Object.values(ROCKER_KEYS),
 ]);
+const remoteOf = (draft) => homeRemote(draft?.remote);
 const OWNED_ACTIONS = ["ButtonCommandAction", "ButtonSequenceAction", "ButtonActivityAction"];
 const SHORT_EVENT = 1;
 const LONG_EVENT = 2;
@@ -57,14 +114,15 @@ function mapById(config, identifier) {
   return mapsOf(config).find((m) => m?.ButtonMapIdentifier === identifier) ?? null;
 }
 
-const targetIdentifier = (activityId) => (activityId ? touchMapIdentifier(activityId, COMPANION_EQUAD) : ROOT_MAP);
+const targetIdentifier = (activityId, equad) => (activityId ? touchMapIdentifier(activityId, equad) : rootMapId(equad));
 
-/* The map a new activity map copies its surface and remote ids from:
-   another activity's Companion map first, then the root map. */
-function siblingMap(config) {
+/* The map a new map copies its surface and remote ids from: another
+   activity's map of this remote first, then its root map, then any of its
+   maps (a remote with a screen may have device maps only). */
+function siblingMap(config, equad) {
   const maps = mapsOf(config);
-  return maps.find((m) => String(m?.ButtonMapIdentifier ?? "").startsWith(`${COMPANION_EQUAD}Activity`))
-    ?? mapById(config, ROOT_MAP);
+  const named = (prefix) => maps.find((m) => String(m?.ButtonMapIdentifier ?? "").startsWith(prefix));
+  return named(`${equad}Activity`) ?? mapById(config, rootMapId(equad)) ?? named(`${equad}Device`) ?? null;
 }
 
 function isHardKey(button, key) {
@@ -121,9 +179,9 @@ function readEntry(map, key) {
   };
 }
 
-function readEntries(map) {
+function readEntries(map, remote) {
   const entries = {};
-  for (const key of OWNED_KEYS) {
+  for (const key of ownedKeysOf(remote)) {
     const entry = readEntry(map, key);
     if (entry) entries[key] = entry;
   }
@@ -135,16 +193,19 @@ function readEntries(map) {
  * one activity's overrides. `entries` are this scope's own keys; in an
  * activity, `globalEntries` are what a key without an override follows.
  */
-export function readHomeButtons(config, activityId = "") {
+export function readHomeButtons(config, activityId = "", equad = COMPANION_EQUAD) {
+  const remote = homeRemote(equad);
   const id = activityId ? String(activityId) : "";
-  const map = mapById(config, targetIdentifier(id));
-  const root = mapById(config, ROOT_MAP);
+  const map = mapById(config, targetIdentifier(id, remote.equad));
+  const root = mapById(config, rootMapId(remote.equad));
+  const sibling = siblingMap(config, remote.equad);
   return {
+    remote: remote.equad,
     activityId: id,
     exists: Boolean(map),
-    canEdit: id ? Boolean(map || siblingMap(config)) : Boolean(root),
-    entries: readEntries(map),
-    globalEntries: id ? readEntries(root) : {},
+    canEdit: id || remote.makesRoot ? Boolean(map || sibling) : Boolean(root),
+    entries: readEntries(map, remote),
+    globalEntries: id ? readEntries(root, remote) : {},
     sequences: sequencesOf(map)
       .filter((s) => !isNothingSequence(s))
       .map((s) => ({ sequenceId: String(s.SequenceId), name: String(s.Name ?? "") })),
@@ -175,7 +236,7 @@ function copy(draft) {
 }
 
 function ownedEntry(draft, key) {
-  if (!OWNED_KEYS.has(key)) throw new Error(`${key} isn't a home control key.`);
+  if (!ownedKeysOf(remoteOf(draft)).has(key)) throw new Error(`${key} isn't a home control key.`);
   const entry = draft.entries[key];
   if (entry?.state === "other") throw new Error("This button is set up in a way this page doesn't change, so it's kept as it is.");
   return entry;
@@ -194,7 +255,7 @@ export function setAction(draft, key, which, action) {
     next.entries[key] = { state: "set", press: wanted, long: entry?.state === "set" ? entry.long : null };
     return next;
   }
-  if (which !== "long" || !HOME_KEYS.has(key)) throw new Error("Only Light 1, Light 2, Plug 1 and Plug 2 have a long press.");
+  if (which !== "long" || !homeKeysOf(remoteOf(draft)).has(key)) throw new Error("Only Light 1, Light 2, Plug 1 and Plug 2 have a long press.");
   if (entry?.state === "set") {
     next.entries[key].long = wanted;
     return next;
@@ -221,6 +282,7 @@ export function clearAction(draft, key, which) {
 /** In an activity: the key does nothing there, whatever the global one does. */
 export function setNothing(draft, key) {
   if (!draft.activityId) throw new Error("Only an activity can turn a button off.");
+  if (!remoteOf(draft).canTurnOff) throw new Error("This remote's buttons can't be turned off for one activity.");
   ownedEntry(draft, key);
   const next = copy(draft);
   next.entries[key] = { state: "nothing" };
@@ -228,24 +290,27 @@ export function setNothing(draft, key) {
 }
 
 /* The entries in key order, so two drafts compare whatever order their edits came in. */
-function entriesShape(entries) {
-  return JSON.stringify([...OWNED_KEYS].map((key) => entries[key] ?? null));
+function entriesShape(entries, remote) {
+  return JSON.stringify([...ownedKeysOf(remote)].map((key) => entries[key] ?? null));
 }
+
+const reread = (config, draft) => readHomeButtons(config, draft.activityId, draft.remote);
 
 /** Whether the draft differs from the scope it was read from. */
 export function isChanged(config, draft) {
-  return entriesShape(readHomeButtons(config, draft.activityId).entries) !== entriesShape(draft.entries);
+  const remote = remoteOf(draft);
+  return entriesShape(reread(config, draft).entries, remote) !== entriesShape(draft.entries, remote);
 }
 
 /** Whether any of `keys` differs from the scope it was read from. */
 export function keysChanged(config, draft, keys) {
-  const saved = readHomeButtons(config, draft.activityId).entries;
+  const saved = reread(config, draft).entries;
   return keys.some((key) => JSON.stringify(saved[key] ?? null) !== JSON.stringify(draft.entries[key] ?? null));
 }
 
 /** The draft with `keys` back as the scope has them on the hub. */
 export function revertKeys(config, draft, keys) {
-  const saved = readHomeButtons(config, draft.activityId).entries;
+  const saved = reread(config, draft).entries;
   const next = copy(draft);
   for (const key of keys) {
     if (saved[key]) next.entries[key] = structuredClone(saved[key]);
@@ -259,7 +324,7 @@ export function revertKeys(config, draft, keys) {
  * "unchanged" or "changed" (something else), like the Touch editor.
  */
 export function saveOutcome(config, draft) {
-  if (JSON.stringify(mapById(config, targetIdentifier(draft.activityId))) === draft.base) return "unchanged";
+  if (JSON.stringify(mapById(config, targetIdentifier(draft.activityId, draft.remote))) === draft.base) return "unchanged";
   return isChanged(config, draft) ? "changed" : "saved";
 }
 
@@ -295,9 +360,9 @@ const sequenceContent = (sequence) => JSON.stringify({ ...sequence, SequenceId: 
    activity override that keeps the global press (a long press set on its
    own) runs a 16422Root sequence, so the activity map gets a copy of it,
    or reuses a copy it already has. */
-function sequenceIdResolver(config, map, alloc) {
+function sequenceIdResolver(config, map, alloc, equad) {
   const own = new Set(sequencesOf(map).map((s) => String(s.SequenceId)));
-  const root = map.ButtonMapIdentifier === ROOT_MAP ? null : mapById(config, ROOT_MAP);
+  const root = map.ButtonMapIdentifier === rootMapId(equad) ? null : mapById(config, rootMapId(equad));
   return (sequenceId) => {
     const id = String(sequenceId);
     if (own.has(id)) return id;
@@ -332,18 +397,19 @@ function newButton(key, buttonId) {
   };
 }
 
-/* A new activity map copies the surface and remote ids from a sibling. */
-function newMap(config, activityId, alloc) {
-  const sibling = siblingMap(config);
-  if (!sibling) throw new Error("This hub has no Harmony Companion map to copy.");
+/* A new map (an activity's, or the root map without an activity) copies the
+   surface and remote ids from a sibling. */
+function newMap(config, activityId, alloc, remote) {
+  const sibling = siblingMap(config, remote.equad);
+  if (!sibling) throw new Error(`This hub has no ${remote.name} map to copy.`);
   return {
     "ButtonMapId-": alloc.mapId(),
-    "ActivityId-": Number(activityId),
+    ...(activityId ? { "ActivityId-": Number(activityId) } : {}),
     Buttons: [],
     "ButtonMapSurfaceId-": sibling["ButtonMapSurfaceId-"] ?? null,
-    __type: "ActivityButtonMap",
+    __type: activityId ? "ActivityButtonMap" : "RootButtonMap",
     "RemoteId-": sibling["RemoteId-"] ?? null,
-    ButtonMapIdentifier: touchMapIdentifier(activityId, COMPANION_EQUAD),
+    ButtonMapIdentifier: targetIdentifier(activityId, remote.equad),
     DateModified: null,
     Sequences: [],
     "SurfaceId-": sibling["SurfaceId-"] ?? null,
@@ -389,14 +455,15 @@ function writeEntry(button, entry, map, sequenceIdIn, nothingId) {
 /* The draft's keys written into `map`: changed keys keep their place and
    fields, cleared keys go, new keys go after the rest. */
 function writeEntries(config, map, draft, alloc) {
-  const sequenceIdIn = sequenceIdResolver(config, map, alloc);
+  const owned = ownedKeysOf(remoteOf(draft));
+  const sequenceIdIn = sequenceIdResolver(config, map, alloc, draft.remote);
   const wantsNothing = Object.values(draft.entries).some((e) => e.state === "nothing");
   const nothingId = wantsNothing ? nothingSequenceId(config, map, alloc) : null;
   const written = new Set();
   const buttons = [];
   for (const button of Array.isArray(map.Buttons) ? map.Buttons : []) {
     const key = typeOf(button) === "HardRemoteButton" ? button.ButtonKey : "";
-    const before = OWNED_KEYS.has(key) ? readEntry(map, key) : undefined;
+    const before = owned.has(key) ? readEntry(map, key) : undefined;
     if (!before || before.state === "other") {
       buttons.push(button);
       continue;
@@ -419,6 +486,28 @@ function writeEntries(config, map, draft, alloc) {
   dropUnusedNothing(map);
 }
 
+/* The remote sends + and − only while its root map has `gateKeys`: add the
+   ones it lacks, doing nothing. A key already there is kept as it is. */
+function addGateKeys(config, mapList, remote, alloc, now) {
+  if (!remote.gateKeys.length) return;
+  const rootId = rootMapId(remote.equad);
+  let root = mapList.ButtonMaps.find((m) => m?.ButtonMapIdentifier === rootId);
+  const missing = remote.gateKeys.filter((key) => !hardButton(root, key));
+  if (!missing.length) return;
+  if (!root) {
+    root = newMap(config, "", alloc, remote);
+    mapList.ButtonMaps.push(root);
+  }
+  const nothingId = nothingSequenceId(config, root, alloc);
+  if (!Array.isArray(root.Buttons)) root.Buttons = [];
+  for (const key of missing) {
+    const button = newButton(key, alloc.id());
+    button.ButtonAction = { __type: "ButtonSequenceAction", SequenceId: Number(nothingId), Order: 0, EventType: SHORT_EVENT, Id: 0 };
+    root.Buttons.push(button);
+  }
+  root.DateModified = harmonyDate(now);
+}
+
 /**
  * The hub's MapList with the draft written into its 16422 map. Every other
  * map, and every key the page doesn't own, is copied as is. An activity
@@ -431,7 +520,8 @@ export function buildHomeButtonsMapList(config, draft, { now = Date.now() } = {}
   if (activityId && !(config?.activityList?.Activities ?? []).some((a) => String(a?.["Id-"]) === activityId)) {
     throw new Error("This activity isn't on the hub any more.");
   }
-  const identifier = targetIdentifier(activityId);
+  const remote = remoteOf(draft);
+  const identifier = targetIdentifier(activityId, remote.equad);
   if (JSON.stringify(mapById(config, identifier)) !== draft.base) {
     throw new Error("These buttons changed on the hub since you opened them. Reopen the page to see the latest.");
   }
@@ -439,14 +529,15 @@ export function buildHomeButtonsMapList(config, draft, { now = Date.now() } = {}
   const alloc = createAllocator(config);
   let map = mapList.ButtonMaps.find((m) => m?.ButtonMapIdentifier === identifier);
   if (!map) {
-    if (!activityId) throw new Error("This hub has no Harmony Companion buttons to change.");
+    if (!activityId && !remote.makesRoot) throw new Error(`This hub has no ${remote.name} buttons to change.`);
     if (Object.keys(draft.entries).length === 0) return mapList;
-    map = newMap(config, activityId, alloc);
+    map = newMap(config, activityId, alloc, remote);
     mapList.ButtonMaps.push(map);
   }
   const before = JSON.stringify(map);
   writeEntries(config, map, draft, alloc);
   if (JSON.stringify(map) !== before) map.DateModified = harmonyDate(now);
+  addGateKeys(config, mapList, remote, alloc, now);
   const errors = validateMapList(mapList);
   if (errors.length) throw new Error(`The hub would not load these buttons: ${errors[0]}`);
   return mapList;
