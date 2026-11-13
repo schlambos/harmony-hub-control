@@ -108,9 +108,15 @@ def asset_names(series: str, version: str) -> dict:
         "dmg": {arch: f"Melodious-{version}-{arch}.dmg" for arch in ("arm64", "x64")},
         "zip": {arch: f"Melodious-{version}-{arch}.zip" for arch in ("arm64", "x64")},
     }
+    # Windows is x64 only: the installer and the same app as a zip
+    # (desktop/electron-builder.yml).
+    win = {
+        "setup": {"x64": f"Melodious-{version}-win-x64-setup.exe"},
+        "zip": {"x64": f"Melodious-{version}-win-x64.zip"},
+    }
     if series == "desktop":
-        return {"mac": mac}
-    return {"hub": f"melodious-hub-{version}.zip", "apk": f"melodious-{version}.apk", "mac": mac}
+        return {"mac": mac, "win": win}
+    return {"hub": f"melodious-hub-{version}.zip", "apk": f"melodious-{version}.apk", "mac": mac, "win": win}
 
 
 def source_assets(folder: Path, series: str, version: str) -> dict[str, str]:
@@ -155,13 +161,14 @@ def release_assets(folder: Path, series: str, version: str) -> list[str]:
 
 
 def ordered_assets(series: str, version: str) -> list[str]:
-    """SHA256SUMS order used since 1.0: hub, apk, dmgs, zips."""
+    """SHA256SUMS order used since 1.0: hub, apk, dmgs, zips; then the Windows installer and zip."""
     names = asset_names(series, version)
     out = []
     if series == "hub":
         out += [names["hub"], names["apk"]]
     out += [names["mac"]["dmg"]["arm64"], names["mac"]["dmg"]["x64"]]
     out += [names["mac"]["zip"]["arm64"], names["mac"]["zip"]["x64"]]
+    out += [names["win"]["setup"]["x64"], names["win"]["zip"]["x64"]]
     return out
 
 
@@ -288,11 +295,19 @@ def build_manifest(folder: Path, series: str, version: str, min_hub: str | None,
             "assets": dict(names["mac"]["zip"]),
             "minSystem": "13.0",
         },
+        # "assets" is the installer, the file the Windows app's update notice
+        # looks for (desktop/src/updates.js appAssetName).
+        "windows": {
+            "assets": dict(names["win"]["setup"]),
+            "zip": dict(names["win"]["zip"]),
+            "minSystem": "10.0",
+        },
     }
     if min_hub:
         if not VERSION_RE.match(min_hub):
             raise ReleaseError(f"--min-hub {min_hub!r} is not MAJOR.MINOR.PATCH")
         manifest["macos"]["minHub"] = min_hub
+        manifest["windows"]["minHub"] = min_hub
     if series == "hub":
         if not min_hub:
             raise ReleaseError("--min-hub is required for a hub release")

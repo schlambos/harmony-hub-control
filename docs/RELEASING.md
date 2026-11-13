@@ -4,13 +4,14 @@ A release is a GitHub release `v<version>` ("Melodious <major.minor>") with:
 - the hub zip;
 - the Android APK;
 - the four macOS files;
+- the two Windows files (experimental, unsigned);
 - BusyBox's upstream source tarball, `busybox-<version>.tar.bz2` (hub releases);
 - `melodious-update.json`;
 - `SHA256SUMS.txt`.
 
-A Mac-only hotfix may go out as `desktop-v<version>` with the Mac files. Untick
-"Set as latest" on those releases, so GitHub's "latest" stays on the full
-release.
+An app-only hotfix may go out as `desktop-v<version>` with the Mac and Windows
+files. Untick "Set as latest" on those releases, so GitHub's "latest" stays on
+the full release.
 
 Releases are not signed. `SHA256SUMS.txt` proves a download is intact, not who
 published it, so the GitHub account is what protects a release. The APK is
@@ -24,6 +25,13 @@ key, so losing that key means users uninstall and reinstall.
    - `melodious-hub-<v>.zip`;
    - the owner signs the APK with `apksigner` → `melodious-<v>.apk`;
    - `Melodious-<v>-{arm64,x64}.{dmg,zip}`;
+   - `Melodious-<v>-win-x64-setup.exe` and `Melodious-<v>-win-x64.zip`, from
+     the `melodious-windows-x64` artifact of the `Desktop (Windows)` workflow
+     run on the release commit, or from `npm run dist:win` on a Windows PC
+     (`desktop/README.md`). Check the two files against the artifact's
+     `SHA256SUMS-windows.txt`, then leave that file out of the folder. They
+     are experimental and unsigned, so SmartScreen warns before the first
+     launch; say so in the release notes;
    - for a hub release, the BusyBox tarball that
      `third_party/busybox-<version>/README.md` names, as downloaded from
      busybox.net (`busybox-1.37.0.tar.bz2` today). `busybox-extra` is GPL-2.0,
@@ -36,8 +44,8 @@ key, so losing that key means users uninstall and reinstall.
 
    This writes:
    - `melodious-update.json`: version, the APK's versionCode and certificate,
-     the Mac zips, and each hub payload file with its install destination,
-     tier and SHA-256;
+     the Mac zips, the Windows installer and zip, and each hub payload file
+     with its install destination, tier and SHA-256;
    - `SHA256SUMS.txt`: every asset, the BusyBox tarball included, plus
      `melodious-update.json`.
 
@@ -63,8 +71,9 @@ key, so losing that key means users uninstall and reinstall.
    python3 tools/releases/release.py verify <folder>
    ```
 
-   It checks every checksum, that nothing in the folder is left out, and that
-   the manifest matches the assets.
+   It checks every checksum, that nothing in the folder is left out or
+   missing (the Windows files included), and that the manifest matches the
+   assets.
 4. **Upload everything in the folder**, including `melodious-update.json`,
    then publish.
 

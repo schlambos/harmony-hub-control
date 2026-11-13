@@ -19,6 +19,8 @@ import release  # noqa: E402
 
 VERSION = "9.8.7"
 COMMIT = "0123456789abcdef0123456789abcdef01234567"
+WIN_SETUP = f"Melodious-{VERSION}-win-x64-setup.exe"
+WIN_ZIP = f"Melodious-{VERSION}-win-x64.zip"
 TARBALL = b"fake busybox-1.37.0 source\n"
 TARBALL_NAME = "busybox-1.37.0.tar.bz2"
 README = ("| Upstream source | `https://busybox.net/downloads/busybox-1.37.0.tar.bz2`, SHA-256 `"
@@ -97,12 +99,74 @@ class ReleaseToolTest(unittest.TestCase):
         self.assertEqual(tiers["payload/activity/codexactivity.lua"], 2)
         self.assertEqual(tiers["payload/scripts/rcS.local"], 3)
         self.assertEqual(tiers["payload/bin/codex_portal"], 3)
+        self.assertWindows(manifest)
 
     def test_desktop_release_round_trip(self):
         manifest = self.make_release(series="desktop")
         self.verify()
         self.assertEqual(manifest["tag"], f"desktop-v{VERSION}")
         self.assertNotIn("hub", manifest)
+        self.assertWindows(manifest)
+
+    def assertWindows(self, manifest):
+        self.assertEqual(manifest["windows"], {
+            "assets": {"x64": WIN_SETUP}, "zip": {"x64": WIN_ZIP}, "minSystem": "10.0", "minHub": "1.2.0"})
+        self.assertEqual(manifest["macos"]["assets"],
+                         {arch: f"Melodious-{VERSION}-{arch}.zip" for arch in ("arm64", "x64")})
+        sums = release.parse_sums((self.dir / release.SUMS_NAME).read_text())
+        for name in (WIN_SETUP, WIN_ZIP):
+            self.assertEqual(sums[name], hashlib.sha256(f"asset {name}".encode()).hexdigest())
+        at = list(sums).index(f"Melodious-{VERSION}-x64.zip")
+        self.assertEqual(list(sums)[at + 1:at + 3], [WIN_SETUP, WIN_ZIP])
+
+    def test_windows_min_hub_is_optional_for_desktop(self):
+        self.make_release(series="desktop")
+        manifest = release.build_manifest(self.dir, "desktop", VERSION, None, COMMIT)
+        self.assertNotIn("minHub", manifest["windows"])
+        self.assertNotIn("minHub", manifest["macos"])
+
+    def test_missing_windows_asset_is_rejected(self):
+        for series in ("hub", "desktop"):
+            for name in (WIN_SETUP, WIN_ZIP):
+                with self.subTest(series=series, name=name):
+                    self.make_release(series=series)
+                    (self.dir / name).unlink()
+                    self.assertRejected(f"lists {name}, which is not in")
+                    with self.assertRaisesRegex(release.ReleaseError, f"missing asset {name}"):
+                        release.build_manifest(self.dir, series, VERSION, "1.2.0", COMMIT, apk_reader=fake_apk)
+                self.tearDown()
+                self.setUp()
+
+    def test_corrupted_windows_asset_is_rejected(self):
+        for series in ("hub", "desktop"):
+            for name in (WIN_SETUP, WIN_ZIP):
+                with self.subTest(series=series, name=name):
+                    self.make_release(series=series)
+                    (self.dir / name).write_bytes(b"swapped")
+                    self.assertRejected(f"{name}: SHA-256 does not match")
+                self.tearDown()
+                self.setUp()
+
+    def test_windows_asset_left_out_of_sums_is_rejected(self):
+        for series in ("hub", "desktop"):
+            with self.subTest(series=series):
+                self.make_release(series=series)
+                names = [n for n in release.release_assets(self.dir, series, VERSION) if n != WIN_ZIP]
+                release.write_sums(self.dir, names + [release.MANIFEST_NAME])
+                self.assertRejected("not covered")
+                (self.dir / WIN_ZIP).unlink()
+                self.assertRejected("expected")
+            self.tearDown()
+            self.setUp()
+
+    def test_edited_windows_manifest_is_rejected(self):
+        self.make_release(series="desktop")
+        path = self.dir / release.MANIFEST_NAME
+        data = json.loads(path.read_text())
+        data["windows"]["assets"]["x64"] = WIN_ZIP
+        path.write_text(json.dumps(data, indent=2) + "\n")
+        release.write_sums(self.dir, release.release_assets(self.dir, "desktop", VERSION) + [release.MANIFEST_NAME])
+        self.assertRejected("does not match the assets")
 
     def test_tampered_asset_is_rejected(self):
         self.make_release()
