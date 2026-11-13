@@ -152,17 +152,36 @@ MapList has Companion home keys.
 
 ## Harmony Elite and 950
 
-The Elite and the 950 have the same six buttons. This part is built from the
-remote's firmware (4.15.330) and the hub's engine as read, and was run on a
-Harmony 950 on 2026-11-13. It has not been run on an Elite.
+The Elite and the 950 have the same six buttons: four silkscreened with dots
+(`•`, `••`, `•••`, `••••`) instead of Light/Plug text, and a **+ / −** rocker.
+This part is built from the remote's firmware (4.15.330) and the hub's engine
+as read, and was run on a Harmony 950 (skin 112) on 2026-11-13. The Harmony
+Elite (skin 111) shares the firmware and dot cluster and is expected to match,
+but is not hardware-verified here.
 
-Run on the 950, with the buttons set for every activity:
+Logitech numbers the `HomeControl` keys column-major while silkscreening the
+dots row-major, so the physical dot buttons map to `HomeControl` keys in a
+crossed order:
 
-- Light 1 and Light 2 send their commands. Held, a light without a long
-  press sends its command once.
-- After Light 1, + and − send its + and − commands (`HomeControl1Up/Down`,
-  volume up and down in the test).
-- After Light 2, which had no + and −, a + or − that does nothing is answered
+| Physical | HomeControl key | Old label |
+| --- | --- | --- |
+| `•` 1 dot | `HomeControl1` | Light 1 |
+| `••` 2 dots | `HomeControl3` | Plug 1 |
+| `•••` 3 dots | `HomeControl2` | Light 2 |
+| `••••` 4 dots | `HomeControl4` | Plug 2 |
+| `+` / `−` | `HomeControlPlus` / `HomeControlMinus` (act on the last-pressed dot's `Up`/`Down`, else `HcUp`/`HcDown`) | + / − |
+
+The UI orders the 16417 rows in physical dot order (`• 1 dot` to `•••• 4 dots`,
+keys `HomeControl1`, `HomeControl3`, `HomeControl2`, `HomeControl4`).
+
+Run on the 950 (skin 112), with the buttons set for every activity:
+
+- All four dot buttons (`•` 1 dot / `HomeControl1`, `••` 2 dots / `HomeControl3`,
+  `•••` 3 dots / `HomeControl2`, `••••` 4 dots / `HomeControl4`) send their
+  commands. Held, a dot button without a long press sends its command once.
+- After 1 dot (`HomeControl1`), + and − send its + and − commands
+  (`HomeControl1Up`/`HomeControl1Down`, volume up and down in the test).
+- After a dot button with no + and −, a + or − that does nothing is answered
   `200`, pressed or held, and the remote's screen carries on.
 - The remote's other keys work as before.
 - The home keys arrive as full `control.button` requests, with a `hold` about
@@ -173,9 +192,8 @@ Not yet run on a 950:
 - **Whether a held + or − repeats.** The hub's log shows one press and one
   release of the command for a 3 second hold of +. It can't show whether the
   device got a repeat, and that wasn't checked.
-- **A long press action** on Light 1 or Light 2.
-- **Plug 1 and Plug 2.**
-- **`HcUp`/`HcDown`**: what + and − do when the light pressed last has none.
+- **A long press action** on a dot button.
+- **`HcUp`/`HcDown`**: what + and − do when the dot button pressed last has none.
 - **An activity's own buttons** (`#homebuttons/screen/<activityId>`).
 - **The remote's own home control screens**: whether they react to a root map
   that holds plain commands.
@@ -183,12 +201,15 @@ Not yet run on a 950:
 - **Where:** Settings → Remotes, in the screen remote's section, card **Home
   control buttons** (`#homebuttons/screen`, `#homebuttons/screen/<activityId>`).
   The card shows only while a remote with skin 111 (Elite) or 112 (950) is
-  paired. The page is the Companion's.
+  paired. The page follows the Companion's layout with the dot buttons in
+  physical order (`• 1 dot`–`•••• 4 dots`).
 - **Keys:** both are remotes with a screen, EquadID `16417`, so the setup
   lives in `16417Root` and `16417Activity<id>`, beside the keys every screen
-  remote has. The buttons are `HomeControl1`–`HomeControl4`; + and − are
-  `HomeControlPlus` and `HomeControlMinus`. `HomeControl<n>Up/Down` and
-  `HcUp`/`HcDown` mean what the Companion's do.
+  remote has. The dot buttons map to `HomeControl1`, `HomeControl3`,
+  `HomeControl2`, and `HomeControl4` as tabled above; + and − are
+  `HomeControlPlus` and `HomeControlMinus` and act on the last-pressed dot's
+  `HomeControl<n>Up`/`HomeControl<n>Down`, or `HcUp`/`HcDown` when the last
+  dot has none.
 - **A Touch paired to the same hub** shares these maps and has no such keys,
   so it never sends them.
 - **The root map:** a hub whose screen remotes came from a Touch has no

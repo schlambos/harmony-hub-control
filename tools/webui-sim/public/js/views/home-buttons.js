@@ -40,8 +40,6 @@ import { sortPickerDevices } from "./remote-model.js";
 import { saveMapList } from "./map-save.js";
 import { hasRemoteMaps } from "./touch-model.js";
 
-const HINT = "+ and − adjust the light or plug button you pressed last when it has + / − actions; otherwise they do what “+ and −” says. Light and plug buttons fire once per press and don't repeat while held. A long press fires after you hold the button for about 0.7 seconds.";
-
 const BADGES = { global: "Global", override: "Override", nothing: "Nothing" };
 const SOURCES = { global: "global setting", override: "this activity" };
 
@@ -195,11 +193,15 @@ export function createHomeButtonsView(section) {
       : `<button type="button" class="m-row wiz-key" data-key="${escapeHtml(button.key)}" aria-haspopup="dialog">${inner}</button>`;
   }
 
+  function hintText() {
+    return `+ and − adjust the ${remote.copy.hintLast} you pressed last when it has + / − actions; otherwise they do what “+ and −” says. ${remote.copy.hintGroup} fire once per press and don't repeat while held. A long press fires after you hold the button for about 0.7 seconds.`;
+  }
+
   function bodyMarkup() {
     const name = activityId ? hub.activityName(hub.activityById(activityId)) : remote.name;
     const about = activityId
-      ? `What the ${remote.name}'s light, plug and + / − buttons do while this activity runs. Changes here only apply to this activity. A button you don't change follows the global setting; one you change replaces it, long press included.`
-      : `What the ${remote.name}'s light, plug and + / − buttons do. Change a button for one activity: Remotes → Home control buttons → the activity.`;
+      ? `What the ${remote.name}'s ${remote.copy.introButtons} do while this activity runs. Changes here only apply to this activity. A button you don't change follows the global setting; one you change replaces it, long press included.`
+      : `What the ${remote.name}'s ${remote.copy.introButtons} do. Change a button for one activity: Remotes → Home control buttons → the activity.`;
     const intro = `<div class="wiz-intro"><h2 tabindex="-1">${escapeHtml(name)}</h2><p>${escapeHtml(about)}</p></div>`;
     if (!hasRemoteMaps(hub.state.config, remote.equad) || !draft.canEdit) {
       return `${intro}<div class="m-empty">
@@ -208,14 +210,14 @@ export function createHomeButtonsView(section) {
           <p class="m-empty-body">Home control buttons need a ${escapeHtml(remote.name)} remote that has synced with this hub at least once.</p>
         </div>`;
     }
-    const lights = buttons.filter((b) => b.tabs.length > 1);
+    const home = buttons.filter((b) => b.tabs.length > 1);
     const rocker = buttons.filter((b) => b.tabs.length === 1);
     return `${intro}
-      ${sectionLabel("Light and plug buttons")}
-      <div class="m-list">${lights.map(buttonRow).join("")}</div>
+      ${sectionLabel(remote.copy.section)}
+      <div class="m-list">${home.map(buttonRow).join("")}</div>
       ${sectionLabel("+ and −")}
       <div class="m-list">${rocker.map(buttonRow).join("")}</div>
-      <p class="wiz-hint">${escapeHtml(HINT)}</p>
+      <p class="wiz-hint">${escapeHtml(hintText())}</p>
       ${dirty ? `<p class="wiz-hint">Nothing reaches the hub until you save.</p>` : ""}`;
   }
 

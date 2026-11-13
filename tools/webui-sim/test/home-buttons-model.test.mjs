@@ -6,6 +6,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import {
   COMPANION_EQUAD,
+  HOME_BUTTONS,
   NOTHING_NAME,
   ROCKER_KEYS,
   SCREEN_EQUAD,
@@ -14,6 +15,7 @@ import {
   dimKeys,
   effectiveAssignment,
   hasHomeButtons,
+  homeRemote,
   isChanged,
   keysChanged,
   readHomeButtons,
@@ -465,6 +467,36 @@ describe("a screen remote with home buttons (Elite, 950)", () => {
   };
   const rfInfo = (rows) => JSON.stringify({ code: 200, data: { EquadID: "34827", RFID: "1", Devices: rows.map(([slot, equad, skin]) => ({ DeviceIndex: String(slot), EquadID: equad, RFID: String(slot), SkinId: skin })) } });
   const models = (rows) => remoteModels(parseRfInfo(rfInfo(rows)).remotes);
+
+  it("orders and labels the 950/Elite buttons as physical dots while leaving the Companion unchanged", () => {
+    const companion = homeRemote(COMPANION_EQUAD);
+    assert.deepEqual(companion.buttons, HOME_BUTTONS);
+    assert.deepEqual(companion.buttons, [
+      { key: "Ha1", label: "Light 1" },
+      { key: "Ha2", label: "Light 2" },
+      { key: "Ha3", label: "Plug 1" },
+      { key: "Ha4", label: "Plug 2" },
+    ]);
+    assert.equal(companion.copy.section, "Light and plug buttons");
+    assert.equal(companion.copy.introButtons, "light, plug and + / − buttons");
+    assert.equal(companion.copy.hintLast, "light or plug button");
+
+    const screen = homeRemote(SCREEN_EQUAD);
+    assert.deepEqual(screen.buttons, [
+      { key: "HomeControl1", label: "• 1 dot" },
+      { key: "HomeControl3", label: "•• 2 dots" },
+      { key: "HomeControl2", label: "••• 3 dots" },
+      { key: "HomeControl4", label: "•••• 4 dots" },
+    ]);
+    assert.equal(screen.copy.section, "Dot buttons");
+    assert.equal(screen.copy.introButtons, "home control and + / − buttons");
+    assert.equal(screen.copy.hintLast, "dot button");
+    assert.equal(screen.copy.hintGroup, "Dot buttons");
+
+    const cfg = config();
+    assert.throws(() => setAction(readHomeButtons(cfg), ROCKER_KEYS.up, "long", MUTE), /Light 1, Light 2, Plug 1 and Plug 2/);
+    assert.throws(() => setAction(read(cfg), ROCKER_KEYS.up, "long", MUTE), /• 1 dot, •• 2 dots, ••• 3 dots and •••• 4 dots/);
+  });
 
   it("only the Elite's and the 950's skins have them", () => {
     const [touch] = models([[2, "16417", "99"]]);
