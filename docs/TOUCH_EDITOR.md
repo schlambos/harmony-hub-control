@@ -128,7 +128,7 @@ only. Editors work to these rules:
 | `16414Activity<id>`, `16422Activity<id>`, `16423Activity<id>` | Hard keys (the same editor from Settings → Remotes, `#touch/<id>/<EquadID>`) | Everything else |
 | `16414Root`, `16422Root`, `16423Root` | The three activity buttons of that remote (Settings → Remotes → Activity buttons, `#activitybuttons/<EquadID>`) | Other buttons |
 | `16422Root`, `16422Activity<id>` | The Companion's home control keys `Ha1`–`Ha4`, `Ha<n>Up/Down`, `HcUp/HcDown` and the map's `Nothing` sequence (Settings → Remotes → Home control buttons, `#homebuttons`, [HOME_CONTROL_BUTTONS.md](HOME_CONTROL_BUTTONS.md)) | Other buttons |
-| `16417Root`, `16417Activity<id>` | A Harmony Elite's or 950's home control keys `HomeControl1`–`HomeControl4`, `HomeControl<n>Up/Down`, `HcUp/HcDown`, and in the root map `HomeControlPlus`/`HomeControlMinus` when missing (`#homebuttons/screen`, experimental) | Other buttons |
+| `16417Root`, `16417Activity<id>` | A Harmony Elite's or 950's home control keys `HomeControl1`–`HomeControl4`, `HomeControl<n>Up/Down`, `HcUp/HcDown`, and in the root map `HomeControlPlus`/`HomeControlMinus` when missing (`#homebuttons/screen`) | Other buttons |
 | Any other root map | Nothing | The whole map |
 
 The activity wizard (web and Android) owns each activity's

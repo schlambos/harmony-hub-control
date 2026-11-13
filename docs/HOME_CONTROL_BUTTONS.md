@@ -150,11 +150,35 @@ MapList has Companion home keys.
     which repeat, so holding + dims.
   - If the wrapper fails, the key goes to the engine unchanged.
 
-## Harmony Elite and 950 (experimental)
+## Harmony Elite and 950
 
 The Elite and the 950 have the same six buttons. This part is built from the
-remote's firmware (4.15.330) and the hub's engine as read, and **has not been
-run on a remote yet**.
+remote's firmware (4.15.330) and the hub's engine as read, and was run on a
+Harmony 950 on 2026-11-13. It has not been run on an Elite.
+
+Run on the 950, with the buttons set for every activity:
+
+- Light 1 and Light 2 send their commands. Held, a light without a long
+  press sends its command once.
+- After Light 1, + and − send its + and − commands (`HomeControl1Up/Down`,
+  volume up and down in the test).
+- After Light 2, which had no + and −, a + or − that does nothing is answered
+  `200`, pressed or held, and the remote's screen carries on.
+- The remote's other keys work as before.
+- The home keys arrive as full `control.button` requests, with a `hold` about
+  every 0.3 seconds while one is held.
+
+Not yet run on a 950:
+
+- **Whether a held + or − repeats.** The hub's log shows one press and one
+  release of the command for a 3 second hold of +. It can't show whether the
+  device got a repeat, and that wasn't checked.
+- **A long press action** on Light 1 or Light 2.
+- **Plug 1 and Plug 2.**
+- **`HcUp`/`HcDown`**: what + and − do when the light pressed last has none.
+- **An activity's own buttons** (`#homebuttons/screen/<activityId>`).
+- **The remote's own home control screens**: whether they react to a root map
+  that holds plain commands.
 
 - **Where:** Settings → Remotes, in the screen remote's section, card **Home
   control buttons** (`#homebuttons/screen`, `#homebuttons/screen/<activityId>`).
@@ -186,11 +210,6 @@ run on a remote yet**.
   offer the `Nothing` sequence in an activity map here.
 - **After a save** the remote must sync before it sends a new key, as for
   every button change on a screen remote.
-
-Not known until it runs on a remote: how the remote sends these keys (they
-are not in the 29 names `hal` packs in short form, so a full `control.button`
-request is expected), and whether its own home control screens react to a
-root map that holds plain commands.
 
 ## Limits
 

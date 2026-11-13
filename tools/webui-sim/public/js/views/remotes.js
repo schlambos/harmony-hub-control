@@ -238,7 +238,7 @@ export function createRemotesView(section) {
     const screen = remote.equadId !== COMPANION_EQUAD;
     const base = screen ? "#homebuttons/screen" : "#homebuttons";
     const note = screen
-      ? "Light 1, Light 2, Plug 1, Plug 2 and + / − on a Harmony Elite or 950. An activity follows these unless it has its own. Not yet proven on a real remote."
+      ? "Light 1, Light 2, Plug 1, Plug 2 and + / − on a Harmony Elite or 950. An activity follows these unless it has its own."
       : "Light 1, Light 2, Plug 1, Plug 2 and + / −. An activity follows these unless it has its own.";
     return `<div class="m-card">
         <div class="m-card-head"><span>Home control buttons</span></div>
