@@ -102,8 +102,10 @@ npm run test:dist
 ## Windows (experimental)
 
 The same app builds for Windows 10 and 11 (x64). It is built and tested on
-GitHub's Windows runner (`.github/workflows/desktop-windows.yml`); it has not
-been run against a real hub from Windows yet.
+GitHub's Windows runner (`.github/workflows/desktop-windows.yml`), and
+"Reinstall All Files" has been run against a real hub from a Windows PC. A
+release carries the two files below beside the Mac files
+(`docs/RELEASING.md`).
 
 ```sh
 cd desktop                 # in Git Bash, from a checkout with LF line endings
