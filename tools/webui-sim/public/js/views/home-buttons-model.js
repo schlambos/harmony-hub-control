@@ -38,6 +38,8 @@ export const HOME_BUTTONS = Object.freeze([
 ]);
 
 /* What differs per remote:
+   - `buttons`: physical button order and UI labels;
+   - `copy`: per-model heading, intro and hint wording;
    - `gateKeys`: keys the root map must have for the remote to send + and −;
    - `canTurnOff`: whether an activity can turn a button off. A remote with a
      screen shows a key that runs a sequence as one and waits for it, so the
@@ -48,6 +50,12 @@ const REMOTES = Object.freeze({
     equad: COMPANION_EQUAD,
     name: "Harmony Companion",
     buttons: HOME_BUTTONS,
+    copy: Object.freeze({
+      section: "Light and plug buttons",
+      introButtons: "light, plug and + / − buttons",
+      hintLast: "light or plug button",
+      hintGroup: "Light and plug buttons",
+    }),
     gateKeys: [],
     canTurnOff: true,
     makesRoot: false,
@@ -55,12 +63,20 @@ const REMOTES = Object.freeze({
   [SCREEN_EQUAD]: {
     equad: SCREEN_EQUAD,
     name: "Harmony Elite or 950",
+    /* Physical dot order (1–4 dots); Logitech numbered the keys column-major
+       so 2 dots is HomeControl3 and 3 dots is HomeControl2. */
     buttons: Object.freeze([
-      { key: "HomeControl1", label: "Light 1" },
-      { key: "HomeControl2", label: "Light 2" },
-      { key: "HomeControl3", label: "Plug 1" },
-      { key: "HomeControl4", label: "Plug 2" },
+      { key: "HomeControl1", label: "• 1 dot" },
+      { key: "HomeControl3", label: "•• 2 dots" },
+      { key: "HomeControl2", label: "••• 3 dots" },
+      { key: "HomeControl4", label: "•••• 4 dots" },
     ]),
+    copy: Object.freeze({
+      section: "Dot buttons",
+      introButtons: "home control and + / − buttons",
+      hintLast: "dot button",
+      hintGroup: "Dot buttons",
+    }),
     gateKeys: ["HomeControlPlus", "HomeControlMinus"],
     canTurnOff: false,
     makesRoot: true,
@@ -255,7 +271,10 @@ export function setAction(draft, key, which, action) {
     next.entries[key] = { state: "set", press: wanted, long: entry?.state === "set" ? entry.long : null };
     return next;
   }
-  if (which !== "long" || !homeKeysOf(remoteOf(draft)).has(key)) throw new Error("Only Light 1, Light 2, Plug 1 and Plug 2 have a long press.");
+  if (which !== "long" || !homeKeysOf(remoteOf(draft)).has(key)) {
+    const labels = remoteOf(draft).buttons.map((b) => b.label);
+    throw new Error(`Only ${labels.slice(0, -1).join(", ")} and ${labels.at(-1)} have a long press.`);
+  }
   if (entry?.state === "set") {
     next.entries[key].long = wanted;
     return next;
