@@ -12,6 +12,12 @@ from forks run it too.
 The design behind it, and what comes next, is in
 [CI_BUILD_RELEASE_DESIGN.md](CI_BUILD_RELEASE_DESIGN.md).
 
+A second workflow, `.github/workflows/desktop-windows.yml`, runs only when
+the desktop app or the web UI changes. On `windows-latest` it runs the
+desktop unit tests and the end-to-end tests, builds the Windows installer and
+zip, launches the built app against the simulator, and keeps both files as
+the `melodious-windows-x64` artifact. Nothing is signed or published.
+
 ## Test suites
 
 `tools/ci/run_suites.sh` holds the list: the simulator and desktop tests, the

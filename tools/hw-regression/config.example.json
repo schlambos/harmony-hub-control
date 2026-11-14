@@ -1,0 +1,23 @@
+{
+  "_comment": "Copy this file to tools/hw-regression/config.local.json (gitignored) and replace placeholder values with your own hub.",
+  "ssh_target": "",
+  "hub_host": "192.0.2.10",
+  "ssh_user": "root",
+  "ssh_port": 22,
+  "ssh_key_path": "~/.ssh/your_hub_ed25519",
+  "webui_port": 8080,
+  "webui_username": "",
+  "webui_password": "",
+  "ssh_timeout_sec": 20,
+  "http_timeout_sec": 15,
+  "wifi_ssid_redact": [
+    "YourHomeWiFiName"
+  ],
+  "extra_redact_literals": [],
+  "test_activity_id": "",
+  "test_hold": {
+    "device_id": "",
+    "command": ""
+  },
+  "ha_webhook_url": ""
+}

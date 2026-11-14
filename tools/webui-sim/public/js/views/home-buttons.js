@@ -1,5 +1,7 @@
 /* Home control buttons (#homebuttons, #homebuttons/<activityId>): what the
    Harmony Companion's Light 1, Light 2, Plug 1, Plug 2 and + / − do.
+   #homebuttons/screen and #homebuttons/screen/<activityId> are the same
+   page for a Harmony Elite or 950.
    Without an activity the page sets the global buttons; with one it sets
    that activity's overrides, which can also turn a button off there. One
    row per button opens its sheet (button-picker.js). Saves go through
@@ -7,13 +9,14 @@
 
 import * as hub from "../state.js";
 import {
-  HOME_BUTTONS,
   COMPANION_EQUAD,
   ROCKER_KEYS,
+  SCREEN_EQUAD,
   buildHomeButtonsMapList,
   clearAction,
   dimKeys,
   effectiveAssignment,
+  homeRemote,
   isChanged,
   keysChanged,
   readHomeButtons,
@@ -37,8 +40,6 @@ import { sortPickerDevices } from "./remote-model.js";
 import { saveMapList } from "./map-save.js";
 import { hasRemoteMaps } from "./touch-model.js";
 
-const HINT = "+ and − adjust the light or plug button you pressed last when it has + / − actions; otherwise they do what “+ and −” says. Light and plug buttons fire once per press and don't repeat while held. A long press fires after you hold the button for about 0.7 seconds.";
-
 const BADGES = { global: "Global", override: "Override", nothing: "Nothing" };
 const SOURCES = { global: "global setting", override: "this activity" };
 
@@ -56,11 +57,14 @@ function lightTabs(key, label) {
   ];
 }
 
-const BUTTONS = [
-  ...HOME_BUTTONS.map((b) => ({ ...b, tabs: lightTabs(b.key, b.label) })),
+const buttonsOf = (remote) => [
+  ...remote.buttons.map((b) => ({ ...b, tabs: lightTabs(b.key, b.label) })),
   { key: ROCKER_KEYS.up, label: "+", tabs: [{ id: "press", label: "Press", key: ROCKER_KEYS.up, which: "press" }] },
   { key: ROCKER_KEYS.down, label: "−", tabs: [{ id: "press", label: "Press", key: ROCKER_KEYS.down, which: "press" }] },
 ];
+
+/* The route's word for a remote with a screen; the Companion has none. */
+const SCREEN_ARG = "screen";
 
 /* Whether two actions do the same thing (a command by its name). */
 function sameTarget(current, action) {
@@ -80,12 +84,15 @@ function chipOf(action) {
 
 export function createHomeButtonsView(section) {
   let activityId = "";
+  let remote = homeRemote(COMPANION_EQUAD);
+  let buttons = buttonsOf(remote);
   let draft = null;
   let dirty = false;
   let saving = false;
   let blocked = ""; // "error" | "missing"
   let sheet = null;
   let showToken = 0;
+  let shownArgs = [];
 
   section.innerHTML = `<div class="wiz home-buttons" id="homeButtonsRoot"></div>`;
   const root = section.querySelector("#homeButtonsRoot");
@@ -121,7 +128,7 @@ export function createHomeButtonsView(section) {
     if (assignment.source === "other") return `${lead} set up elsewhere, kept as it is.`;
     if (assignment.press) return `${lead} ${pressAndLong(assignment)}${from}`;
     if (title) return `${lead} not set, so ${title[0]} does what “${title[0]}” says.`;
-    return HOME_BUTTONS.some((b) => b.key === key) ? "Not set yet. Long press needs a press first." : "Not set yet.";
+    return remote.buttons.some((b) => b.key === key) ? "Not set yet. Long press needs a press first." : "Not set yet.";
   }
 
   function globalSummary(key) {
@@ -186,32 +193,36 @@ export function createHomeButtonsView(section) {
       : `<button type="button" class="m-row wiz-key" data-key="${escapeHtml(button.key)}" aria-haspopup="dialog">${inner}</button>`;
   }
 
+  function hintText() {
+    return `+ and − adjust the ${remote.copy.hintLast} you pressed last when it has + / − actions; otherwise they do what “+ and −” says. ${remote.copy.hintGroup} fire once per press and don't repeat while held. A long press fires after you hold the button for about 0.7 seconds.`;
+  }
+
   function bodyMarkup() {
-    const name = activityId ? hub.activityName(hub.activityById(activityId)) : "Harmony Companion";
+    const name = activityId ? hub.activityName(hub.activityById(activityId)) : remote.name;
     const about = activityId
-      ? "What the Harmony Companion's light, plug and + / − buttons do while this activity runs. Changes here only apply to this activity. A button you don't change follows the global setting; one you change replaces it, long press included."
-      : "What the Harmony Companion's light, plug and + / − buttons do. Change a button for one activity: Remotes → Home control buttons → the activity.";
+      ? `What the ${remote.name}'s ${remote.copy.introButtons} do while this activity runs. Changes here only apply to this activity. A button you don't change follows the global setting; one you change replaces it, long press included.`
+      : `What the ${remote.name}'s ${remote.copy.introButtons} do. Change a button for one activity: Remotes → Home control buttons → the activity.`;
     const intro = `<div class="wiz-intro"><h2 tabindex="-1">${escapeHtml(name)}</h2><p>${escapeHtml(about)}</p></div>`;
-    if (!hasRemoteMaps(hub.state.config, COMPANION_EQUAD) || !draft.canEdit) {
+    if (!hasRemoteMaps(hub.state.config, remote.equad) || !draft.canEdit) {
       return `${intro}<div class="m-empty">
           ${iconTile("info_outlined", { size: 64 })}
-          <h2 class="m-empty-title">No Harmony Companion on this hub</h2>
-          <p class="m-empty-body">Home control buttons need a Harmony Companion remote that has synced with this hub at least once.</p>
+          <h2 class="m-empty-title">No ${escapeHtml(remote.name)} on this hub</h2>
+          <p class="m-empty-body">Home control buttons need a ${escapeHtml(remote.name)} remote that has synced with this hub at least once.</p>
         </div>`;
     }
-    const lights = BUTTONS.filter((b) => b.tabs.length > 1);
-    const rocker = BUTTONS.filter((b) => b.tabs.length === 1);
+    const home = buttons.filter((b) => b.tabs.length > 1);
+    const rocker = buttons.filter((b) => b.tabs.length === 1);
     return `${intro}
-      ${sectionLabel("Light and plug buttons")}
-      <div class="m-list">${lights.map(buttonRow).join("")}</div>
+      ${sectionLabel(remote.copy.section)}
+      <div class="m-list">${home.map(buttonRow).join("")}</div>
       ${sectionLabel("+ and −")}
       <div class="m-list">${rocker.map(buttonRow).join("")}</div>
-      <p class="wiz-hint">${escapeHtml(HINT)}</p>
+      <p class="wiz-hint">${escapeHtml(hintText())}</p>
       ${dirty ? `<p class="wiz-hint">Nothing reaches the hub until you save.</p>` : ""}`;
   }
 
   function footMarkup() {
-    if (!hasRemoteMaps(hub.state.config, COMPANION_EQUAD) || !draft.canEdit) return "";
+    if (!hasRemoteMaps(hub.state.config, remote.equad) || !draft.canEdit) return "";
     return `<div class="wiz-foot">
         <button type="button" class="btn btn-outlined" data-act="undo"${dirty && !saving ? "" : " disabled"}>Undo changes</button>
         <button type="button" class="btn btn-filled${saving ? " is-busy" : ""}" data-act="save"${dirty && !saving ? "" : " disabled"}${saving ? ' aria-busy="true"' : ""}>
@@ -312,11 +323,11 @@ export function createHomeButtonsView(section) {
         current: !own,
         pick: () => edit((d) => clearAction(d, slot.key, "press")),
       },
-      {
+      ...(remote.canTurnOff ? [{
         label: "Nothing in this activity",
         current: own?.state === "nothing",
         pick: () => edit((d) => setNothing(d, slot.key)),
-      },
+      }] : []),
     ];
   }
 
@@ -416,14 +427,14 @@ export function createHomeButtonsView(section) {
     saving = false;
     if (result !== "kept") {
       dirty = false;
-      draft = readHomeButtons(hub.state.config, activityId);
+      draft = readHomeButtons(hub.state.config, activityId, remote.equad);
     }
     if (!section.hidden) render();
   }
 
 
   function undo() {
-    draft = readHomeButtons(hub.state.config, activityId);
+    draft = readHomeButtons(hub.state.config, activityId, remote.equad);
     dirty = false;
     render();
   }
@@ -454,13 +465,13 @@ export function createHomeButtonsView(section) {
     if (saving) return;
     const row = event.target.closest("[data-key]");
     if (row) {
-      openButtonSheet(BUTTONS.find((b) => b.key === row.dataset.key));
+      openButtonSheet(buttons.find((b) => b.key === row.dataset.key));
       return;
     }
     const act = event.target.closest("[data-act]")?.dataset.act;
     if (act === "save") save();
     else if (act === "undo") undo();
-    else if (act === "retry") hub.reloadConfig().then(() => view.onShow({ args: activityId ? [activityId] : [] }));
+    else if (act === "retry") hub.reloadConfig().then(() => view.onShow({ args: shownArgs }));
   });
 
   window.addEventListener("beforeunload", (event) => {
@@ -477,8 +488,12 @@ export function createHomeButtonsView(section) {
       dirty = false;
       saving = false;
       blocked = "";
+      shownArgs = args;
+      const screen = args[0] === SCREEN_ARG;
+      remote = homeRemote(screen ? SCREEN_EQUAD : COMPANION_EQUAD);
+      buttons = buttonsOf(remote);
       try {
-        activityId = decodeURIComponent(args[0] ?? "");
+        activityId = decodeURIComponent(args[screen ? 1 : 0] ?? "");
       } catch (_) {
         activityId = "-"; // a malformed escape is just an unknown activity
       }
@@ -494,7 +509,7 @@ export function createHomeButtonsView(section) {
         renderBlocked("missing");
         return;
       }
-      draft = readHomeButtons(hub.state.config, activityId);
+      draft = readHomeButtons(hub.state.config, activityId, remote.equad);
       render();
       root.querySelector(".wiz-intro h2")?.focus({ preventScroll: true });
     },

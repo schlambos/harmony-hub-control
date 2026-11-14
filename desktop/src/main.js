@@ -36,6 +36,7 @@ const {
   createUpdateStore,
   fetchHubVersion,
   isGitHubUrl,
+  osLabel,
 } = require("./updates");
 const {
   bundlePathFromExec,
@@ -44,7 +45,9 @@ const {
   prepareUpdate,
   swapInto,
 } = require("./self-update");
-const { findHubKey, updateHub } = require("./hub-update");
+const { findHubKey, readLocalHubZip, updateHub } = require("./hub-update");
+const { reinstallHub } = require("./hub-reinstall");
+const { isWizardDevAvailable, registerWizardIpcHandlers } = require("./wizard");
 
 // Test hooks (stand-in safeStorage, stub catalog) exist only when running from
 // source; a packaged app ignores MELODIOUS_E2E.
@@ -137,6 +140,10 @@ function buildAppMenu() {
                 label: "Check for Updates…",
                 click: () => checkForUpdatesNow(),
               },
+              {
+                label: "Reinstall / Repair Hub Software…",
+                click: () => reinstallHubFlow(),
+              },
               { type: "separator" },
               {
                 label: "Settings…",
@@ -154,7 +161,29 @@ function buildAppMenu() {
             ],
           },
         ]
-      : []),
+      : [
+          // Windows has no app menu: Settings and the update check live here.
+          {
+            label: "File",
+            submenu: [
+              {
+                label: "Settings…",
+                accelerator: "CmdOrCtrl+,",
+                click: () => openSettingsPage(),
+              },
+              {
+                label: "Check for Updates…",
+                click: () => checkForUpdatesNow(),
+              },
+              {
+                label: "Reinstall / Repair Hub Software…",
+                click: () => reinstallHubFlow(),
+              },
+              { type: "separator" },
+              { role: "quit" },
+            ],
+          },
+        ]),
     {
       label: "Edit",
       submenu: [
@@ -193,8 +222,7 @@ function buildAppMenu() {
       label: "Window",
       submenu: [
         { role: "minimize" },
-        { role: "zoom" },
-        ...(isMac ? [{ type: "separator" }, { role: "front" }] : [{ role: "close" }]),
+        ...(isMac ? [{ role: "zoom" }, { type: "separator" }, { role: "front" }] : [{ role: "close" }]),
       ],
     },
   ];
@@ -287,7 +315,10 @@ function setDockProgress(value) {
 async function installAppUpdate(release) {
   if (installingUpdate || !release) return { ok: false };
   const appPath = bundlePathFromExec(process.execPath);
-  const problem = installLocationProblem(appPath, { packaged: app.isPackaged });
+  // Replacing itself is built for the Mac app bundle only.
+  const problem = process.platform === "darwin"
+    ? installLocationProblem(appPath, { packaged: app.isPackaged })
+    : "On Windows, Melodious doesn't replace itself yet. Download the new version from the release page and run it.";
   if (problem) {
     const { response } = await showMessage({
       type: "warning",
@@ -307,7 +338,7 @@ async function installAppUpdate(release) {
       release,
       arch: process.arch,
       appPath,
-      userAgent: `Melodious/${app.getVersion()} (macOS)`,
+      userAgent: `Melodious/${app.getVersion()} (${osLabel()})`,
       onProgress: (done, total) => {
         if (total > 0) setDockProgress(done / total);
       },
@@ -333,11 +364,8 @@ function sendHubStep(text) {
   if (mainWindow && !mainWindow.isDestroyed()) mainWindow.webContents.send("desktop:hub-update-step", { text });
 }
 
-/** Update the hub over SSH with the installer's key; explains every outcome in a dialog. */
-async function updateHubFlow(release) {
-  if (updatingHub || !release) return { ok: false };
-  const hub = settingsStore.getHub();
-  if (!hub) return { ok: false, error: "No hub is set up in this app." };
+/** The installer's hub SSH key, or null after telling the user where it belongs. */
+async function hubKeyOrExplain() {
   const keyPath = findHubKey();
   if (!keyPath) {
     await showMessage({
@@ -345,10 +373,19 @@ async function updateHubFlow(release) {
       message: "Melodious needs your hub's SSH key",
       detail:
         "Updating the hub uses the same SSH key as the installer: ~/.ssh/harmony_owner_…, created when the hub was rooted. " +
-        "Put it in ~/.ssh on this Mac, or run the installer from the release page instead.",
+        `Put it in ${process.platform === "darwin" ? "~/.ssh on this Mac" : `${path.join(os.homedir(), ".ssh")} on this PC`}, or run the installer from the release page instead.`,
     });
-    return { ok: false, error: "no key" };
   }
+  return keyPath;
+}
+
+/** Update the hub over SSH with the installer's key; explains every outcome in a dialog. */
+async function updateHubFlow(release) {
+  if (updatingHub || !release) return { ok: false };
+  const hub = settingsStore.getHub();
+  if (!hub) return { ok: false, error: "No hub is set up in this app." };
+  const keyPath = await hubKeyOrExplain();
+  if (!keyPath) return { ok: false, error: "no key" };
   const { response } = await showMessage({
     type: "question",
     message: `Update the hub to Melodious ${release.version}?`,
@@ -371,7 +408,7 @@ async function updateHubFlow(release) {
       httpPort: hub.port,
       authHeader: settingsStore.getHubAuthHeader(),
       keyPath,
-      userAgent: `Melodious/${app.getVersion()} (macOS)`,
+      userAgent: `Melodious/${app.getVersion()} (${osLabel()})`,
       onStep: sendHubStep,
     });
     sendHubStep("");
@@ -386,6 +423,67 @@ async function updateHubFlow(release) {
     await showMessage({ type: "warning", message: "The hub wasn't updated", detail: err?.message || String(err) });
     return { ok: false, error: err?.message || String(err) };
   } finally {
+    updatingHub = false;
+    setDockProgress(-1);
+  }
+}
+
+/** Reinstall or repair the hub's software from a source the user picks, whatever version the hub reports. */
+async function reinstallHubFlow() {
+  if (updatingHub) return { ok: false };
+  const hub = settingsStore.getHub();
+  if (!hub) {
+    await showMessage({ type: "info", message: "No hub is connected", detail: "Connect to your hub first, then try again." });
+    return { ok: false, error: "No hub is set up in this app." };
+  }
+  updatingHub = true;
+  try {
+    const keyPath = await hubKeyOrExplain();
+    if (!keyPath) return { ok: false, error: "no key" };
+    const authHeader = settingsStore.getHubAuthHeader();
+    return await reinstallHub({
+      hub,
+      keyPath,
+      keyLabel: keyPath.replace(os.homedir(), "~"),
+      getHubVersion: () => fetchHubVersion({ host: hub.host, port: hub.port, authHeader }),
+      getLatestRelease: async () => {
+        const checked = await updateChecker.check();
+        const error = checked.state === "rate-limited"
+          ? "GitHub is limiting requests from this network. Try again later."
+          : checked.state === "error" ? checked.error : "";
+        return { release: checked.latestHub, error };
+      },
+      pickZip: async () => {
+        const options = {
+          title: "Choose a hub zip",
+          buttonLabel: "Choose",
+          properties: ["openFile"],
+          filters: [{ name: "Melodious hub zip", extensions: ["zip"] }],
+        };
+        const parent = updateDialogParent();
+        const picked = await (parent ? dialog.showOpenDialog(parent, options) : dialog.showOpenDialog(options));
+        return picked.canceled ? null : picked.filePaths[0] || null;
+      },
+      readZip: readLocalHubZip,
+      update: (options) =>
+        updateHub({
+          ...options,
+          host: hub.host,
+          httpPort: hub.port,
+          authHeader,
+          keyPath,
+          userAgent: `Melodious/${app.getVersion()} (${osLabel()})`,
+          onStep: sendHubStep,
+        }),
+      showMessage,
+      onStart: () => {
+        setDockProgress(2);
+        // Settings → Updates shows the progress.
+        if (pageMode !== "settings") openSettingsPage();
+      },
+    });
+  } finally {
+    sendHubStep("");
     updatingHub = false;
     setDockProgress(-1);
   }
@@ -434,6 +532,11 @@ function registerIpcHandlers() {
     const catStatus = catSvc ? await catSvc.status() : { signedIn: false };
     return {
       mode: pageMode,
+      platform: process.platform,
+      wizardDevAvailable: isWizardDevAvailable({
+        isPackaged: app.isPackaged,
+        platform: process.platform,
+      }),
       hub,
       hasHubAuth: Boolean(hubAuth?.header),
       hubUsername: hubAuth?.username || "",
@@ -616,6 +719,11 @@ function registerIpcHandlers() {
     return updateHubFlow(status.latestHub);
   });
 
+  ipcMain.handle("desktop:updates-reinstall-hub", async (event) => {
+    checkSender(event);
+    return reinstallHubFlow();
+  });
+
   ipcMain.handle("desktop:updates-open-release", (event, args = {}) => {
     checkSender(event);
     return { ok: openReleasePage(args.url) };
@@ -625,6 +733,30 @@ function registerIpcHandlers() {
     ipcMain,
     getMainWindow: () => mainWindow,
     getCatalogService: () => getActiveCatalogService(),
+  });
+
+  registerWizardIpcHandlers({
+    ipcMain,
+    getMainWindow: () => mainWindow,
+    getSavedAuthHeader: () => settingsStore.getHubAuthHeader(),
+    isWizardAvailable: () =>
+      isWizardDevAvailable({
+        isPackaged: app.isPackaged,
+        platform: process.platform,
+      }),
+    pickFirmwareFile: async (win) => {
+      const options = {
+        title: "Choose a Harmony Hub firmware bundle (.hfw2)",
+        buttonLabel: "Choose",
+        properties: ["openFile"],
+        filters: [{ name: "Harmony Hub firmware (.hfw2)", extensions: ["hfw2"] }],
+      };
+      const parent = win && !win.isDestroyed?.() ? win : updateDialogParent();
+      const picked = await (parent
+        ? dialog.showOpenDialog(parent, options)
+        : dialog.showOpenDialog(options));
+      return picked.canceled ? null : picked.filePaths[0] || null;
+    },
   });
 }
 
@@ -687,6 +819,7 @@ app.whenReady().then(() => {
     store: updateStore,
     appVersion: app.getVersion(),
     arch: process.arch,
+    platform: process.platform,
     getHubVersion: () => {
       const hub = settingsStore.getHub();
       return hub

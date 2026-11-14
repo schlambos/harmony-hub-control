@@ -113,6 +113,18 @@ ROOT_TOOL_SCAN = (
     '[ -f "$f" ] && [ ! -L "$f" ] || continue; set -- $(ls -il "$f"); '
     'echo "dropbear_copy inode=$1 links=$3 path=$f"; done'
 )
+# Logitech's runtime for the Harmony Hub Extender (Zigbee/Z-Wave), installed
+# once an Extender has been connected: about 5 MB. Only measured and reported:
+# removing it breaks the Extender, so the installer never does.
+EXTENDER_PACKAGE = "/pkg/moosehead"
+# No du, find or ls -R on the hub: walk the folders, never through a symlink.
+EXTENDER_SCAN = (
+    'd=/pkg/moosehead; if [ -d "$d" ] && [ ! -L "$d" ]; then set -- "$d"; '
+    'while [ $# -gt 0 ]; do d=$1; shift; ls -la "$d" 2>/dev/null; '
+    'for e in "$d"/* "$d"/.[!.]*; do [ -d "$e" ] && [ ! -L "$e" ] && set -- "$@" "$e"; done; done | '
+    "awk '/^-/ {s += $5; n++} END "
+    '{print "extender_package bytes=" (s + 0) " files=" (n + 0) " path=/pkg/moosehead"}\'; fi'
+)
 # Removes the root tool's Dropbear only while SSH runs ours.
 ROOT_TOOL_DROPBEAR_REMOVE = (
     "if [ -x /data/codex/bin/dropbear ] && grep /data/codex/bin/dropbear /usr/sbin/dropbear >/dev/null; then "
@@ -1345,6 +1357,9 @@ class Installer:
         # "preflight" when the measured check blocked, "phase1" when a copy failed.
         self.capacity_stage = ""
         self.root_tool_stages: list[dict[str, object]] = []
+        # Size of /pkg/moosehead, or None when the hub has no Extender package.
+        self.moosehead_bytes: int | None = None
+        self.moosehead_files = 0
         # Inode of each Dropbear copy, by path.
         self.dropbear_copies: dict[str, str] = {}
         # Hard-link count of each, by path.
@@ -1823,6 +1838,19 @@ class Installer:
                 self.dropbear_copies[copy.group(3)] = copy.group(1)
                 self.dropbear_links[copy.group(3)] = int(copy.group(2))
 
+    def scan_extender_package(self) -> None:
+        """Measure /pkg/moosehead. Read-only: nothing here or later removes it."""
+        self.moosehead_bytes = None
+        self.moosehead_files = 0
+        code, out, _err = self.run_remote_rc(EXTENDER_SCAN, timeout=60)
+        if code != 0:
+            return
+        for line in out.splitlines():
+            found = re.match(r"^extender_package bytes=(\d+) files=(\d+) path=(\S+)$", line.strip())
+            if found and found.group(3) == EXTENDER_PACKAGE:
+                self.moosehead_bytes = int(found.group(1))
+                self.moosehead_files = int(found.group(2))
+
     def root_tool_dropbear_removable(self) -> bool:
         """True when the root tool's Dropbear is a separate copy that SSH no
         longer uses and phase 1 won't link."""
@@ -2113,6 +2141,17 @@ class Installer:
                 info("They are removed before the install (--remove-root-tool-leftovers).")
             else:
                 info("Run the installer with --remove-root-tool-leftovers to remove them and free that flash.")
+        if self.moosehead_bytes is not None:
+            kv(
+                f"extender_package bytes={self.moosehead_bytes} files={self.moosehead_files} "
+                f"path={EXTENDER_PACKAGE}"
+            )
+            info(
+                f"Harmony Hub Extender package found at {EXTENDER_PACKAGE} "
+                f"({kib(self.moosehead_bytes)} in {self.moosehead_files} file(s)). It uses a large share of "
+                "the hub's flash. The installer never removes it; back it up and remove it yourself only if "
+                "you no longer use a Harmony Hub Extender (see docs/INSTALL.md)."
+            )
 
     def render_verdict(self) -> None:
         # NOTE(InstallerCliUX): human-facing verdict prose is owned by
@@ -2140,6 +2179,12 @@ class Installer:
                 info(
                     f"Removing harmony-hub-root's leftovers (--remove-root-tool-leftovers) frees about "
                     f"{kib(self.leftover_credit())}."
+                )
+            if self.moosehead_bytes is not None:
+                info(
+                    f"The Harmony Hub Extender package at {EXTENDER_PACKAGE} ({kib(self.moosehead_bytes)}) is a "
+                    "likely cause of the shortfall. See \"If the hub's flash is full\" in docs/INSTALL.md; "
+                    "don't delete it if you still use an Extender."
                 )
             info(
                 "Otherwise free space on the hub, or pass --skip-flash-check to try anyway: "
@@ -3027,6 +3072,7 @@ class Installer:
         self.ram_status()
         self.measure_flash()
         self.scan_root_tool_leftovers()
+        self.scan_extender_package()
 
         self.count_backup_generations()
         self.compute_handoff_estimate()

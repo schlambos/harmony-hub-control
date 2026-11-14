@@ -80,7 +80,7 @@ function release(base, version, zipName, extra = {}) {
   };
 }
 
-test("bundle path from the executable path", () => {
+test("bundle path from the executable path", { skip: !mac }, () => {
   assert.equal(bundlePathFromExec("/Applications/Melodious.app/Contents/MacOS/Melodious"), "/Applications/Melodious.app");
   assert.equal(bundlePathFromExec("/usr/local/bin/node"), null);
 });

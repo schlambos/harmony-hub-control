@@ -113,6 +113,14 @@ with `BLOCKED_CAPACITY` before writing anything.
   `--remove-root-tool-leftovers` deletes them before installing. It
   removes the root tool's Dropbear only while SSH runs Melodious's
   copy.
+- **The Harmony Hub Extender package.** A hub that has ever had a
+  Harmony Hub Extender (Zigbee/Z-Wave) connected keeps Logitech's
+  runtime for it in `/pkg/moosehead`: about 5 MB, which can leave too
+  little room for Melodious even with the backups and logs cleared.
+  The preflight reports it and its size (`extender_package`). Melodious
+  never removes it, because that breaks the devices behind the
+  Extender. If you no longer use an Extender, copy the folder off the
+  hub first, then delete it over SSH.
 - **Old backups.** `/data/codex-backups` and
   `/data/codex/resource-backups` hold older copies. Download a backup
   first, then delete the ones you don't need over SSH.
@@ -129,6 +137,23 @@ the installer again. Or let the macOS app do it: when a newer hub
 release is out, Settings → Updates offers **Update hub…**. The Android
 app only tells you a hub update is out; it never holds the hub's SSH
 key.
+
+**Reinstall / repair hub software…** (Settings → Updates, and the
+Melodious menu on a Mac or the File menu on Windows) puts hub software
+back on the hub whatever version it runs:
+
+- You pick the source: the latest GitHub release, or a
+  `melodious-hub-<version>.zip` on your computer. The app shows the hub's
+  version next to the source's before anything changes.
+- **Repair** checks every file on the hub and replaces only the ones that
+  differ; when they all match, nothing is written. **Reinstall All Files**
+  sends and rewrites every file, then restarts the hub.
+- A source older than the hub needs an explicit **Downgrade**. When both
+  report the same version but files differ, the app lists them and asks
+  first, because a hub built from source keeps the last release's number.
+- It is the same SSH install as **Update hub…**, with the same key, checks
+  and rollback. The zip must carry every file this version of the app
+  installs, so an older release's zip is refused.
 
 How the macOS app's hub update works:
 

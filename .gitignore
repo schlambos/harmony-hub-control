@@ -35,6 +35,8 @@ authorized_keys
 .env
 secrets.*
 config.local.json
+tools/hw-regression/config.local.*
+tools/hw-regression/reports/
 harmony_hub_id.txt
 harmony_hub_id.json
 

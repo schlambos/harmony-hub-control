@@ -39,6 +39,7 @@ contextBridge.exposeInMainWorld("melodiousDesktop", {
     check: () => ipcRenderer.invoke("desktop:updates-check"),
     install: () => ipcRenderer.invoke("desktop:updates-install"),
     updateHub: () => ipcRenderer.invoke("desktop:updates-update-hub"),
+    reinstallHub: () => ipcRenderer.invoke("desktop:updates-reinstall-hub"),
     onHubStep: (callback) => {
       if (typeof callback !== "function") return;
       ipcRenderer.on("desktop:hub-update-step", (_event, info) => callback(String(info?.text ?? "")));
@@ -52,6 +53,22 @@ contextBridge.exposeInMainWorld("melodiousDesktop", {
     checkModel: (args) => invokeCatalog("catalog:check-model", args),
     search: (args) => invokeCatalog("catalog:search", args),
     download: (args) => invokeCatalog("catalog:download", args),
+  },
+  wizard: {
+    detectAndClassify: (args) => ipcRenderer.invoke("wizard:detect-classify", args),
+    usbProbe: (args) => ipcRenderer.invoke("wizard:usb-probe", args),
+    runAction: (args) => {
+      if (!args || typeof args !== "object" || Array.isArray(args)) {
+        return ipcRenderer.invoke("wizard:run-action", {});
+      }
+      // Never forward renderer-supplied file paths; .hfw2 bundles are chosen via native dialog in main.
+      const { firmwareFile: _ignoredFirmwareFile, ...safeArgs } = args;
+      return ipcRenderer.invoke("wizard:run-action", safeArgs);
+    },
+    onEvent: (callback) => {
+      if (typeof callback !== "function") return;
+      ipcRenderer.on("desktop:wizard-event", (_event, info) => callback(info));
+    },
   },
 });
 

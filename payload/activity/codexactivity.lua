@@ -3024,7 +3024,7 @@ local function workerLoop()
   workerTask = nil
 end
 
--- The Harmony Companion's home-control keys (docs/HOME_CONTROL_BUTTONS.md).
+-- Home-control keys (docs/HOME_CONTROL_BUTTONS.md), first the Companion's.
 -- Light 1, Light 2, Plug 1 and Plug 2 are Ha1-Ha4; + and - are RockerUp and
 -- RockerDown. Their actions live in the Companion's 16422 button maps like
 -- every other key's: 16422Root for all the time, 16422Activity<id> to
@@ -3033,18 +3033,39 @@ local HOME_EQUAD = "16422"
 local HOME_ROOT_MAP = HOME_EQUAD .. "Root"
 local MAP_LIST_FILE = "/data/resources/MapList.json"
 local HOME_KEYS = {"Ha1", "Ha2", "Ha3", "Ha4"}
-local IS_HOME_KEY = {Ha1 = true, Ha2 = true, Ha3 = true, Ha4 = true}
 -- + and - adjust the last pressed home key when it has <key>Up/<key>Down,
 -- else they send HcUp/HcDown.
-local ROCKER_SUFFIX = {RockerUp = "Up", RockerDown = "Down"}
 local FIXED_ROCKER_PREFIX = "Hc"
+-- The remotes with home-control keys, by EquadID: their four keys and what
+-- their + and - are called. A Harmony Elite or 950 (16417, like every remote
+-- with a screen) has the same six keys under other names; a Touch has none
+-- and never sends them. Their actions live in the 16417 maps the same way.
+--   swallowNothing: a key that does nothing is answered here. A remote with
+--     a screen waits for the engine to finish a key it knows as a sequence,
+--     so there the engine runs it.
+--   ownRocker: + and - are sent only while the root map has them, so a
+--     rocker with no action of its own is in the map doing nothing; it is
+--     answered here.
+local HOME_REMOTES = {
+  ["16422"] = {
+    keys = {Ha1 = true, Ha2 = true, Ha3 = true, Ha4 = true},
+    rockers = {RockerUp = "Up", RockerDown = "Down"},
+    swallowNothing = true,
+  },
+  ["16417"] = {
+    keys = {HomeControl1 = true, HomeControl2 = true, HomeControl3 = true, HomeControl4 = true},
+    rockers = {HomeControlPlus = "Up", HomeControlMinus = "Down"},
+    ownRocker = true,
+  },
+}
 
 -- The engine's account, as it hands it to the AutomationConfig pass on
 -- every config load: the same object its session serves, which this
 -- plugin may not require (tools/activity_offline_guard.sh). Until the
 -- first load after this plugin starts, keys are left to the engine.
 local engineAccount = nil
-local lastHomeKey = nil
+-- The home key pressed last, per EquadID.
+local lastHomeKey = {}
 -- The key each rocker was renamed to at its press (false: left as it is),
 -- so its holds and release go to the same key.
 local rockerAliases = {}
@@ -3117,9 +3138,10 @@ local function installRootHomeKeysHook()
   return true
 end
 
--- The maps the engine looks a Companion key up in, in its order: the
+-- The maps the engine looks a remote's key up in, in its order: the
 -- running activity's map, then the root map.
-local function homeControlMaps()
+local function homeControlMaps(equad)
+  equad = equad or HOME_EQUAD
   local account = engineAccount
   if type(account) ~= "table" or type(account.buttonMaps) ~= "table" then
     return {}
@@ -3127,9 +3149,9 @@ local function homeControlMaps()
   local maps = {}
   local activityId = account.currentActivityId
   if activityId ~= nil and tostring(activityId) ~= "-1" then
-    maps[#maps + 1] = account.buttonMaps[HOME_EQUAD .. "Activity" .. tostring(activityId)]
+    maps[#maps + 1] = account.buttonMaps[equad .. "Activity" .. tostring(activityId)]
   end
-  maps[#maps + 1] = account.buttonMaps[HOME_ROOT_MAP]
+  maps[#maps + 1] = account.buttonMaps[equad .. "Root"]
   return maps -- a missing activity map adds no entry, so the list has no gap
 end
 
@@ -3161,10 +3183,10 @@ local function hasLongPress(button)
   return type(button.longActions) == "table" and #button.longActions > 0
 end
 
-local function rockerAlias(maps, rocker)
-  local suffix = ROCKER_SUFFIX[rocker]
-  if lastHomeKey and resolveButton(maps, lastHomeKey .. suffix) then
-    return lastHomeKey .. suffix
+local function rockerAlias(maps, equad, suffix)
+  local last = lastHomeKey[equad]
+  if last and resolveButton(maps, last .. suffix) then
+    return last .. suffix
   end
   if resolveButton(maps, FIXED_ROCKER_PREFIX .. suffix) then
     return FIXED_ROCKER_PREFIX .. suffix
@@ -3175,17 +3197,20 @@ end
 -- The engine re-sends a key on every hold (about every 220 ms) unless the
 -- key has a long-press action, which would flip a toggle several times.
 -- A home key fires once per press; its holds are answered here.
-local function homeKeyAnswer(cmd, verb, params, maps)
+local function homeKeyAnswer(cmd, verb, params, maps, equad, remote)
   local key = params.buttonKey
   if verb == "press" then
-    lastHomeKey = key
+    lastHomeKey[equad] = key
   end
   local button = resolveButton(maps, key)
   if button == nil then
     return nil
   end
   if doesNothing(button) then
-    return connect.createResponse(cmd, "200", "OK", nil)
+    if remote.swallowNothing or verb == "hold" then
+      return connect.createResponse(cmd, "200", "OK", nil)
+    end
+    return nil
   end
   if verb == "hold" and not hasLongPress(button) and not isAutomationBinding(button) then
     return connect.createResponse(cmd, "200", "OK", nil)
@@ -3195,33 +3220,48 @@ end
 
 -- The engine hands every key named "Rocker" to its home-automation
 -- manager before the button maps are read, so a rocker with an action in
--- the maps is renamed to that plain key first.
-local function renameRocker(verb, params, maps)
+-- the maps is renamed to that plain key first. The answer for a rocker
+-- handled here, or nil to let the engine handle it.
+local function renameRocker(cmd, verb, params, maps, equad, remote)
   local rocker = params.buttonKey
-  local alias = rockerAliases[rocker]
+  local slot = equad .. rocker
+  local alias = rockerAliases[slot]
   if verb == "press" or alias == nil then
-    alias = rockerAlias(maps, rocker)
-    rockerAliases[rocker] = alias
+    alias = rockerAlias(maps, equad, remote.rockers[rocker])
+    rockerAliases[slot] = alias
   end
   if verb == "release" then
-    rockerAliases[rocker] = nil
+    rockerAliases[slot] = nil
   end
   if alias then
     params.buttonKey = alias
+    return nil
   end
+  if remote.ownRocker then
+    local own = resolveButton(maps, rocker)
+    if own ~= nil and doesNothing(own) then
+      return connect.createResponse(cmd, "200", "OK", nil)
+    end
+  end
+  return nil
 end
 
 -- The answer for a key handled here, or nil to let the engine handle it.
 local function routeHomeControlKey(cmd, verb, params)
-  if type(params) ~= "table" or tostring(params.equadId) ~= HOME_EQUAD then
+  if type(params) ~= "table" then
+    return nil
+  end
+  local equad = tostring(params.equadId)
+  local remote = HOME_REMOTES[equad]
+  if not remote then
     return nil
   end
   local key = params.buttonKey
-  if IS_HOME_KEY[key] then
-    return homeKeyAnswer(cmd, verb, params, homeControlMaps())
+  if remote.keys[key] then
+    return homeKeyAnswer(cmd, verb, params, homeControlMaps(equad), equad, remote)
   end
-  if ROCKER_SUFFIX[key] then
-    renameRocker(verb, params, homeControlMaps())
+  if remote.rockers[key] then
+    return renameRocker(cmd, verb, params, homeControlMaps(equad), equad, remote)
   end
   return nil
 end

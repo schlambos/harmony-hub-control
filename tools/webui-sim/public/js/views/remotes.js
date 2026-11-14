@@ -4,7 +4,8 @@
    "Buttons for each activity", one row per activity opening the same editor
    (#touch/<id>/<EquadID>); a remote without a screen also gets its activity
    buttons (#activitybuttons/<EquadID>), and the Companion its home control
-   buttons (#homebuttons, #homebuttons/<id>). Each remote has its own maps,
+   buttons (#homebuttons, #homebuttons/<id>); so does a Harmony Elite or 950
+   (#homebuttons/screen, #homebuttons/screen/<id>). Each remote has its own maps,
    named by its EquadID. Their keys stay alike (the editor changes every remote
    unless a key is set for one remote only), so each activity row only says
    where they differ. Models in remotes-model.js.
@@ -43,7 +44,7 @@ import {
 } from "./remotes-model.js";
 import { saveMapList } from "./map-save.js";
 import { hasRemoteMaps } from "./touch-model.js";
-import { COMPANION_EQUAD } from "./home-buttons-model.js";
+import { COMPANION_EQUAD, SCREEN_EQUAD, hasHomeButtons, homeRemote } from "./home-buttons-model.js";
 
 const SMART_CONTROL_STEPS = `On a Harmony Smart Control, ${PAIRING_STEPS[SMART_CONTROL_EQUAD]}.`;
 
@@ -229,16 +230,23 @@ export function createRemotesView(section) {
       </div>`;
   }
 
-  /* The Companion's light, plug and + / − buttons: one row for every
+  /* The remote's home control and + / − buttons: one row for every
      activity (its root map), then a row per activity for its overrides. */
-  function homeButtonsCard() {
+  function homeButtonsCard(remote) {
     const row = (title, href) => listRow({ title, href, chevron: true });
+    // A remote with a screen: only the Elite and the 950 have these buttons.
+    const screen = remote.equadId !== COMPANION_EQUAD;
+    const base = screen ? "#homebuttons/screen" : "#homebuttons";
+    const labels = homeRemote(screen ? SCREEN_EQUAD : COMPANION_EQUAD).buttons.map((b) => b.label).join(", ");
+    const note = screen
+      ? `${labels} and + / − on a Harmony Elite or 950. An activity follows these unless it has its own.`
+      : `${labels} and + / −. An activity follows these unless it has its own.`;
     return `<div class="m-card">
         <div class="m-card-head"><span>Home control buttons</span></div>
-        <p class="list-note">Light 1, Light 2, Plug 1, Plug 2 and + / −. An activity follows these unless it has its own.</p>
+        <p class="list-note">${note}</p>
         <div class="m-list">${[
-          row("Every activity", "#homebuttons"),
-          ...hub.activities().map((a) => row(hub.activityName(a), `#homebuttons/${encodeURIComponent(String(a["Id-"]))}`)),
+          row("Every activity", base),
+          ...hub.activities().map((a) => row(hub.activityName(a), `${base}/${encodeURIComponent(String(a["Id-"]))}`)),
         ].join("")}</div>
       </div>`;
   }
@@ -282,10 +290,10 @@ export function createRemotesView(section) {
     if (remote.role === "no-screen") body = `${missingKeysNotice(remote)}${activityButtonsCard(remote)}${activitiesCard(remote)}`;
     else if (remote.role === "screen") body = activitiesCard(remote);
     else body = `<div class="m-card"><p class="list-note">Nothing to set for this remote here yet.</p></div>`;
-    if (remote.equadId === COMPANION_EQUAD) body += homeButtonsCard();
+    if (hasHomeButtons(remote)) body += homeButtonsCard(remote);
     const count = remote.slots.length;
     const shared = count > 1
-      ? `<p class="list-note">These ${count} remotes are the same model, so they share these settings (slots ${remote.slots.join(", ")}).</p>`
+      ? `<p class="list-note">These ${count} remotes ${new Set(remote.skinIds).size > 1 ? "both have a screen" : "are the same model"}, so they share these settings (slots ${remote.slots.join(", ")}).</p>`
       : "";
     return `${sectionLabel(count > 1 ? `${remote.name} × ${count}` : remote.name)}<div class="remotes-section">${shared}${body}</div>`;
   }

@@ -17,6 +17,7 @@ const {
   hubUpdateNote,
   isGitHubUrl,
   latestHubRelease,
+  latestAppRelease,
   latestMacRelease,
 } = require("../src/updates.js");
 
@@ -92,6 +93,16 @@ test("the Mac picks the newest v* or desktop-v* release with its arch, ignoring 
   assert.equal(latestHubRelease(releases).version, "1.3.0", "desktop-v releases carry no hub");
 });
 
+test("Windows picks the newest release with its installer, never the Mac zip", () => {
+  const releases = [
+    release("desktop-v1.4.0", ["Melodious-1.4.0-x64.zip", "Melodious-1.4.0-arm64.zip"]),
+    release("desktop-v1.3.1", ["Melodious-1.3.1-x64.zip", "Melodious-1.3.1-win-x64-setup.exe"]),
+  ];
+  assert.equal(latestAppRelease(releases, "x64", "win32").version, "1.3.1");
+  assert.equal(latestAppRelease(releases, "x64", "darwin").version, "1.4.0");
+  assert.equal(latestAppRelease(releases, "arm64", "win32"), null);
+});
+
 test("releases whose links leave the repository are ignored", () => {
   const evil = release("v9.0.0", ["Melodious-9.0.0-arm64.zip", "melodious-hub-9.0.0.zip"], {
     html_url: "https://github.com/someone-else/harmony-hub-control/releases/tag/v9.0.0",
@@ -125,6 +136,7 @@ test("checker: one GitHub call, saves picks, reuses them on 304, and is due agai
     store,
     appVersion: "1.2.0",
     arch: "arm64",
+    platform: "darwin",
     now: () => clock,
     fetchImpl: async (url, opts) => {
       calls.push({ url, headers: opts.headers });
@@ -158,7 +170,7 @@ test("checker: up to date, rate limited, offline", async () => {
   const dir = tmpDir();
   const store = createUpdateStore({ dir });
   store.write({ checks: true });
-  const make = (fetchImpl) => createUpdateChecker({ store, appVersion: "1.3.0", arch: "arm64", fetchImpl });
+  const make = (fetchImpl) => createUpdateChecker({ store, appVersion: "1.3.0", arch: "arm64", platform: "darwin", fetchImpl });
 
   const current = await make(async () => fakeResponse(200, [fullRelease("1.3.0")])).check();
   assert.equal(current.app, null);

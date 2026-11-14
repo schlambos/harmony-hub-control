@@ -321,7 +321,64 @@ check("a held rocker stays on the key it pressed, even when another home key is 
   first.key == "Ha1Up" and held.key == "Ha1Up" and released.key == "Ha1Up" and again.key == "HcUp",
   table.concat({ first.key, held.key, released.key, again.key }, " "))
 
+-- == A remote with a screen that has home keys (Elite, 950) ===================
+
+local SCREEN = "16417"
+local function screenHub(activityId, activityButtons, rootButtons)
+  local maps = { ["16417Root"] = { buttons = rootButtons }, ["16422Root"] = { buttons = rootMap } }
+  if activityButtons then maps["16417Activity" .. activityId] = { buttons = activityButtons } end
+  account = { currentActivityId = activityId, buttonMaps = maps }
+  reader.getAutomationConfiguration({}, account)
+end
+local screenRoot = {
+  HomeControl1 = button(SEND),
+  HomeControl1Up = button(SEND),
+  HomeControl2 = button(SEND, { "SendCommand" }),
+  HomeControl3 = button(SEND),
+  HomeControlPlus = button(NOTHING),
+  HomeControlMinus = button(NOTHING),
+  HcDown = button(SEND),
+}
+screenHub("-1", nil, screenRoot)
+check("a screen remote's home key fires once too",
+  pressAndHold("HomeControl1", SCREEN) == "press:HomeControl1 answered:200 answered:200 release:HomeControl1",
+  pressAndHold("HomeControl1", SCREEN))
+check("its long press keeps the holds",
+  pressAndHold("HomeControl2", SCREEN) == "press:HomeControl2 hold:HomeControl2 hold:HomeControl2 release:HomeControl2",
+  pressAndHold("HomeControl2", SCREEN))
+check("its other keys are never touched",
+  pressAndHold("Menu", SCREEN) == "press:Menu hold:Menu hold:Menu release:Menu", pressAndHold("Menu", SCREEN))
+check("the Companion's key names mean nothing on a screen remote",
+  pressAndHold("Ha1", SCREEN) == "press:Ha1 hold:Ha1 hold:Ha1 release:Ha1", pressAndHold("Ha1", SCREEN))
+press("press", "HomeControl1", SCREEN)
+check("+ after its Light 1 adjusts Light 1",
+  pressAndHold("HomeControlPlus", SCREEN) ==
+    "press:HomeControl1Up hold:HomeControl1Up hold:HomeControl1Up release:HomeControl1Up",
+  pressAndHold("HomeControlPlus", SCREEN))
+check("- falls back to the fixed -",
+  pressAndHold("HomeControlMinus", SCREEN) == "press:HcDown hold:HcDown hold:HcDown release:HcDown",
+  pressAndHold("HomeControlMinus", SCREEN))
+press("press", "HomeControl3", SCREEN)
+check("a + with no action is answered here, so the engine's home-automation path never sees it",
+  pressAndHold("HomeControlPlus", SCREEN) == "answered:200 answered:200 answered:200 answered:200",
+  pressAndHold("HomeControlPlus", SCREEN))
+press("press", "Ha1")
+press("press", "HomeControl3", SCREEN)
+check("each remote has its own last home key",
+  pressAndHold("RockerUp") == "press:Ha1Up hold:Ha1Up hold:Ha1Up release:Ha1Up", pressAndHold("RockerUp"))
+screenHub("100", { HomeControl3 = button(NOTHING) }, screenRoot)
+check("\"nothing\" on a screen remote is run by the engine (the remote waits for it); only holds stop here",
+  pressAndHold("HomeControl3", SCREEN) == "press:HomeControl3 answered:200 answered:200 release:HomeControl3",
+  pressAndHold("HomeControl3", SCREEN))
+screenHub("-1", nil, { HomeControlPlus = logitechLight })
+check("a + Logitech's home control binds stays the engine's",
+  pressAndHold("HomeControlPlus", SCREEN) ==
+    "press:HomeControlPlus hold:HomeControlPlus hold:HomeControlPlus release:HomeControlPlus",
+  pressAndHold("HomeControlPlus", SCREEN))
+
 -- == Failure ===============================================================
+
+hub("-1", nil, rootMap)
 
 local accountIndex = upvalueIndex(homeControlMaps, "engineAccount")
 debug.setupvalue(homeControlMaps, accountIndex,
