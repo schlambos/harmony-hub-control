@@ -48,10 +48,12 @@ with it at least once. The Android app doesn't have this page.
   each have a "no action" row. **No press** also removes the long press and
   keeps + / −. **Clear** empties the whole button.
 - **The page shows what's set.** A row names the press, the long press and
-  the button's + / −; only a button with nothing set is greyed out. On an
-  activity's page, a badge says whether the button follows the global one
-  (**Global**), is set there (**Override**) or does nothing there
-  (**Nothing**).
+  the button's + / −; only a button with nothing set is greyed out. Legacy
+  Logitech bindings (`ButtonHomeControlAction`) show **Set up elsewhere · kept
+  as it is** and stay untouched on save unless you replace or clear them in
+  the picker. On an activity's page, a badge says whether the button follows
+  the global one (**Global**), is set there (**Override**) or does nothing
+  there (**Nothing**).
 - **The sheet keeps your picks until Done** (`views/button-picker.js`). A
   pick, Clear and Undo keep the sheet open. Done keeps the changes; any other close drops them, as in the
   Touch editor.
