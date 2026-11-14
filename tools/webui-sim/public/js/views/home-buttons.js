@@ -125,7 +125,7 @@ export function createHomeButtonsView(section) {
     const from = activityId && SOURCES[assignment.source] ? ` (${SOURCES[assignment.source]})` : "";
     const lead = title ? `${title}:` : "Now:";
     if (assignment.source === "nothing") return `${lead} nothing in this activity.`;
-    if (assignment.source === "other") return `${lead} set up elsewhere, kept as it is.`;
+    if (assignment.source === "other") return `${lead} set up elsewhere — kept unless you change or clear it.`;
     if (assignment.press) return `${lead} ${pressAndLong(assignment)}${from}`;
     if (title) return `${lead} not set, so ${title[0]} does what “${title[0]}” says.`;
     return remote.buttons.some((b) => b.key === key) ? "Not set yet. Long press needs a press first." : "Not set yet.";
@@ -187,10 +187,7 @@ export function createHomeButtonsView(section) {
     const inner = `<span class="wiz-key-name">${escapeHtml(button.label)}</span>
         <span class="wiz-key-value${unset ? " is-unset" : ""}">${pressMarkup(assignment, dims.length > 0)}${extrasLine(assignment, dims)}</span>
         ${badge}`;
-    // A key set up in a way this page doesn't change is only shown.
-    return draft.entries[button.key]?.state === "other"
-      ? `<div class="m-row wiz-key">${inner}</div>`
-      : `<button type="button" class="m-row wiz-key" data-key="${escapeHtml(button.key)}" aria-haspopup="dialog">${inner}</button>`;
+    return `<button type="button" class="m-row wiz-key" data-key="${escapeHtml(button.key)}" aria-haspopup="dialog">${inner}</button>`;
   }
 
   function hintText() {
@@ -339,7 +336,7 @@ export function createHomeButtonsView(section) {
     }
     if (activityId) return [];
     const label = slot.title ? `No ${slot.label} action` : "No press";
-    return [{ label, current: !effective.press, pick: () => edit((d) => clearAction(d, slot.key, "press")) }];
+    return [{ label, current: effective.source === "unset", pick: () => edit((d) => clearAction(d, slot.key, "press")) }];
   }
 
   /* An activity following a global long press keeps the global press and drops the long one. */
@@ -368,13 +365,13 @@ export function createHomeButtonsView(section) {
         now: (tab) => nowLine(slotOf(tab).key, slotOf(tab).title),
         tabEnabled: (tab) => {
           const slot = slotOf(tab);
-          if (draft.entries[slot.key]?.state === "other") return false;
           return slot.which !== "long" || Boolean(effectiveAssignment(draft, slot.key).press);
         },
-        tabHint: (tab) => (slotOf(tab).which === "long" && draft.entries[button.key]?.state !== "other"
-          ? "Set a press first"
-          : ""),
-        canClear: () => keys.some((key) => draft.entries[key] && draft.entries[key].state !== "other"),
+        tabHint: (tab) => {
+          if (slotOf(tab).which !== "long") return "";
+          return effectiveAssignment(draft, button.key).source === "other" ? "Replace the press first" : "Set a press first";
+        },
+        canClear: () => keys.some((key) => Boolean(draft.entries[key])),
         canUndo: () => keysChanged(hub.state.config, draft, keys),
         startChip: (tab) => {
           const want = chipOf(effectiveAssignment(draft, slotOf(tab).key)[slotOf(tab).which])
@@ -385,7 +382,7 @@ export function createHomeButtonsView(section) {
         extraRows: (tab) => [...noneRows(slotOf(tab)), ...scopeRows(slotOf(tab))],
         // Clear empties the whole button: press, long press, + and −.
         onClear: () => edit((d) => keys
-          .filter((key) => d.entries[key] && d.entries[key].state !== "other")
+          .filter((key) => d.entries[key])
           .reduce((next, key) => clearAction(next, key, "press"), d)),
         onUndo: () => edit((d) => revertKeys(hub.state.config, d, keys)),
         onDone: () => {

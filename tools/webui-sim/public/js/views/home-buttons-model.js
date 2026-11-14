@@ -177,7 +177,7 @@ function pageAction({ kind, deviceId, command, functionId, activityId, sequenceI
 const readAction = (action, map) => pageAction(describeAction(action, map));
 
 /* One key in one map: absent (undefined), "set" (press and long press),
-   "nothing", or "other" (actions this page doesn't own; kept as they are). */
+   "nothing", or "other" (actions this page doesn't own; kept unless changed). */
 function readEntry(map, key) {
   const button = hardButton(map, key);
   if (!button) return undefined;
@@ -253,9 +253,7 @@ function copy(draft) {
 
 function ownedEntry(draft, key) {
   if (!ownedKeysOf(remoteOf(draft)).has(key)) throw new Error(`${key} isn't a home control key.`);
-  const entry = draft.entries[key];
-  if (entry?.state === "other") throw new Error("This button is set up in a way this page doesn't change, so it's kept as it is.");
-  return entry;
+  return draft.entries[key];
 }
 
 /**
@@ -483,14 +481,14 @@ function writeEntries(config, map, draft, alloc) {
   for (const button of Array.isArray(map.Buttons) ? map.Buttons : []) {
     const key = typeOf(button) === "HardRemoteButton" ? button.ButtonKey : "";
     const before = owned.has(key) ? readEntry(map, key) : undefined;
-    if (!before || before.state === "other") {
+    const entry = draft.entries[key];
+    if (!before || (before.state === "other" && entry?.state === "other")) {
       buttons.push(button);
       continue;
     }
     // A second button for a key already written would shadow it on the hub.
     if (written.has(key)) continue;
     written.add(key);
-    const entry = draft.entries[key];
     if (!entry) continue; // cleared
     writeEntry(button, entry, map, sequenceIdIn, nothingId);
     buttons.push(button);

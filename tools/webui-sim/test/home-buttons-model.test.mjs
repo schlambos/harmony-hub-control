@@ -109,14 +109,32 @@ describe("reading the Companion's buttons", () => {
     assert.equal(effectiveAssignment(draft, "Ha1").source, "global");
   });
 
-  it("keeps a key with an action it doesn't own as it is", () => {
+  it("keeps a key with an action it doesn't own as it is until replaced or cleared", () => {
     const cfg = config();
     keyOf(mapOf(cfg, ROOT_MAP), "Ha2").ButtonAction = { __type: "ButtonHomeControlAction", ProgramId: 7, EventType: 1 };
     const draft = readHomeButtons(cfg);
     assert.equal(effectiveAssignment(draft, "Ha2").source, "other");
-    assert.throws(() => setAction(draft, "Ha2", "press", MUTE), /doesn't change/);
+    assert.throws(() => setAction(draft, "Ha2", "long", MUTE), /press does first/);
+    assert.equal(clearAction(draft, "Ha2", "long").entries.Ha2.state, "other");
     const map = mapOf(built(cfg, setAction(draft, "Ha3", "press", MUTE)), ROOT_MAP);
     assert.deepEqual(keyOf(map, "Ha2"), keyOf(mapOf(cfg, ROOT_MAP), "Ha2"));
+
+    const replaced = setAction(draft, "Ha2", "press", MUTE);
+    assert.equal(effectiveAssignment(replaced, "Ha2").source, "global");
+    assert.deepEqual(effectiveAssignment(replaced, "Ha2").press, MUTE);
+    assert.equal(isChanged(cfg, replaced), true);
+    assert.equal(keysChanged(cfg, replaced, ["Ha2"]), true);
+    assert.equal(keyOf(mapOf(built(cfg, replaced), ROOT_MAP), "Ha2").ButtonAction.CommandName, "Mute");
+
+    const cleared = clearAction(draft, "Ha2", "press");
+    assert.equal(effectiveAssignment(cleared, "Ha2").source, "unset");
+    assert.equal(isChanged(cfg, cleared), true);
+    assert.equal(keyOf(mapOf(built(cfg, cleared), ROOT_MAP), "Ha2"), undefined);
+
+    const reverted = revertKeys(cfg, cleared, ["Ha2"]);
+    assert.equal(effectiveAssignment(reverted, "Ha2").source, "other");
+    assert.equal(isChanged(cfg, reverted), false);
+    assert.equal(keysChanged(cfg, reverted, ["Ha2"]), false);
   });
 });
 
@@ -574,6 +592,43 @@ describe("a screen remote with home buttons (Elite, 950)", () => {
     assert.ok(runsNothing(second, "HomeControlMinus"));
     assert.equal(keyOf(second, "HcUp").ButtonAction.CommandName, "Mute");
     assert.equal(second.Sequences.length, 1);
+  });
+
+  it("replaces or clears legacy ButtonHomeControlAction dot bindings in 16417Root while keeping untouched ones", () => {
+    const cfg = config();
+    const own1 = { __type: "ButtonHomeControlAction", ProgramId: 1, EventType: 1 };
+    const own2 = { __type: "ButtonHomeControlAction", ProgramId: 2, EventType: 1 };
+    const own3 = { __type: "ButtonHomeControlAction", ProgramId: 3, EventType: 1 };
+    const seeded = built(cfg, setAction(setAction(setAction(read(cfg), "HomeControl1", "press", MUTE), "HomeControl2", "press", MUTE), "HomeControl3", "press", MUTE));
+    const root = mapOf(seeded, SCREEN_ROOT);
+    keyOf(root, "HomeControl1").ButtonAction = own1;
+    keyOf(root, "HomeControl2").ButtonAction = own2;
+    keyOf(root, "HomeControl3").ButtonAction = own3;
+    const legacy = { ...cfg, mapList: seeded };
+
+    const draft = read(legacy);
+    assert.equal(effectiveAssignment(draft, "HomeControl1").source, "other");
+    assert.equal(effectiveAssignment(draft, "HomeControl2").source, "other");
+    assert.equal(effectiveAssignment(draft, "HomeControl3").source, "other");
+    assert.throws(() => setAction(draft, "HomeControl1", "long", START_MUSIC), /press does first/);
+
+    let edited = setAction(draft, "HomeControl1", "press", MUTE);
+    edited = clearAction(edited, "HomeControl3", "press");
+    assert.equal(isChanged(legacy, edited), true);
+    assert.equal(keysChanged(legacy, edited, ["HomeControl1"]), true);
+    assert.equal(keysChanged(legacy, edited, ["HomeControl2"]), false);
+    assert.equal(keysChanged(legacy, edited, ["HomeControl3"]), true);
+
+    const saved = mapOf(built(legacy, edited), SCREEN_ROOT);
+    assert.equal(keyOf(saved, "HomeControl1").ButtonAction.CommandName, "Mute");
+    assert.deepEqual(keyOf(saved, "HomeControl2").ButtonAction, own2);
+    assert.equal(keyOf(saved, "HomeControl3"), undefined);
+    assert.ok(runsNothing(saved, "HomeControlPlus") && runsNothing(saved, "HomeControlMinus"));
+
+    const undone = revertKeys(legacy, edited, ["HomeControl1", "HomeControl3"]);
+    assert.equal(effectiveAssignment(undone, "HomeControl1").source, "other");
+    assert.equal(effectiveAssignment(undone, "HomeControl3").source, "other");
+    assert.equal(isChanged(legacy, undone), false);
   });
 
   it("can't turn a button off in one activity, and knows no Companion keys", () => {
