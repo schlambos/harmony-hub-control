@@ -3,10 +3,11 @@
 // SPDX-License-Identifier: MIT
 // Copyright (c) 2026 Matthew Gibbons (Melodious — LICENSE section 2)
 //
-// Dual-signal hub state classifier for Melodious Root Wizard (Slice 1).
+// Dual-signal hub state classifier for Melodious Root Wizard (Slice 1 + Slice 2).
 // Combines SSDP + :8080 (/api/system-status) + :8088 (getProvisionInfo) +
 // :5222 (XMPP) + :22 (SSH) + USB HID (preflight /rf/deviceinfo + hbus
-// connect.sysinfo?get) into one verdict and checks against user intent.
+// connect.sysinfo?get + setup.account?getProvisionInfo + connect.discoveryinfo?get)
+// into one verdict and checks against user intent.
 
 const VERDICTS = Object.freeze({
   FRESH: "fresh",
@@ -75,9 +76,12 @@ function sanitizeWebUiProbe(probed, mask = true) {
   };
 }
 
-function evaluateFirmwareGate({ usbSysinfo, webUiProbe }) {
+function evaluateFirmwareGate({ usbSysinfo, usbDiscoveryInfo, webUiProbe } = {}) {
   const fw =
     (usbSysinfo && typeof usbSysinfo.fwVer === "string" && usbSysinfo.fwVer.trim()) ||
+    (usbDiscoveryInfo &&
+      typeof usbDiscoveryInfo.currentFwVersion === "string" &&
+      usbDiscoveryInfo.currentFwVersion.trim()) ||
     (webUiProbe && typeof webUiProbe.firmware === "string" && webUiProbe.firmware.trim()) ||
     "";
   if (!fw) {
@@ -102,7 +106,11 @@ function evaluateFirmwareGate({ usbSysinfo, webUiProbe }) {
   };
 }
 
-function evaluateMismatch(userIntent, verdict, { webUi8080, provisionInfo8088 } = {}) {
+function evaluateMismatch(
+  userIntent,
+  verdict,
+  { webUi8080, provisionInfo8088, usbProvisionInfo } = {}
+) {
   const intent = String(userIntent || "").trim().toLowerCase();
 
   if (verdict === VERDICTS.MELODIOUS_INSTALLED) {
@@ -116,10 +124,17 @@ function evaluateMismatch(userIntent, verdict, { webUi8080, provisionInfo8088 } 
     };
   }
 
+  const activeProv =
+    provisionInfo8088 && provisionInfo8088.ok
+      ? provisionInfo8088
+      : usbProvisionInfo && usbProvisionInfo.ok
+        ? usbProvisionInfo
+        : null;
+
   if (
-    provisionInfo8088?.ok &&
-    provisionInfo8088.provisioned &&
-    provisionInfo8088.remoteIdType === "string"
+    activeProv?.ok &&
+    activeProv.provisioned &&
+    activeProv.remoteIdType === "string"
   ) {
     return {
       hasMismatch: true,
@@ -186,6 +201,8 @@ function classifyHubSignals({
     device: null,
     preflight: null,
     sysinfo: null,
+    provisionInfo: null,
+    discoveryInfo: null,
     usbWedge: false,
   };
   const lan = bridgeResult?.lan || {
@@ -208,8 +225,36 @@ function classifyHubSignals({
   const usbConnected = Boolean(usb.connected);
   const usbPreflightOk = Boolean(usb.preflight && usb.preflight.ok);
   const usbSysinfoOk = Boolean(usb.sysinfo && usb.sysinfo.ok);
+  const usbProvisionInfo = usb.provisionInfo || null;
+  const usbDiscoveryInfo = usb.discoveryInfo || null;
+  const usbProvisionInfoOk = Boolean(usbProvisionInfo && usbProvisionInfo.ok);
+  const usbDiscoveryInfoOk = Boolean(usbDiscoveryInfo && usbDiscoveryInfo.ok);
   const usbHasHubId = Boolean(usb.preflight && usb.preflight.hasHubId);
   const usbWedged = Boolean(usb.usbWedge);
+
+  let usbProvisioned = null;
+  if (
+    (usbProvisionInfoOk && Boolean(usbProvisionInfo.provisioned)) ||
+    (usbDiscoveryInfoOk && Boolean(usbDiscoveryInfo.provisioned)) ||
+    usbHasHubId
+  ) {
+    usbProvisioned = true;
+  } else if (
+    (usbProvisionInfoOk && !usbProvisionInfo.provisioned) ||
+    (usbDiscoveryInfoOk && !usbDiscoveryInfo.provisioned) ||
+    (usbConnected && usbPreflightOk && !usbHasHubId)
+  ) {
+    usbProvisioned = false;
+  }
+
+  const effectiveProv =
+    provisionInfo8088 && provisionInfo8088.ok
+      ? provisionInfo8088
+      : usbProvisionInfoOk
+        ? usbProvisionInfo
+        : usbDiscoveryInfoOk
+          ? usbDiscoveryInfo
+          : null;
 
   let verdict = VERDICTS.UNKNOWN;
   let verdictLabel = "Unknown / Unreachable";
@@ -226,7 +271,7 @@ function classifyHubSignals({
       (port22Open ? " and Dropbear SSH is open on port 22." : ".");
     recommendedNextStep =
       "No root needed. Connect to this hub directly from the Connect screen, or use Settings → Updates to reinstall/repair.";
-  } else if (port5222Open && lanProvisioned !== false) {
+  } else if (port5222Open && lanProvisioned !== false && usbProvisioned !== false) {
     verdict = VERDICTS.PROVISIONED_XMPP_ON;
     verdictLabel = "Provisioned (XMPP On)";
     verdictSummary =
@@ -234,28 +279,35 @@ function classifyHubSignals({
       (port22Open ? " (SSH port 22 is also already open)." : ".");
     recommendedNextStep = port22Open
       ? "Root SSH (port 22) is already open. Ready for Melodious web UI installation."
-      : "Eligible for standard LAN root over XMPP (--action lan-root --transport xmpp).";
-  } else if (lanProvisioned === true || usbHasHubId) {
+      : "Eligible for standard LAN root over XMPP (--action lan-root-xmpp).";
+  } else if (lanProvisioned === true || usbProvisioned === true) {
     verdict = VERDICTS.PROVISIONED_LOCAL;
-    const isLocal = Boolean(provisionInfo8088?.isLocalAccountHint);
+    const isLocal = Boolean(effectiveProv?.isLocalAccountHint);
+    const detectedOverUsbOnly = usbProvisioned === true && lanProvisioned !== true;
     verdictLabel = isLocal
       ? "Provisioned (Local Account, XMPP Off)"
-      : "Provisioned (XMPP Off / Port 5222 Closed)";
+      : detectedOverUsbOnly
+        ? "Provisioned (Detected over USB, Offline / XMPP Off)"
+        : "Provisioned (XMPP Off / Port 5222 Closed)";
+    const modeNote = effectiveProv?.mode ? ` (mode ${effectiveProv.mode})` : "";
     verdictSummary =
-      `Hub is provisioned${provisionInfo8088?.mode ? ` (mode ${provisionInfo8088.mode})` : ""}, ` +
-      "but XMPP port 5222 is closed" +
+      `Hub is provisioned${modeNote}` +
+      (detectedOverUsbOnly
+        ? " (confirmed over USB hbus without LAN/Wi-Fi)"
+        : ", but XMPP port 5222 is closed") +
       (port22Open ? " and SSH port 22 is open." : ".");
     if (port22Open) {
       recommendedNextStep =
         "Root SSH (port 22) is already open and the hub has a Hub ID. Ready for Melodious web UI installation.";
     } else if (usbConnected && usbPreflightOk) {
-      recommendedNextStep =
-        "XMPP is closed on 5222, but USB HID is connected and responsive. Root over USB (--action lan-root --transport usb) or enable XMPP on 8088 if cloud-provisioned.";
+      recommendedNextStep = detectedOverUsbOnly
+        ? "Hub is provisioned to an account over USB. Connect it to Wi-Fi (usb-wifi-connect) to root and preserve its setup, or run usb-factory-reset ('1' only) if starting fresh."
+        : "XMPP is closed on 5222, but USB HID is connected and responsive. Root over USB (--action usb-root) or enable XMPP on 8088 if cloud-provisioned.";
     } else {
       recommendedNextStep =
-        "Connect the hub over USB to root via --transport usb (locally provisioned hubs keep port 5222 closed), or if cloud-provisioned, enable XMPP in the Harmony app / --action enable-xmpp.";
+        "Connect the hub over USB to root via --action usb-root (locally provisioned hubs keep port 5222 closed), or if cloud-provisioned, enable XMPP in the Harmony app.";
     }
-  } else if (lanProvisioned === false || (usbConnected && usbPreflightOk && !usbHasHubId)) {
+  } else if (lanProvisioned === false || usbProvisioned === false) {
     verdict = VERDICTS.FRESH;
     verdictLabel = "Factory-Reset / Unprovisioned (Fresh Hub)";
     verdictSummary =
@@ -263,12 +315,13 @@ function classifyHubSignals({
       (port8088Open ? ", confirmed on LAN :8088" : "") +
       (usbConnected && usbPreflightOk ? ", confirmed over USB HID." : ".");
     recommendedNextStep = usbConnected && usbPreflightOk
-      ? "Ready for the fresh-hub USB activation chain: verify 4.15.600 firmware gate → open TDE gate (/tde/enable) → write local mode-3 provisioning (numeric remoteId) → seed AutomationConfig → root over USB → install Melodious."
+      ? "Ready for the fresh-hub USB activation chain: verify 4.15.600 firmware gate → open TDE gate (usb-tde-enable) → write local mode-3 provisioning (usb-provision-local, numeric remoteId) → seed AutomationConfig (usb-seed-automation) → root over USB (usb-root) → install Melodious."
       : "Connect the hub to this Mac with a data-capable USB cable so the fresh-hub USB activation chain can run.";
   }
 
   const firmwareGate = evaluateFirmwareGate({
     usbSysinfo: usb.sysinfo,
+    usbDiscoveryInfo,
     webUiProbe: webUi8080,
   });
 
@@ -282,6 +335,8 @@ function classifyHubSignals({
   const mismatch = evaluateMismatch(userIntent, verdict, {
     webUi8080,
     provisionInfo8088,
+    usbProvisionInfo,
+    usbDiscoveryInfo,
   });
 
   return {
@@ -319,6 +374,11 @@ function classifyHubSignals({
         preflight: usb.preflight || null,
         sysinfoOk: usbSysinfoOk,
         sysinfo: usb.sysinfo || null,
+        provisionInfoOk: usbProvisionInfoOk,
+        provisionInfo: usbProvisionInfo,
+        discoveryInfoOk: usbDiscoveryInfoOk,
+        discoveryInfo: usbDiscoveryInfo,
+        provisioned: usbProvisioned,
         usbWedge: usbWedged,
         error: usb.error || null,
       },

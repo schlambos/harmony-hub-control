@@ -55,12 +55,18 @@ test("preload exposes seven fixed update channels and passes only the documented
     ["desktop:updates-open-release", { url: "https://github.com/schlambos/harmony-hub-control/releases/tag/v1.3.0" }],
   ]);
 
-  assert.deepEqual(Object.keys(bridge.wizard), ["detectAndClassify", "usbProbe", "onEvent"]);
+  assert.deepEqual(Object.keys(bridge.wizard), ["detectAndClassify", "usbProbe", "runAction", "onEvent"]);
   calls.length = 0;
   await bridge.wizard.detectAndClassify({ userIntent: "fresh", mask: true });
   await bridge.wizard.usbProbe({ action: "probe", mask: true });
+  await bridge.wizard.runAction({
+    action: "usb-flash-firmware",
+    confirmAction: "usb-flash-firmware",
+    firmwareFile: "/etc/passwd",
+  });
   assert.deepEqual(JSON.parse(JSON.stringify(calls)), [
     ["wizard:detect-classify", { userIntent: "fresh", mask: true }],
     ["wizard:usb-probe", { action: "probe", mask: true }],
+    ["wizard:run-action", { action: "usb-flash-firmware", confirmAction: "usb-flash-firmware" }],
   ]);
 });

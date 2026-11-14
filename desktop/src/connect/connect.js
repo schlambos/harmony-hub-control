@@ -50,7 +50,12 @@
   let wizardBusy = false;
   let wizardStepText = "";
   let wizardResult = null;
+  let wizardActionResult = null;
   let wizardError = "";
+  let wizardWifiSsid = "";
+  let wizardWifiPassword = "";
+  let wizardRemoteId = "20261111";
+  let wizardAccountId = "";
 
   function escapeHtml(value) {
     return String(value ?? "").replace(/[&<>"']/g, (c) =>
@@ -348,8 +353,14 @@
     if (wizardError) {
       resultHtml = `<div class="notice notice-error" id="wizardErrorNotice" role="alert" style="margin-top:var(--space-3)">${escapeHtml(wizardError)}</div>`;
     } else if (r) {
+      const usbProv = usbSig?.provisionInfo;
+      const usbProvNote = usbProv?.ok
+        ? usbProv.provisioned
+          ? ` · USB getProvisionInfo: Provisioned (mode ${escapeHtml(usbProv.mode ?? "?")}, remoteId type: ${escapeHtml(usbProv.remoteIdType || "none")}${usbProv.isLocalAccountHint ? ", local account" : ""})`
+          : " · USB getProvisionInfo: Unprovisioned"
+        : "";
       const usbSummary = usbSig?.connected
-        ? `Connected (${escapeHtml(usbSig.device?.backend || "hidapi")} ${escapeHtml(usbSig.device?.vendorId || "046D")}:${escapeHtml(usbSig.device?.productId || "C129")}) · preflight: ${usbSig.preflightOk ? "OK" : "Failed"} · sysinfo: ${usbSig.sysinfoOk ? `OK (fw ${escapeHtml(usbSig.sysinfo?.fwVer || "?")}, skin ${escapeHtml(usbSig.sysinfo?.skinDecimal ?? usbSig.sysinfo?.skin ?? "?")}, RAM ${escapeHtml(usbSig.sysinfo?.ramSize || "?")})` : "Failed"}`
+        ? `Connected (${escapeHtml(usbSig.device?.backend || "hidapi")} ${escapeHtml(usbSig.device?.vendorId || "046D")}:${escapeHtml(usbSig.device?.productId || "C129")}) · preflight: ${usbSig.preflightOk ? "OK" : "Failed"} · sysinfo: ${usbSig.sysinfoOk ? `OK (fw ${escapeHtml(usbSig.sysinfo?.fwVer || "?")}, skin ${escapeHtml(usbSig.sysinfo?.skinDecimal ?? usbSig.sysinfo?.skin ?? "?")}, RAM ${escapeHtml(usbSig.sysinfo?.ramSize || "?")})` : "Failed"}${usbProvNote}`
         : usbSig?.error
           ? `Not connected (${escapeHtml(usbSig.error)})`
           : "Skipped or no 046D:C129 device found";
@@ -492,6 +503,49 @@
             : ""
         }
         ${resultHtml}
+        ${
+          wizardActionResult
+            ? `<div class="notice ${wizardActionResult.ok ? "notice-ok" : "notice-error"}" id="wizardActionOutcome" role="status" style="margin-top:var(--space-2)">
+                 <strong>Action ${escapeHtml(wizardActionResult.action)}:</strong> ${wizardActionResult.ok ? "OK" : escapeHtml(wizardActionResult.error || "Failed")}
+               </div>`
+            : ""
+        }
+        <details id="wizardSlice2DevActions" style="margin-top:var(--space-2)">
+          <summary style="cursor:pointer;font-size:var(--fs-body-sm);font-weight:600">Developer Pre-Root &amp; Root Actions (Slice 2 — Explicit Confirmation)</summary>
+          <div style="display:grid;gap:var(--space-3);margin-top:var(--space-3)">
+            <div style="display:grid;grid-template-columns:1fr 1fr;gap:var(--space-2)">
+              <div class="m-field">
+                <label for="wizardWifiSsidInput">Wi-Fi SSID (for usb-wifi-connect)</label>
+                <input id="wizardWifiSsidInput" type="text" autocomplete="off" spellcheck="false" value="${escapeHtml(wizardWifiSsid)}" ${wizardBusy ? "disabled" : ""}>
+              </div>
+              <div class="m-field">
+                <label for="wizardWifiPassInput">Wi-Fi Password (stdin JSON only)</label>
+                <input id="wizardWifiPassInput" type="password" autocomplete="off" value="${escapeHtml(wizardWifiPassword)}" ${wizardBusy ? "disabled" : ""}>
+              </div>
+            </div>
+            <div style="display:grid;grid-template-columns:1fr 1fr;gap:var(--space-2)">
+              <div class="m-field">
+                <label for="wizardRemoteIdInput">Numeric remoteId (positive integer)</label>
+                <input id="wizardRemoteIdInput" type="text" inputmode="numeric" autocomplete="off" value="${escapeHtml(wizardRemoteId)}" ${wizardBusy ? "disabled" : ""}>
+              </div>
+              <div class="m-field">
+                <label for="wizardAccountIdInput">Local accountId (optional)</label>
+                <input id="wizardAccountIdInput" type="text" autocomplete="off" placeholder="hub-local-20261111" value="${escapeHtml(wizardAccountId)}" ${wizardBusy ? "disabled" : ""}>
+              </div>
+            </div>
+            <div style="display:flex;gap:var(--space-2);flex-wrap:wrap">
+              <button type="button" class="btn btn-outlined btn-sm" data-wizard-action="usb-wifi-scan" ${wizardBusy ? "disabled" : ""}>USB Wi-Fi Scan</button>
+              <button type="button" class="btn btn-tonal btn-sm" data-wizard-action="usb-wifi-connect" ${wizardBusy ? "disabled" : ""}>USB Wi-Fi Connect</button>
+              <button type="button" class="btn btn-tonal btn-sm" data-wizard-action="usb-flash-firmware" ${wizardBusy ? "disabled" : ""}>USB Flash Firmware (.hfw2)…</button>
+              <button type="button" class="btn btn-danger btn-sm" data-wizard-action="usb-factory-reset" ${wizardBusy ? "disabled" : ""}>USB Factory Reset ('1')</button>
+              <button type="button" class="btn btn-tonal btn-sm" data-wizard-action="usb-tde-enable" ${wizardBusy ? "disabled" : ""}>1. USB TDE Enable</button>
+              <button type="button" class="btn btn-tonal btn-sm" data-wizard-action="usb-provision-local" ${wizardBusy ? "disabled" : ""}>2. USB Provision Local</button>
+              <button type="button" class="btn btn-tonal btn-sm" data-wizard-action="usb-seed-automation" ${wizardBusy ? "disabled" : ""}>3. USB Seed AutomationConfig</button>
+              <button type="button" class="btn btn-filled btn-sm" data-wizard-action="usb-root" ${wizardBusy ? "disabled" : ""}>4. USB Root (Dropbear)</button>
+              <button type="button" class="btn btn-filled btn-sm" data-wizard-action="lan-root-xmpp" ${wizardBusy ? "disabled" : ""}>LAN Root (XMPP)</button>
+            </div>
+          </div>
+        </details>
       </div>
     `;
   }
@@ -620,6 +674,10 @@
     const wizProvEl = document.getElementById("wizardIntentProvisioned");
     const wizUsbEl = document.getElementById("wizardIncludeUsb");
     const wizMaskEl = document.getElementById("wizardMaskIds");
+    const wizSsidEl = document.getElementById("wizardWifiSsidInput");
+    const wizPassEl = document.getElementById("wizardWifiPassInput");
+    const wizRemoteIdEl = document.getElementById("wizardRemoteIdInput");
+    const wizAccountIdEl = document.getElementById("wizardAccountIdInput");
     if (hostEl) formHost = hostEl.value;
     if (portEl) formPort = portEl.value;
     if (userEl) formUser = userEl.value;
@@ -630,6 +688,50 @@
     if (wizProvEl?.checked) wizardIntent = "provisioned";
     if (wizUsbEl) wizardIncludeUsb = wizUsbEl.checked;
     if (wizMaskEl) wizardMask = wizMaskEl.checked;
+    if (wizSsidEl) wizardWifiSsid = wizSsidEl.value;
+    if (wizPassEl) wizardWifiPassword = wizPassEl.value;
+    if (wizRemoteIdEl) wizardRemoteId = wizRemoteIdEl.value;
+    if (wizAccountIdEl) wizardAccountId = wizAccountIdEl.value;
+  }
+
+  async function runWizardDevAction(action) {
+    if (!wizardBridge?.runAction || !state.wizardDevAvailable || wizardBusy) return;
+    syncInputsFromDom();
+    const isReadonly = action === "usb-wifi-scan" || action === "usb-wifi-status";
+    if (!isReadonly) {
+      const confirmed = window.confirm(
+        `Run state-changing Root Wizard action "${action}" on the connected hub?`
+      );
+      if (!confirmed) return;
+    }
+    wizardBusy = true;
+    wizardError = "";
+    wizardActionResult = null;
+    wizardStepText = `Running ${action}…`;
+    render();
+    try {
+      const parsedRemoteId = Number.parseInt(String(wizardRemoteId).trim(), 10);
+      const res = await wizardBridge.runAction({
+        action,
+        confirmAction: isReadonly ? "" : action,
+        host: wizardHost.trim() || formHost.trim(),
+        mask: wizardMask,
+        ssid: wizardWifiSsid.trim(),
+        password: wizardWifiPassword,
+        remoteId: Number.isSafeInteger(parsedRemoteId) && parsedRemoteId > 0 ? parsedRemoteId : null,
+        accountId: wizardAccountId.trim(),
+      });
+      if (res && !res.canceled) {
+        wizardActionResult = res;
+      }
+      wizardStepText = "";
+    } catch (err) {
+      wizardError = err?.message || String(err);
+      wizardStepText = "";
+    } finally {
+      wizardBusy = false;
+      render();
+    }
   }
 
   async function runWizardDetect({ usbOnly = false } = {}) {
@@ -684,6 +786,11 @@
     if (target.closest("#wizardUsbOnlyBtn") && wizardBridge && !wizardBusy) {
       wizardIncludeUsb = true;
       await runWizardDetect({ usbOnly: true });
+      return;
+    }
+    const actionBtn = target.closest("[data-wizard-action]");
+    if (actionBtn && wizardBridge && !wizardBusy) {
+      await runWizardDevAction(actionBtn.dataset.wizardAction);
       return;
     }
     const releaseBtn = target.closest("[data-release-url]");
