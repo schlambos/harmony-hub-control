@@ -47,7 +47,9 @@ A hub that was never set up has none of these resources. On such a hub the
 manager so each gets its index entry. It writes only when every one of the
 five is absent or already empty, in local mode (cloud blocker on) and with no
 sync running: a hub with any setup is left as it is, and a resource that
-exists is never rewritten.
+exists is never rewritten. It then sends `config_new` with `"all"`, so the
+firmware initializes its account by loading all five lists; if that load does
+not succeed, later reloads in the same boot keep requesting `"all"`.
 
 Read or start the current activity (`render_activity_state_json()`,
 `render_activity_run_json()`):

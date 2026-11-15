@@ -4061,8 +4061,8 @@ static int engine_reply_code(const char *reply);
 #define ENGINE_CODE_RESTRICTED 568
 
 static void render_activity_run_json(int fd, const struct request *req) {
-    char activity_id[64], params[192], reply[8192];
-    int rc;
+    char activity_id[64], params[192], reply[8192], engine_error[1024];
+    int rc, engine_code = 200;
     FILE *f;
     form_value(req->body, "activityId", activity_id, sizeof(activity_id));
     if (!safe_activity_id(activity_id)) {
@@ -4076,7 +4076,8 @@ static void render_activity_run_json(int fd, const struct request *req) {
         "{\"activityId\":\"%s\",\"timestamp\":%ld000}",
         activity_id, (long)time(NULL));
     rc = harmony_hbus_call("harmony.engine?startactivity", params, reply, sizeof(reply));
-    if (rc == 0 && engine_reply_code(reply) == ENGINE_CODE_RESTRICTED) {
+    if (rc == 0) engine_code = engine_reply_code(reply);
+    if (rc == 0 && engine_code == ENGINE_CODE_RESTRICTED) {
         f = send_json_start(fd, "409 Conflict");
         if (!f) return;
         fputs("{\"ok\":false,\"restricted\":true,\"error\":"
@@ -4088,9 +4089,19 @@ static void render_activity_run_json(int fd, const struct request *req) {
         fclose(f);
         return;
     }
-    f = send_json_start(fd, rc == 0 ? "200 OK" : "502 Bad Gateway");
+    if (rc == 0 && engine_code != 200 &&
+        (!json_top_string(reply, "msg", engine_error, sizeof(engine_error)) || !engine_error[0])) {
+        snprintf(engine_error, sizeof(engine_error),
+            "Harmony activity engine returned code %d.", engine_code);
+    }
+    f = send_json_start(fd, rc == 0 && engine_code == 200 ? "200 OK" : "502 Bad Gateway");
     if (!f) return;
-    fprintf(f, "{\"ok\":%s,\"activityId\":", rc == 0 ? "true" : "false");
+    fprintf(f, "{\"ok\":%s", rc == 0 && engine_code == 200 ? "true" : "false");
+    if (rc == 0 && engine_code != 200) {
+        fputs(",\"error\":", f);
+        json_write_string(f, engine_error);
+    }
+    fputs(",\"activityId\":", f);
     json_write_string(f, activity_id);
     fputs(",\"reply\":", f);
     json_write_string(f, reply);

@@ -166,6 +166,8 @@ local function resetHub()
     published = 0,
     sync = false,
     engineListening = true,
+    fullLoadFailures = 0,
+    account = nil,
     failSave = nil,
     pending = nil, -- a request codex_webui leaves for the worker's next pass
     passes = 0,
@@ -208,6 +210,15 @@ package.preload["system"] = function()
     sendMessage = function(name, args)
       if name == "config_new" then
         hub.messages[#hub.messages + 1] = type(args) == "table" and table.concat(args, ",") or tostring(args)
+        -- harmonyengine's named-resource loadResource() returns true without
+        -- loading anything while account is nil. Only "all" reaches loadAll().
+        if args == "all" then
+          if hub.fullLoadFailures > 0 then
+            hub.fullLoadFailures = hub.fullLoadFailures - 1
+            return nil, "simulated loadAll failure"
+          end
+          hub.account = { DevicesWithFeatures = {} }
+        end
       end
       return true
     end,
@@ -362,6 +373,18 @@ local fixtureFile = assert(realOpen(repoRoot .. "/tools/webui-sim/fixtures/fresh
 local FRESH = decodeJson(fixtureFile:read("*a"))
 fixtureFile:close()
 
+local function queueFirstActivity(id)
+  hub.fs[RESOURCES .. "DeviceList.json"] = encodeJson(FRESH.blank.deviceList)
+  hub.fs[RESOURCES .. "ProtocolList.json"] = '{"Protocols":[{"Id-":2,"Name":"Toshiba 32 Bit","__type":"IrProtocol"}]}'
+  hub.pending = encodeJson({
+    id = id, op = "CommitActivityResources",
+    activityList = FRESH.proven.activityList,
+    mapList = FRESH.proven.mapList,
+    functionList = FRESH.proven.functionList,
+    activityChanged = true, mapChanged = true, functionChanged = true,
+  })
+end
+
 -- A fresh hub ------------------------------------------------------------------
 -- Its index holds only the AutomationConfig the activation chain seeds.
 resetHub()
@@ -375,9 +398,10 @@ check("/api/activity-config answers 200 afterwards", activityConfigStatus() == 2
 check("they were saved once each, through the resource manager",
   table.concat(hub.saves, ",") == "ProtocolList,DeviceList,ActivityList,FunctionList,MapList",
   table.concat(hub.saves, ","))
-check("the engine was told to load them",
-  hub.messages[1] == "ProtocolList,DeviceList,ActivityList,FunctionList,MapList" and #hub.messages == 1,
+check("the engine was told to load the whole account",
+  hub.messages[1] == "all" and #hub.messages == 1,
   table.concat(hub.messages, " | "))
+check("config_new all initialized harmonyengine's account", hub.account ~= nil)
 check("and the reload request was used up", hub.fs[RELOAD_FLAG] == nil)
 check("every other resource is left alone",
   fileOf("AutomationConfig") == automation[RESOURCES .. "AutomationConfig.json"] and
@@ -406,15 +430,7 @@ check("the empty resources are not written again, in that boot or the next",
 
 -- The first activity, as the web app saves it once a device was added
 -- (codex_webui writes DeviceList and ProtocolList straight to disk).
-hub.fs[RESOURCES .. "DeviceList.json"] = encodeJson(FRESH.blank.deviceList)
-hub.fs[RESOURCES .. "ProtocolList.json"] = '{"Protocols":[{"Id-":2,"Name":"Toshiba 32 Bit","__type":"IrProtocol"}]}'
-hub.pending = encodeJson({
-  id = "first", op = "CommitActivityResources",
-  activityList = FRESH.proven.activityList,
-  mapList = FRESH.proven.mapList,
-  functionList = FRESH.proven.functionList,
-  activityChanged = true, mapChanged = true, functionChanged = true,
-})
+queueFirstActivity("first")
 run(3)
 do
   local response = hub.fs[RESPONSE] and decodeJson(hub.fs[RESPONSE]) or {}
@@ -472,6 +488,19 @@ resetHub()
 put("ActivityList", "not json")
 leftAlone("a resource that can't be read is not overwritten, nor are its neighbours made")
 
+configured()
+boot()
+run(2)
+queueFirstActivity("configured")
+run(3)
+do
+  local response = hub.fs[RESPONSE] and decodeJson(hub.fs[RESPONSE]) or {}
+  check("a normal hub still reloads only the activity resources after a commit",
+    response.ok == true and table.concat(hub.messages, " | ") == "ActivityList,FunctionList,MapList",
+    table.concat(hub.messages, " | "))
+  check("the simulated named-resource rule leaves account nil", hub.account == nil)
+end
+
 -- When it runs ---------------------------------------------------------------------
 resetHub()
 hub.fs[BLOCKER] = "0\n"
@@ -495,13 +524,32 @@ resetHub()
 hub.engineListening = false
 boot()
 run(3)
-check("with the engine not listening yet the resources are made and the reload waits",
-  allEmpty() and #hub.messages == 0 and hub.fs[RELOAD_FLAG] ~= nil)
+check("with the engine not listening yet the resources are made and the full reload waits",
+  allEmpty() and #hub.messages == 0 and hub.fs[RELOAD_FLAG] == "all\n",
+  tostring(hub.fs[RELOAD_FLAG]))
 hub.engineListening = true
 run(2)
-check("and the engine loads them once it listens",
-  hub.messages[1] == "ProtocolList,DeviceList,ActivityList,FunctionList,MapList" and hub.fs[RELOAD_FLAG] == nil,
+check("and the engine loads the account once it listens",
+  hub.messages[1] == "all" and hub.account ~= nil and hub.fs[RELOAD_FLAG] == nil,
   table.concat(hub.messages, " | "))
+
+-- A failed full load must not allow a same-boot activity commit to downgrade
+-- to the named-resource rule, which would return true with account still nil.
+resetHub()
+hub.fullLoadFailures = 2
+boot()
+run(1)
+check("a failed full load leaves account unavailable and the full load pending",
+  table.concat(hub.messages, " | ") == "all" and hub.account == nil and hub.fs[RELOAD_FLAG] == nil,
+  table.concat(hub.messages, " | "))
+queueFirstActivity("full-load-retry")
+run(3)
+do
+  local response = hub.fs[RESPONSE] and decodeJson(hub.fs[RESPONSE]) or {}
+  check("the activity commit falls back to all until the full load succeeds",
+    response.ok == true and hub.account ~= nil and table.concat(hub.messages, " | ") == "all | all | all",
+    table.concat(hub.messages, " | ") .. "; " .. tostring(response.error))
+end
 
 -- A save that fails part-way leaves what it wrote; the next boot finishes.
 resetHub()

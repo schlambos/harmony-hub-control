@@ -230,7 +230,7 @@ describe("codex_webui /api/activity-restrictions", { skip: !haveCc && "no C comp
     assert.equal(cleared.file, "<none>", "an empty import lifts every restriction");
   });
 
-  it("answers a start the engine refused for time restrictions with 409 restricted", () => {
+  it("maps startactivity engine replies to honest HTTP results", () => {
     const run = (reply) => {
       fs.writeFileSync(harness.engineReply, reply);
       return runHarness(harness.bin, [["POST", FORM_TYPE, null, "activityId=100", "/api/activity-run"]])[0];
@@ -249,6 +249,15 @@ describe("codex_webui /api/activity-restrictions", { skip: !haveCc && "no C comp
     // A 568 nested inside data is not the engine's answer code.
     const nested = run('{"cmd":"harmony.engine?startActivity","code":200,"id":"codex-1","data":{"code":"568"}}');
     assert.equal(nested.status, 200);
+
+    for (const [code, message] of [[560, "Account config data is not available"], ['"500"', "Engine failed"]]) {
+      const refused = run(`{"cmd":"harmony.engine?startactivity","code":${code},"id":"codex-1","msg":"${message}","data":{}}`);
+      assert.equal(refused.status, 502, `code ${code}`);
+      assert.equal(refused.body.ok, false);
+      assert.equal(refused.body.error, message);
+      assert.equal(refused.body.activityId, "100");
+      assert.match(refused.body.reply, new RegExp(`"code":${code}`));
+    }
   });
 
   it("checks a bundle's restrictions before writing anything", () => {
