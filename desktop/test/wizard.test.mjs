@@ -739,7 +739,8 @@ test("detectAndClassify, runWizardAction, and wizard:* IPC handlers enforce send
     host: "",
     mask: true,
   });
-  assert.equal(capturedBridgeHost, "192.168.0.235");
+  // USB connected with no unmasked discoveryInfo.ip: must NOT merge another hub's SSDP host
+  assert.equal(capturedBridgeHost, "");
   assert.equal(res.verdict, "fresh");
   assert.equal(res.mismatch.hasMismatch, false);
   assert.ok(sentEvents.some(([ch, evt]) => ch === WIZARD_CHANNELS.event && evt.step === "usb-preflight"));
@@ -1314,4 +1315,312 @@ test("wizard/flow.js pure model computes Fresh & Provisioned step states and ren
   assert.match(step3Html, /Create your first activity/);
   assert.match(step3Html, /Pair your remote/);
   assert.match(step3Html, /Open Hub/);
+});
+
+test("runWizardBridge surfaces nested result/progress errors without a type:error event", async () => {
+  const fakeSpawn = (_cmd, _args, _opts) => {
+    const child = new EventEmitter();
+    child.stdin = { on() {}, write() {}, end() {} };
+    child.stdout = new EventEmitter();
+    child.stderr = new EventEmitter();
+    child.kill = () => {};
+    setImmediate(() => {
+      child.stdout.emit(
+        "data",
+        Buffer.from(
+          '{"type":"progress","step":"usb-provision-verify","status":"failed","error":"getProvisionInfo verification did not report mode 3"}\n' +
+            '{"type":"result","action":"usb-provision-local","ok":false,"provisionLocal":{"ok":false,"error":"getProvisionInfo verification did not report mode 3"}}\n'
+        )
+      );
+      child.emit("close", 1);
+    });
+    return child;
+  };
+  const out = await runWizardBridge({
+    action: "usb-provision-local",
+    confirmAction: "usb-provision-local",
+    spawnImpl: fakeSpawn,
+  });
+  assert.equal(out.ok, false);
+  assert.match(out.error, /did not report mode 3/);
+
+  const fakeSpawn2 = (_cmd, _args, _opts) => {
+    const child = new EventEmitter();
+    child.stdin = { on() {}, write() {}, end() {} };
+    child.stdout = new EventEmitter();
+    child.stderr = new EventEmitter();
+    child.kill = () => {};
+    setImmediate(() => {
+      child.stdout.emit(
+        "data",
+        Buffer.from(
+          '{"type":"result","action":"usb-flash-firmware","ok":false,"firmwareFlash":{"ok":false,"error":"skin mismatch 65 not in [106]"}}\n'
+        )
+      );
+      child.emit("close", 1);
+    });
+    return child;
+  };
+  const out2 = await runWizardBridge({
+    action: "usb-flash-firmware",
+    confirmAction: "usb-flash-firmware",
+    spawnImpl: fakeSpawn2,
+  });
+  assert.equal(out2.ok, false);
+  assert.match(out2.error, /skin mismatch/);
+});
+
+test("runWizardAction gives usb-provision-local/usb-flash-firmware >=240000ms headroom and verifyTimeoutS 180 default", async () => {
+  const captured = {};
+  const fakeBridge = async (opts) => {
+    captured[opts.action] = opts;
+    return { ok: true, exitCode: 0, pythonPath: "python3", events: [], result: { ok: true } };
+  };
+
+  await runWizardAction({
+    action: "usb-provision-local",
+    confirmAction: "usb-provision-local",
+    remoteId: 20261111,
+    runBridgeImpl: fakeBridge,
+  });
+  assert.equal(captured["usb-provision-local"].verifyTimeoutS, 180);
+  assert.ok(captured["usb-provision-local"].processTimeoutMs >= 240000);
+
+  await runWizardAction({
+    action: "usb-flash-firmware",
+    confirmAction: "usb-flash-firmware",
+    firmwareFile: "/tmp/4.15.600.hfw2",
+    runBridgeImpl: fakeBridge,
+  });
+  assert.equal(captured["usb-flash-firmware"].verifyTimeoutS, 180);
+  assert.ok(captured["usb-flash-firmware"].processTimeoutMs >= 240000);
+
+  // Explicit overrides (including 0 to skip verify) are preserved
+  await runWizardAction({
+    action: "usb-provision-local",
+    confirmAction: "usb-provision-local",
+    remoteId: 20261111,
+    verifyTimeoutS: 0,
+    processTimeoutMs: 180000,
+    runBridgeImpl: fakeBridge,
+  });
+  assert.equal(captured["usb-provision-local"].verifyTimeoutS, 0);
+
+  // Melodious-installed Step 1 keeps primary Connect button plus secondary fresh/reset link
+  const freshState = wizardFlow.createInitialWizardState(4150);
+  freshState.classifyResult = {
+    verdict: "melodious-installed",
+    verdictLabel: "Melodious ready",
+    verdictSummary: "ok",
+    signals: { lan: { host: "192.168.0.100", ports: { 8080: true } }, usb: {}, ssdp: {} },
+    firmwareGate: { passes: true },
+    mismatch: {},
+  };
+  freshState.hostInput = "192.168.0.100";
+  const step1Html = wizardFlow.renderWizardPage(freshState);
+  assert.match(step1Html, /Connect &amp; Open Hub/);
+  assert.match(step1Html, /Start fresh \/ Factory reset/);
+});
+
+test("detectAndClassify isolates multi-hub SSDP from USB hub and strictly honors explicit host", async () => {
+  // 1. Explicit host ("192.168.0.235") ALWAYS overrides SSDP ("192.168.0.234")
+  const explicitWebUiHosts = [];
+  const explicitBridgeCalls = [];
+  const explicitRes = await detectAndClassify({
+    userIntent: "fresh",
+    host: "192.168.0.235",
+    skipUsb: false,
+    mask: false,
+    scanSsdpImpl: async () => [{ host: "192.168.0.234", webUiPort: 8080, hbusPort: 8088 }],
+    probeHubImpl: async ({ host }) => {
+      explicitWebUiHosts.push(host);
+      return null;
+    },
+    runBridgeImpl: async (opts) => {
+      explicitBridgeCalls.push({ host: opts.host, skipUsb: opts.skipUsb });
+      return {
+        ok: true,
+        exitCode: 0,
+        pythonPath: "python3",
+        events: [],
+        result: {
+          ok: true,
+          usb: {
+            ok: true,
+            connected: true,
+            deviceCount: 1,
+            preflight: { ok: true, hasHubId: false },
+            sysinfo: { ok: true, fwVer: "4.15.600", skinDecimal: 106 },
+            provisionInfo: { ok: true, provisioned: false },
+            discoveryInfo: { ok: true, provisioned: false, hasIp: true, ip: "192.168.0.235" },
+          },
+          lan: {
+            ok: true,
+            host: "192.168.0.235",
+            provisionInfo: { ok: true, provisioned: false },
+            ports: { 8080: false, 8088: true, 5222: false, 22: false },
+          },
+        },
+      };
+    },
+  });
+  assert.deepEqual(explicitWebUiHosts, ["192.168.0.235"]);
+  assert.deepEqual(explicitBridgeCalls, [{ host: "192.168.0.235", skipUsb: false }]);
+  assert.equal(explicitRes.verdict, "fresh");
+  assert.equal(wizardFlow.extractDetectedHost(explicitRes), "192.168.0.235");
+
+  // 2. Blank host + USB connected with NO IP (fresh hub before Wi-Fi) while Hub 1 (.234) is on SSDP:
+  //    MUST NOT probe .234 or merge .234's Melodious :8080/:22 into Hub 2's verdict!
+  const freshUsbWebUiHosts = [];
+  const freshUsbBridgeCalls = [];
+  const freshUsbRes = await detectAndClassify({
+    userIntent: "fresh",
+    host: "",
+    skipUsb: false,
+    mask: false,
+    scanSsdpImpl: async () => [{ host: "192.168.0.234", webUiPort: 8080, hbusPort: 8088 }],
+    probeHubImpl: async ({ host }) => {
+      freshUsbWebUiHosts.push(host);
+      return { host, port: 8080, firmware: "4.15.600 (Melodious 2.0.0)" };
+    },
+    runBridgeImpl: async (opts) => {
+      freshUsbBridgeCalls.push({ host: opts.host, skipUsb: opts.skipUsb });
+      return {
+        ok: true,
+        exitCode: 0,
+        pythonPath: "python3",
+        events: [],
+        result: {
+          ok: true,
+          usb: {
+            ok: true,
+            connected: true,
+            deviceCount: 1,
+            preflight: { ok: true, hasHubId: false },
+            sysinfo: { ok: true, fwVer: "4.15.600", skinDecimal: 106 },
+            provisionInfo: { ok: true, provisioned: false },
+            discoveryInfo: { ok: true, provisioned: false, hasIp: false, ip: "" },
+          },
+          lan: { ok: false, skipped: true },
+        },
+      };
+    },
+  });
+  assert.deepEqual(freshUsbWebUiHosts, []);
+  assert.deepEqual(freshUsbBridgeCalls, [{ host: "", skipUsb: false }]);
+  assert.equal(freshUsbRes.verdict, "fresh");
+  assert.equal(freshUsbRes.signals.lan.host, "");
+  assert.equal(wizardFlow.extractDetectedHost(freshUsbRes), "");
+
+  // 3. Blank host + USB connected WITH discoveryInfo.ip = "192.168.0.235" while Hub 1 (.234) is on SSDP:
+  //    probes USB first, then probes :8080 and LAN ports on "192.168.0.235" (never .234!)
+  const usbWithIpWebUiHosts = [];
+  const usbWithIpBridgeCalls = [];
+  const usbWithIpRes = await detectAndClassify({
+    userIntent: "fresh",
+    host: "",
+    skipUsb: false,
+    mask: false,
+    scanSsdpImpl: async () => [{ host: "192.168.0.234", webUiPort: 8080, hbusPort: 8088 }],
+    probeHubImpl: async ({ host }) => {
+      usbWithIpWebUiHosts.push(host);
+      return null;
+    },
+    runBridgeImpl: async (opts) => {
+      usbWithIpBridgeCalls.push({ host: opts.host, skipUsb: opts.skipUsb });
+      if (!opts.skipUsb) {
+        return {
+          ok: true,
+          exitCode: 0,
+          pythonPath: "python3",
+          events: [{ type: "step", step: "usb-preflight" }],
+          result: {
+            ok: true,
+            usb: {
+              ok: true,
+              connected: true,
+              deviceCount: 1,
+              preflight: { ok: true, hasHubId: false },
+              sysinfo: { ok: true, fwVer: "4.15.600", skinDecimal: 106 },
+              provisionInfo: { ok: true, provisioned: false },
+              discoveryInfo: { ok: true, provisioned: false, hasIp: true, ip: "192.168.0.235" },
+            },
+            lan: { ok: false, skipped: true },
+          },
+        };
+      }
+      return {
+        ok: true,
+        exitCode: 0,
+        pythonPath: "python3",
+        events: [{ type: "step", step: "lan-ports" }],
+        result: {
+          ok: true,
+          usb: { ok: false, skipped: true, connected: false },
+          lan: {
+            ok: true,
+            host: "192.168.0.235",
+            provisionInfo: { ok: true, provisioned: false },
+            ports: { 8080: false, 8088: true, 5222: false, 22: false },
+          },
+        },
+      };
+    },
+  });
+  assert.deepEqual(usbWithIpWebUiHosts, ["192.168.0.235"]);
+  assert.deepEqual(usbWithIpBridgeCalls, [
+    { host: "", skipUsb: false },
+    { host: "192.168.0.235", skipUsb: true },
+  ]);
+  assert.equal(usbWithIpRes.verdict, "fresh");
+  assert.equal(wizardFlow.extractDetectedHost(usbWithIpRes), "192.168.0.235");
+
+  // 4. Blank host + USB NOT connected + single SSDP candidate ("192.168.0.234"): auto-picks .234
+  const noUsbWebUiHosts = [];
+  const noUsbBridgeCalls = [];
+  const noUsbRes = await detectAndClassify({
+    userIntent: "provisioned",
+    host: "",
+    skipUsb: false,
+    mask: false,
+    scanSsdpImpl: async () => [{ host: "192.168.0.234", webUiPort: 8080, hbusPort: 8088 }],
+    probeHubImpl: async ({ host }) => {
+      noUsbWebUiHosts.push(host);
+      return { host, port: 8080, firmware: "4.15.600" };
+    },
+    runBridgeImpl: async (opts) => {
+      noUsbBridgeCalls.push({ host: opts.host, skipUsb: opts.skipUsb });
+      if (!opts.skipUsb) {
+        return {
+          ok: false,
+          exitCode: 1,
+          pythonPath: "python3",
+          events: [],
+          result: { ok: false, usb: { ok: false, connected: false, deviceCount: 0 } },
+        };
+      }
+      return {
+        ok: true,
+        exitCode: 0,
+        pythonPath: "python3",
+        events: [],
+        result: {
+          ok: true,
+          usb: { ok: false, skipped: true, connected: false },
+          lan: {
+            ok: true,
+            host: "192.168.0.234",
+            ports: { 8080: true, 8088: true, 5222: false, 22: true },
+          },
+        },
+      };
+    },
+  });
+  assert.deepEqual(noUsbWebUiHosts, ["192.168.0.234"]);
+  assert.deepEqual(noUsbBridgeCalls, [
+    { host: "", skipUsb: false },
+    { host: "192.168.0.234", skipUsb: true },
+  ]);
+  assert.equal(noUsbRes.verdict, "melodious-installed");
+  assert.equal(wizardFlow.extractDetectedHost(noUsbRes), "192.168.0.234");
 });

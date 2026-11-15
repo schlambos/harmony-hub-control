@@ -664,9 +664,11 @@ test(
         globalThis.__melodiousWizardAvailable = true;
         globalThis.__wizardActionCalls = [];
         globalThis.__wizardInstallCalls = [];
+        globalThis.__wizardDetectHosts = [];
 
         globalThis.__melodiousWizardOverrides = {
           detectAndClassify: async (opts) => {
+            globalThis.__wizardDetectHosts.push(opts.host || "");
             opts.onEvent?.({
               type: "step",
               step: "usb-preflight",
@@ -834,8 +836,18 @@ test(
         await page.textContent("#openWizardConnectBtn"),
         /Set up a new or unrooted Harmony Hub/
       );
+      // Even though saved settings already hold a connected host (127.0.0.1),
+      // opening Fresh OOB wizard must leave #wizardHostInput blank!
       await page.click("#openWizardConnectBtn");
       await page.waitForSelector("#hubSetupWizard", { timeout: 10000 });
+      assert.equal(await page.inputValue("#wizardHostInput"), "");
+
+      // Typing an explicit IP on Step 1 always takes precedence, and clearing it resets confirmedHost
+      await page.fill("#wizardHostInput", "192.168.0.235");
+      await page.click("#wizardDetectBtn");
+      await page.waitForSelector("#wizardResultCard", { timeout: 10000 });
+      assert.equal(await page.inputValue("#wizardHostInput"), "192.168.0.235");
+      await page.fill("#wizardHostInput", "");
 
       // Developer overrides accordion stays collapsed by default (no wall of buttons)
       assert.equal(
@@ -901,9 +913,11 @@ test(
       assert.match(checklistText, /Pair your remote/);
 
       const recorded = await electronApp.evaluate(() => ({
+        detectHosts: globalThis.__wizardDetectHosts,
         actions: globalThis.__wizardActionCalls,
         installs: globalThis.__wizardInstallCalls,
       }));
+      assert.deepEqual(recorded.detectHosts, ["192.168.0.235", "", ""]);
       assert.deepEqual(
         recorded.actions.map((a) => a.action),
         [

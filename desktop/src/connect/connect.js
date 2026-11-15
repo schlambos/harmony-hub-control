@@ -519,7 +519,10 @@
 
     if (wizFreshEl?.checked) wiz.intent = "fresh";
     if (wizProvEl?.checked) wiz.intent = "provisioned";
-    if (wizHostEl) wiz.hostInput = wizHostEl.value;
+    if (wizHostEl) {
+      wiz.hostInput = wizHostEl.value;
+      wiz.confirmedHost = wizHostEl.value.trim();
+    }
     if (wizUsbEl) wiz.includeUsb = wizUsbEl.checked;
     if (wizMaskEl) wiz.maskIds = wizMaskEl.checked;
     if (provHostEl) wiz.confirmedHost = provHostEl.value;
@@ -577,7 +580,9 @@
     wiz.logLines = [];
     render();
     try {
-      const targetHost = (wiz.confirmedHost || wiz.hostInput || formHost).trim();
+      const typedStep1Host = wiz.step === 1 ? wiz.hostInput.trim() : "";
+      const targetHost =
+        wiz.step === 1 ? typedStep1Host : (wiz.confirmedHost || wiz.hostInput).trim();
       const res = await wizardBridge.detectAndClassify({
         userIntent: wiz.intent,
         host: targetHost,
@@ -594,7 +599,10 @@
         wiz.sshOpen = true;
       }
       const detectedHost = wizardFlow.extractDetectedHost(res);
-      if (detectedHost) {
+      if (typedStep1Host) {
+        // User explicitly typed an IP on Step 1 — never overwrite it with a different SSDP IP.
+        wiz.confirmedHost = typedStep1Host;
+      } else if (detectedHost) {
         wiz.confirmedHost = detectedHost;
         if (!wiz.hostInput.trim()) wiz.hostInput = detectedHost;
       }
@@ -734,6 +742,8 @@
         wiz.factoryResetGuidance = res.result?.factoryReset?.powerCycleGuidance || "";
         wiz.intent = "fresh";
         wiz.flowPath = "fresh";
+        wiz.confirmedHost = "";
+        wiz.hostInput = "";
         wiz.wifiConnected = false;
         wiz.tdeDone = false;
         wiz.provisionLocalDone = false;
@@ -830,33 +840,46 @@
       }
 
       wiz.wifiConnected = true;
-      wiz.stepText = "Reading hub LAN IP address…";
+      wiz.stepText = "Reading hub LAN IP address over USB…";
       render();
 
-      const statusRes = await wizardBridge
-        .runAction({
-          action: "usb-wifi-status",
-          showSsids: true,
-          mask: false,
-        })
-        .catch(() => null);
-      const usbIp =
-        statusRes?.result?.wifiStatus?.ipAddress ||
-        statusRes?.result?.wifiStatus?.ip ||
-        "";
-      if (wizardFlow.isUnmaskedHost(usbIp) && usbIp !== "0.0.0.0") {
-        wiz.confirmedHost = String(usbIp).trim();
+      let detectedUsbIp = "";
+      for (let attempt = 0; attempt < 8; attempt += 1) {
+        if (attempt > 0) {
+          await new Promise((r) => setTimeout(r, 2500));
+        }
+        const statusRes = await wizardBridge
+          .runAction({
+            action: "usb-wifi-status",
+            showSsids: true,
+            mask: false,
+          })
+          .catch(() => null);
+        const candIp = String(
+          statusRes?.result?.wifiStatus?.ipAddress ||
+            statusRes?.result?.wifiStatus?.ip ||
+            ""
+        ).trim();
+        if (wizardFlow.isUnmaskedHost(candIp) && candIp !== "0.0.0.0") {
+          detectedUsbIp = candIp;
+          break;
+        }
+      }
+      if (detectedUsbIp) {
+        wiz.confirmedHost = detectedUsbIp;
       } else if (!wiz.confirmedHost.trim()) {
+        // Query USB-isolated classification (skipUsb: false) so another hub on SSDP
+        // can never be mistaken for this USB-connected hub's IP.
         const cls = await wizardBridge
           .detectAndClassify({
             userIntent: "fresh",
             host: "",
-            skipUsb: true,
+            skipUsb: false,
             mask: false,
           })
           .catch(() => null);
-        const ssdpHost = wizardFlow.extractDetectedHost(cls);
-        if (ssdpHost) wiz.confirmedHost = ssdpHost;
+        const usbDetectedHost = wizardFlow.extractDetectedHost(cls);
+        if (usbDetectedHost) wiz.confirmedHost = usbDetectedHost;
       }
       wiz.stepText = "";
       showSnackbar(
@@ -988,7 +1011,7 @@
     if (!wizardBridge || !wizardFlow || wiz.busy) return;
     syncInputsFromDom();
 
-    const host = (wiz.confirmedHost || wiz.hostInput || formHost).trim();
+    const host = (wiz.confirmedHost || wiz.hostInput).trim();
     if (!wizardFlow.isUnmaskedHost(host)) {
       wiz.error = "Enter or detect the hub's LAN IP address before rooting or installing.";
       render();
@@ -1166,7 +1189,7 @@
           action,
           confirmAction: isReadonly ? "" : action,
           allowUnprovenPost: action === "post-root" && wiz.allowUnprovenPost,
-          host: (wiz.confirmedHost || wiz.hostInput || formHost).trim(),
+          host: (wiz.confirmedHost || wiz.hostInput).trim(),
           mask: wiz.maskIds,
           ssid: wiz.wifiSsid.trim(),
           encryption: wiz.wifiEncryption || "WPA2-PSK",
@@ -1179,6 +1202,10 @@
       if (!res?.canceled) {
         applyWedgeFromOutcome(res);
         wiz.lastManualOutcome = res;
+        if (action === "usb-factory-reset" && res?.ok) {
+          wiz.factoryResetSent = true;
+          wiz.factoryResetGuidance = res.result?.factoryReset?.powerCycleGuidance || "";
+        }
       }
       wiz.stepText = "";
     } catch (err) {
@@ -1216,7 +1243,6 @@
       syncInputsFromDom();
       wiz.open = true;
       wiz.returnMode = "connect";
-      if (!wiz.hostInput && formHost) wiz.hostInput = formHost;
       render();
       return;
     }
@@ -1225,7 +1251,10 @@
       syncInputsFromDom();
       wiz.open = true;
       wiz.returnMode = "settings";
-      if (!wiz.hostInput && formHost) wiz.hostInput = formHost;
+      if (wiz.intent === "provisioned" && !wiz.hostInput && formHost) {
+        wiz.hostInput = formHost;
+        wiz.confirmedHost = formHost.trim();
+      }
       render();
       return;
     }
@@ -1253,6 +1282,15 @@
         wiz.flowPath =
           toStep2Btn.dataset.nextBranch ||
           wizardFlow.deriveRecommendedPath(wiz.classifyResult, wiz.intent);
+        wiz.step = 2;
+        wiz.error = "";
+        render();
+        return;
+      }
+      if (target.closest("#wizardStartFreshBtn")) {
+        syncInputsFromDom();
+        wiz.intent = "fresh";
+        wiz.flowPath = "fresh";
         wiz.step = 2;
         wiz.error = "";
         render();

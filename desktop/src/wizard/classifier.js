@@ -356,7 +356,11 @@ function classifyHubSignals({
         candidates: ssdpList,
       },
       lan: {
-        host: lan.host || webUi8080.host || (ssdpList[0]?.host ?? ""),
+        host:
+          lan.host ||
+          webUi8080.host ||
+          (usbDiscoveryInfo?.hasIp ? String(usbDiscoveryInfo.ip || "") : "") ||
+          (!usbConnected && ssdpList.length === 1 ? ssdpList[0]?.host ?? "" : ""),
         ports: {
           8080: port8080Open,
           8088: port8088Open,

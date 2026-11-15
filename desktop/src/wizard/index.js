@@ -143,6 +143,18 @@ function validateWifiPassword(rawPassword, encryption = "WPA2-PSK") {
   return pass;
 }
 
+function extractUnmaskedUsbHost(usbResult) {
+  const raw = String(usbResult?.discoveryInfo?.ip ?? "").trim();
+  if (!raw || raw === "0.0.0.0" || raw === "none" || raw.startsWith("<")) {
+    return "";
+  }
+  try {
+    return normalizeHost(raw);
+  } catch {
+    return "";
+  }
+}
+
 async function detectAndClassify({
   userIntent = "",
   host = "",
@@ -164,7 +176,8 @@ async function detectAndClassify({
   onEvent = null,
 } = {}) {
   const cleanIntent = validateUserIntent(userIntent);
-  let targetHost = validateOptionalHost(host);
+  const explicitHost = validateOptionalHost(host);
+  let targetHost = explicitHost;
 
   const emit = (evt) => {
     if (typeof onEvent === "function") {
@@ -172,6 +185,33 @@ async function detectAndClassify({
         onEvent(evt);
       } catch {}
     }
+  };
+
+  const runWebUiProbe = async (hostToProbe) => {
+    if (!hostToProbe) return null;
+    emit({
+      type: "step",
+      step: "webui-8080",
+      message: "Checking /api/system-status on port 8080",
+    });
+    let probed = null;
+    try {
+      probed = await probeHubImpl({
+        host: hostToProbe,
+        port: Number(webUiPort) || 8080,
+        authHeader,
+        timeoutMs: probeTimeoutMs,
+      });
+    } catch {
+      probed = null;
+    }
+    emit({
+      type: "progress",
+      step: "webui-8080",
+      status: probed ? "ok" : "unreachable",
+      reachable: Boolean(probed),
+    });
+    return probed;
   };
 
   // 1. SSDP discovery on LAN (239.255.255.250:1900)
@@ -186,13 +226,6 @@ async function detectAndClassify({
   } catch {
     ssdpCandidates = [];
   }
-  if (!targetHost && ssdpCandidates.length === 1 && ssdpCandidates[0]?.host) {
-    try {
-      targetHost = normalizeHost(ssdpCandidates[0].host);
-    } catch {
-      targetHost = "";
-    }
-  }
   emit({
     type: "progress",
     step: "ssdp-scan",
@@ -200,47 +233,140 @@ async function detectAndClassify({
     candidateCount: ssdpCandidates.length,
   });
 
-  // 2. Probe :8080 /api/system-status if we have a target host
   let webUiProbe = null;
-  if (targetHost) {
-    emit({
-      type: "step",
-      step: "webui-8080",
-      message: "Checking /api/system-status on port 8080",
+  let bridgeOutcome = null;
+
+  if (explicitHost) {
+    // Explicit caller host: ONLY probe that host — never substitute or fall back to SSDP.
+    webUiProbe = await runWebUiProbe(explicitHost);
+    bridgeOutcome = await runBridgeImpl({
+      action: "classify",
+      host: explicitHost,
+      usbBackend,
+      usbDevicePath,
+      timeoutMs: bridgeTimeoutMs,
+      hbusPort,
+      xmppPort,
+      sshPort,
+      webUiPort,
+      skipUsb: Boolean(skipUsb),
+      mask: mask !== false,
+      onEvent: emit,
     });
-    try {
-      webUiProbe = await probeHubImpl({
-        host: targetHost,
-        port: Number(webUiPort) || 8080,
-        authHeader,
-        timeoutMs: probeTimeoutMs,
-      });
-    } catch {
-      webUiProbe = null;
+  } else if (!skipUsb) {
+    // Blank host with USB enabled: probe USB FIRST without assuming an SSDP host
+    // so a different hub on the LAN can never merge into the USB hub's verdict.
+    const usbFirstOutcome = await runBridgeImpl({
+      action: "classify",
+      host: "",
+      usbBackend,
+      usbDevicePath,
+      timeoutMs: bridgeTimeoutMs,
+      hbusPort,
+      xmppPort,
+      sshPort,
+      webUiPort,
+      skipUsb: false,
+      mask: mask !== false,
+      onEvent: emit,
+    });
+    const usbConnected = Boolean(usbFirstOutcome.result?.usb?.connected);
+    if (usbConnected) {
+      const usbIp = extractUnmaskedUsbHost(usbFirstOutcome.result?.usb);
+      if (usbIp) {
+        targetHost = usbIp;
+        webUiProbe = await runWebUiProbe(usbIp);
+        const lanOutcome = await runBridgeImpl({
+          action: "classify",
+          host: usbIp,
+          usbBackend,
+          usbDevicePath,
+          timeoutMs: bridgeTimeoutMs,
+          hbusPort,
+          xmppPort,
+          sshPort,
+          webUiPort,
+          skipUsb: true,
+          mask: mask !== false,
+          onEvent: emit,
+        });
+        bridgeOutcome = {
+          ...usbFirstOutcome,
+          ok: Boolean(usbFirstOutcome.ok || lanOutcome.ok),
+          events: [...(usbFirstOutcome.events || []), ...(lanOutcome.events || [])],
+          result: {
+            ...(usbFirstOutcome.result || {}),
+            usb: usbFirstOutcome.result?.usb,
+            lan: lanOutcome.result?.lan || { ok: false, skipped: true },
+          },
+        };
+      } else {
+        // USB connected with no IP (e.g. fresh hub before Wi-Fi, or masked):
+        // do NOT merge another hub's SSDP :8080/:22 into the USB hub's verdict.
+        bridgeOutcome = usbFirstOutcome;
+      }
+    } else {
+      // USB not connected: only auto-pick when there is a single unambiguous SSDP candidate.
+      if (ssdpCandidates.length === 1 && ssdpCandidates[0]?.host) {
+        try {
+          targetHost = normalizeHost(ssdpCandidates[0].host);
+        } catch {
+          targetHost = "";
+        }
+      }
+      if (targetHost) {
+        webUiProbe = await runWebUiProbe(targetHost);
+        const lanOutcome = await runBridgeImpl({
+          action: "classify",
+          host: targetHost,
+          usbBackend,
+          usbDevicePath,
+          timeoutMs: bridgeTimeoutMs,
+          hbusPort,
+          xmppPort,
+          sshPort,
+          webUiPort,
+          skipUsb: true,
+          mask: mask !== false,
+          onEvent: emit,
+        });
+        bridgeOutcome = {
+          ...lanOutcome,
+          events: [...(usbFirstOutcome.events || []), ...(lanOutcome.events || [])],
+          result: {
+            ...(lanOutcome.result || {}),
+            usb: usbFirstOutcome.result?.usb || lanOutcome.result?.usb,
+          },
+        };
+      } else {
+        bridgeOutcome = usbFirstOutcome;
+      }
     }
-    emit({
-      type: "progress",
-      step: "webui-8080",
-      status: webUiProbe ? "ok" : "unreachable",
-      reachable: Boolean(webUiProbe),
+  } else {
+    // Blank host with skipUsb=true: auto-pick single SSDP candidate if unambiguous.
+    if (ssdpCandidates.length === 1 && ssdpCandidates[0]?.host) {
+      try {
+        targetHost = normalizeHost(ssdpCandidates[0].host);
+      } catch {
+        targetHost = "";
+      }
+    }
+    webUiProbe = await runWebUiProbe(targetHost);
+    bridgeOutcome = await runBridgeImpl({
+      action: "classify",
+      host: targetHost,
+      usbBackend,
+      usbDevicePath,
+      timeoutMs: bridgeTimeoutMs,
+      hbusPort,
+      xmppPort,
+      sshPort,
+      webUiPort,
+      skipUsb: true,
+      mask: mask !== false,
+      onEvent: emit,
     });
   }
-
-  // 3. Run Python wizard_bridge.py (USB preflight + sysinfo + USB getProvisionInfo/discoveryinfo + LAN :8088 + :5222/:22)
-  const bridgeOutcome = await runBridgeImpl({
-    action: "classify",
-    host: targetHost,
-    usbBackend,
-    usbDevicePath,
-    timeoutMs: bridgeTimeoutMs,
-    hbusPort,
-    xmppPort,
-    sshPort,
-    webUiPort,
-    skipUsb: Boolean(skipUsb),
-    mask: mask !== false,
-    onEvent: emit,
-  });
 
   const classified = classifyHubSignals({
     userIntent: cleanIntent,
@@ -397,6 +523,32 @@ async function runWizardAction({
     targetHost = validateOptionalHost(host);
   }
 
+  const LONG_VERIFY_ACTIONS = new Set(["usb-provision-local", "usb-flash-firmware"]);
+  let effectiveVerifyTimeoutS = verifyTimeoutS;
+  if (
+    LONG_VERIFY_ACTIONS.has(cleanAction) &&
+    (effectiveVerifyTimeoutS === null || effectiveVerifyTimeoutS === undefined)
+  ) {
+    // Default to 180s so post-reboot luaworks (~2 min) has room; explicit
+    // caller overrides (including 0 to skip verify) are preserved.
+    effectiveVerifyTimeoutS = 180;
+  }
+  let effectiveProcessTimeoutMs = Number(processTimeoutMs) || 180000;
+  if (LONG_VERIFY_ACTIONS.has(cleanAction)) {
+    const verifyForHeadroom = Number(effectiveVerifyTimeoutS ?? 180) || 0;
+    if (verifyForHeadroom > 0) {
+      // Keep Node from SIGKILLing Python mid-reboot poll: verify window + 60s
+      // margin, with a 5-minute floor for the slow post-reboot path.
+      effectiveProcessTimeoutMs = Math.max(
+        effectiveProcessTimeoutMs,
+        verifyForHeadroom * 1000 + 60000,
+        300000
+      );
+    } else {
+      effectiveProcessTimeoutMs = Math.max(effectiveProcessTimeoutMs, 60000);
+    }
+  }
+
   const outcome = await runBridgeImpl({
     action: cleanAction,
     confirmAction: MUTATING_BRIDGE_ACTIONS.has(cleanAction) ? cleanAction : "",
@@ -405,11 +557,11 @@ async function runWizardAction({
     usbBackend,
     usbDevicePath,
     timeoutMs,
-    processTimeoutMs,
+    processTimeoutMs: effectiveProcessTimeoutMs,
     mask: mask !== false,
     showSsids: Boolean(showSsids),
     firmwareFile: cleanAction === "usb-flash-firmware" ? firmwareFile : "",
-    verifyTimeoutS,
+    verifyTimeoutS: effectiveVerifyTimeoutS,
     skipPostRebootVerify: Boolean(skipPostRebootVerify),
     remoteId: validRemoteId,
     accountId: cleanAction === "usb-seed-automation" ? String(accountId || "").trim() : "",
