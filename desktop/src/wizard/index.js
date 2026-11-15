@@ -30,11 +30,22 @@ const {
   evaluateMismatch,
   classifyHubSignals,
 } = require("./classifier");
+const {
+  ALLOWED_INSTALL_SOURCES,
+  DEFAULT_INSTALLER_SCRIPT,
+  DEFAULT_HELPERS_DIR,
+  validatePositiveHubId,
+  validateInstallerHost,
+  buildInstallerArgs,
+  stageInstallerWorkspace,
+  installFreshHub,
+} = require("./installer");
 
 const WIZARD_CHANNELS = Object.freeze({
   detectClassify: "wizard:detect-classify",
   usbProbe: "wizard:usb-probe",
   runAction: "wizard:run-action",
+  installHub: "wizard:install-hub",
   event: "desktop:wizard-event",
 });
 
@@ -385,9 +396,12 @@ function createWizardIpcHandlers({
   getSavedAuthHeader = () => null,
   isWizardAvailable = () => true,
   pickFirmwareFile = async () => null,
+  pickHubZip = async () => null,
+  userAgent = "Melodious",
   detectAndClassifyImpl = detectAndClassify,
   runUsbProbeImpl = runUsbProbe,
   runWizardActionImpl = runWizardAction,
+  installFreshHubImpl = installFreshHub,
 } = {}) {
   const ensureTrustedAndAvailable = (event) => {
     const win = typeof getMainWindow === "function" ? getMainWindow() : null;
@@ -492,6 +506,52 @@ function createWizardIpcHandlers({
         onEvent: forwardEventToWindow(win),
       });
     },
+    [WIZARD_CHANNELS.installHub]: async (event, args = {}) => {
+      const win = ensureTrustedAndAvailable(event);
+      if (!args || typeof args !== "object" || Array.isArray(args)) {
+        throw new Error("Invalid wizard install arguments");
+      }
+      if (Object.prototype.hasOwnProperty.call(args, "hubZipPath")) {
+        throw new Error(
+          "Renderer-supplied hubZipPath is not permitted; local hub zip must be chosen via native dialog"
+        );
+      }
+      if (Object.prototype.hasOwnProperty.call(args, "keyPath")) {
+        throw new Error("Renderer-supplied keyPath is not permitted");
+      }
+
+      const cleanSource = String(args.source ?? "latest").trim().toLowerCase();
+      if (!ALLOWED_INSTALL_SOURCES.has(cleanSource)) {
+        throw new Error('Invalid install source: must be "latest" or "local"');
+      }
+      const targetHost = validateRequiredHost(args.host, "wizard:install-hub");
+      const validHubId = validatePositiveHubId(args.hubId);
+
+      let selectedHubZip = "";
+      if (cleanSource === "local") {
+        const picked = await pickHubZip(win);
+        if (!picked) {
+          return {
+            ok: false,
+            canceled: true,
+            source: "local",
+          };
+        }
+        selectedHubZip = String(picked).trim();
+      }
+
+      return installFreshHubImpl({
+        source: cleanSource,
+        hubZipPath: selectedHubZip,
+        host: targetHost,
+        hubId: validHubId,
+        preflightOnly: args.preflightOnly === true,
+        removeRootToolLeftovers: args.removeRootToolLeftovers !== false,
+        authHeader: getSavedAuthHeader(),
+        userAgent,
+        onEvent: forwardEventToWindow(win),
+      });
+    },
   };
 }
 
@@ -501,18 +561,24 @@ function registerWizardIpcHandlers({
   getSavedAuthHeader,
   isWizardAvailable,
   pickFirmwareFile,
+  pickHubZip,
+  userAgent,
   detectAndClassifyImpl,
   runUsbProbeImpl,
   runWizardActionImpl,
+  installFreshHubImpl,
 } = {}) {
   const handlers = createWizardIpcHandlers({
     getMainWindow,
     getSavedAuthHeader,
     isWizardAvailable,
     pickFirmwareFile,
+    pickHubZip,
+    userAgent,
     detectAndClassifyImpl,
     runUsbProbeImpl,
     runWizardActionImpl,
+    installFreshHubImpl,
   });
   for (const [channel, handler] of Object.entries(handlers)) {
     ipcMain.handle(channel, handler);
@@ -530,14 +596,21 @@ module.exports = {
   MUTATING_BRIDGE_ACTIONS,
   ALLOWED_BRIDGE_ACTIONS,
   ALLOWED_USB_BACKENDS,
+  ALLOWED_INSTALL_SOURCES,
   DEFAULT_BRIDGE_SCRIPT,
+  DEFAULT_INSTALLER_SCRIPT,
+  DEFAULT_HELPERS_DIR,
   HUB_ROOT_DIR,
   resolvePythonExecutable,
   validatePositiveRemoteId,
+  validatePositiveHubId,
+  validateInstallerHost,
   validateWifiSsid,
   validateWifiPassword,
   scrubSecretText,
   buildBridgeArgs,
+  buildInstallerArgs,
+  stageInstallerWorkspace,
   runWizardBridge,
   evaluateFirmwareGate,
   evaluateMismatch,
@@ -545,6 +618,7 @@ module.exports = {
   detectAndClassify,
   runUsbProbe,
   runWizardAction,
+  installFreshHub,
   createWizardIpcHandlers,
   registerWizardIpcHandlers,
 };

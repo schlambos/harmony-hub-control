@@ -47,11 +47,22 @@ const {
 } = require("./self-update");
 const { findHubKey, readLocalHubZip, updateHub } = require("./hub-update");
 const { reinstallHub } = require("./hub-reinstall");
-const { isWizardDevAvailable, registerWizardIpcHandlers } = require("./wizard");
+const {
+  classifyHubSignals,
+  detectAndClassify,
+  installFreshHub,
+  isWizardDevAvailable,
+  registerWizardIpcHandlers,
+  runUsbProbe,
+  runWizardAction,
+} = require("./wizard");
 
 // Test hooks (stand-in safeStorage, stub catalog) exist only when running from
 // source; a packaged app ignores MELODIOUS_E2E.
 const E2E = process.env.MELODIOUS_E2E === "1" && !app.isPackaged;
+if (E2E) {
+  globalThis.__melodiousClassifyHubSignals = classifyHubSignals;
+}
 // Test runs (packaged ones too) never ask about update checks or call GitHub.
 const UPDATE_PROMPTS = process.env.MELODIOUS_E2E !== "1";
 const UPDATE_SCHEDULE_MS = 60 * 60 * 1000;
@@ -118,6 +129,16 @@ let updatingHub = false;
 
 function getActiveCatalogService() {
   return (E2E && globalThis.__melodiousCatalogService) || catalogService;
+}
+
+function getWizardDevAvailable() {
+  if (E2E && typeof globalThis.__melodiousWizardAvailable === "boolean") {
+    return globalThis.__melodiousWizardAvailable;
+  }
+  return isWizardDevAvailable({
+    isPackaged: app.isPackaged,
+    platform: process.platform,
+  });
 }
 
 function openSettingsPage() {
@@ -533,10 +554,7 @@ function registerIpcHandlers() {
     return {
       mode: pageMode,
       platform: process.platform,
-      wizardDevAvailable: isWizardDevAvailable({
-        isPackaged: app.isPackaged,
-        platform: process.platform,
-      }),
+      wizardDevAvailable: getWizardDevAvailable(),
       hub,
       hasHubAuth: Boolean(hubAuth?.header),
       hubUsername: hubAuth?.username || "",
@@ -739,12 +757,12 @@ function registerIpcHandlers() {
     ipcMain,
     getMainWindow: () => mainWindow,
     getSavedAuthHeader: () => settingsStore.getHubAuthHeader(),
-    isWizardAvailable: () =>
-      isWizardDevAvailable({
-        isPackaged: app.isPackaged,
-        platform: process.platform,
-      }),
+    isWizardAvailable: () => getWizardDevAvailable(),
+    userAgent: `Melodious/${app.getVersion()} (${osLabel()})`,
     pickFirmwareFile: async (win) => {
+      if (E2E && typeof globalThis.__melodiousWizardOverrides?.pickFirmwareFile === "function") {
+        return globalThis.__melodiousWizardOverrides.pickFirmwareFile(win);
+      }
       const options = {
         title: "Choose a Harmony Hub firmware bundle (.hfw2)",
         buttonLabel: "Choose",
@@ -757,6 +775,38 @@ function registerIpcHandlers() {
         : dialog.showOpenDialog(options));
       return picked.canceled ? null : picked.filePaths[0] || null;
     },
+    pickHubZip: async (win) => {
+      if (E2E && typeof globalThis.__melodiousWizardOverrides?.pickHubZip === "function") {
+        return globalThis.__melodiousWizardOverrides.pickHubZip(win);
+      }
+      const options = {
+        title: "Choose a Melodious hub zip",
+        buttonLabel: "Choose",
+        properties: ["openFile"],
+        filters: [{ name: "Melodious hub zip (.zip)", extensions: ["zip"] }],
+      };
+      const parent = win && !win.isDestroyed?.() ? win : updateDialogParent();
+      const picked = await (parent
+        ? dialog.showOpenDialog(parent, options)
+        : dialog.showOpenDialog(options));
+      return picked.canceled ? null : picked.filePaths[0] || null;
+    },
+    detectAndClassifyImpl: (opts) =>
+      E2E && typeof globalThis.__melodiousWizardOverrides?.detectAndClassify === "function"
+        ? globalThis.__melodiousWizardOverrides.detectAndClassify(opts)
+        : detectAndClassify(opts),
+    runUsbProbeImpl: (opts) =>
+      E2E && typeof globalThis.__melodiousWizardOverrides?.runUsbProbe === "function"
+        ? globalThis.__melodiousWizardOverrides.runUsbProbe(opts)
+        : runUsbProbe(opts),
+    runWizardActionImpl: (opts) =>
+      E2E && typeof globalThis.__melodiousWizardOverrides?.runWizardAction === "function"
+        ? globalThis.__melodiousWizardOverrides.runWizardAction(opts)
+        : runWizardAction(opts),
+    installFreshHubImpl: (opts) =>
+      E2E && typeof globalThis.__melodiousWizardOverrides?.installFreshHub === "function"
+        ? globalThis.__melodiousWizardOverrides.installFreshHub(opts)
+        : installFreshHub(opts),
   });
 }
 

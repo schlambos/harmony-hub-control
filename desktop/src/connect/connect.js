@@ -5,8 +5,11 @@
   const catalogBridge = window.melodiousDesktop?.catalog;
   const updatesBridge = window.melodiousDesktop?.updates;
   const wizardBridge = window.melodiousDesktop?.wizard;
+  const wizardFlow = window.MelodiousRootWizardFlow;
   const root = document.getElementById("connectRoot");
   const appbar = document.getElementById("connectAppbar");
+  const appbarTitle = document.getElementById("connectAppbarTitle");
+  const appbarActions = document.getElementById("connectAppbarActions");
   const backBtn = document.getElementById("settingsBackBtn");
   const snackHost = document.getElementById("snackbars");
 
@@ -40,22 +43,13 @@
   let statusMsg = "";
   let statusError = false;
   let snackTimer = null;
-  let updates = null; // desktop:updates-get / -check result
+  let updates = null;
   let updatesBusy = false;
-  let hubStep = ""; // progress of a hub update, from the main process
-  let wizardIntent = "fresh"; // "fresh" | "provisioned"
-  let wizardHost = "";
-  let wizardIncludeUsb = true;
-  let wizardMask = true;
-  let wizardBusy = false;
-  let wizardStepText = "";
-  let wizardResult = null;
-  let wizardActionResult = null;
-  let wizardError = "";
-  let wizardWifiSsid = "";
-  let wizardWifiPassword = "";
-  let wizardRemoteId = "20261111";
-  let wizardAccountId = "";
+  let hubStep = "";
+
+  let wiz = wizardFlow
+    ? wizardFlow.createInitialWizardState()
+    : { open: false, step: 1, busy: false, logLines: [] };
 
   function escapeHtml(value) {
     return String(value ?? "").replace(/[&<>"']/g, (c) =>
@@ -70,6 +64,15 @@
     snackTimer = setTimeout(() => {
       snackHost.innerHTML = "";
     }, isError ? 6000 : 3500);
+  }
+
+  function pushWizLog(line) {
+    const clean = String(line ?? "").trim();
+    if (!clean) return;
+    wiz.logLines.push(clean);
+    if (wiz.logLines.length > 120) {
+      wiz.logLines.splice(0, wiz.logLines.length - 120);
+    }
   }
 
   function renderDiscoveredList() {
@@ -106,7 +109,12 @@
       .join("")}</div>`;
   }
 
-  function renderConnectAndAddressSection() {
+  function renderConnectAndAddressSection({ includeWizardCard = false } = {}) {
+    const wizardEntryHtml =
+      includeWizardCard && wizardBridge && wizardFlow && state.wizardDevAvailable
+        ? wizardFlow.renderWizardConnectEntry({ disabled: connecting })
+        : "";
+
     return `
       <div style="display:flex;align-items:center;justify-content:space-between;margin-top:var(--space-6);margin-bottom:var(--space-2)">
         <h3 class="m-section" style="margin:0">Hubs on this network</h3>
@@ -117,6 +125,7 @@
         }
       </div>
       ${renderDiscoveredList()}
+      ${wizardEntryHtml}
 
       <h3 class="m-section">Enter address</h3>
       <form id="connectForm" class="m-card m-form" novalidate>
@@ -165,99 +174,6 @@
           ${connecting ? '<span class="m-spinner" style="border-color:var(--on-primary);border-right-color:transparent" aria-hidden="true"></span>' : ""}
           <span>${connecting ? "Connecting…" : "Connect"}</span>
         </button>
-      </form>
-    `;
-  }
-
-  function renderSettingsSections() {
-    const savedHubText = state.hub
-      ? `${state.hub.host}:${state.hub.port}`
-      : "Not connected";
-    const authStatusText = !state.encryptionAvailable
-      ? "Keychain encryption unavailable (nothing stored)"
-      : state.hasHubAuth
-        ? `Saved${state.hubUsername ? ` for ${state.hubUsername}` : ""}`
-        : "Not set";
-
-    return `
-      <h3 class="m-section">Current hub</h3>
-      <div class="m-list">
-        <div class="m-row">
-          <span class="m-tile m-tile--hub" style="--tile:44px">${ROUTER_SVG}</span>
-          <span class="m-row-text">
-            <span class="m-row-title" id="currentHubAddress">${escapeHtml(savedHubText)}</span>
-            <span class="m-row-sub">Sign-in: ${escapeHtml(authStatusText)}</span>
-          </span>
-          ${
-            state.hub
-              ? `<button type="button" class="btn btn-danger btn-sm" id="forgetHubBtn">Forget hub</button>`
-              : ""
-          }
-        </div>
-      </div>
-
-      ${renderConnectAndAddressSection()}
-
-      <h3 class="m-section">Hub sign-in</h3>
-      <form id="hubAuthForm" class="m-card m-form" novalidate>
-        <p class="m-field-hint" style="margin-top:0">
-          Used when your hub has HTTP Basic sign-in enabled. ${state.platform === "win32" ? "Stored encrypted with Windows data protection for your account." : "Stored encrypted in your macOS Keychain."}
-        </p>
-        <div style="display:grid;grid-template-columns:1fr 1fr;gap:var(--space-3)">
-          <div class="m-field">
-            <label for="settingsAuthUser">Username</label>
-            <input id="settingsAuthUser" type="text" autocomplete="off" spellcheck="false" value="${escapeHtml(formUser)}">
-          </div>
-          <div class="m-field">
-            <label for="settingsAuthPass">Password</label>
-            <input id="settingsAuthPass" type="password" autocomplete="off" value="">
-          </div>
-        </div>
-        <div style="display:flex;gap:var(--space-2);flex-wrap:wrap">
-          <button type="submit" class="btn btn-tonal" id="saveHubAuthBtn">Save sign-in</button>
-          ${
-            state.hasHubAuth
-              ? '<button type="button" class="btn btn-outlined" id="clearHubAuthBtn">Forget sign-in</button>'
-              : ""
-          }
-        </div>
-      </form>
-
-      <h3 class="m-section">Logitech account</h3>
-      <div class="m-list">
-        <div class="m-row" id="settingsLogitechRow">
-          <span class="m-row-text">
-            <span class="m-row-title" id="settingsLogitechStatus">${
-              state.logitechSignedIn ? "Signed in to Logitech" : "Not signed in"
-            }</span>
-            <span class="m-row-sub">${
-              !state.encryptionAvailable
-                ? "Keychain encryption is unavailable; sign-in lasts only while the app is open."
-                : "Used only to search and download device codes from Logitech's catalog."
-            }</span>
-          </span>
-          ${
-            state.logitechSignedIn
-              ? '<button type="button" class="btn btn-outlined btn-sm" id="settingsLogitechSignOutBtn">Sign out</button>'
-              : '<button type="button" class="btn btn-tonal btn-sm" id="settingsLogitechSignInBtn">Sign in</button>'
-          }
-        </div>
-      </div>
-
-      ${renderUpdatesSection()}
-
-      ${renderWizardDetectSection()}
-
-      <h3 class="m-section">Advanced</h3>
-      <form id="clientIdForm" class="m-card m-form" novalidate>
-        <div class="m-field">
-          <label for="clientIdInput">OAuth client_id</label>
-          <input id="clientIdInput" type="text" autocomplete="off" spellcheck="false" placeholder="${escapeHtml(state.defaultClientId)}" value="${escapeHtml(formClientId)}">
-          <p class="m-field-hint">Leave empty to use Logitech's public desktop client_id (${escapeHtml(state.defaultClientId)}).</p>
-        </div>
-        <div>
-          <button type="submit" class="btn btn-tonal" id="saveClientIdBtn">Save client_id</button>
-        </div>
       </form>
     `;
   }
@@ -339,214 +255,100 @@
     `;
   }
 
-  function renderWizardDetectSection() {
-    if (!wizardBridge || !state.wizardDevAvailable) return "";
-    const r = wizardResult;
-    const mismatch = r?.mismatch;
-    const usbSig = r?.signals?.usb;
-    const lanSig = r?.signals?.lan;
-    const ssdpSig = r?.signals?.ssdp;
-    const fwGate = r?.firmwareGate;
-    const wedge = r?.usbWedge;
+  function renderSettingsSections() {
+    const savedHubText = state.hub
+      ? `${state.hub.host}:${state.hub.port}`
+      : "Not connected";
+    const authStatusText = !state.encryptionAvailable
+      ? "Keychain encryption unavailable (nothing stored)"
+      : state.hasHubAuth
+        ? `Saved${state.hubUsername ? ` for ${state.hubUsername}` : ""}`
+        : "Not set";
 
-    let resultHtml = "";
-    if (wizardError) {
-      resultHtml = `<div class="notice notice-error" id="wizardErrorNotice" role="alert" style="margin-top:var(--space-3)">${escapeHtml(wizardError)}</div>`;
-    } else if (r) {
-      const usbProv = usbSig?.provisionInfo;
-      const usbProvNote = usbProv?.ok
-        ? usbProv.provisioned
-          ? ` · USB getProvisionInfo: Provisioned (mode ${escapeHtml(usbProv.mode ?? "?")}, remoteId type: ${escapeHtml(usbProv.remoteIdType || "none")}${usbProv.isLocalAccountHint ? ", local account" : ""})`
-          : " · USB getProvisionInfo: Unprovisioned"
+    const wizardSettingsEntry =
+      wizardBridge && wizardFlow && state.wizardDevAvailable
+        ? wizardFlow.renderWizardSettingsEntry({ disabled: updatesBusy })
         : "";
-      const usbSummary = usbSig?.connected
-        ? `Connected (${escapeHtml(usbSig.device?.backend || "hidapi")} ${escapeHtml(usbSig.device?.vendorId || "046D")}:${escapeHtml(usbSig.device?.productId || "C129")}) · preflight: ${usbSig.preflightOk ? "OK" : "Failed"} · sysinfo: ${usbSig.sysinfoOk ? `OK (fw ${escapeHtml(usbSig.sysinfo?.fwVer || "?")}, skin ${escapeHtml(usbSig.sysinfo?.skinDecimal ?? usbSig.sysinfo?.skin ?? "?")}, RAM ${escapeHtml(usbSig.sysinfo?.ramSize || "?")})` : "Failed"}${usbProvNote}`
-        : usbSig?.error
-          ? `Not connected (${escapeHtml(usbSig.error)})`
-          : "Skipped or no 046D:C129 device found";
-
-      const ports = lanSig?.ports || {};
-      const prov = lanSig?.provisionInfo8088;
-      const provSummary = prov?.ok
-        ? prov.provisioned
-          ? `Provisioned (mode ${escapeHtml(prov.mode ?? "?")}, remoteId type: ${escapeHtml(prov.remoteIdType || "none")}${prov.isLocalAccountHint ? ", local account" : ""})`
-          : "Unprovisioned (only discoveryServer/se keys)"
-        : lanSig?.host
-          ? `Unreachable (${escapeHtml(prov?.error || "no response")})`
-          : "No LAN host specified";
-
-      const portSummary = lanSig?.host
-        ? `:8080 Web UI=${ports["8080"] ? "open" : "closed"} · :8088 HBus=${ports["8088"] ? "open" : "closed"} · :5222 XMPP=${ports["5222"] ? "open" : "closed"} · :22 SSH=${ports["22"] ? "open" : "closed"}`
-        : "Not probed";
-
-      resultHtml = `
-        <div id="wizardResultCard" style="margin-top:var(--space-3);display:grid;gap:var(--space-3)">
-          ${
-            mismatch?.hasMismatch
-              ? `<div class="notice ${mismatch.severity === "warning" ? "notice-error" : "notice-ok"}" id="wizardMismatchBanner" role="alert">
-                   <div style="font-weight:600;margin-bottom:4px">${escapeHtml(mismatch.title)}</div>
-                   <div>${escapeHtml(mismatch.message)}</div>
-                   ${
-                     mismatch.recommendedIntent
-                       ? `<div style="margin-top:var(--space-2)">
-                            <button type="button" class="btn btn-tonal btn-sm" id="wizardSwitchIntentBtn" data-recommended-intent="${escapeHtml(mismatch.recommendedIntent)}">
-                              Switch to ${mismatch.recommendedIntent === "fresh" ? "Factory-reset / unprovisioned (USB)" : "Already provisioned (LAN / XMPP)"}
-                            </button>
-                          </div>`
-                       : ""
-                   }
-                 </div>`
-              : ""
-          }
-          ${
-            wedge?.wedged
-              ? `<div class="notice notice-error" id="wizardUsbWedgeBanner" role="alert">
-                   <div style="font-weight:600;margin-bottom:4px">USB HID LTCP link wedged</div>
-                   <div>${escapeHtml(wedge.message)}</div>
-                 </div>`
-              : ""
-          }
-          <div class="m-list">
-            <div class="m-row">
-              <span class="m-row-text">
-                <span class="m-row-title" id="wizardVerdictTitle">Verdict: ${escapeHtml(r.verdictLabel || r.verdict)} <code style="font-size:0.85em">(${escapeHtml(r.verdict)})</code></span>
-                <span class="m-row-sub" id="wizardVerdictSummary">${escapeHtml(r.verdictSummary || "")}</span>
-              </span>
-            </div>
-            ${
-              fwGate
-                ? `<div class="m-row">
-                     <span class="m-row-text">
-                       <span class="m-row-title" id="wizardFirmwareGateTitle">Firmware gate (${escapeHtml(fwGate.requiredFirmware)}): ${fwGate.passes === true ? "Pass" : fwGate.passes === false ? "Update required" : "Unknown"}</span>
-                       <span class="m-row-sub">${escapeHtml(fwGate.message)}</span>
-                     </span>
-                   </div>`
-                : ""
-            }
-            <div class="m-row">
-              <span class="m-row-text">
-                <span class="m-row-title">USB HID probe (046D:C129)</span>
-                <span class="m-row-sub" id="wizardUsbSummary">${usbSummary}</span>
-              </span>
-            </div>
-            <div class="m-row">
-              <span class="m-row-text">
-                <span class="m-row-title">LAN signals (${escapeHtml(lanSig?.host || (ssdpSig?.found ? "SSDP found" : "none"))})</span>
-                <span class="m-row-sub" id="wizardLanSummary">SSDP: ${escapeHtml(ssdpSig?.candidateCount ?? 0)} found · :8088 getProvisionInfo: ${provSummary} · Ports: ${escapeHtml(portSummary)}</span>
-              </span>
-            </div>
-            <div class="m-row">
-              <span class="m-row-text">
-                <span class="m-row-title">Recommended path (read-only preview)</span>
-                <span class="m-row-sub" id="wizardRecommendedNextStep">${escapeHtml(r.recommendedNextStep || "")}</span>
-              </span>
-            </div>
-          </div>
-        </div>
-      `;
-    }
 
     return `
-      <h3 class="m-section">Hub Setup &amp; Root Wizard · Detect &amp; Classify (Read-Only)</h3>
-      <div class="m-card m-form" id="wizardDetectCard">
-        <p class="m-field-hint" style="margin-top:0">
-          Read-only check over LAN and USB HID (046D:C129) to detect your hub's state before rooting or installing Melodious. No changes are written to the hub.
-        </p>
-        <fieldset style="border:0;padding:0;margin:0;display:grid;gap:var(--space-2)">
-          <legend style="font-weight:600;margin-bottom:var(--space-1)">How is this hub currently set up?</legend>
-          <label style="display:flex;align-items:flex-start;gap:var(--space-2);cursor:pointer">
-            <input type="radio" name="wizardIntent" id="wizardIntentFresh" value="fresh" ${wizardIntent === "fresh" ? "checked" : ""} ${wizardBusy ? "disabled" : ""}>
-            <span>
-              <strong>Factory-reset or unprovisioned (root over USB)</strong><br>
-              <span class="muted" style="font-size:var(--fs-body-sm)">Brand-new, freshly reset, or second-hand hub with no Logitech cloud account.</span>
-            </span>
-          </label>
-          <label style="display:flex;align-items:flex-start;gap:var(--space-2);cursor:pointer">
-            <input type="radio" name="wizardIntent" id="wizardIntentProvisioned" value="provisioned" ${wizardIntent === "provisioned" ? "checked" : ""} ${wizardBusy ? "disabled" : ""}>
-            <span>
-              <strong>Already provisioned via Logitech cloud (root over LAN / XMPP)</strong><br>
-              <span class="muted" style="font-size:var(--fs-body-sm)">Already set up in the Harmony app and reachable on your network.</span>
-            </span>
-          </label>
-        </fieldset>
-
-        <div style="display:grid;grid-template-columns:1fr auto;gap:var(--space-3);align-items:end">
-          <div class="m-field">
-            <label for="wizardHostInput">Hub IP for LAN probe (optional — leave blank to use SSDP or USB only)</label>
-            <input id="wizardHostInput" type="text" autocomplete="off" spellcheck="false" placeholder="${escapeHtml(formHost || "192.168.0.235")}" value="${escapeHtml(wizardHost)}" ${wizardBusy ? "disabled" : ""}>
-          </div>
-          <div style="display:flex;flex-direction:column;gap:6px;padding-bottom:6px">
-            <label style="display:flex;align-items:center;gap:6px;font-size:var(--fs-body-sm);cursor:pointer">
-              <input type="checkbox" id="wizardIncludeUsb" ${wizardIncludeUsb ? "checked" : ""} ${wizardBusy ? "disabled" : ""}>
-              <span>Probe USB HID (046D:C129)</span>
-            </label>
-            <label style="display:flex;align-items:center;gap:6px;font-size:var(--fs-body-sm);cursor:pointer">
-              <input type="checkbox" id="wizardMaskIds" ${wizardMask ? "checked" : ""} ${wizardBusy ? "disabled" : ""}>
-              <span>Mask MAC / IP / Hub ID / serials</span>
-            </label>
-          </div>
+      <h3 class="m-section">Current hub</h3>
+      <div class="m-list">
+        <div class="m-row">
+          <span class="m-tile m-tile--hub" style="--tile:44px">${ROUTER_SVG}</span>
+          <span class="m-row-text">
+            <span class="m-row-title" id="currentHubAddress">${escapeHtml(savedHubText)}</span>
+            <span class="m-row-sub">Sign-in: ${escapeHtml(authStatusText)}</span>
+          </span>
+          ${
+            state.hub
+              ? `<button type="button" class="btn btn-danger btn-sm" id="forgetHubBtn">Forget hub</button>`
+              : ""
+          }
         </div>
-
-        <div style="display:flex;gap:var(--space-2);flex-wrap:wrap">
-          <button type="button" class="btn btn-filled" id="wizardDetectBtn" ${wizardBusy ? "disabled" : ""}>
-            ${wizardBusy ? '<span class="m-spinner" style="border-color:var(--on-primary);border-right-color:transparent" aria-hidden="true"></span>' : ""}
-            <span>${wizardBusy ? "Probing…" : "Detect & Classify (Read-Only)"}</span>
-          </button>
-          <button type="button" class="btn btn-tonal" id="wizardUsbOnlyBtn" ${wizardBusy ? "disabled" : ""}>
-            USB Preflight + Sysinfo Only
-          </button>
-        </div>
-
-        ${
-          wizardStepText
-            ? `<p class="list-note" id="wizardStepStatus" role="status" style="margin:0">${escapeHtml(wizardStepText)}</p>`
-            : ""
-        }
-        ${resultHtml}
-        ${
-          wizardActionResult
-            ? `<div class="notice ${wizardActionResult.ok ? "notice-ok" : "notice-error"}" id="wizardActionOutcome" role="status" style="margin-top:var(--space-2)">
-                 <strong>Action ${escapeHtml(wizardActionResult.action)}:</strong> ${wizardActionResult.ok ? "OK" : escapeHtml(wizardActionResult.error || "Failed")}
-               </div>`
-            : ""
-        }
-        <details id="wizardSlice2DevActions" style="margin-top:var(--space-2)">
-          <summary style="cursor:pointer;font-size:var(--fs-body-sm);font-weight:600">Developer Pre-Root &amp; Root Actions (Slice 2 — Explicit Confirmation)</summary>
-          <div style="display:grid;gap:var(--space-3);margin-top:var(--space-3)">
-            <div style="display:grid;grid-template-columns:1fr 1fr;gap:var(--space-2)">
-              <div class="m-field">
-                <label for="wizardWifiSsidInput">Wi-Fi SSID (for usb-wifi-connect)</label>
-                <input id="wizardWifiSsidInput" type="text" autocomplete="off" spellcheck="false" value="${escapeHtml(wizardWifiSsid)}" ${wizardBusy ? "disabled" : ""}>
-              </div>
-              <div class="m-field">
-                <label for="wizardWifiPassInput">Wi-Fi Password (stdin JSON only)</label>
-                <input id="wizardWifiPassInput" type="password" autocomplete="off" value="${escapeHtml(wizardWifiPassword)}" ${wizardBusy ? "disabled" : ""}>
-              </div>
-            </div>
-            <div style="display:grid;grid-template-columns:1fr 1fr;gap:var(--space-2)">
-              <div class="m-field">
-                <label for="wizardRemoteIdInput">Numeric remoteId (positive integer)</label>
-                <input id="wizardRemoteIdInput" type="text" inputmode="numeric" autocomplete="off" value="${escapeHtml(wizardRemoteId)}" ${wizardBusy ? "disabled" : ""}>
-              </div>
-              <div class="m-field">
-                <label for="wizardAccountIdInput">Local accountId (optional)</label>
-                <input id="wizardAccountIdInput" type="text" autocomplete="off" placeholder="hub-local-20261111" value="${escapeHtml(wizardAccountId)}" ${wizardBusy ? "disabled" : ""}>
-              </div>
-            </div>
-            <div style="display:flex;gap:var(--space-2);flex-wrap:wrap">
-              <button type="button" class="btn btn-outlined btn-sm" data-wizard-action="usb-wifi-scan" ${wizardBusy ? "disabled" : ""}>USB Wi-Fi Scan</button>
-              <button type="button" class="btn btn-tonal btn-sm" data-wizard-action="usb-wifi-connect" ${wizardBusy ? "disabled" : ""}>USB Wi-Fi Connect</button>
-              <button type="button" class="btn btn-tonal btn-sm" data-wizard-action="usb-flash-firmware" ${wizardBusy ? "disabled" : ""}>USB Flash Firmware (.hfw2)…</button>
-              <button type="button" class="btn btn-danger btn-sm" data-wizard-action="usb-factory-reset" ${wizardBusy ? "disabled" : ""}>USB Factory Reset ('1')</button>
-              <button type="button" class="btn btn-tonal btn-sm" data-wizard-action="usb-tde-enable" ${wizardBusy ? "disabled" : ""}>1. USB TDE Enable</button>
-              <button type="button" class="btn btn-tonal btn-sm" data-wizard-action="usb-provision-local" ${wizardBusy ? "disabled" : ""}>2. USB Provision Local</button>
-              <button type="button" class="btn btn-tonal btn-sm" data-wizard-action="usb-seed-automation" ${wizardBusy ? "disabled" : ""}>3. USB Seed AutomationConfig</button>
-              <button type="button" class="btn btn-filled btn-sm" data-wizard-action="usb-root" ${wizardBusy ? "disabled" : ""}>4. USB Root (Dropbear)</button>
-              <button type="button" class="btn btn-filled btn-sm" data-wizard-action="lan-root-xmpp" ${wizardBusy ? "disabled" : ""}>LAN Root (XMPP)</button>
-            </div>
-          </div>
-        </details>
       </div>
+
+      ${renderConnectAndAddressSection({ includeWizardCard: false })}
+
+      <h3 class="m-section">Hub sign-in</h3>
+      <form id="hubAuthForm" class="m-card m-form" novalidate>
+        <p class="m-field-hint" style="margin-top:0">
+          Used when your hub has HTTP Basic sign-in enabled. ${state.platform === "win32" ? "Stored encrypted with Windows data protection for your account." : "Stored encrypted in your macOS Keychain."}
+        </p>
+        <div style="display:grid;grid-template-columns:1fr 1fr;gap:var(--space-3)">
+          <div class="m-field">
+            <label for="settingsAuthUser">Username</label>
+            <input id="settingsAuthUser" type="text" autocomplete="off" spellcheck="false" value="${escapeHtml(formUser)}">
+          </div>
+          <div class="m-field">
+            <label for="settingsAuthPass">Password</label>
+            <input id="settingsAuthPass" type="password" autocomplete="off" value="">
+          </div>
+        </div>
+        <div style="display:flex;gap:var(--space-2);flex-wrap:wrap">
+          <button type="submit" class="btn btn-tonal" id="saveHubAuthBtn">Save sign-in</button>
+          ${
+            state.hasHubAuth
+              ? '<button type="button" class="btn btn-outlined" id="clearHubAuthBtn">Forget sign-in</button>'
+              : ""
+          }
+        </div>
+      </form>
+
+      <h3 class="m-section">Logitech account</h3>
+      <div class="m-list">
+        <div class="m-row" id="settingsLogitechRow">
+          <span class="m-row-text">
+            <span class="m-row-title" id="settingsLogitechStatus">${
+              state.logitechSignedIn ? "Signed in to Logitech" : "Not signed in"
+            }</span>
+            <span class="m-row-sub">${
+              !state.encryptionAvailable
+                ? "Keychain encryption is unavailable; sign-in lasts only while the app is open."
+                : "Used only to search and download device codes from Logitech's catalog."
+            }</span>
+          </span>
+          ${
+            state.logitechSignedIn
+              ? '<button type="button" class="btn btn-outlined btn-sm" id="settingsLogitechSignOutBtn">Sign out</button>'
+              : '<button type="button" class="btn btn-tonal btn-sm" id="settingsLogitechSignInBtn">Sign in</button>'
+          }
+        </div>
+      </div>
+
+      ${renderUpdatesSection()}
+      ${wizardSettingsEntry}
+
+      <h3 class="m-section">Advanced</h3>
+      <form id="clientIdForm" class="m-card m-form" novalidate>
+        <div class="m-field">
+          <label for="clientIdInput">OAuth client_id</label>
+          <input id="clientIdInput" type="text" autocomplete="off" spellcheck="false" placeholder="${escapeHtml(state.defaultClientId)}" value="${escapeHtml(formClientId)}">
+          <p class="m-field-hint">Leave empty to use Logitech's public desktop client_id (${escapeHtml(state.defaultClientId)}).</p>
+        </div>
+        <div>
+          <button type="submit" class="btn btn-tonal" id="saveClientIdBtn">Save client_id</button>
+        </div>
+      </form>
     `;
   }
 
@@ -561,12 +363,36 @@
   }
 
   function render() {
+    const wizardOpen = Boolean(
+      wiz.open && wizardBridge && wizardFlow && state.wizardDevAvailable
+    );
     const isSettings = state.mode === "settings";
+
+    if (wizardOpen) {
+      document.title = "Hub Setup · Melodious";
+      if (appbar) {
+        appbar.hidden = false;
+        if (backBtn) backBtn.hidden = false;
+        if (appbarTitle) appbarTitle.textContent = "Hub Setup";
+        if (appbarActions) {
+          appbarActions.innerHTML = `<span class="appbar-note" id="connectAppbarStepNote">Step ${escapeHtml(wiz.step)} of 3</span>`;
+        }
+      }
+      root.innerHTML = wizardFlow.renderWizardPage(wiz);
+      return;
+    }
+
     document.title = `${isSettings ? "Settings" : "Connect"} · Melodious`;
     if (appbar) {
       appbar.hidden = !isSettings;
       if (backBtn) {
         backBtn.hidden = !state.hub;
+      }
+      if (appbarTitle) {
+        appbarTitle.textContent = "Settings";
+      }
+      if (appbarActions) {
+        appbarActions.innerHTML = "";
       }
     }
 
@@ -598,8 +424,7 @@
                </div>`
             : ""
         }
-        ${renderConnectAndAddressSection()}
-        ${renderWizardDetectSection()}
+        ${renderConnectAndAddressSection({ includeWizardCard: true })}
       `;
     }
   }
@@ -669,92 +494,699 @@
     const userEl = document.getElementById("connectUsername");
     const passEl = document.getElementById("connectPassword");
     const cidEl = document.getElementById("clientIdInput");
-    const wizHostEl = document.getElementById("wizardHostInput");
-    const wizFreshEl = document.getElementById("wizardIntentFresh");
-    const wizProvEl = document.getElementById("wizardIntentProvisioned");
-    const wizUsbEl = document.getElementById("wizardIncludeUsb");
-    const wizMaskEl = document.getElementById("wizardMaskIds");
-    const wizSsidEl = document.getElementById("wizardWifiSsidInput");
-    const wizPassEl = document.getElementById("wizardWifiPassInput");
-    const wizRemoteIdEl = document.getElementById("wizardRemoteIdInput");
-    const wizAccountIdEl = document.getElementById("wizardAccountIdInput");
     if (hostEl) formHost = hostEl.value;
     if (portEl) formPort = portEl.value;
     if (userEl) formUser = userEl.value;
     if (passEl) formPass = passEl.value;
     if (cidEl) formClientId = cidEl.value;
-    if (wizHostEl) wizardHost = wizHostEl.value;
-    if (wizFreshEl?.checked) wizardIntent = "fresh";
-    if (wizProvEl?.checked) wizardIntent = "provisioned";
-    if (wizUsbEl) wizardIncludeUsb = wizUsbEl.checked;
-    if (wizMaskEl) wizardMask = wizMaskEl.checked;
-    if (wizSsidEl) wizardWifiSsid = wizSsidEl.value;
-    if (wizPassEl) wizardWifiPassword = wizPassEl.value;
-    if (wizRemoteIdEl) wizardRemoteId = wizRemoteIdEl.value;
-    if (wizAccountIdEl) wizardAccountId = wizAccountIdEl.value;
+
+    const wizFreshEl = document.getElementById("wizardIntentFresh");
+    const wizProvEl = document.getElementById("wizardIntentProvisioned");
+    const wizHostEl = document.getElementById("wizardHostInput");
+    const wizUsbEl = document.getElementById("wizardIncludeUsb");
+    const wizMaskEl = document.getElementById("wizardMaskIds");
+    const provHostEl = document.getElementById("wizardProvHostInput");
+    const provHubIdEl = document.getElementById("wizardProvHubIdInput");
+    const wizSsidEl = document.getElementById("wizardWifiSsidInput");
+    const wizEncEl = document.getElementById("wizardWifiEncSelect");
+    const wizPassEl = document.getElementById("wizardWifiPassInput");
+    const freshHostEl = document.getElementById("freshConfirmedHostInput");
+    const wizRemoteIdEl = document.getElementById("wizardRemoteIdInput");
+    const wizHubNameEl = document.getElementById("wizardHubNameInput");
+    const srcLatestEl = document.getElementById("wizardInstallSourceLatest");
+    const srcLocalEl = document.getElementById("wizardInstallSourceLocal");
+    const allowPostEl = document.getElementById("wizardAllowUnprovenPost");
+
+    if (wizFreshEl?.checked) wiz.intent = "fresh";
+    if (wizProvEl?.checked) wiz.intent = "provisioned";
+    if (wizHostEl) wiz.hostInput = wizHostEl.value;
+    if (wizUsbEl) wiz.includeUsb = wizUsbEl.checked;
+    if (wizMaskEl) wiz.maskIds = wizMaskEl.checked;
+    if (provHostEl) wiz.confirmedHost = provHostEl.value;
+    if (provHubIdEl) wiz.provHubIdInput = provHubIdEl.value;
+    if (wizSsidEl) wiz.wifiSsid = wizSsidEl.value;
+    if (wizEncEl) wiz.wifiEncryption = wizEncEl.value;
+    if (wizPassEl) wiz.wifiPassword = wizPassEl.value;
+    if (freshHostEl) wiz.confirmedHost = freshHostEl.value;
+    if (wizRemoteIdEl) wiz.remoteIdInput = wizRemoteIdEl.value;
+    if (wizHubNameEl) wiz.hubNameInput = wizHubNameEl.value;
+    if (srcLatestEl?.checked) wiz.installSource = "latest";
+    if (srcLocalEl?.checked) wiz.installSource = "local";
+    if (allowPostEl) wiz.allowUnprovenPost = allowPostEl.checked;
   }
 
-  async function runWizardDevAction(action) {
-    if (!wizardBridge?.runAction || !state.wizardDevAvailable || wizardBusy) return;
-    syncInputsFromDom();
-    const isReadonly = action === "usb-wifi-scan" || action === "usb-wifi-status";
-    if (!isReadonly) {
-      const confirmed = window.confirm(
-        `Run state-changing Root Wizard action "${action}" on the connected hub?`
-      );
-      if (!confirmed) return;
+  function applyWedgeFromOutcome(res) {
+    const wedged = Boolean(
+      res?.result?.usbWedge ||
+        res?.result?.usb?.usbWedge ||
+        res?.result?.wifiScan?.usbWedge ||
+        res?.result?.wifiStatus?.usbWedge ||
+        res?.result?.wifiConnect?.usbWedge ||
+        res?.result?.factoryReset?.usbWedge ||
+        res?.result?.firmwareFlash?.usbWedge ||
+        res?.result?.tdeEnable?.usbWedge ||
+        res?.result?.provisionLocal?.usbWedge ||
+        res?.result?.automationConfig?.usbWedge ||
+        res?.result?.root?.usbWedge
+    );
+    if (wedged) {
+      wiz.usbWedgeActive = true;
+      wiz.usbWedgeMessage =
+        res?.error ||
+        "USB HID LTCP link wedged. Unplug USB power for 15 seconds, plug back in, wait ~5 minutes, and re-run Detect.";
     }
-    wizardBusy = true;
-    wizardError = "";
-    wizardActionResult = null;
-    wizardStepText = `Running ${action}…`;
+  }
+
+  async function confirmWizardStep({ title, body, confirmLabel = "Continue", danger = false }) {
+    if (!wizardFlow?.openWizardConfirmDialog) return false;
+    return wizardFlow.openWizardConfirmDialog(document, {
+      title,
+      body,
+      confirmLabel,
+      danger,
+    });
+  }
+
+  async function runWizardDetect() {
+    if (!wizardBridge || !wizardFlow || !state.wizardDevAvailable || wiz.busy) return;
+    syncInputsFromDom();
+    wiz.busy = true;
+    wiz.busyAction = "detect";
+    wiz.error = "";
+    wiz.stepText = "Detecting hub over LAN and USB HID…";
+    wiz.logLines = [];
     render();
     try {
-      const parsedRemoteId = Number.parseInt(String(wizardRemoteId).trim(), 10);
-      const res = await wizardBridge.runAction({
-        action,
-        confirmAction: isReadonly ? "" : action,
-        host: wizardHost.trim() || formHost.trim(),
-        mask: wizardMask,
-        ssid: wizardWifiSsid.trim(),
-        password: wizardWifiPassword,
-        remoteId: Number.isSafeInteger(parsedRemoteId) && parsedRemoteId > 0 ? parsedRemoteId : null,
-        accountId: wizardAccountId.trim(),
+      const targetHost = (wiz.confirmedHost || wiz.hostInput || formHost).trim();
+      const res = await wizardBridge.detectAndClassify({
+        userIntent: wiz.intent,
+        host: targetHost,
+        skipUsb: !wiz.includeUsb,
+        mask: wiz.maskIds,
       });
-      if (res && !res.canceled) {
-        wizardActionResult = res;
+      wiz.classifyResult = res;
+      wiz.usbWedgeActive = Boolean(res?.usbWedge?.wedged);
+      wiz.usbWedgeMessage = res?.usbWedge?.message || "";
+      if (res?.firmwareGate?.passes === true) {
+        wiz.firmwarePassed = true;
       }
-      wizardStepText = "";
+      if (res?.signals?.lan?.ports?.["22"]) {
+        wiz.sshOpen = true;
+      }
+      const detectedHost = wizardFlow.extractDetectedHost(res);
+      if (detectedHost) {
+        wiz.confirmedHost = detectedHost;
+        if (!wiz.hostInput.trim()) wiz.hostInput = detectedHost;
+      }
+      const detectedHubId = wizardFlow.extractDetectedNumericHubId(res);
+      if (detectedHubId !== null && !wiz.provHubIdInput.trim()) {
+        wiz.provHubIdInput = String(detectedHubId);
+      }
+      wiz.stepText = "";
     } catch (err) {
-      wizardError = err?.message || String(err);
-      wizardStepText = "";
+      wiz.error = err?.message || String(err);
+      wiz.stepText = "";
     } finally {
-      wizardBusy = false;
+      wiz.busy = false;
+      wiz.busyAction = "";
       render();
     }
   }
 
-  async function runWizardDetect({ usbOnly = false } = {}) {
-    if (!wizardBridge || !state.wizardDevAvailable || wizardBusy) return;
-    syncInputsFromDom();
-    wizardBusy = true;
-    wizardError = "";
-    wizardStepText = usbOnly ? "Starting read-only USB HID probe…" : "Starting read-only Detect & Classify…";
+  async function enterStep3Handoff(rawHost, rawPort = 8080) {
+    const host = String(rawHost || wiz.confirmedHost || wiz.hostInput || "").trim();
+    const port = Number(rawPort) || 8080;
+    wiz.step = 3;
+    wiz.handoffHost = host;
+    wiz.handoffPort = port;
+    wiz.handoffError = "";
+    wiz.handoffConnected = false;
+    render();
+    if (!host) {
+      wiz.handoffError = "No hub IP address set.";
+      render();
+      return;
+    }
+    wiz.busy = true;
+    wiz.stepText = `Connecting desktop app to http://${host}:${port}…`;
     render();
     try {
-      const targetHost = usbOnly ? "" : (wizardHost.trim() || formHost.trim());
-      wizardResult = await wizardBridge.detectAndClassify({
-        userIntent: wizardIntent,
-        host: targetHost,
-        skipUsb: usbOnly ? false : !wizardIncludeUsb,
-        mask: wizardMask,
-      });
-      wizardStepText = "";
+      const res = await bridge.connect({ host, port });
+      if (res && res.ok) {
+        wiz.handoffConnected = true;
+        wiz.handoffFirmware = res.firmware || "";
+        wiz.handoffError = "";
+        state = await bridge.getState();
+      } else {
+        wiz.handoffConnected = false;
+        wiz.handoffError = res?.error || `Could not connect to http://${host}:${port} yet.`;
+      }
     } catch (err) {
-      wizardError = err?.message || String(err);
-      wizardStepText = "";
+      wiz.handoffConnected = false;
+      wiz.handoffError = err?.message || String(err);
     } finally {
-      wizardBusy = false;
+      wiz.busy = false;
+      wiz.stepText = "";
+      render();
+    }
+  }
+
+  async function handleFlashFirmware() {
+    if (!wizardBridge || wiz.busy) return;
+    syncInputsFromDom();
+    const ok = await confirmWizardStep({
+      title: "Update hub firmware to 4.15.600?",
+      body:
+        "Next you will choose an official Logitech signed 4.15.600 .hfw2 bundle on this Mac.\n\n" +
+        "• Melodious checks Description.xml against your hub's skin before uploading.\n" +
+        "• Firmware updates are one-way and take 2–3 minutes with an automatic reboot ('u' boot-updater handoff is normal).\n" +
+        "• Keep the USB cable firmly connected until the hub finishes rebooting.",
+      confirmLabel: "Choose .hfw2 & Flash",
+    });
+    if (!ok) return;
+
+    wiz.busy = true;
+    wiz.busyAction = "usb-flash-firmware";
+    wiz.error = "";
+    wiz.logLines = [];
+    wiz.stepText = "Validating and uploading .hfw2 firmware bundle…";
+    render();
+    try {
+      const res = await wizardBridge.runAction({
+        action: "usb-flash-firmware",
+        confirmAction: "usb-flash-firmware",
+        mask: wiz.maskIds,
+      });
+      if (res?.canceled) {
+        wiz.stepText = "";
+        return;
+      }
+      applyWedgeFromOutcome(res);
+      if (!res?.ok) {
+        wiz.error = res?.error || "Firmware update did not complete.";
+      } else {
+        wiz.firmwarePassed = true;
+        showSnackbar("Firmware 4.15.600 verified.");
+      }
+      wiz.stepText = "";
+    } catch (err) {
+      wiz.error = err?.message || String(err);
+      wiz.stepText = "";
+    } finally {
+      wiz.busy = false;
+      wiz.busyAction = "";
+      render();
+    }
+  }
+
+  async function handleFactoryReset() {
+    if (!wizardBridge || wiz.busy) return;
+    syncInputsFromDom();
+    const ok = await confirmWizardStep({
+      title: "Factory reset this Harmony Hub?",
+      body:
+        "This writes the safe factory-reset marker ('1' only — never RF chip-erase 'all') and triggers a USB reboot.\n\n" +
+        "• Erases /data and /cache (account binding, devices, activities, Wi-Fi).\n" +
+        "• After 30–60 seconds of fast red blinking, the hub stays absent from USB until you unplug USB power for 15 seconds, plug it back in, and wait ~5 minutes for boot to settle.",
+      confirmLabel: "Erase & Reset Hub",
+      danger: true,
+    });
+    if (!ok) return;
+
+    wiz.busy = true;
+    wiz.busyAction = "usb-factory-reset";
+    wiz.error = "";
+    wiz.logLines = [];
+    wiz.stepText = "Sending safe factory reset ('1') over USB…";
+    render();
+    try {
+      const res = await wizardBridge.runAction({
+        action: "usb-factory-reset",
+        confirmAction: "usb-factory-reset",
+        resetPayload: "1",
+        mask: wiz.maskIds,
+      });
+      applyWedgeFromOutcome(res);
+      if (!res?.ok) {
+        wiz.error = res?.error || "Factory reset failed.";
+      } else {
+        wiz.factoryResetSent = true;
+        wiz.factoryResetGuidance = res.result?.factoryReset?.powerCycleGuidance || "";
+        wiz.intent = "fresh";
+        wiz.flowPath = "fresh";
+        wiz.wifiConnected = false;
+        wiz.tdeDone = false;
+        wiz.provisionLocalDone = false;
+        wiz.seedAutomationDone = false;
+        wiz.sshOpen = false;
+        showSnackbar("Factory reset sent. Follow the 15s USB power-cycle steps.");
+      }
+      wiz.stepText = "";
+    } catch (err) {
+      wiz.error = err?.message || String(err);
+      wiz.stepText = "";
+    } finally {
+      wiz.busy = false;
+      wiz.busyAction = "";
+      render();
+    }
+  }
+
+  async function handleWifiScan() {
+    if (!wizardBridge || wiz.busy) return;
+    syncInputsFromDom();
+    wiz.busy = true;
+    wiz.busyAction = "usb-wifi-scan";
+    wiz.error = "";
+    wiz.stepText = "Scanning visible 2.4 GHz Wi-Fi networks over USB…";
+    render();
+    try {
+      const res = await wizardBridge.runAction({
+        action: "usb-wifi-scan",
+        showSsids: true,
+        mask: false,
+      });
+      applyWedgeFromOutcome(res);
+      if (!res?.ok) {
+        wiz.error = res?.error || "Wi-Fi scan failed.";
+      } else {
+        wiz.wifiScanned = true;
+        const nets = res.result?.wifiScan?.networks;
+        wiz.wifiNetworks = Array.isArray(nets) ? nets : [];
+        if (!wiz.wifiSsid && wiz.wifiNetworks[0]?.ssid) {
+          wiz.wifiSsid = String(wiz.wifiNetworks[0].ssid);
+        }
+      }
+      wiz.stepText = "";
+    } catch (err) {
+      wiz.error = err?.message || String(err);
+      wiz.stepText = "";
+    } finally {
+      wiz.busy = false;
+      wiz.busyAction = "";
+      render();
+    }
+  }
+
+  async function handleWifiConnect() {
+    if (!wizardBridge || !wizardFlow || wiz.busy) return;
+    syncInputsFromDom();
+    const ssid = wiz.wifiSsid.trim();
+    const enc = wiz.wifiEncryption || "WPA2-PSK";
+    const pass = enc === "OPEN" ? "" : wiz.wifiPassword;
+
+    if (!ssid) {
+      wiz.error = "Enter or choose a 2.4 GHz Wi-Fi network SSID.";
+      render();
+      return;
+    }
+    if (enc !== "OPEN" && !pass) {
+      wiz.error = "Enter the Wi-Fi password for this network.";
+      render();
+      return;
+    }
+
+    wiz.busy = true;
+    wiz.busyAction = "usb-wifi-connect";
+    wiz.error = "";
+    wiz.logLines = [];
+    wiz.stepText = `Connecting hub to "${ssid}" over USB…`;
+    render();
+    try {
+      const res = await wizardBridge.runAction({
+        action: "usb-wifi-connect",
+        confirmAction: "usb-wifi-connect",
+        ssid,
+        encryption: enc,
+        password: pass,
+        showSsids: true,
+        mask: wiz.maskIds,
+      });
+      applyWedgeFromOutcome(res);
+      if (!res?.ok) {
+        wiz.error = res?.error || "Wi-Fi connection failed.";
+        wiz.stepText = "";
+        return;
+      }
+
+      wiz.wifiConnected = true;
+      wiz.stepText = "Reading hub LAN IP address…";
+      render();
+
+      const statusRes = await wizardBridge
+        .runAction({
+          action: "usb-wifi-status",
+          showSsids: true,
+          mask: false,
+        })
+        .catch(() => null);
+      const usbIp =
+        statusRes?.result?.wifiStatus?.ipAddress ||
+        statusRes?.result?.wifiStatus?.ip ||
+        "";
+      if (wizardFlow.isUnmaskedHost(usbIp) && usbIp !== "0.0.0.0") {
+        wiz.confirmedHost = String(usbIp).trim();
+      } else if (!wiz.confirmedHost.trim()) {
+        const cls = await wizardBridge
+          .detectAndClassify({
+            userIntent: "fresh",
+            host: "",
+            skipUsb: true,
+            mask: false,
+          })
+          .catch(() => null);
+        const ssdpHost = wizardFlow.extractDetectedHost(cls);
+        if (ssdpHost) wiz.confirmedHost = ssdpHost;
+      }
+      wiz.stepText = "";
+      showSnackbar(
+        wiz.confirmedHost
+          ? `Wi-Fi connected (${wiz.confirmedHost}).`
+          : "Wi-Fi credentials written. Confirm or detect the hub's LAN IP below."
+      );
+    } catch (err) {
+      wiz.error = err?.message || String(err);
+      wiz.stepText = "";
+    } finally {
+      wiz.busy = false;
+      wiz.busyAction = "";
+      render();
+    }
+  }
+
+  async function handleFreshPrepareHub() {
+    if (!wizardBridge || !wizardFlow || wiz.busy) return;
+    syncInputsFromDom();
+    const remoteIdInt = wizardFlow.parsePositiveIntInput(wiz.remoteIdInput);
+    if (remoteIdInt === null) {
+      wiz.error =
+        "Numeric Hub ID (remoteId) must be a positive whole number (e.g. 20264150), never a string or zero.";
+      render();
+      return;
+    }
+
+    const ok = await confirmWizardStep({
+      title: "Unlock & prepare this hub over USB?",
+      body:
+        `Melodious will run three preparation steps with numeric Hub ID ${remoteIdInt}:\n\n` +
+        "1. Open /tde/enable ('1', length byte 0x01) and verify /etc/tdeenable.\n" +
+        "2. Write local mode-3 provisioning preferences and reboot the hub.\n" +
+        "3. Seed minimal AutomationConfig so plugin discovery works.\n\n" +
+        "Keep the USB cable plugged in throughout the reboot.",
+      confirmLabel: "Unlock & Prepare",
+    });
+    if (!ok) return;
+
+    const rerunAll = wiz.tdeDone && wiz.provisionLocalDone && wiz.seedAutomationDone;
+    if (rerunAll) {
+      wiz.tdeDone = false;
+      wiz.provisionLocalDone = false;
+      wiz.seedAutomationDone = false;
+    }
+
+    wiz.busy = true;
+    wiz.busyAction = "fresh-prepare";
+    wiz.error = "";
+    wiz.logLines = [];
+    render();
+    try {
+      if (!wiz.tdeDone) {
+        wiz.stepText = "1/3 Opening TDE file gate (/tde/enable)…";
+        render();
+        const tdeRes = await wizardBridge.runAction({
+          action: "usb-tde-enable",
+          confirmAction: "usb-tde-enable",
+          mask: wiz.maskIds,
+        });
+        applyWedgeFromOutcome(tdeRes);
+        if (!tdeRes?.ok) {
+          wiz.error = tdeRes?.error || "Opening TDE gate failed.";
+          wiz.stepText = "";
+          return;
+        }
+        wiz.tdeDone = true;
+        render();
+      }
+
+      if (!wiz.provisionLocalDone) {
+        wiz.stepText = `2/3 Writing local mode-3 provisioning (remoteId ${remoteIdInt}) & rebooting…`;
+        render();
+        const provRes = await wizardBridge.runAction({
+          action: "usb-provision-local",
+          confirmAction: "usb-provision-local",
+          remoteId: remoteIdInt,
+          hubName: wiz.hubNameInput.trim() || "Harmony Hub",
+          accountId: wiz.accountIdInput.trim(),
+          mask: wiz.maskIds,
+        });
+        applyWedgeFromOutcome(provRes);
+        if (!provRes?.ok) {
+          wiz.error = provRes?.error || "Local mode-3 provisioning failed.";
+          wiz.stepText = "";
+          return;
+        }
+        wiz.provisionLocalDone = true;
+        render();
+      }
+
+      if (!wiz.seedAutomationDone) {
+        wiz.stepText = "3/3 Seeding minimal AutomationConfig over USB…";
+        render();
+        const seedRes = await wizardBridge.runAction({
+          action: "usb-seed-automation",
+          confirmAction: "usb-seed-automation",
+          remoteId: remoteIdInt,
+          accountId: wiz.accountIdInput.trim(),
+          mask: wiz.maskIds,
+        });
+        applyWedgeFromOutcome(seedRes);
+        if (!seedRes?.ok) {
+          wiz.error = seedRes?.error || "Seeding AutomationConfig failed.";
+          wiz.stepText = "";
+          return;
+        }
+        wiz.seedAutomationDone = true;
+      }
+
+      wiz.stepText = "";
+      showSnackbar("Hub unlocked and prepared for rooting.");
+    } catch (err) {
+      wiz.error = err?.message || String(err);
+      wiz.stepText = "";
+    } finally {
+      wiz.busy = false;
+      wiz.busyAction = "";
+      render();
+    }
+  }
+
+  async function runRootAndOrInstall({
+    rootAction = "", // "" | "usb-root" | "lan-root-xmpp"
+    runInstall = true,
+    preflightOnly = false,
+  } = {}) {
+    if (!wizardBridge || !wizardFlow || wiz.busy) return;
+    syncInputsFromDom();
+
+    const host = (wiz.confirmedHost || wiz.hostInput || formHost).trim();
+    if (!wizardFlow.isUnmaskedHost(host)) {
+      wiz.error = "Enter or detect the hub's LAN IP address before rooting or installing.";
+      render();
+      return;
+    }
+
+    const rawHubId =
+      wiz.flowPath === "provisioned" ? wiz.provHubIdInput : wiz.remoteIdInput;
+    const hubIdInt = wizardFlow.parsePositiveIntInput(rawHubId);
+    if (runInstall && hubIdInt === null) {
+      wiz.error =
+        "A positive numeric Hub ID is required to install Melodious (never empty or non-numeric).";
+      render();
+      return;
+    }
+
+    if (!preflightOnly) {
+      const stepsDesc = [];
+      if (rootAction) {
+        stepsDesc.push(
+          rootAction === "usb-root"
+            ? `• Stage persistent Dropbear SSH over USB and verify port 22 on ${host}.`
+            : `• Stage persistent Dropbear SSH over LAN XMPP (:5222) on ${host}.`
+        );
+      }
+      if (runInstall) {
+        stepsDesc.push(
+          `• Run first-time Melodious installer (${wiz.installSource === "local" ? "local hub zip chosen next" : "latest GitHub release"}) on ${host} with Hub ID ${hubIdInt}, enable the cloud blocker, reboot if needed, and verify port 8080.`
+        );
+      }
+      const ok = await confirmWizardStep({
+        title:
+          rootAction && runInstall
+            ? "Root hub & install Melodious?"
+            : rootAction
+              ? "Enable root SSH on this hub?"
+              : "Install Melodious on this hub?",
+        body: `${stepsDesc.join("\n")}\n\nKeep the hub powered on until installation completes.`,
+        confirmLabel:
+          rootAction && runInstall
+            ? "Root & Install"
+            : rootAction
+              ? "Root Hub"
+              : "Install Melodious",
+      });
+      if (!ok) return;
+    }
+
+    wiz.busy = true;
+    wiz.busyAction = rootAction || "install";
+    wiz.error = "";
+    wiz.logLines = [];
+    render();
+    try {
+      if (rootAction) {
+        wiz.stepText =
+          rootAction === "usb-root"
+            ? `Rooting hub over USB and verifying SSH port 22 on ${host}…`
+            : `Rooting hub over LAN XMPP and verifying SSH port 22 on ${host}…`;
+        render();
+        const rootRes = await wizardBridge.runAction({
+          action: rootAction,
+          confirmAction: rootAction,
+          host,
+          remoteId: hubIdInt,
+          mask: wiz.maskIds,
+        });
+        applyWedgeFromOutcome(rootRes);
+        if (!rootRes?.ok) {
+          wiz.error = rootRes?.error || `${rootAction} failed.`;
+          wiz.stepText = "";
+          return;
+        }
+        if (rootRes.result?.root?.sshPortOpen === false) {
+          wiz.error = `Root action completed, but SSH port 22 on ${host} is still closed.`;
+          wiz.stepText = "";
+          return;
+        }
+        wiz.sshOpen = true;
+        render();
+      }
+
+      if (runInstall) {
+        wiz.stepText = preflightOnly
+          ? `Running Melodious preflight check on ${host}…`
+          : `Installing Melodious on ${host}…`;
+        render();
+        const installRes = await wizardBridge.installHub({
+          source: wiz.installSource,
+          host,
+          hubId: hubIdInt,
+          preflightOnly,
+          removeRootToolLeftovers: true,
+        });
+        if (installRes?.canceled) {
+          wiz.stepText = "";
+          return;
+        }
+        if (!installRes?.ok) {
+          wiz.error = installRes?.error || "Melodious installation failed.";
+          wiz.stepText = "";
+          return;
+        }
+        wiz.installedVersion = installRes.version || "";
+        if (preflightOnly) {
+          wiz.preflightPassed = true;
+          wiz.stepText = "";
+          showSnackbar(`Preflight ALLOWED for Melodious ${wiz.installedVersion}.`);
+          return;
+        }
+        wiz.installDone = true;
+        wiz.handoffPort = Number(installRes.port) || 8080;
+        wiz.stepText = "";
+        showSnackbar(`Melodious ${wiz.installedVersion} installed!`);
+        wiz.busy = false;
+        wiz.busyAction = "";
+        await enterStep3Handoff(host, wiz.handoffPort);
+        return;
+      }
+
+      wiz.stepText = "";
+      showSnackbar("Root SSH enabled on port 22.");
+    } catch (err) {
+      wiz.error = err?.message || String(err);
+      wiz.stepText = "";
+    } finally {
+      wiz.busy = false;
+      wiz.busyAction = "";
+      render();
+    }
+  }
+
+  async function handleManualOverrideAction(action) {
+    if (!wizardBridge || !wizardFlow || wiz.busy) return;
+    syncInputsFromDom();
+    const readonlyActions = new Set([
+      "usb-preflight",
+      "usb-wifi-scan",
+      "usb-wifi-status",
+    ]);
+    const isReadonly = readonlyActions.has(action);
+    if (!isReadonly) {
+      const extraWarn =
+        action === "post-root"
+          ? "\n\nEXPERIMENTAL: HTTP POST root on :8088 is unproven on full root runs."
+          : "";
+      const ok = await confirmWizardStep({
+        title: `Run manual action "${action}"?`,
+        body: `This executes ${action} directly against the connected hub.${extraWarn}`,
+        confirmLabel: `Run ${action}`,
+        danger: action === "usb-factory-reset",
+      });
+      if (!ok) return;
+    }
+
+    wiz.busy = true;
+    wiz.busyAction = action;
+    wiz.error = "";
+    wiz.lastManualOutcome = null;
+    wiz.stepText = `Running ${action}…`;
+    render();
+    try {
+      let res;
+      if (action === "usb-preflight") {
+        res = await wizardBridge.usbProbe({
+          action: "usb-preflight",
+          mask: wiz.maskIds,
+        });
+        res = { ...res, action: "usb-preflight" };
+      } else {
+        const rawRid =
+          wiz.flowPath === "provisioned" ? wiz.provHubIdInput : wiz.remoteIdInput;
+        const ridInt = wizardFlow.parsePositiveIntInput(rawRid);
+        res = await wizardBridge.runAction({
+          action,
+          confirmAction: isReadonly ? "" : action,
+          allowUnprovenPost: action === "post-root" && wiz.allowUnprovenPost,
+          host: (wiz.confirmedHost || wiz.hostInput || formHost).trim(),
+          mask: wiz.maskIds,
+          ssid: wiz.wifiSsid.trim(),
+          encryption: wiz.wifiEncryption || "WPA2-PSK",
+          password: wiz.wifiPassword,
+          remoteId: ridInt,
+          hubName: wiz.hubNameInput.trim() || "Harmony Hub",
+          accountId: wiz.accountIdInput.trim(),
+        });
+      }
+      if (!res?.canceled) {
+        applyWedgeFromOutcome(res);
+        wiz.lastManualOutcome = res;
+      }
+      wiz.stepText = "";
+    } catch (err) {
+      wiz.error = err?.message || String(err);
+      wiz.stepText = "";
+    } finally {
+      wiz.busy = false;
+      wiz.busyAction = "";
       render();
     }
   }
@@ -763,36 +1195,238 @@
     syncInputsFromDom();
   });
 
-  root.addEventListener("change", () => {
+  root.addEventListener("change", (event) => {
     syncInputsFromDom();
+    const id = event.target?.id || "";
+    const name = event.target?.name || "";
+    if (
+      name === "wizardIntent" ||
+      name === "wizardInstallSource" ||
+      id === "wizardWifiEncSelect" ||
+      id === "wizardAllowUnprovenPost"
+    ) {
+      render();
+    }
   });
 
   root.addEventListener("click", async (event) => {
     const target = event.target;
-    const switchIntentBtn = target.closest("#wizardSwitchIntentBtn");
-    if (switchIntentBtn) {
+
+    if (target.closest("#openWizardConnectBtn") && state.wizardDevAvailable) {
       syncInputsFromDom();
-      const rec = switchIntentBtn.dataset.recommendedIntent;
-      if (rec === "fresh" || rec === "provisioned") {
-        wizardIntent = rec;
-        await runWizardDetect({ usbOnly: false });
+      wiz.open = true;
+      wiz.returnMode = "connect";
+      if (!wiz.hostInput && formHost) wiz.hostInput = formHost;
+      render();
+      return;
+    }
+
+    if (target.closest("#openWizardSettingsBtn") && state.wizardDevAvailable) {
+      syncInputsFromDom();
+      wiz.open = true;
+      wiz.returnMode = "settings";
+      if (!wiz.hostInput && formHost) wiz.hostInput = formHost;
+      render();
+      return;
+    }
+
+    if (wiz.open && state.wizardDevAvailable) {
+      if (target.closest("#wizardDetectBtn") || target.closest("#wizardRecheckBtn")) {
+        await runWizardDetect();
+        return;
       }
-      return;
+      const switchBtn = target.closest("#wizardSwitchIntentBtn");
+      if (switchBtn) {
+        syncInputsFromDom();
+        const rec = switchBtn.dataset.recommendedIntent;
+        if (rec === "fresh" || rec === "provisioned") {
+          wiz.intent = rec;
+          wiz.flowPath = rec;
+          render();
+          await runWizardDetect();
+        }
+        return;
+      }
+      const toStep2Btn = target.closest("#wizardToStep2Btn");
+      if (toStep2Btn) {
+        syncInputsFromDom();
+        wiz.flowPath =
+          toStep2Btn.dataset.nextBranch ||
+          wizardFlow.deriveRecommendedPath(wiz.classifyResult, wiz.intent);
+        wiz.step = 2;
+        wiz.error = "";
+        render();
+        return;
+      }
+      if (target.closest("#wizardSkipDetectBtn")) {
+        syncInputsFromDom();
+        wiz.flowPath = wiz.intent;
+        wiz.step = 2;
+        wiz.error = "";
+        render();
+        return;
+      }
+      if (
+        target.closest("#wizardAlreadyInstalledConnectBtn") ||
+        target.closest("#wizardSkipToStep3Btn")
+      ) {
+        syncInputsFromDom();
+        const host =
+          wizardFlow.extractDetectedHost(wiz.classifyResult) ||
+          wiz.confirmedHost.trim() ||
+          wiz.hostInput.trim();
+        await enterStep3Handoff(host);
+        return;
+      }
+      if (target.closest("#wizardBranchFreshBtn")) {
+        syncInputsFromDom();
+        wiz.flowPath = "fresh";
+        wiz.error = "";
+        render();
+        return;
+      }
+      if (target.closest("#wizardBranchProvisionedBtn")) {
+        syncInputsFromDom();
+        wiz.flowPath = "provisioned";
+        wiz.error = "";
+        render();
+        return;
+      }
+      if (target.closest("#wizardBackToStep1Btn")) {
+        syncInputsFromDom();
+        wiz.step = 1;
+        wiz.error = "";
+        render();
+        return;
+      }
+      if (target.closest("#wizardToStep3Btn")) {
+        syncInputsFromDom();
+        await enterStep3Handoff(wiz.confirmedHost || wiz.hostInput, wiz.handoffPort || 8080);
+        return;
+      }
+      if (target.closest("#wizardBackToStep2Btn")) {
+        wiz.step = 2;
+        wiz.error = "";
+        render();
+        return;
+      }
+      if (target.closest("#wizardRetryHandoffBtn")) {
+        await enterStep3Handoff(
+          wiz.handoffHost || wiz.confirmedHost || wiz.hostInput,
+          wiz.handoffPort || 8080
+        );
+        return;
+      }
+      if (target.closest("#wizardOpenHubBtn")) {
+        const host = (wiz.handoffHost || wiz.confirmedHost || wiz.hostInput).trim();
+        if (!wiz.handoffConnected && host) {
+          const res = await bridge.connect({ host, port: wiz.handoffPort || 8080 });
+          if (!res?.ok) {
+            wiz.handoffError = res?.error || `Can't reach http://${host}:8080.`;
+            render();
+            return;
+          }
+        }
+        await bridge.openShell();
+        window.location.hash = "#remote";
+        window.location.reload();
+        return;
+      }
+      if (target.closest("#freshFlashFirmwareBtn")) {
+        await handleFlashFirmware();
+        return;
+      }
+      if (
+        target.closest("#freshFactoryResetBtn") ||
+        target.closest("#wizardProvFactoryResetBtn")
+      ) {
+        await handleFactoryReset();
+        return;
+      }
+      if (target.closest("#freshWifiScanBtn")) {
+        await handleWifiScan();
+        return;
+      }
+      const wifiRow = target.closest("[data-wifi-idx]");
+      if (wifiRow) {
+        syncInputsFromDom();
+        const picked = wiz.wifiNetworks[Number(wifiRow.dataset.wifiIdx)];
+        if (picked) {
+          wiz.wifiSsid = String(picked.ssid || "");
+          const rawEnc = String(picked.encryption || picked.security || "WPA2-PSK").toUpperCase();
+          if (rawEnc === "NONE" || rawEnc === "OPEN") wiz.wifiEncryption = "OPEN";
+          else if (rawEnc.includes("WPA2")) wiz.wifiEncryption = "WPA2-PSK";
+          else if (rawEnc.includes("WPA")) wiz.wifiEncryption = "WPA-PSK";
+          render();
+        }
+        return;
+      }
+      if (target.closest("#freshWifiConnectBtn")) {
+        await handleWifiConnect();
+        return;
+      }
+      if (target.closest("#freshVerifyLanBtn")) {
+        await runWizardDetect();
+        return;
+      }
+      if (target.closest("#freshPrepareHubBtn")) {
+        await handleFreshPrepareHub();
+        return;
+      }
+      if (target.closest("#freshRootAndInstallBtn")) {
+        await runRootAndOrInstall({
+          rootAction: wiz.sshOpen ? "" : "usb-root",
+          runInstall: true,
+          preflightOnly: false,
+        });
+        return;
+      }
+      if (target.closest("#wizardProvRunAllBtn")) {
+        const st = wizardFlow.computeProvisionedChecklistStatus(wiz);
+        await runRootAndOrInstall({
+          rootAction: st.rootDone ? "" : "lan-root-xmpp",
+          runInstall: true,
+          preflightOnly: false,
+        });
+        return;
+      }
+      if (target.closest("#wizardRunLanRootBtn")) {
+        await runRootAndOrInstall({
+          rootAction: "lan-root-xmpp",
+          runInstall: false,
+        });
+        return;
+      }
+      if (target.closest("#wizardProvUsbRootBtn")) {
+        await runRootAndOrInstall({
+          rootAction: "usb-root",
+          runInstall: false,
+        });
+        return;
+      }
+      if (target.closest("#wizardInstallMelodiousBtn")) {
+        await runRootAndOrInstall({
+          rootAction: "",
+          runInstall: true,
+          preflightOnly: false,
+        });
+        return;
+      }
+      if (target.closest("#wizardRunPreflightBtn")) {
+        await runRootAndOrInstall({
+          rootAction: "",
+          runInstall: true,
+          preflightOnly: true,
+        });
+        return;
+      }
+      const manualBtn = target.closest("[data-wizard-manual-action]");
+      if (manualBtn) {
+        await handleManualOverrideAction(manualBtn.dataset.wizardManualAction);
+        return;
+      }
     }
-    if (target.closest("#wizardDetectBtn") && wizardBridge && !wizardBusy) {
-      await runWizardDetect({ usbOnly: false });
-      return;
-    }
-    if (target.closest("#wizardUsbOnlyBtn") && wizardBridge && !wizardBusy) {
-      wizardIncludeUsb = true;
-      await runWizardDetect({ usbOnly: true });
-      return;
-    }
-    const actionBtn = target.closest("[data-wizard-action]");
-    if (actionBtn && wizardBridge && !wizardBusy) {
-      await runWizardDevAction(actionBtn.dataset.wizardAction);
-      return;
-    }
+
     const releaseBtn = target.closest("[data-release-url]");
     if (releaseBtn && updatesBridge) {
       await updatesBridge.openRelease(releaseBtn.dataset.releaseUrl);
@@ -802,7 +1436,6 @@
       updatesBusy = true;
       render();
       try {
-        // The main process confirms, shows progress here and reports the outcome in a dialog.
         await updatesBridge.updateHub();
       } finally {
         updatesBusy = false;
@@ -815,7 +1448,6 @@
       updatesBusy = true;
       render();
       try {
-        // The main process asks for the source, confirms, shows progress here and reports the outcome in a dialog.
         await updatesBridge.reinstallHub();
       } finally {
         updatesBusy = false;
@@ -829,7 +1461,6 @@
       render();
       showSnackbar("Downloading the update from GitHub…");
       try {
-        // On success the app relaunches; on failure the main process explains in a dialog.
         await updatesBridge.install();
       } finally {
         updatesBusy = false;
@@ -987,6 +1618,20 @@
   });
 
   backBtn?.addEventListener("click", async () => {
+    if (wiz.open) {
+      syncInputsFromDom();
+      wiz.open = false;
+      wiz.error = "";
+      if (wiz.returnMode === "settings") {
+        await bridge.openSettings();
+        state.mode = "settings";
+      } else {
+        await bridge.openConnect();
+        state.mode = "connect";
+      }
+      render();
+      return;
+    }
     if (!state.hub) return;
     await bridge.openShell();
     window.location.hash = "#remote";
@@ -1001,11 +1646,16 @@
   wizardBridge?.onEvent?.((evt) => {
     if (!evt || typeof evt !== "object") return;
     if (evt.type === "step" && evt.message) {
-      wizardStepText = String(evt.message);
-      render();
+      wiz.stepText = String(evt.message);
+      pushWizLog(`== ${evt.message} ==`);
+      if (wiz.open) render();
+    } else if (evt.type === "progress" && evt.message) {
+      pushWizLog(String(evt.message));
+      if (wiz.open) render();
     } else if (evt.type === "error" && evt.message) {
-      wizardStepText = `Error: ${evt.message}`;
-      render();
+      wiz.stepText = `Error: ${evt.message}`;
+      pushWizLog(`ERROR: ${evt.message}`);
+      if (wiz.open) render();
     }
   });
 

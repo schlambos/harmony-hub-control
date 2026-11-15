@@ -175,9 +175,13 @@ function loadShellBundle(shellDir, connectDir = null) {
   if (connectDir && fs.existsSync(path.join(connectDir, "index.html"))) {
     const connectHtmlRaw = fs.readFileSync(path.join(connectDir, "index.html"), "utf8");
     const connectJs = fs.readFileSync(path.join(connectDir, "connect.js"), "utf8");
+    const wizardFlowPath = path.join(connectDir, "..", "wizard", "flow.js");
+    const combinedJs = fs.existsSync(wizardFlowPath)
+      ? `${fs.readFileSync(wizardFlowPath, "utf8")}\n${connectJs}`
+      : connectJs;
     const connectHtml = connectHtmlRaw.replace(
       "<!-- CONNECT_SCRIPT -->",
-      `<script>${connectJs}</script>`
+      () => `<script>${combinedJs}</script>`
     );
     const connectCsp = buildCsp(connectHtml);
     connectBundle = {
