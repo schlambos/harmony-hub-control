@@ -13,8 +13,48 @@ const path = require("node:path");
 const { spawn } = require("node:child_process");
 
 const REPO_ROOT = path.resolve(__dirname, "..", "..", "..");
-const HUB_ROOT_DIR = path.join(REPO_ROOT, "tools", "hub-root");
-const DEFAULT_BRIDGE_SCRIPT = path.join(HUB_ROOT_DIR, "wizard_bridge.py");
+const DEFAULT_RESOURCES_PATH =
+  typeof process.resourcesPath === "string" ? process.resourcesPath : "";
+const IS_PACKAGED_RUNTIME = __dirname.includes("app.asar");
+
+function pathModuleForPlatform(platform = process.platform) {
+  return platform === "win32" ? path.win32 : path.posix;
+}
+
+function resolveHubRootDir({
+  isPackaged,
+  resourcesPath = DEFAULT_RESOURCES_PATH,
+  repoRoot = REPO_ROOT,
+  platform = process.platform,
+  existsSync = fs.existsSync,
+} = {}) {
+  const pathMod = pathModuleForPlatform(platform);
+  const cleanResources = String(resourcesPath ?? "").trim();
+  if (cleanResources && isPackaged !== false) {
+    const bundledDir = pathMod.join(cleanResources, "hub-root");
+    const bundledScript = pathMod.join(bundledDir, "wizard_bridge.py");
+    try {
+      if (isPackaged === true || existsSync(bundledScript)) {
+        return bundledDir;
+      }
+    } catch {
+      if (isPackaged === true) return bundledDir;
+    }
+  }
+  return pathMod.join(repoRoot, "tools", "hub-root");
+}
+
+function resolveBridgeScriptPath(options = {}) {
+  const pathMod = pathModuleForPlatform(options.platform ?? process.platform);
+  return pathMod.join(resolveHubRootDir(options), "wizard_bridge.py");
+}
+
+const HUB_ROOT_DIR = resolveHubRootDir({
+  isPackaged: IS_PACKAGED_RUNTIME ? undefined : false,
+});
+const DEFAULT_BRIDGE_SCRIPT = resolveBridgeScriptPath({
+  isPackaged: IS_PACKAGED_RUNTIME ? undefined : false,
+});
 
 const READONLY_BRIDGE_ACTIONS = new Set([
   "probe",
@@ -51,19 +91,46 @@ const ALLOWED_USB_BACKENDS = new Set(["auto", "hidapi", "hidraw", "winhid"]);
 function resolvePythonExecutable({
   env = process.env,
   platform = process.platform,
-  hubRootDir = HUB_ROOT_DIR,
+  isPackaged,
+  resourcesPath = DEFAULT_RESOURCES_PATH,
+  hubRootDir,
   existsSync = fs.existsSync,
 } = {}) {
   if (env.MELODIOUS_WIZARD_PYTHON && String(env.MELODIOUS_WIZARD_PYTHON).trim()) {
     return String(env.MELODIOUS_WIZARD_PYTHON).trim();
   }
-  const pathMod = platform === "win32" ? path.win32 : path.posix;
+  const pathMod = pathModuleForPlatform(platform);
+  const cleanResources = String(resourcesPath ?? "").trim();
+  if (cleanResources && isPackaged !== false) {
+    const bundledCandidates =
+      platform === "win32"
+        ? [
+            pathMod.join(cleanResources, "wizard-python", "python.exe"),
+            pathMod.join(cleanResources, "wizard-python", "Scripts", "python.exe"),
+          ]
+        : [
+            pathMod.join(cleanResources, "wizard-python", "bin", "python3"),
+            pathMod.join(cleanResources, "wizard-python", "bin", "python"),
+          ];
+    for (const candidate of bundledCandidates) {
+      try {
+        if (existsSync(candidate)) return candidate;
+      } catch {}
+    }
+  }
+  const effectiveHubRootDir =
+    hubRootDir ||
+    resolveHubRootDir({
+      isPackaged: false,
+      platform,
+      existsSync,
+    });
   const venvCandidates =
     platform === "win32"
-      ? [pathMod.join(hubRootDir, ".venv", "Scripts", "python.exe")]
+      ? [pathMod.join(effectiveHubRootDir, ".venv", "Scripts", "python.exe")]
       : [
-          pathMod.join(hubRootDir, ".venv", "bin", "python"),
-          pathMod.join(hubRootDir, ".venv", "bin", "python3"),
+          pathMod.join(effectiveHubRootDir, ".venv", "bin", "python"),
+          pathMod.join(effectiveHubRootDir, ".venv", "bin", "python3"),
         ];
   for (const candidate of venvCandidates) {
     try {
@@ -71,6 +138,23 @@ function resolvePythonExecutable({
     } catch {}
   }
   return platform === "win32" ? "python" : "python3";
+}
+
+function buildIsolatedPythonEnv(baseEnv = process.env, extra = {}) {
+  const cleanEnv = { ...baseEnv };
+  delete cleanEnv.PYTHONHOME;
+  delete cleanEnv.PYTHONPATH;
+  delete cleanEnv.PYTHONSTARTUP;
+  delete cleanEnv.PYTHONUSERBASE;
+  delete cleanEnv.VIRTUAL_ENV;
+  delete cleanEnv.__PYVENV_LAUNCHER__;
+  return {
+    ...cleanEnv,
+    PYTHONUNBUFFERED: "1",
+    PYTHONNOUSERSITE: "1",
+    PYTHONDONTWRITEBYTECODE: "1",
+    ...extra,
+  };
 }
 
 function validatePositiveRemoteId(remoteId) {
@@ -421,11 +505,9 @@ function runWizardBridge({
       child = spawnImpl(pythonPath, [bridgePath, ...bridgeArgs], {
         cwd: path.dirname(bridgePath),
         stdio: ["pipe", "pipe", "pipe"],
-        env: {
-          ...process.env,
-          PYTHONUNBUFFERED: "1",
+        env: buildIsolatedPythonEnv(process.env, {
           HARMONY_NO_PAUSE: "1",
-        },
+        }),
       });
     } catch (err) {
       const cleanErr = scrubSecretText(String(err?.message || err), secretToScrub);
@@ -500,6 +582,23 @@ function runWizardBridge({
         handleLine(stdoutRemainder);
         stdoutRemainder = "";
       }
+      // Keep packaged Contents/Resources/hub-root immutable so Melodious.app's
+      // CodeResources seal is never dirtied by harmony_hub_id.* handoff files
+      // (per-user ~/.harmony-hub/ handoff files remain intact).
+      if (DEFAULT_RESOURCES_PATH) {
+        const resolvedResources = path.resolve(DEFAULT_RESOURCES_PATH);
+        const bridgeDir = path.resolve(path.dirname(bridgePath));
+        if (
+          bridgeDir === resolvedResources ||
+          bridgeDir.startsWith(resolvedResources + path.sep)
+        ) {
+          for (const scratch of ["harmony_hub_id.txt", "harmony_hub_id.json"]) {
+            try {
+              fs.unlinkSync(path.join(bridgeDir, scratch));
+            } catch {}
+          }
+        }
+      }
       const exitCode = typeof code === "number" ? code : -1;
       const errorEvent = [...events].reverse().find((e) => e && e.type === "error");
       const ok = Boolean(!timedOut && exitCode === 0 && resultEvent && resultEvent.ok);
@@ -530,9 +629,13 @@ module.exports = {
   MUTATING_BRIDGE_ACTIONS,
   ALLOWED_BRIDGE_ACTIONS,
   ALLOWED_USB_BACKENDS,
+  DEFAULT_RESOURCES_PATH,
   DEFAULT_BRIDGE_SCRIPT,
   HUB_ROOT_DIR,
+  resolveHubRootDir,
+  resolveBridgeScriptPath,
   resolvePythonExecutable,
+  buildIsolatedPythonEnv,
   validatePositiveRemoteId,
   scrubSecretText,
   buildBridgeArgs,

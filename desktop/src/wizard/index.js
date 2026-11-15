@@ -6,6 +6,8 @@
 // Melodious Root Wizard Slice 1 + Slice 2: Detect & Classify + structured
 // pre-root/root action orchestrator and IPC handlers.
 
+const fs = require("node:fs");
+const path = require("node:path");
 const { isTrustedIpcSender } = require("../security");
 const { normalizeHost } = require("../settings");
 const { scanSsdp, probeHub } = require("../discovery");
@@ -14,9 +16,13 @@ const {
   MUTATING_BRIDGE_ACTIONS,
   ALLOWED_BRIDGE_ACTIONS,
   ALLOWED_USB_BACKENDS,
+  DEFAULT_RESOURCES_PATH,
   DEFAULT_BRIDGE_SCRIPT,
   HUB_ROOT_DIR,
+  resolveHubRootDir,
+  resolveBridgeScriptPath,
   resolvePythonExecutable,
+  buildIsolatedPythonEnv,
   validatePositiveRemoteId,
   scrubSecretText,
   buildBridgeArgs,
@@ -34,6 +40,8 @@ const {
   ALLOWED_INSTALL_SOURCES,
   DEFAULT_INSTALLER_SCRIPT,
   DEFAULT_HELPERS_DIR,
+  INSTALLER_HELPER_NAMES,
+  resolveInstallerPaths,
   validatePositiveHubId,
   validateInstallerHost,
   buildInstallerArgs,
@@ -49,11 +57,42 @@ const WIZARD_CHANNELS = Object.freeze({
   event: "desktop:wizard-event",
 });
 
+function hasBundledWizardResources({
+  resourcesPath = DEFAULT_RESOURCES_PATH,
+  platform = process.platform,
+  existsSync = fs.existsSync,
+} = {}) {
+  if (platform !== "darwin") return false;
+  const cleanResources = String(resourcesPath ?? "").trim();
+  if (!cleanResources) return false;
+  const requiredPaths = [
+    path.posix.join(cleanResources, "wizard-python", "bin", "python3"),
+    path.posix.join(cleanResources, "hub-root", "wizard_bridge.py"),
+    path.posix.join(cleanResources, "hub-root", "dropbearmulti"),
+    path.posix.join(cleanResources, "installer", "install_webui.py"),
+    ...INSTALLER_HELPER_NAMES.map((helperName) =>
+      path.posix.join(cleanResources, "installer", "payload", "helpers", helperName)
+    ),
+  ];
+  for (const target of requiredPaths) {
+    try {
+      if (!existsSync(target)) return false;
+    } catch {
+      return false;
+    }
+  }
+  return true;
+}
+
 function isWizardDevAvailable({
   isPackaged = false,
   platform = process.platform,
+  resourcesPath = DEFAULT_RESOURCES_PATH,
+  existsSync = fs.existsSync,
 } = {}) {
-  return !isPackaged && platform === "darwin";
+  if (platform !== "darwin") return false;
+  if (!isPackaged) return true;
+  return hasBundledWizardResources({ resourcesPath, platform, existsSync });
 }
 
 function validateOptionalHost(rawHost) {
@@ -588,6 +627,7 @@ function registerWizardIpcHandlers({
 
 module.exports = {
   WIZARD_CHANNELS,
+  hasBundledWizardResources,
   isWizardDevAvailable,
   VERDICTS,
   USER_INTENTS,
@@ -601,7 +641,11 @@ module.exports = {
   DEFAULT_INSTALLER_SCRIPT,
   DEFAULT_HELPERS_DIR,
   HUB_ROOT_DIR,
+  resolveHubRootDir,
+  resolveBridgeScriptPath,
+  resolveInstallerPaths,
   resolvePythonExecutable,
+  buildIsolatedPythonEnv,
   validatePositiveRemoteId,
   validatePositiveHubId,
   validateInstallerHost,

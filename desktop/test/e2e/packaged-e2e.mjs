@@ -32,8 +32,12 @@ const APPS = [
 const SHELL_FILES = ["index.html", "harmony-shell.js", "harmony-shell.css", "activity-ui.js", "activity-ui.css"];
 const SRC_FILES = [
   "src/main.js", "src/preload.js", "src/scheme.js", "src/security.js", "src/settings.js",
-  "src/discovery.js", "src/ipc.js", "src/catalog/oauth.js", "src/catalog/client.js",
-  "src/catalog/signin-window.js", "src/connect/index.html", "src/connect/connect.js",
+  "src/discovery.js", "src/ipc.js", "src/updates.js", "src/self-update.js",
+  "src/hub-update.js", "src/hub-update/hub_update.sh", "src/hub-reinstall.js",
+  "src/catalog/oauth.js", "src/catalog/client.js", "src/catalog/signin-window.js",
+  "src/connect/index.html", "src/connect/connect.js",
+  "src/wizard/index.js", "src/wizard/bridge.js", "src/wizard/classifier.js",
+  "src/wizard/flow.js", "src/wizard/installer.js",
 ];
 
 function wait(ms) {
@@ -96,6 +100,131 @@ function checkBundle(appDir, arch) {
   assert.equal(fs.existsSync(path.join(resources, "app-update.yml")), false, "no auto-update config");
   assert.equal(fs.existsSync(path.join(appDir, "Contents", "Library", "LoginItems")), false, "no login item");
   assert.equal(fs.existsSync(path.join(resources, "icon.icns")), true);
+
+  // Root & Setup Wizard extraResources (macOS only, outside app.asar)
+  const expectedMachOArch = arch === "x64" ? "x86_64" : "arm64";
+  const bundledPython = path.join(resources, "wizard-python", "bin", "python3");
+  const bundledPythonReal = path.join(resources, "wizard-python", "bin", "python3.12");
+  const bundledHidSo = path.join(
+    resources,
+    "wizard-python",
+    "lib",
+    "python3.12",
+    "site-packages",
+    "hid.cpython-312-darwin.so"
+  );
+  const bundledBridge = path.join(resources, "hub-root", "wizard_bridge.py");
+  const bundledDropbear = path.join(resources, "hub-root", "dropbearmulti");
+  const bundledInstaller = path.join(resources, "installer", "install_webui.py");
+
+  for (const requiredRes of [
+    bundledPython,
+    bundledPythonReal,
+    path.join(resources, "wizard-python", "lib", "python3.12", "LICENSE.txt"),
+    bundledHidSo,
+    path.join(
+      resources,
+      "wizard-python",
+      "lib",
+      "python3.12",
+      "site-packages",
+      "hidapi-0.15.0.dist-info",
+      "licenses",
+      "LICENSE.txt"
+    ),
+    bundledBridge,
+    path.join(resources, "hub-root", "harmony_usb_bridge.py"),
+    path.join(resources, "hub-root", "harmony_xmpp_root_shell.py"),
+    bundledDropbear,
+    bundledInstaller,
+    path.join(resources, "installer", "payload", "helpers", "codex_flash_free"),
+    path.join(resources, "installer", "payload", "helpers", "hal_multiremote_patch.json"),
+    path.join(resources, "installer", "payload", "helpers", "hal_remotes_patch.json"),
+  ]) {
+    assert.equal(fs.existsSync(requiredRes), true, `expected bundled resource ${requiredRes}`);
+  }
+  for (const excluded of [
+    ".venv",
+    "tests",
+    "__pycache__",
+    ".pytest_cache",
+    "harmony_hub_id.txt",
+    "harmony_hub_id.json",
+  ]) {
+    assert.equal(
+      fs.existsSync(path.join(resources, "hub-root", excluded)),
+      false,
+      `hub-root must not bundle ${excluded}`
+    );
+  }
+
+  assert.equal(
+    spawnSync("lipo", ["-archs", bundledPythonReal], { encoding: "utf8" }).stdout.trim(),
+    expectedMachOArch
+  );
+  assert.equal(
+    spawnSync("lipo", ["-archs", bundledHidSo], { encoding: "utf8" }).stdout.trim(),
+    expectedMachOArch
+  );
+  const hidOtool = spawnSync("otool", ["-L", bundledHidSo], { encoding: "utf8" });
+  assert.equal(hidOtool.status, 0, hidOtool.stderr);
+  assert.doesNotMatch(hidOtool.stdout, /\/opt\/homebrew|\/usr\/local/);
+
+  // Bundled Python imports hid + stdlib and runs wizard_bridge.py --action usb-enumerate cleanly
+  const isolatedEnv = {
+    PATH: "/usr/bin:/bin:/usr/sbin:/sbin",
+    HOME: process.env.HOME || os.homedir(),
+    PYTHONNOUSERSITE: "1",
+    PYTHONDONTWRITEBYTECODE: "1",
+    PYTHONUNBUFFERED: "1",
+    HARMONY_NO_PAUSE: "1",
+  };
+  const runBundledPython = (pyArgs, cwd = path.dirname(bundledBridge)) =>
+    arch === "x64" && process.arch !== "x64"
+      ? spawnSync("arch", ["-x86_64", bundledPython, ...pyArgs], {
+          cwd,
+          env: isolatedEnv,
+          encoding: "utf8",
+          timeout: 20_000,
+        })
+      : spawnSync(bundledPython, pyArgs, {
+          cwd,
+          env: isolatedEnv,
+          encoding: "utf8",
+          timeout: 20_000,
+        });
+
+  const importCheck = runBundledPython([
+    "-I",
+    "-B",
+    "-c",
+    "import hid, ssl, sqlite3, ctypes, json, zipfile; assert hasattr(hid, 'enumerate')",
+  ]);
+  assert.equal(importCheck.status, 0, importCheck.stderr || importCheck.stdout);
+
+  const enumCheck = runBundledPython([
+    "-B",
+    bundledBridge,
+    "--action",
+    "usb-enumerate",
+    "--usb-backend",
+    "hidapi",
+    "--mask",
+  ]);
+  assert.equal(enumCheck.status, 0, enumCheck.stderr || enumCheck.stdout);
+  const ndjsonEvents = enumCheck.stdout
+    .trim()
+    .split(/\r?\n/)
+    .filter(Boolean)
+    .map((line) => JSON.parse(line));
+  assert.ok(ndjsonEvents.length >= 2, "expected step/progress/result NDJSON lines from usb-enumerate");
+  const enumProgress = ndjsonEvents.find((e) => e.type === "progress" && e.step === "usb-enumerate");
+  assert.equal(enumProgress?.status, "ok", JSON.stringify(ndjsonEvents));
+  assert.ok(Array.isArray(enumProgress?.devices));
+  const enumResult = ndjsonEvents.at(-1);
+  assert.equal(enumResult?.type, "result");
+  assert.equal(enumResult?.action, "usb-enumerate");
+  assert.equal(enumResult?.ok, true);
 
   // The app carries exactly src/ and the staged shell, and the shell is
   // byte-identical to what bundle-shell.sh staged from codex_webui's bundle.
@@ -185,7 +314,37 @@ for (const { arch, dir } of APPS) {
         fs.mkdirSync(process.env.MELODIOUS_DIST_SCREENSHOT_DIR, { recursive: true });
         await page.screenshot({ path: path.join(process.env.MELODIOUS_DIST_SCREENSHOT_DIR, `packaged-catalog-${arch}.png`) });
       }
-      console.log(`packaged ${arch}: ad-hoc signed, no URL types/update feed/login item, shell byte-identical, launched, catalog tab ready: OK`);
+
+      // Packaged macOS builds enable the Root & Setup Wizard, render the Connect entry,
+      // and execute wizard:usb-probe end-to-end through Contents/Resources/{wizard-python,hub-root}
+      const state = await page.evaluate(() => window.melodiousDesktop.hub.getState());
+      assert.equal(state.platform, "darwin");
+      assert.equal(state.wizardDevAvailable, true);
+
+      const liveUsbEnum = await page.evaluate(() =>
+        window.melodiousDesktop.wizard.usbProbe({
+          action: "usb-enumerate",
+          usbBackend: "hidapi",
+          mask: true,
+        })
+      );
+      assert.equal(liveUsbEnum.ok, true, JSON.stringify(liveUsbEnum));
+      assert.equal(liveUsbEnum.exitCode, 0);
+      assert.match(liveUsbEnum.pythonPath ?? "", /\/Contents\/Resources\/wizard-python\/bin\/python3$/);
+      assert.equal(liveUsbEnum.usb?.ok, true);
+      assert.ok(Array.isArray(liveUsbEnum.usb?.devices));
+
+      await page.evaluate(async () => {
+        await window.melodiousDesktop.hub.openConnect();
+        window.location.reload();
+      });
+      await page.waitForSelector("#openWizardConnectBtn", { timeout: 15000 });
+      assert.match(
+        await page.textContent("#openWizardConnectBtn"),
+        /Set up a new or unrooted Harmony Hub/
+      );
+
+      console.log(`packaged ${arch}: ad-hoc signed, wizard Python + hidapi + resources verified, launched, catalog & wizard ready: OK`);
     } finally {
       if (electronApp) {
         // E2E quit-on-close is off in a packaged app, so quit explicitly.
@@ -200,5 +359,10 @@ for (const { arch, dir } of APPS) {
       simProc.kill();
       fs.rmSync(userDataDir, { recursive: true, force: true });
     }
+
+    // Re-verify bundle seal after running bundled Python and launching Melodious.app
+    // to prove zero .pyc or runtime files dirtied Contents/Resources.
+    const postRunVerify = spawnSync("codesign", ["--verify", "--deep", "--strict", dir], { encoding: "utf8" });
+    assert.equal(postRunVerify.status, 0, postRunVerify.stderr);
   });
 }

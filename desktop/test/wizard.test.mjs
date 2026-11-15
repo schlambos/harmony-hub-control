@@ -7,6 +7,7 @@ import http from "node:http";
 import os from "node:os";
 import path from "node:path";
 import test from "node:test";
+import { fileURLToPath } from "node:url";
 import { createRequire } from "node:module";
 
 const require = createRequire(import.meta.url);
@@ -15,9 +16,14 @@ const {
   WIZARD_CHANNELS,
   READONLY_BRIDGE_ACTIONS,
   MUTATING_BRIDGE_ACTIONS,
+  hasBundledWizardResources,
   isWizardDevAvailable,
   VERDICTS,
+  resolveHubRootDir,
+  resolveBridgeScriptPath,
+  resolveInstallerPaths,
   resolvePythonExecutable,
+  buildIsolatedPythonEnv,
   validatePositiveRemoteId,
   validatePositiveHubId,
   buildBridgeArgs,
@@ -30,13 +36,79 @@ const {
   createWizardIpcHandlers,
 } = require("../src/wizard/index.js");
 const wizardFlow = require("../src/wizard/flow.js");
+const {
+  isMachOHeader,
+  isMachOFile,
+  collectMachOFiles,
+  signMachOFiles,
+} = require("../scripts/after-pack.js");
 
-test("isWizardDevAvailable gates the unfinished dev UI out of packaged and non-macOS builds", () => {
+test("isWizardDevAvailable enables macOS source & packaged builds (when resources exist) and keeps Windows/Linux disabled", () => {
+  const macRes = "/Applications/Melodious.app/Contents/Resources";
+  const bundledSet = new Set([
+    `${macRes}/wizard-python/bin/python3`,
+    `${macRes}/hub-root/wizard_bridge.py`,
+    `${macRes}/hub-root/dropbearmulti`,
+    `${macRes}/installer/install_webui.py`,
+    `${macRes}/installer/payload/helpers/codex_flash_free`,
+    `${macRes}/installer/payload/helpers/hal_multiremote_patch.json`,
+    `${macRes}/installer/payload/helpers/hal_remotes_patch.json`,
+  ]);
+
   assert.equal(isWizardDevAvailable({ isPackaged: false, platform: "darwin" }), true);
-  assert.equal(isWizardDevAvailable({ isPackaged: true, platform: "darwin" }), false);
+  assert.equal(
+    isWizardDevAvailable({
+      isPackaged: true,
+      platform: "darwin",
+      resourcesPath: macRes,
+      existsSync: (p) => bundledSet.has(p),
+    }),
+    true
+  );
+  // Missing resourcesPath or any missing bundled file fails closed
+  assert.equal(
+    isWizardDevAvailable({ isPackaged: true, platform: "darwin", resourcesPath: "" }),
+    false
+  );
+  assert.equal(
+    isWizardDevAvailable({
+      isPackaged: true,
+      platform: "darwin",
+      resourcesPath: macRes,
+      existsSync: (p) => bundledSet.has(p) && !p.endsWith("dropbearmulti"),
+    }),
+    false
+  );
+  assert.equal(
+    hasBundledWizardResources({
+      resourcesPath: macRes,
+      platform: "darwin",
+      existsSync: (p) => bundledSet.has(p),
+    }),
+    true
+  );
+
+  // Windows and Linux stay strictly false even if resourcesPath is populated
   assert.equal(isWizardDevAvailable({ isPackaged: false, platform: "win32" }), false);
-  assert.equal(isWizardDevAvailable({ isPackaged: true, platform: "win32" }), false);
+  assert.equal(
+    isWizardDevAvailable({
+      isPackaged: true,
+      platform: "win32",
+      resourcesPath: macRes,
+      existsSync: () => true,
+    }),
+    false
+  );
   assert.equal(isWizardDevAvailable({ isPackaged: false, platform: "linux" }), false);
+  assert.equal(
+    isWizardDevAvailable({
+      isPackaged: true,
+      platform: "linux",
+      resourcesPath: macRes,
+      existsSync: () => true,
+    }),
+    false
+  );
 });
 
 test("buildBridgeArgs enforces action allowlist, confirmAction guards, numeric remoteId, and forbids passwords on argv", () => {
@@ -143,20 +215,43 @@ test("buildBridgeArgs enforces action allowlist, confirmAction guards, numeric r
   );
 });
 
-test("resolvePythonExecutable prefers MELODIOUS_WIZARD_PYTHON then .venv/bin/python", () => {
+test("resolvePythonExecutable, bridge/installer packaged resource resolvers, and isolated Python env work across packaged & source modes", () => {
+  const macRes = "/Applications/Melodious.app/Contents/Resources";
+
+  // 1. MELODIOUS_WIZARD_PYTHON always overrides both packaged and .venv Python
   assert.equal(
     resolvePythonExecutable({
       env: { MELODIOUS_WIZARD_PYTHON: "/custom/python3" },
+      isPackaged: true,
+      resourcesPath: macRes,
       existsSync: () => true,
     }),
     "/custom/python3"
   );
+
+  // 2. Packaged macOS resolves Contents/Resources/wizard-python/bin/python3
   assert.equal(
     resolvePythonExecutable({
       env: {},
       platform: "darwin",
+      isPackaged: true,
+      resourcesPath: macRes,
+      existsSync: (p) => p === `${macRes}/wizard-python/bin/python3`,
+    }),
+    `${macRes}/wizard-python/bin/python3`
+  );
+
+  // 3. Source checkout ignores resourcesPath when isPackaged=false and prefers .venv
+  assert.equal(
+    resolvePythonExecutable({
+      env: {},
+      platform: "darwin",
+      isPackaged: false,
+      resourcesPath: macRes,
       hubRootDir: "/repo/tools/hub-root",
-      existsSync: (p) => p === "/repo/tools/hub-root/.venv/bin/python",
+      existsSync: (p) =>
+        p === `${macRes}/wizard-python/bin/python3` ||
+        p === "/repo/tools/hub-root/.venv/bin/python",
     }),
     "/repo/tools/hub-root/.venv/bin/python"
   );
@@ -164,6 +259,7 @@ test("resolvePythonExecutable prefers MELODIOUS_WIZARD_PYTHON then .venv/bin/pyt
     resolvePythonExecutable({
       env: {},
       platform: "win32",
+      isPackaged: false,
       hubRootDir: "C:\\repo\\tools\\hub-root",
       existsSync: (p) => p === "C:\\repo\\tools\\hub-root\\.venv\\Scripts\\python.exe",
     }),
@@ -173,11 +269,165 @@ test("resolvePythonExecutable prefers MELODIOUS_WIZARD_PYTHON then .venv/bin/pyt
     resolvePythonExecutable({
       env: {},
       platform: "darwin",
+      isPackaged: false,
       hubRootDir: "/repo/tools/hub-root",
       existsSync: () => false,
     }),
     "python3"
   );
+
+  // 4. Bridge & installer paths resolve from resourcesPath when packaged and repoRoot in source mode
+  assert.equal(
+    resolveHubRootDir({
+      isPackaged: true,
+      platform: "darwin",
+      resourcesPath: macRes,
+      repoRoot: "/repo",
+    }),
+    `${macRes}/hub-root`
+  );
+  assert.equal(
+    resolveBridgeScriptPath({
+      isPackaged: true,
+      platform: "darwin",
+      resourcesPath: macRes,
+      repoRoot: "/repo",
+    }),
+    `${macRes}/hub-root/wizard_bridge.py`
+  );
+  assert.equal(
+    resolveBridgeScriptPath({
+      isPackaged: false,
+      platform: "darwin",
+      resourcesPath: macRes,
+      repoRoot: "/repo",
+    }),
+    "/repo/tools/hub-root/wizard_bridge.py"
+  );
+
+  assert.deepEqual(
+    resolveInstallerPaths({
+      isPackaged: true,
+      platform: "darwin",
+      resourcesPath: macRes,
+      repoRoot: "/repo",
+    }),
+    {
+      installerScriptPath: `${macRes}/installer/install_webui.py`,
+      helpersDirPath: `${macRes}/installer/payload/helpers`,
+    }
+  );
+  assert.deepEqual(
+    resolveInstallerPaths({
+      isPackaged: false,
+      platform: "darwin",
+      resourcesPath: macRes,
+      repoRoot: "/repo",
+    }),
+    {
+      installerScriptPath: "/repo/install_webui.py",
+      helpersDirPath: "/repo/payload/helpers",
+    }
+  );
+
+  // 5. Isolated Python env scrubs host Python variables and prevents .pyc writes in Resources
+  const isolated = buildIsolatedPythonEnv(
+    {
+      PATH: "/usr/bin:/bin",
+      PYTHONHOME: "/opt/homebrew/Cellar/python",
+      PYTHONPATH: "/Users/test/custom-site",
+      PYTHONUSERBASE: "/Users/test/.local",
+      VIRTUAL_ENV: "/Users/test/.venv",
+      __PYVENV_LAUNCHER__: "/Library/Frameworks/Python.framework/Versions/3.12/bin/python3",
+    },
+    { HARMONY_NO_PAUSE: "1" }
+  );
+  assert.equal(isolated.PATH, "/usr/bin:/bin");
+  assert.equal(isolated.PYTHONHOME, undefined);
+  assert.equal(isolated.PYTHONPATH, undefined);
+  assert.equal(isolated.PYTHONUSERBASE, undefined);
+  assert.equal(isolated.VIRTUAL_ENV, undefined);
+  assert.equal(isolated.__PYVENV_LAUNCHER__, undefined);
+  assert.equal(isolated.PYTHONNOUSERSITE, "1");
+  assert.equal(isolated.PYTHONDONTWRITEBYTECODE, "1");
+  assert.equal(isolated.PYTHONUNBUFFERED, "1");
+  assert.equal(isolated.HARMONY_NO_PAUSE, "1");
+});
+
+test("after-pack.js detects Mach-O binaries/dylibs/.so and skips ELF MIPS binaries (dropbearmulti, codex_flash_free), scripts, and symlinks", () => {
+  // Thin 64-bit LE (arm64 / x86_64) & BE, thin 32-bit LE & BE, fat Mach-O
+  assert.equal(isMachOHeader(Buffer.from([0xcf, 0xfa, 0xed, 0xfe, 0, 0, 0, 0])), true);
+  assert.equal(isMachOHeader(Buffer.from([0xfe, 0xed, 0xfa, 0xcf, 0, 0, 0, 0])), true);
+  assert.equal(isMachOHeader(Buffer.from([0xce, 0xfa, 0xed, 0xfe, 0, 0, 0, 0])), true);
+  assert.equal(isMachOHeader(Buffer.from([0xfe, 0xed, 0xfa, 0xce, 0, 0, 0, 0])), true);
+  assert.equal(isMachOHeader(Buffer.from([0xca, 0xfe, 0xba, 0xbe, 0, 0, 0, 2])), true);
+
+  // ELF (\x7fELF), Java .class (0xcafebabe major=52), shebang, JSON, short buffer
+  assert.equal(isMachOHeader(Buffer.from([0x7f, 0x45, 0x4c, 0x46, 1, 2, 1, 0])), false);
+  assert.equal(isMachOHeader(Buffer.from([0xca, 0xfe, 0xba, 0xbe, 0, 0, 0, 52])), false);
+  assert.equal(isMachOHeader(Buffer.from("#!/usr/bin/env python3\n", "utf8")), false);
+  assert.equal(isMachOHeader(Buffer.from('{"ok":true}\n', "utf8")), false);
+  assert.equal(isMachOHeader(Buffer.from([0xcf, 0xfa])), false);
+
+  const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../..");
+  const realDropbear = path.join(repoRoot, "tools", "hub-root", "dropbearmulti");
+  const realFlashFree = path.join(repoRoot, "payload", "helpers", "codex_flash_free");
+  assert.equal(isMachOFile(realDropbear), false, "MIPS ELF dropbearmulti must not be detected as Mach-O");
+  assert.equal(isMachOFile(realFlashFree), false, "MIPS ELF codex_flash_free must not be detected as Mach-O");
+
+  const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "melodious-afterpack-test-"));
+  try {
+    const pyBinDir = path.join(tmpDir, "wizard-python", "bin");
+    const pyLibDir = path.join(tmpDir, "wizard-python", "lib");
+    const siteDir = path.join(pyLibDir, "python3.12", "site-packages");
+    const hubRootDir = path.join(tmpDir, "hub-root");
+    const helpersDir = path.join(tmpDir, "installer", "payload", "helpers");
+    fs.mkdirSync(pyBinDir, { recursive: true });
+    fs.mkdirSync(siteDir, { recursive: true });
+    fs.mkdirSync(hubRootDir, { recursive: true });
+    fs.mkdirSync(helpersDir, { recursive: true });
+
+    const fakeMachO64 = Buffer.alloc(32);
+    fakeMachO64.writeUInt32LE(0xfeedfacf, 0);
+
+    const pyExe = path.join(pyBinDir, "python3.12");
+    const libPy = path.join(pyLibDir, "libpython3.12.dylib");
+    const hidSo = path.join(siteDir, "hid.cpython-312-darwin.so");
+    fs.writeFileSync(pyExe, fakeMachO64);
+    fs.writeFileSync(libPy, fakeMachO64);
+    fs.writeFileSync(hidSo, fakeMachO64);
+
+    if (process.platform !== "win32") {
+      fs.symlinkSync("python3.12", path.join(pyBinDir, "python3"));
+    }
+
+    // Copy real MIPS ELF binaries + Python/JSON files into the resource tree
+    fs.copyFileSync(realDropbear, path.join(hubRootDir, "dropbearmulti"));
+    fs.writeFileSync(path.join(hubRootDir, "wizard_bridge.py"), "#!/usr/bin/env python3\n");
+    fs.copyFileSync(realFlashFree, path.join(helpersDir, "codex_flash_free"));
+    fs.writeFileSync(path.join(helpersDir, "hal_remotes_patch.json"), "{}\n");
+
+    const collected = collectMachOFiles([
+      path.join(tmpDir, "wizard-python"),
+      hubRootDir,
+      path.join(tmpDir, "installer"),
+    ]);
+    assert.deepEqual(collected, [libPy, hidSo, pyExe], "libraries/extensions signed before executable; ELF/symlinks/scripts skipped");
+
+    const signedCalls = [];
+    signMachOFiles([tmpDir], {
+      execFileSyncImpl: (cmd, args) => {
+        signedCalls.push([cmd, args]);
+      },
+    });
+    assert.deepEqual(signedCalls, [
+      ["codesign", ["--force", "--sign", "-", libPy]],
+      ["codesign", ["--force", "--sign", "-", hidSo]],
+      ["codesign", ["--force", "--sign", "-", pyExe]],
+    ]);
+  } finally {
+    fs.rmSync(tmpDir, { recursive: true, force: true });
+  }
 });
 
 test("runWizardBridge parses fragmented NDJSON chunks, pipes stdinJson without leaking secrets to argv, and spawns real wizard_bridge.py", async () => {
@@ -399,10 +649,10 @@ test("detectAndClassify, runWizardAction, and wizard:* IPC handlers enforce send
   const trustedEvent = { sender: mainWin.webContents, senderFrame: mainFrame };
   const untrustedEvent = { sender: {}, senderFrame: mainFrame };
 
-  // 1. Test isWizardDevAvailable gating on IPC handlers (packaged / non-macOS disabled)
+  // 1. Test isWizardDevAvailable gating on IPC handlers (non-macOS or missing resources disabled)
   const disabledHandlers = createWizardIpcHandlers({
     getMainWindow: () => mainWin,
-    isWizardAvailable: () => isWizardDevAvailable({ isPackaged: true, platform: "darwin" }),
+    isWizardAvailable: () => isWizardDevAvailable({ isPackaged: true, platform: "win32" }),
   });
   await assert.rejects(
     () => disabledHandlers[WIZARD_CHANNELS.detectClassify](trustedEvent, {}),
@@ -914,7 +1164,7 @@ test("wizard:install-hub IPC enforces sender check, isWizardAvailable, native zi
 
   const gatedHandlers = createWizardIpcHandlers({
     getMainWindow: () => mainWin,
-    isWizardAvailable: () => isWizardDevAvailable({ isPackaged: true, platform: "darwin" }),
+    isWizardAvailable: () => isWizardDevAvailable({ isPackaged: true, platform: "win32" }),
   });
   await assert.rejects(
     () =>

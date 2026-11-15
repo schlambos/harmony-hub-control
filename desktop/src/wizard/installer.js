@@ -32,16 +32,69 @@ const { probeHub } = require("../discovery");
 const { RELEASES_URL, isGitHubUrl, latestHubRelease } = require("../updates");
 const { downloadVerified } = require("../self-update");
 const { readLocalHubZip } = require("../hub-update");
-const { resolvePythonExecutable } = require("./bridge");
+const {
+  DEFAULT_RESOURCES_PATH,
+  buildIsolatedPythonEnv,
+  resolvePythonExecutable,
+} = require("./bridge");
 
 const REPO_ROOT = path.resolve(__dirname, "..", "..", "..");
-const DEFAULT_INSTALLER_SCRIPT = path.join(REPO_ROOT, "install_webui.py");
-const DEFAULT_HELPERS_DIR = path.join(REPO_ROOT, "payload", "helpers");
+const IS_PACKAGED_RUNTIME = __dirname.includes("app.asar");
 const INSTALLER_HELPER_NAMES = Object.freeze([
   "codex_flash_free",
   "hal_multiremote_patch.json",
   "hal_remotes_patch.json",
 ]);
+
+function resolveInstallerPaths({
+  isPackaged,
+  resourcesPath = DEFAULT_RESOURCES_PATH,
+  repoRoot = REPO_ROOT,
+  platform = process.platform,
+  existsSync = fs.existsSync,
+} = {}) {
+  const pathMod = platform === "win32" ? path.win32 : path.posix;
+  const cleanResources = String(resourcesPath ?? "").trim();
+  if (cleanResources && isPackaged !== false) {
+    const bundledInstaller = pathMod.join(
+      cleanResources,
+      "installer",
+      "install_webui.py"
+    );
+    const bundledHelpers = pathMod.join(
+      cleanResources,
+      "installer",
+      "payload",
+      "helpers"
+    );
+    try {
+      if (isPackaged === true || existsSync(bundledInstaller)) {
+        return {
+          installerScriptPath: bundledInstaller,
+          helpersDirPath: bundledHelpers,
+        };
+      }
+    } catch {
+      if (isPackaged === true) {
+        return {
+          installerScriptPath: bundledInstaller,
+          helpersDirPath: bundledHelpers,
+        };
+      }
+    }
+  }
+  return {
+    installerScriptPath: pathMod.join(repoRoot, "install_webui.py"),
+    helpersDirPath: pathMod.join(repoRoot, "payload", "helpers"),
+  };
+}
+
+const {
+  installerScriptPath: DEFAULT_INSTALLER_SCRIPT,
+  helpersDirPath: DEFAULT_HELPERS_DIR,
+} = resolveInstallerPaths({
+  isPackaged: IS_PACKAGED_RUNTIME ? undefined : false,
+});
 
 const ALLOWED_INSTALL_SOURCES = new Set(["latest", "local"]);
 
@@ -347,10 +400,7 @@ function runStagedInstaller({
       child = spawnImpl(pythonPath, installerArgs, {
         cwd,
         stdio: ["pipe", "pipe", "pipe"],
-        env: {
-          ...process.env,
-          PYTHONUNBUFFERED: "1",
-        },
+        env: buildIsolatedPythonEnv(process.env),
       });
     } catch (err) {
       finish({
@@ -770,6 +820,7 @@ module.exports = {
   DEFAULT_INSTALLER_SCRIPT,
   DEFAULT_HELPERS_DIR,
   INSTALLER_HELPER_NAMES,
+  resolveInstallerPaths,
   validatePositiveHubId,
   validateInstallerHost,
   buildInstallerArgs,

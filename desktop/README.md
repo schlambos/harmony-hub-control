@@ -44,13 +44,15 @@ node desktop/test/hub-emu.mjs                 # catalog import POSTs against too
 
 `test:dist` checks each built `Melodious.app`: the ad-hoc signature, one
 architecture per build, the app's own LC_UUID, an Info.plist with the Local
-Network text and no URL scheme, update feed or login item, and a shell
-byte-identical to `build/shell/`. It then launches the app
-against the simulator (on loopback, which Local Network privacy doesn't
-cover, so the LAN prompt is a manual check) and opens the catalog tab. It never signs in to
-Logitech, and it runs with `--use-mock-keychain` so it doesn't touch your
-login Keychain. The x64 build runs under Rosetta on Apple silicon; without
-Rosetta it is skipped.
+Network text and no URL scheme, update feed or login item, a shell
+byte-identical to `build/shell/`, and the bundled Root & Setup Wizard Python +
+`hidapi` runtime (`import hid` and `wizard_bridge.py --action usb-enumerate`).
+It then launches the app against the simulator (on loopback, which Local Network
+privacy doesn't cover, so the LAN prompt is a manual check), checks the catalog
+tab, and verifies the Root & Setup Wizard entry renders on the Connect screen.
+It never signs in to Logitech, and it runs with `--use-mock-keychain` so it
+doesn't touch your login Keychain. The x64 build runs under Rosetta on Apple
+silicon; without Rosetta it is skipped.
 
 None of the tests contact Logitech or a real hub.
 
@@ -64,7 +66,9 @@ npm run dist
 npm run test:dist
 ```
 
-`npm run dist` stages the shell, then runs
+`npm run dist` stages the shell (`scripts/bundle-shell.sh`), stages the
+SHA-256-pinned Root & Setup Wizard Python + `hidapi` runtimes for `arm64` and
+`x64` (`scripts/stage-wizard-runtime.sh --arch all`), then runs
 `electron-builder --mac --arm64 --x64` with `electron-builder.yml`:
 
 | File | What it is |
@@ -74,6 +78,19 @@ npm run test:dist
 
 - Separate builds per architecture, not one universal app, which would
   double the download.
+- `scripts/stage-wizard-runtime.sh` downloads, caches (`build/wizard-cache/`,
+  gitignored) and verifies by SHA-256:
+  - `astral-sh/python-build-standalone` `cpython-3.12.16+20261110`
+    (`install_only_stripped` for `aarch64-apple-darwin` and
+    `x86_64-apple-darwin`; PSF License 2.0 / BSD-3-Clause, keeping
+    `lib/python3.12/LICENSE.txt`).
+  - PyPI `hidapi==0.15.0` binary wheels (`cp312` `arm64` and `x86_64`;
+    dual-licensed BSD-3-Clause / GPL-3.0, keeping
+    `site-packages/hidapi-0.15.0.dist-info/licenses/LICENSE*.txt`, linked only
+    against macOS `IOKit`, `CoreFoundation`, `AppKit` and `libSystem.B`).
+  `mac.extraResources` copies the matching architecture's `wizard-python`,
+  `tools/hub-root` (excluding `.venv`, `tests` and caches), `install_webui.py`
+  and `payload/helpers` into `Contents/Resources/` outside `app.asar`.
 - Ad-hoc signed (`identity: "-"`, hardened runtime off). No Developer ID,
   no notarisation, so macOS asks before the first launch (see below).
 - No update feed, no URL scheme, no login item and no helper beyond
@@ -86,7 +103,11 @@ npm run test:dist
   can write, such as /Applications for an admin. It doesn't work from the
   disk image or a translocated copy, and the app says so.
 - `scripts/after-pack.js` gives the main executable its own LC_UUID before
-  signing, derived from the bundle id and arch (`scripts/macho-uuid.js`).
+  signing, derived from the bundle id and arch (`scripts/macho-uuid.js`), and
+  ad-hoc signs every nested Mach-O binary, dylib and `.so` inside
+  `Contents/Resources/wizard-python` (skipping MIPS ELF hub binaries such as
+  `dropbearmulti` and `codex_flash_free`) before `electron-builder` seals the
+  bundle.
   macOS Local Network privacy identifies apps by that UUID, and Electron's
   prebuilt executable has the same one in every app on the same version, so
   without it macOS files Melodious under another Electron app (often the
@@ -127,7 +148,9 @@ npm run test:dist:win
 - The app doesn't replace itself on Windows. An update notice opens the
   release page, and only for a release that carries the Windows installer.
 - Saved sign-ins are encrypted with Windows data protection (DPAPI).
-- The USB rooting tools are not part of this app.
+- The Root & Setup Wizard and USB rooting tools remain macOS-only (`dist:win`
+  does not bundle the wizard Python runtime or root helpers, and
+  `wizardDevAvailable` stays `false` on Windows).
 
 The app icon is `resources/icon.png`, made from the Melodious artwork:
 

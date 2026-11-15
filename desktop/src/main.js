@@ -138,6 +138,7 @@ function getWizardDevAvailable() {
   return isWizardDevAvailable({
     isPackaged: app.isPackaged,
     platform: process.platform,
+    resourcesPath: process.resourcesPath,
   });
 }
 
@@ -568,6 +569,7 @@ function registerIpcHandlers() {
 
   ipcMain.handle("desktop:discover-hubs", async (event) => {
     checkSender(event);
+    if (process.env.MELODIOUS_E2E === "1") return [];
     return discoverHubs({
       authHeader: settingsStore.getHubAuthHeader(),
     });
