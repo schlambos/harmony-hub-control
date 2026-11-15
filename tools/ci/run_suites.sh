@@ -63,6 +63,7 @@ activity-json-semantic|sh tools/activity_json_semantic_smoke.sh
 activity-offline-guard|sh tools/activity_offline_guard.sh
 hbus-notification|cc -std=c99 -O2 -o $LOGS/codex_hbus_host payload/source/codex_hbus.c && python3 tools/hbus_notification_smoke.py $LOGS/codex_hbus_host
 lua-barrier|luajit $LUA/codexactivity-barrier-test.lua
+lua-fresh-hub|luajit $LUA/codexactivity-fresh-hub-test.lua
 lua-device-screens|luajit $LUA/codexactivity-device-screens-test.lua
 lua-ha-devices|luajit $LUA/codexactivity-ha-devices-test.lua
 lua-androidtv-devices|luajit $LUA/codexactivity-androidtv-devices-test.lua

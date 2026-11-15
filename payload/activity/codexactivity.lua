@@ -41,6 +41,11 @@ local workerTask
 local barrierTask
 local stopRequested = false
 local tokenCounter = 0
+-- A blank boot needs harmonyengine's loadAll(), not its named-resource path:
+-- the latter is a no-op until loadAll() has initialized the account. Keep
+-- asking for "all" until that load is accepted, including reloads requested by
+-- activity commits in the same boot.
+local needFullEngineLoad = false
 
 local function new(self)
   local obj = {}
@@ -207,13 +212,14 @@ local function reloadActivityEngine()
   if not system.isMessageRegistered("config_new") then
     return nil, "Harmony activity engine reload handler is unavailable"
   end
-  local ok, result = pcall(
-    system.sendMessage,
-    "config_new",
+  local names = needFullEngineLoad and "all" or
     {"ActivityList", "FunctionList", "MapList"}
-  )
+  local ok, result = pcall(system.sendMessage, "config_new", names)
   if not ok or result ~= true then
     return nil, "Harmony activity engine rejected the local resource reload"
+  end
+  if names == "all" then
+    needFullEngineLoad = false
   end
   return true
 end
@@ -2874,31 +2880,40 @@ end
 -- picks it up.
 local function reloadRequestedResources()
   local data = readFile(RESOURCE_RELOAD_FLAG)
-  if not data then
+  if not data and not needFullEngineLoad then
     return
   end
   if not system.isMessageRegistered("config_new") or
       resources.isAnySyncInProgress() then
     return
   end
-  os.remove(RESOURCE_RELOAD_FLAG)
+  if data then
+    os.remove(RESOURCE_RELOAD_FLAG)
+  end
   local names = {}
-  for name in string.gmatch(data, "[%w]+") do
-    if name == "all" then
-      names = "all"
-      break
-    end
-    if RELOADABLE_RESOURCES[name] then
-      table.insert(names, name)
+  if data then
+    for name in string.gmatch(data, "[%w]+") do
+      if name == "all" then
+        names = "all"
+        break
+      end
+      if RELOADABLE_RESOURCES[name] then
+        table.insert(names, name)
+      end
     end
   end
-  if type(names) == "table" and #names == 0 then
+  if needFullEngineLoad then
+    names = "all"
+  elseif type(names) == "table" and #names == 0 then
     names = {"DeviceList", "ProtocolList"}
   end
   local ok, result = pcall(system.sendMessage, "config_new", names)
   if not ok or result ~= true then
     log.warning("codexactivity: requested resource reload failed:", tostring(result))
     return
+  end
+  if names == "all" then
+    needFullEngineLoad = false
   end
   publishLocalRevision()
   log.notice("codexactivity: reloaded resources requested by codex_webui")
@@ -2963,6 +2978,7 @@ local function seedBlankHub()
   if #absent == 0 then
     return
   end
+  needFullEngineLoad = true
   local names = {}
   for _, entry in ipairs(absent) do
     local etag = localEtag()
@@ -2977,10 +2993,11 @@ local function seedBlankHub()
     end
     table.insert(names, entry.name)
   end
-  -- The engine loads them through the reload codex_webui's own edits use.
+  -- Only config_new "all" reaches harmonyengine's loadAll(). Named resource
+  -- reloads silently succeed without initializing account on a blank hub.
   local flag = io.open(RESOURCE_RELOAD_FLAG, "w")
   if flag then
-    flag:write(table.concat(names, "\n"), "\n")
+    flag:write("all\n")
     flag:close()
   end
   log.notice("codexactivity: blank hub; created empty", table.concat(names, ", "))
