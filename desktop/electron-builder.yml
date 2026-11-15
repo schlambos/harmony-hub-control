@@ -36,6 +36,48 @@ mac:
   darkModeSupport: true
   extendInfo:
     NSLocalNetworkUsageDescription: Melodious connects to your Harmony Hub on your local network.
+  # Root & Setup Wizard runtime and helpers (macOS only; kept out of app.asar
+  # and out of Windows builds).
+  extraResources:
+    - from: build/wizard-python/${arch}
+      to: wizard-python
+      filter:
+        - "**/*"
+        - "!**/__pycache__"
+        - "!**/__pycache__/**"
+        - "!**/*.pyc"
+        - "!**/*.pyo"
+        - "!**/.DS_Store"
+    - from: ../tools/hub-root
+      to: hub-root
+      filter:
+        - "**/*"
+        - "!.venv"
+        - "!.venv/**"
+        - "!tests"
+        - "!tests/**"
+        - "!__pycache__"
+        - "!**/__pycache__"
+        - "!**/__pycache__/**"
+        - "!.pytest_cache"
+        - "!**/.pytest_cache"
+        - "!**/.pytest_cache/**"
+        - "!**/*.pyc"
+        - "!**/*.pyo"
+        - "!.git*"
+        - "!**/.git*"
+        - "!.github"
+        - "!.github/**"
+        - "!harmony_hub_id.*"
+        - "!**/.DS_Store"
+    - from: ../install_webui.py
+      to: installer/install_webui.py
+    - from: ../payload/helpers
+      to: installer/payload/helpers
+      filter:
+        - codex_flash_free
+        - hal_multiremote_patch.json
+        - hal_remotes_patch.json
   # Ad-hoc signature: no Developer ID and no notarisation. Hardened runtime
   # stays off, as ad-hoc signing needs.
   identity: "-"

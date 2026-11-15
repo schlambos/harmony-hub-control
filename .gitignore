@@ -75,6 +75,8 @@ tools/webui-sim/build/
 node_modules/
 desktop/node_modules/
 desktop/build/
+desktop/build/wizard-python/
+desktop/build/wizard-cache/
 desktop/dist/
 .omo/
 .playwright-mcp/

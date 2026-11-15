@@ -7,10 +7,11 @@
   "main": "src/main.js",
   "scripts": {
     "bundle:shell": "sh scripts/bundle-shell.sh",
+    "stage:wizard": "sh scripts/stage-wizard-runtime.sh",
     "start": "sh scripts/bundle-shell.sh && electron .",
     "test": "node --test test/*.test.mjs",
     "test:e2e": "sh scripts/bundle-shell.sh && node --test test/e2e/shell-e2e.mjs",
-    "dist": "sh scripts/bundle-shell.sh && electron-builder --mac --arm64 --x64",
+    "dist": "sh scripts/bundle-shell.sh && sh scripts/stage-wizard-runtime.sh --arch all && electron-builder --mac --arm64 --x64",
     "dist:win": "sh scripts/bundle-shell.sh && electron-builder --win --x64 --publish never",
     "test:dist:win": "node --test test/e2e/packaged-win-e2e.mjs",
     "test:dist": "node --test test/e2e/packaged-e2e.mjs"
