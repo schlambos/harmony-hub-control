@@ -92,6 +92,7 @@ test("packaged Melodious for Windows: contents, launch against webui-sim, catalo
     const state = await page.evaluate(() => window.melodiousDesktop.hub.getState());
     assert.equal(state.platform, "win32");
     assert.equal(state.encryptionAvailable, true);
+    assert.equal(state.wizardDevAvailable, false);
   } finally {
     if (electronApp) await electronApp.close().catch(() => {});
     simProc.kill();

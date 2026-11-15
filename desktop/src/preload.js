@@ -65,6 +65,18 @@ contextBridge.exposeInMainWorld("melodiousDesktop", {
       const { firmwareFile: _ignoredFirmwareFile, ...safeArgs } = args;
       return ipcRenderer.invoke("wizard:run-action", safeArgs);
     },
+    installHub: (args) => {
+      if (!args || typeof args !== "object" || Array.isArray(args)) {
+        return ipcRenderer.invoke("wizard:install-hub", {});
+      }
+      // Never forward renderer-supplied file paths; local hub zips are chosen via native dialog in main.
+      const {
+        hubZipPath: _ignoredHubZipPath,
+        keyPath: _ignoredKeyPath,
+        ...safeArgs
+      } = args;
+      return ipcRenderer.invoke("wizard:install-hub", safeArgs);
+    },
     onEvent: (callback) => {
       if (typeof callback !== "function") return;
       ipcRenderer.on("desktop:wizard-event", (_event, info) => callback(info));

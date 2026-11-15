@@ -596,3 +596,351 @@ test("Playwright _electron end-to-end shell suite against webui-sim", { timeout:
     }
   }
 });
+
+test(
+  "Playwright _electron Root & Setup Wizard 1-2-3 guided flow and packaged gating",
+  { timeout: 120_000 },
+  async () => {
+    const userDataDir = fs.mkdtempSync(
+      path.join(os.tmpdir(), "melodious-wiz-e2e-userdata-")
+    );
+    const wizSimPort = SIM_PORT + 11;
+    const simProc = spawn(
+      process.execPath,
+      [path.join(REPO_ROOT, "tools/webui-sim/server.mjs")],
+      {
+        env: { ...process.env, PORT: String(wizSimPort) },
+        stdio: "ignore",
+      }
+    );
+
+    let electronApp = null;
+    try {
+      await waitForHttp(`http://127.0.0.1:${wizSimPort}/api/system-status`);
+
+      electronApp = await electron.launch({
+        args: [DESKTOP_DIR],
+        env: {
+          ...process.env,
+          MELODIOUS_E2E: "1",
+          MELODIOUS_USER_DATA_DIR: userDataDir,
+        },
+      });
+
+      const page = await electronApp.firstWindow();
+      await page.setViewportSize({ width: 1280, height: 840 });
+      await page.waitForSelector("#connectForm", { timeout: 10000 });
+
+      // 1. Packaged / gated-off check (isWizardAvailable = false): hides all wizard UI & rejects IPC
+      await electronApp.evaluate(() => {
+        globalThis.__melodiousWizardAvailable = false;
+      });
+      await page.reload();
+      await page.waitForSelector("#connectForm", { timeout: 10000 });
+      assert.equal(await page.locator("#openWizardConnectBtn").count(), 0);
+      assert.equal(await page.locator("#hubSetupWizard").count(), 0);
+
+      await electronApp.evaluate(({ Menu }) => {
+        const menu = Menu.getApplicationMenu();
+        const sub = menu.items[0]?.submenu;
+        sub?.items.find((i) => i.label === "Settings…")?.click();
+      });
+      await page.waitForSelector("#clientIdInput", { timeout: 10000 });
+      assert.equal(await page.locator("#openWizardSettingsBtn").count(), 0);
+
+      const gatedErr = await page.evaluate(async () => {
+        try {
+          await window.melodiousDesktop.wizard.detectAndClassify({});
+          return "";
+        } catch (err) {
+          return String(err?.message || err);
+        }
+      });
+      assert.match(gatedErr, /Root Wizard dev actions are not available/);
+
+      // 2. Enable source-mode wizard availability + install deterministic offline wizard stubs
+      await electronApp.evaluate((_electron, { simPort }) => {
+        const classifyHubSignals = globalThis.__melodiousClassifyHubSignals;
+        globalThis.__melodiousWizardAvailable = true;
+        globalThis.__wizardActionCalls = [];
+        globalThis.__wizardInstallCalls = [];
+
+        globalThis.__melodiousWizardOverrides = {
+          detectAndClassify: async (opts) => {
+            opts.onEvent?.({
+              type: "step",
+              step: "usb-preflight",
+              message: "Reading /rf/deviceinfo over USB HID",
+            });
+            const classified = classifyHubSignals({
+              userIntent: opts.userIntent,
+              ssdpCandidates: [],
+              webUiProbe: null,
+              bridgeResult: {
+                usb: {
+                  ok: true,
+                  connected: true,
+                  deviceCount: 1,
+                  device: { backend: "hidapi", vendorId: "046D", productId: "C129" },
+                  preflight: { ok: true, hasHubId: false, pairedDeviceCount: 0 },
+                  sysinfo: { ok: true, fwVer: "4.15.600", skinDecimal: 106, ramSize: "64MB" },
+                  provisionInfo: { ok: true, provisioned: false, mode: null },
+                  discoveryInfo: { ok: true, provisioned: false, currentFwVersion: "4.15.600" },
+                  usbWedge: false,
+                },
+                lan: { ok: false, skipped: true, ports: {} },
+              },
+              mask: opts.mask,
+            });
+            return {
+              ok: true,
+              bridgeOk: true,
+              bridgeExitCode: 0,
+              pythonPath: "python3",
+              bridgeError: null,
+              events: [],
+              ...classified,
+            };
+          },
+          runWizardAction: async (opts) => {
+            globalThis.__wizardActionCalls.push({
+              action: opts.action,
+              confirmAction: opts.confirmAction,
+              host: opts.host,
+              ssid: opts.ssid,
+              hasPassword: Boolean(opts.password),
+              passwordValue: opts.password,
+              remoteId: opts.remoteId,
+              remoteIdType: typeof opts.remoteId,
+            });
+            opts.onEvent?.({
+              type: "step",
+              step: opts.action,
+              message: `Simulated ${opts.action}`,
+            });
+            if (opts.action === "usb-wifi-scan") {
+              return {
+                ok: true,
+                action: opts.action,
+                result: {
+                  ok: true,
+                  wifiScan: {
+                    networkCount: 1,
+                    networks: [
+                      { ssid: "Home24GHz", encryption: "WPA2-PSK", signal_strength: 192 },
+                    ],
+                  },
+                },
+              };
+            }
+            if (opts.action === "usb-wifi-connect") {
+              return {
+                ok: true,
+                action: opts.action,
+                result: { ok: true, wifiConnect: { ok: true, ssid: opts.ssid } },
+              };
+            }
+            if (opts.action === "usb-wifi-status") {
+              return {
+                ok: true,
+                action: opts.action,
+                result: {
+                  ok: true,
+                  wifiStatus: { ok: true, ipAddress: "127.0.0.1", ssid: "Home24GHz" },
+                },
+              };
+            }
+            if (opts.action === "usb-root") {
+              return {
+                ok: true,
+                action: opts.action,
+                result: {
+                  ok: true,
+                  root: {
+                    ok: true,
+                    action: "usb-root",
+                    transport: "usb",
+                    host: opts.host,
+                    sshPort: 22,
+                    sshPortOpen: true,
+                  },
+                },
+              };
+            }
+            return {
+              ok: true,
+              action: opts.action,
+              result: { ok: true },
+            };
+          },
+          installFreshHub: async (opts) => {
+            globalThis.__wizardInstallCalls.push({
+              source: opts.source,
+              host: opts.host,
+              hubId: opts.hubId,
+              hubIdType: typeof opts.hubId,
+              preflightOnly: opts.preflightOnly,
+              removeRootToolLeftovers: opts.removeRootToolLeftovers,
+            });
+            opts.onEvent?.({
+              type: "step",
+              step: "install-webui",
+              phase: "Checking SSH",
+              message: "Checking SSH",
+            });
+            opts.onEvent?.({
+              type: "progress",
+              step: "install-webui",
+              status: "ok",
+              verdict: "ALLOWED",
+              message: "Preflight verdict: ALLOWED",
+            });
+            return {
+              ok: true,
+              source: opts.source,
+              version: "2.1.0",
+              host: opts.host,
+              port: simPort,
+              hubId: opts.hubId,
+              preflightOnly: Boolean(opts.preflightOnly),
+              exitCode: 0,
+              verdict: "ALLOWED",
+              webUiReachable: true,
+            };
+          },
+        };
+      }, { simPort: wizSimPort });
+
+      // 3. Settings entry ("Set up or re-root a hub") opens wizard and Back returns to Settings
+      await page.reload();
+      await page.waitForSelector("#openWizardSettingsBtn", { timeout: 10000 });
+      assert.match(await page.textContent("#openWizardSettingsBtn"), /Set up or re-root a hub/);
+      await page.click("#openWizardSettingsBtn");
+      await page.waitForSelector("#hubSetupWizard", { timeout: 10000 });
+      assert.equal(await page.title(), "Hub Setup · Melodious");
+      assert.equal((await page.textContent("#connectAppbarStepNote")).trim(), "Step 1 of 3");
+
+      await page.click("#settingsBackBtn");
+      await page.waitForSelector("#openWizardSettingsBtn", { timeout: 10000 });
+      assert.equal(await page.title(), "Settings · Melodious");
+
+      // 4. OOB Connect entry ("Set up a new or unrooted Harmony Hub") below discovered hubs
+      await page.evaluate(async () => {
+        await window.melodiousDesktop.hub.openConnect();
+        window.location.reload();
+      });
+      await page.waitForSelector("#openWizardConnectBtn", { timeout: 10000 });
+      assert.match(
+        await page.textContent("#openWizardConnectBtn"),
+        /Set up a new or unrooted Harmony Hub/
+      );
+      await page.click("#openWizardConnectBtn");
+      await page.waitForSelector("#hubSetupWizard", { timeout: 10000 });
+
+      // Developer overrides accordion stays collapsed by default (no wall of buttons)
+      assert.equal(
+        await page.evaluate(() => document.getElementById("wizardDevOverrides")?.open),
+        false
+      );
+
+      // 5. Step 1: Select "Already set up with Logitech" against a fresh hub -> prominent mismatch banner -> switch to Fresh
+      await page.click("#wizardIntentProvisionedLabel");
+      await page.click("#wizardDetectBtn");
+      await page.waitForSelector("#wizardMismatchBanner", { timeout: 10000 });
+      assert.match(
+        await page.textContent("#wizardMismatchBanner"),
+        /Mismatch: Hub is unprovisioned \/ factory-reset/
+      );
+      assert.match(await page.textContent("#wizardFirmwareCard"), /4\.15\.600 · Pass/);
+
+      await page.click("#wizardSwitchIntentBtn");
+      await page.waitForSelector("#wizardMismatchBanner", {
+        state: "detached",
+        timeout: 10000,
+      });
+      await page.waitForSelector("#wizardToStep2Btn:not([disabled])", { timeout: 10000 });
+      assert.equal(await page.locator("#wizardMismatchBanner").count(), 0);
+
+      // 6. Step 2: Guided Fresh progression (Wi-Fi -> TDE/Provision/Seed -> USB Root & Install)
+      await page.click("#wizardToStep2Btn");
+      await page.waitForSelector("#wizardStep2Fresh", { timeout: 10000 });
+      assert.equal((await page.textContent("#connectAppbarStepNote")).trim(), "Step 2 of 3");
+
+      // 6a. Scan Wi-Fi, pick network, enter password, connect -> auto-detects 127.0.0.1
+      await page.click("#freshWifiScanBtn");
+      await page.waitForSelector('[data-wifi-idx="0"]', { timeout: 10000 });
+      await page.click('[data-wifi-idx="0"]');
+      assert.equal(await page.inputValue("#wizardWifiSsidInput"), "Home24GHz");
+      await page.fill("#wizardWifiPassInput", "TestPassphrase123");
+      await page.click("#freshWifiConnectBtn");
+      await page.waitForFunction(
+        () => document.getElementById("freshConfirmedHostInput")?.value === "127.0.0.1",
+        null,
+        { timeout: 10000 }
+      );
+
+      // 6b. Unlock & Prepare Hub (TDE -> Provision Local with numeric remoteId -> Seed AutomationConfig)
+      await page.fill("#wizardRemoteIdInput", "20264150");
+      await page.click("#freshPrepareHubBtn");
+      await page.waitForSelector("dialog#wizardConfirmDialog[open]", { timeout: 10000 });
+      await page.click("#wizardConfirmAcceptBtn");
+      await page.waitForSelector("#freshStagePrepare.is-done", { timeout: 10000 });
+
+      // 6c. Root & Install Melodious -> advances automatically to Step 3 Handoff
+      await page.click("#freshRootAndInstallBtn");
+      await page.waitForSelector("dialog#wizardConfirmDialog[open]", { timeout: 10000 });
+      await page.click("#wizardConfirmAcceptBtn");
+
+      // 7. Step 3: Verify desktop connected to hub, post-install checklist rendered, and "Open Hub" opens web UI
+      await page.waitForSelector("#wizardStep3ConnectedCard", { timeout: 10000 });
+      assert.equal((await page.textContent("#connectAppbarStepNote")).trim(), "Step 3 of 3");
+      assert.match(await page.textContent("#wizardStep3ConnectedCard"), /Connected · Melodious 2\.1\.0/);
+      const checklistText = await page.textContent("#wizardPostInstallChecklist");
+      assert.match(checklistText, /Add your first device/);
+      assert.match(checklistText, /Create your first activity/);
+      assert.match(checklistText, /Pair your remote/);
+
+      const recorded = await electronApp.evaluate(() => ({
+        actions: globalThis.__wizardActionCalls,
+        installs: globalThis.__wizardInstallCalls,
+      }));
+      assert.deepEqual(
+        recorded.actions.map((a) => a.action),
+        [
+          "usb-wifi-scan",
+          "usb-wifi-connect",
+          "usb-wifi-status",
+          "usb-tde-enable",
+          "usb-provision-local",
+          "usb-seed-automation",
+          "usb-root",
+        ]
+      );
+      const wifiCall = recorded.actions.find((a) => a.action === "usb-wifi-connect");
+      assert.equal(wifiCall.passwordValue, "TestPassphrase123");
+      const provCall = recorded.actions.find((a) => a.action === "usb-provision-local");
+      assert.equal(provCall.remoteId, 20264150);
+      assert.equal(provCall.remoteIdType, "number");
+      assert.deepEqual(recorded.installs, [
+        {
+          source: "latest",
+          host: "127.0.0.1",
+          hubId: 20264150,
+          hubIdType: "number",
+          preflightOnly: false,
+          removeRootToolLeftovers: true,
+        },
+      ]);
+
+      await page.click("#wizardOpenHubBtn");
+      await page.waitForSelector("#view-remote:not([hidden])", { timeout: 10000 });
+      assert.equal(await page.title(), "Remote · Melodious");
+    } finally {
+      if (electronApp) {
+        await electronApp.close();
+      }
+      simProc.kill();
+      fs.rmSync(userDataDir, { recursive: true, force: true });
+    }
+  }
+);

@@ -55,7 +55,7 @@ test("preload exposes seven fixed update channels and passes only the documented
     ["desktop:updates-open-release", { url: "https://github.com/schlambos/harmony-hub-control/releases/tag/v1.3.0" }],
   ]);
 
-  assert.deepEqual(Object.keys(bridge.wizard), ["detectAndClassify", "usbProbe", "runAction", "onEvent"]);
+  assert.deepEqual(Object.keys(bridge.wizard), ["detectAndClassify", "usbProbe", "runAction", "installHub", "onEvent"]);
   calls.length = 0;
   await bridge.wizard.detectAndClassify({ userIntent: "fresh", mask: true });
   await bridge.wizard.usbProbe({ action: "probe", mask: true });
@@ -64,9 +64,17 @@ test("preload exposes seven fixed update channels and passes only the documented
     confirmAction: "usb-flash-firmware",
     firmwareFile: "/etc/passwd",
   });
+  await bridge.wizard.installHub({
+    source: "local",
+    host: "192.168.0.235",
+    hubId: 20264150,
+    hubZipPath: "/etc/passwd",
+    keyPath: "/etc/shadow",
+  });
   assert.deepEqual(JSON.parse(JSON.stringify(calls)), [
     ["wizard:detect-classify", { userIntent: "fresh", mask: true }],
     ["wizard:usb-probe", { action: "probe", mask: true }],
     ["wizard:run-action", { action: "usb-flash-firmware", confirmAction: "usb-flash-firmware" }],
+    ["wizard:install-hub", { source: "local", host: "192.168.0.235", hubId: 20264150 }],
   ]);
 });

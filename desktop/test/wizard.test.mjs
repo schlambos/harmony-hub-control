@@ -1,9 +1,16 @@
 import assert from "node:assert/strict";
+import { execFileSync } from "node:child_process";
+import crypto from "node:crypto";
 import { EventEmitter } from "node:events";
+import fs from "node:fs";
+import http from "node:http";
+import os from "node:os";
+import path from "node:path";
 import test from "node:test";
 import { createRequire } from "node:module";
 
 const require = createRequire(import.meta.url);
+const { HUB_FILES, unzipCommand } = require("../src/hub-update.js");
 const {
   WIZARD_CHANNELS,
   READONLY_BRIDGE_ACTIONS,
@@ -12,13 +19,17 @@ const {
   VERDICTS,
   resolvePythonExecutable,
   validatePositiveRemoteId,
+  validatePositiveHubId,
   buildBridgeArgs,
+  buildInstallerArgs,
   runWizardBridge,
   classifyHubSignals,
   detectAndClassify,
   runWizardAction,
+  installFreshHub,
   createWizardIpcHandlers,
 } = require("../src/wizard/index.js");
+const wizardFlow = require("../src/wizard/flow.js");
 
 test("isWizardDevAvailable gates the unfinished dev UI out of packaged and non-macOS builds", () => {
   assert.equal(isWizardDevAvailable({ isPackaged: false, platform: "darwin" }), true);
@@ -551,4 +562,506 @@ test("detectAndClassify, runWizardAction, and wizard:* IPC handlers enforce send
   });
   assert.equal(lastActionBridgeOpts.remoteId, 20261111);
   assert.equal(lastActionBridgeOpts.stdinJson.remoteId, 20261111);
+});
+
+function makeSyntheticVerifiedPayload(version = "2.1.0") {
+  const md5 = (buf) => crypto.createHash("md5").update(buf).digest("hex");
+  return {
+    version,
+    files: Object.entries(HUB_FILES).map(([rel, [dest, mode, reboot]]) => {
+      const body = Buffer.from(`${rel} ${version}\n`, "utf8");
+      return {
+        rel,
+        dest,
+        mode,
+        reboot,
+        body,
+        md5: md5(body),
+        name: rel.replace(/\//g, "_"),
+      };
+    }),
+  };
+}
+
+test("installFreshHub stages verified payload + install_webui.py, enforces CLI flags and verdict=ALLOWED, probes :8080, and always cleans up temp dirs", async () => {
+  for (const badHubId of ["20264150", 0, -9, 1.5, NaN, null, undefined, false]) {
+    assert.throws(() => validatePositiveHubId(badHubId), /strictly positive integer/);
+  }
+  const defaultArgs = buildInstallerArgs({
+    installerPath: "/tmp/stage/install_webui.py",
+    host: "192.168.0.235",
+    hubId: 20264150,
+  });
+  assert.deepEqual(defaultArgs, [
+    "/tmp/stage/install_webui.py",
+    "--hub-host",
+    "192.168.0.235",
+    "--hub-id",
+    "20264150",
+    "--no-prompt",
+    "--mqtt-disabled",
+    "--remove-root-tool-leftovers",
+  ]);
+  const preflightNoCleanupArgs = buildInstallerArgs({
+    installerPath: "/tmp/stage/install_webui.py",
+    host: "192.168.0.235",
+    hubId: 20264150,
+    keyPath: "/Users/owner/.ssh/harmony_owner_ed25519",
+    sshPort: 2222,
+    removeRootToolLeftovers: false,
+    preflightOnly: true,
+  });
+  assert.ok(!preflightNoCleanupArgs.includes("--remove-root-tool-leftovers"));
+  assert.ok(preflightNoCleanupArgs.includes("--preflight-only"));
+  assert.ok(preflightNoCleanupArgs.includes("--port"));
+  assert.ok(preflightNoCleanupArgs.includes("2222"));
+
+  const tmpRootDir = fs.mkdtempSync(path.join(os.tmpdir(), "melodious-wiz-inst-test-"));
+  const server = http.createServer();
+  try {
+    const fakeZipBytes = Buffer.from("PK-synthetic-hub-zip", "utf8");
+    const fakeZipSha = crypto.createHash("sha256").update(fakeZipBytes).digest("hex");
+    const sumsBody = `${fakeZipSha}  melodious-hub-2.1.0.zip\n`;
+
+    server.on("request", (req, res) => {
+      if (req.url === "/repos/schlambos/harmony-hub-control/releases") {
+        res.writeHead(200, { "Content-Type": "application/json" });
+        res.end(
+          JSON.stringify([
+            {
+              tag_name: "v2.1.0",
+              draft: false,
+              prerelease: false,
+              published_at: "2026-11-15T00:00:00Z",
+              html_url: "https://github.com/schlambos/harmony-hub-control/releases/tag/v2.1.0",
+              assets: [
+                {
+                  name: "melodious-hub-2.1.0.zip",
+                  browser_download_url: `http://127.0.0.1:${server.address().port}/assets/melodious-hub-2.1.0.zip`,
+                },
+                {
+                  name: "SHA256SUMS.txt",
+                  browser_download_url: `http://127.0.0.1:${server.address().port}/assets/SHA256SUMS.txt`,
+                },
+              ],
+            },
+          ])
+        );
+        return;
+      }
+      if (req.url === "/assets/SHA256SUMS.txt") {
+        res.writeHead(200, { "Content-Type": "text/plain" });
+        res.end(sumsBody);
+        return;
+      }
+      if (req.url === "/assets/melodious-hub-2.1.0.zip") {
+        res.writeHead(200, { "Content-Length": String(fakeZipBytes.length) });
+        res.end(fakeZipBytes);
+        return;
+      }
+      res.writeHead(404);
+      res.end();
+    });
+    await new Promise((r) => server.listen(0, "127.0.0.1", r));
+    const baseUrl = `http://127.0.0.1:${server.address().port}`;
+
+    // 1. Successful "latest" install: stages payload + helpers + install_webui.py, streams events, verifies ALLOWED + :8080, cleans up temp dir
+    let inspectedWorkspace = null;
+    let capturedArgs = null;
+    const events = [];
+    let probeCalls = 0;
+
+    const latestRes = await installFreshHub({
+      source: "latest",
+      host: "192.168.0.235",
+      hubId: 20264150,
+      releasesUrl: `${baseUrl}/repos/schlambos/harmony-hub-control/releases`,
+      allowUrl: (u) => u.startsWith(baseUrl) || u.startsWith("https://github.com/schlambos/harmony-hub-control/"),
+      readLocalHubZipImpl: async (zipPath) => {
+        assert.ok(fs.existsSync(zipPath), "downloaded zip exists before unpack");
+        return makeSyntheticVerifiedPayload("2.1.0");
+      },
+      spawnImpl: (_py, args, opts) => {
+        capturedArgs = args;
+        inspectedWorkspace = {
+          hasInstaller: fs.existsSync(path.join(opts.cwd, "install_webui.py")),
+          hasWebuiBin: fs.existsSync(path.join(opts.cwd, "payload", "bin", "codex_webui")),
+          hasManifest: fs.existsSync(path.join(opts.cwd, "payload", "bin", "MANIFEST.txt")),
+          hasFlashFree: fs.existsSync(path.join(opts.cwd, "payload", "helpers", "codex_flash_free")),
+          hasMultiPatch: fs.existsSync(path.join(opts.cwd, "payload", "helpers", "hal_multiremote_patch.json")),
+          hasRemotesPatch: fs.existsSync(path.join(opts.cwd, "payload", "helpers", "hal_remotes_patch.json")),
+        };
+        const child = new EventEmitter();
+        child.stdin = { on() {}, end() {} };
+        child.stdout = new EventEmitter();
+        child.stderr = new EventEmitter();
+        child.kill = () => {};
+        setImmediate(() => {
+          child.stdout.emit("data", Buffer.from("== Checking SSH ==\n  uid=0(root)\n== Building candidate inventory ==\n"));
+          child.stdout.emit("data", Buffer.from("verdict=ALLOWED\n== Restarting the hub ==\n== Done ==\n"));
+          child.emit("close", 0);
+        });
+        return child;
+      },
+      probeHubImpl: async ({ host, port }) => {
+        probeCalls += 1;
+        assert.equal(host, "192.168.0.235");
+        assert.equal(port, 8080);
+        return probeCalls >= 2
+          ? { host, port, firmware: "4.15.600", authRequired: false }
+          : null;
+      },
+      probePollMs: 10,
+      probeWaitMs: 500,
+      tmpRootDir,
+      onEvent: (evt) => events.push(evt),
+    });
+
+    assert.equal(latestRes.ok, true);
+    assert.equal(latestRes.version, "2.1.0");
+    assert.equal(latestRes.verdict, "ALLOWED");
+    assert.equal(latestRes.webUiReachable, true);
+    assert.equal(probeCalls, 2);
+    assert.deepEqual(inspectedWorkspace, {
+      hasInstaller: true,
+      hasWebuiBin: true,
+      hasManifest: true,
+      hasFlashFree: true,
+      hasMultiPatch: true,
+      hasRemotesPatch: true,
+    });
+    assert.ok(capturedArgs.includes("--no-prompt"));
+    assert.ok(capturedArgs.includes("--mqtt-disabled"));
+    assert.ok(capturedArgs.includes("--remove-root-tool-leftovers"));
+    assert.ok(!capturedArgs.includes("--preflight-only"));
+    assert.ok(events.some((e) => e.type === "step" && e.phase === "Checking SSH"));
+    assert.ok(events.some((e) => e.type === "progress" && e.verdict === "ALLOWED"));
+    assert.deepEqual(fs.readdirSync(tmpRootDir), [], "temp dir must be cleaned up on success");
+
+    // 2. Local preflight-only run passes --preflight-only, skips :8080 requirement, and cleans up temp dir
+    const localZipPlaceholder = path.join(os.tmpdir(), `fake-local-${process.pid}.zip`);
+    fs.writeFileSync(localZipPlaceholder, fakeZipBytes);
+    try {
+      let preflightArgs = null;
+      const preRes = await installFreshHub({
+        source: "local",
+        hubZipPath: localZipPlaceholder,
+        host: "192.168.0.235",
+        hubId: 20264150,
+        preflightOnly: true,
+        removeRootToolLeftovers: false,
+        readLocalHubZipImpl: async () => makeSyntheticVerifiedPayload("2.1.0"),
+        spawnImpl: (_py, args) => {
+          preflightArgs = args;
+          const child = new EventEmitter();
+          child.stdin = { on() {}, end() {} };
+          child.stdout = new EventEmitter();
+          child.stderr = new EventEmitter();
+          child.kill = () => {};
+          setImmediate(() => {
+            child.stdout.emit("data", Buffer.from("verdict=ALLOWED\n"));
+            child.emit("close", 0);
+          });
+          return child;
+        },
+        probeHubImpl: async () => assert.fail("preflight-only must not require :8080 probe"),
+        tmpRootDir,
+      });
+      assert.equal(preRes.ok, true);
+      assert.equal(preRes.preflightOnly, true);
+      assert.ok(preflightArgs.includes("--preflight-only"));
+      assert.ok(!preflightArgs.includes("--remove-root-tool-leftovers"));
+      assert.deepEqual(fs.readdirSync(tmpRootDir), [], "temp dir cleaned up after preflight-only");
+
+      // 3. Blocked verdict / non-zero exit cleans up temp dir and reports verdict_reason
+      const blockedRes = await installFreshHub({
+        source: "local",
+        hubZipPath: localZipPlaceholder,
+        host: "192.168.0.235",
+        hubId: 20264150,
+        readLocalHubZipImpl: async () => makeSyntheticVerifiedPayload("2.1.0"),
+        spawnImpl: () => {
+          const child = new EventEmitter();
+          child.stdin = { on() {}, end() {} };
+          child.stdout = new EventEmitter();
+          child.stderr = new EventEmitter();
+          child.kill = () => {};
+          setImmediate(() => {
+            child.stdout.emit(
+              "data",
+              Buffer.from("verdict_reason=free flash 100000 < needed 900000\nverdict=BLOCKED_CAPACITY\n")
+            );
+            child.emit("close", 2);
+          });
+          return child;
+        },
+        tmpRootDir,
+      });
+      assert.equal(blockedRes.ok, false);
+      assert.equal(blockedRes.verdict, "BLOCKED_CAPACITY");
+      assert.match(blockedRes.error, /BLOCKED_CAPACITY.*free flash/);
+      assert.deepEqual(fs.readdirSync(tmpRootDir), [], "temp dir cleaned up on blocked verdict");
+
+      // 4. Unreachable :8080 after install returns ok=false and cleans up temp dir
+      const noWebRes = await installFreshHub({
+        source: "local",
+        hubZipPath: localZipPlaceholder,
+        host: "192.168.0.235",
+        hubId: 20264150,
+        readLocalHubZipImpl: async () => makeSyntheticVerifiedPayload("2.1.0"),
+        spawnImpl: () => {
+          const child = new EventEmitter();
+          child.stdin = { on() {}, end() {} };
+          child.stdout = new EventEmitter();
+          child.stderr = new EventEmitter();
+          child.kill = () => {};
+          setImmediate(() => {
+            child.stdout.emit("data", Buffer.from("verdict=ALLOWED\n"));
+            child.emit("close", 0);
+          });
+          return child;
+        },
+        probeHubImpl: async () => null,
+        probeWaitMs: 0,
+        tmpRootDir,
+      });
+      assert.equal(noWebRes.ok, false);
+      assert.equal(noWebRes.webUiReachable, false);
+      assert.deepEqual(fs.readdirSync(tmpRootDir), [], "temp dir cleaned up when :8080 fails");
+
+      // 5. Thrown error during zip verification still cleans up temp dir
+      await assert.rejects(
+        () =>
+          installFreshHub({
+            source: "local",
+            hubZipPath: localZipPlaceholder,
+            host: "192.168.0.235",
+            hubId: 20264150,
+            readLocalHubZipImpl: async () => {
+              throw new Error("That isn't a Melodious hub zip");
+            },
+            tmpRootDir,
+          }),
+        /isn't a Melodious hub zip/
+      );
+      assert.deepEqual(fs.readdirSync(tmpRootDir), [], "temp dir cleaned up on thrown zip error");
+
+      // 6. Real .zip archive unpacked by default readLocalHubZip on macOS and Windows
+      if (process.platform === "darwin" || process.platform === "win32") {
+        const zipBuildDir = fs.mkdtempSync(path.join(os.tmpdir(), "melodious-real-zip-"));
+        try {
+          const top = path.join(zipBuildDir, "melodious-hub-2.2.0");
+          const synth = makeSyntheticVerifiedPayload("2.2.0");
+          let manifest = "";
+          for (const f of synth.files) {
+            fs.mkdirSync(path.dirname(path.join(top, f.rel)), { recursive: true });
+            fs.writeFileSync(path.join(top, f.rel), f.body);
+            if (f.rel.startsWith("payload/bin/")) {
+              manifest += `${f.md5}  ${path.posix.basename(f.rel)}\n`;
+            }
+          }
+          fs.writeFileSync(path.join(top, "payload/bin/MANIFEST.txt"), manifest);
+          const realZip = path.join(zipBuildDir, "melodious-hub-2.2.0.zip");
+          if (process.platform === "win32") {
+            execFileSync(unzipCommand(realZip, zipBuildDir)[0], ["-a", "-c", "-f", realZip, "-C", zipBuildDir, "melodious-hub-2.2.0"]);
+          } else {
+            execFileSync("/usr/bin/ditto", ["-c", "-k", "--keepParent", top, realZip]);
+          }
+          const realZipRes = await installFreshHub({
+            source: "local",
+            hubZipPath: realZip,
+            host: "192.168.0.235",
+            hubId: 20264150,
+            preflightOnly: true,
+            spawnImpl: () => {
+              const child = new EventEmitter();
+              child.stdin = { on() {}, end() {} };
+              child.stdout = new EventEmitter();
+              child.stderr = new EventEmitter();
+              child.kill = () => {};
+              setImmediate(() => {
+                child.stdout.emit("data", Buffer.from("verdict=ALLOWED\n"));
+                child.emit("close", 0);
+              });
+              return child;
+            },
+            tmpRootDir,
+          });
+          assert.equal(realZipRes.ok, true);
+          assert.equal(realZipRes.version, "2.2.0");
+          assert.deepEqual(fs.readdirSync(tmpRootDir), []);
+        } finally {
+          fs.rmSync(zipBuildDir, { recursive: true, force: true });
+        }
+      }
+    } finally {
+      fs.rmSync(localZipPlaceholder, { force: true });
+    }
+  } finally {
+    server.close();
+    fs.rmSync(tmpRootDir, { recursive: true, force: true });
+  }
+});
+
+test("wizard:install-hub IPC enforces sender check, isWizardAvailable, native zip dialog, and numeric hubId", async () => {
+  const mainFrame = { url: "melodious://app/" };
+  const mainWin = {
+    isDestroyed: () => false,
+    webContents: { mainFrame, send() {} },
+  };
+  const trustedEvent = { sender: mainWin.webContents, senderFrame: mainFrame };
+  const untrustedEvent = { sender: {}, senderFrame: mainFrame };
+
+  const gatedHandlers = createWizardIpcHandlers({
+    getMainWindow: () => mainWin,
+    isWizardAvailable: () => isWizardDevAvailable({ isPackaged: true, platform: "darwin" }),
+  });
+  await assert.rejects(
+    () =>
+      gatedHandlers[WIZARD_CHANNELS.installHub](trustedEvent, {
+        source: "latest",
+        host: "192.168.0.235",
+        hubId: 20264150,
+      }),
+    /Root Wizard dev actions are not available/
+  );
+
+  let pickedZipPath = "/Users/owner/Downloads/melodious-hub-2.1.0.zip";
+  let lastInstallOpts = null;
+  const handlers = createWizardIpcHandlers({
+    getMainWindow: () => mainWin,
+    isWizardAvailable: () => true,
+    pickHubZip: async () => pickedZipPath,
+    installFreshHubImpl: async (opts) => {
+      lastInstallOpts = opts;
+      return {
+        ok: true,
+        source: opts.source,
+        version: "2.1.0",
+        host: opts.host,
+        port: 8080,
+        hubId: opts.hubId,
+        verdict: "ALLOWED",
+        webUiReachable: true,
+      };
+    },
+  });
+
+  await assert.rejects(
+    () =>
+      handlers[WIZARD_CHANNELS.installHub](untrustedEvent, {
+        source: "latest",
+        host: "192.168.0.235",
+        hubId: 20264150,
+      }),
+    /Untrusted IPC sender/
+  );
+
+  // Renderer-supplied hubZipPath and keyPath MUST be rejected
+  await assert.rejects(
+    () =>
+      handlers[WIZARD_CHANNELS.installHub](trustedEvent, {
+        source: "local",
+        host: "192.168.0.235",
+        hubId: 20264150,
+        hubZipPath: "/etc/passwd",
+      }),
+    /Renderer-supplied hubZipPath is not permitted/
+  );
+  await assert.rejects(
+    () =>
+      handlers[WIZARD_CHANNELS.installHub](trustedEvent, {
+        source: "latest",
+        host: "192.168.0.235",
+        hubId: 20264150,
+        keyPath: "/etc/shadow",
+      }),
+    /Renderer-supplied keyPath is not permitted/
+  );
+
+  // Non-numeric / zero / negative hubId MUST be rejected
+  for (const badId of ["20264150", 0, -5, null, undefined]) {
+    await assert.rejects(
+      () =>
+        handlers[WIZARD_CHANNELS.installHub](trustedEvent, {
+          source: "latest",
+          host: "192.168.0.235",
+          hubId: badId,
+        }),
+      /strictly positive integer/
+    );
+  }
+
+  // Missing or invalid host MUST be rejected
+  await assert.rejects(
+    () =>
+      handlers[WIZARD_CHANNELS.installHub](trustedEvent, {
+        source: "latest",
+        host: "",
+        hubId: 20264150,
+      }),
+    /Hub IP address or hostname is required/
+  );
+
+  // Valid local install picks zip from native dialog
+  const okLocal = await handlers[WIZARD_CHANNELS.installHub](trustedEvent, {
+    source: "local",
+    host: "192.168.0.235",
+    hubId: 20264150,
+  });
+  assert.equal(okLocal.ok, true);
+  assert.equal(lastInstallOpts.hubZipPath, "/Users/owner/Downloads/melodious-hub-2.1.0.zip");
+  assert.equal(lastInstallOpts.hubId, 20264150);
+
+  // Canceled native zip dialog returns canceled: true without calling installFreshHubImpl
+  pickedZipPath = null;
+  lastInstallOpts = null;
+  const canceledLocal = await handlers[WIZARD_CHANNELS.installHub](trustedEvent, {
+    source: "local",
+    host: "192.168.0.235",
+    hubId: 20264150,
+  });
+  assert.equal(canceledLocal.ok, false);
+  assert.equal(canceledLocal.canceled, true);
+  assert.equal(lastInstallOpts, null);
+});
+
+test("wizard/flow.js pure model computes Fresh & Provisioned step states and renders Steps 1-3 cleanly", () => {
+  assert.equal(wizardFlow.parsePositiveIntInput("20264150"), 20264150);
+  assert.equal(wizardFlow.parsePositiveIntInput("0"), null);
+  assert.equal(wizardFlow.parsePositiveIntInput("-12"), null);
+  assert.equal(wizardFlow.parsePositiveIntInput("2026abc"), null);
+
+  const st = wizardFlow.createInitialWizardState(4150);
+  assert.equal(st.remoteIdInput, "20264150");
+  assert.equal(wizardFlow.computeFreshChecklistStatus(st).currentStage, 1);
+
+  const step1Html = wizardFlow.renderWizardPage(st);
+  assert.match(step1Html, /Step 1 of 3/);
+  assert.match(step1Html, /Already set up with Logitech/);
+  assert.match(step1Html, /Factory reset \/ starting fresh/);
+  assert.match(step1Html, /Developer \/ Manual Step Overrides/);
+
+  st.firmwarePassed = true;
+  assert.equal(wizardFlow.computeFreshChecklistStatus(st).currentStage, 2);
+  st.wifiConnected = true;
+  st.confirmedHost = "192.168.0.235";
+  assert.equal(wizardFlow.computeFreshChecklistStatus(st).currentStage, 3);
+  st.tdeDone = true;
+  st.provisionLocalDone = true;
+  st.seedAutomationDone = true;
+  assert.equal(wizardFlow.computeFreshChecklistStatus(st).currentStage, 4);
+  st.step = 2;
+  st.flowPath = "fresh";
+  const step2FreshHtml = wizardFlow.renderWizardPage(st);
+  assert.match(step2FreshHtml, /Root &amp; Install Melodious/);
+
+  st.step = 3;
+  st.handoffConnected = true;
+  st.handoffHost = "192.168.0.235";
+  const step3Html = wizardFlow.renderWizardPage(st);
+  assert.match(step3Html, /Add your first device/);
+  assert.match(step3Html, /Create your first activity/);
+  assert.match(step3Html, /Pair your remote/);
+  assert.match(step3Html, /Open Hub/);
 });
