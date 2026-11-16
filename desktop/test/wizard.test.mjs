@@ -1279,44 +1279,209 @@ test("wizard:install-hub IPC enforces sender check, isWizardAvailable, native zi
   assert.equal(lastInstallOpts, null);
 });
 
-test("wizard/flow.js pure model computes Fresh & Provisioned step states and renders Steps 1-3 cleanly", () => {
+test("wizard/flow.js renders jargon-free 4-screen consumer flow, optional sub-screens, and isolated troubleshooting tools", () => {
   assert.equal(wizardFlow.parsePositiveIntInput("20264150"), 20264150);
   assert.equal(wizardFlow.parsePositiveIntInput("0"), null);
   assert.equal(wizardFlow.parsePositiveIntInput("-12"), null);
   assert.equal(wizardFlow.parsePositiveIntInput("2026abc"), null);
 
+  assert.equal(wizardFlow.formatWifiSignalLabel(224), "Strong");
+  assert.equal(wizardFlow.formatWifiSignalLabel(150), "Good");
+  assert.equal(wizardFlow.formatWifiSignalLabel(80), "Fair");
+  assert.equal(wizardFlow.formatWifiSecurityLabel("WPA2-PSK"), "WPA2");
+  assert.equal(wizardFlow.formatWifiSecurityLabel("OPEN"), "Open");
+
+  const forbiddenJargon = [
+    /046D:C129/i,
+    /\bSSDP\b/,
+    /\/tde\/enable/i,
+    /AutomationConfig/,
+    /Dropbear/i,
+    /positive integer, never a string/i,
+    /stdin pipe only/i,
+    /HBus :8088/i,
+    /XMPP :5222/i,
+    /Developer \/ Manual Step Overrides/,
+    /data-wizard-manual-action=/,
+    /Preflight Check Only/,
+  ];
+  const assertCleanConsumerHtml = (html, contextLabel) => {
+    for (const pattern of forbiddenJargon) {
+      assert.doesNotMatch(
+        html,
+        pattern,
+        `Unexpected engineering jargon/control ${pattern} on ${contextLabel}`
+      );
+    }
+  };
+
   const st = wizardFlow.createInitialWizardState(4150);
   assert.equal(st.remoteIdInput, "20264150");
+  assert.equal(st.includeUsb, true);
+  assert.equal(st.troubleshootingOpen, false);
   assert.equal(wizardFlow.computeFreshChecklistStatus(st).currentStage, 1);
 
+  // Screen 1 initial state
   const step1Html = wizardFlow.renderWizardPage(st);
-  assert.match(step1Html, /Step 1 of 3/);
-  assert.match(step1Html, /Already set up with Logitech/);
-  assert.match(step1Html, /Factory reset \/ starting fresh/);
-  assert.match(step1Html, /Developer \/ Manual Step Overrides/);
+  assert.match(step1Html, /Set up your Harmony Hub/);
+  assert.match(step1Html, /Already set up in the Harmony app/);
+  assert.match(step1Html, /Brand new, factory reset, or bought used/);
+  assert.match(step1Html, /Find My Hub/);
+  assert.match(step1Html, /Can't find it\? Enter IP address/);
+  assert.doesNotMatch(step1Html, /<details[^>]*id="wizardIpDisclosure"[^>]*open/);
+  assert.match(step1Html, /Troubleshooting tools/);
+  assertCleanConsumerHtml(step1Html, "Screen 1 initial");
 
+  // Screen 1: Fresh hub found over USB on 4.15.600 -> never shows firmware card
+  st.classifyResult = {
+    verdict: "fresh",
+    signals: {
+      usb: { connected: true, preflightOk: true },
+      lan: { host: "", ports: {} },
+      ssdp: {},
+    },
+    firmwareGate: { passes: true, currentFirmware: "4.15.600" },
+    mismatch: { hasMismatch: false },
+  };
+  const freshReadyHtml = wizardFlow.renderWizardPage(st);
+  assert.match(freshReadyHtml, /Harmony Hub found over USB and ready for setup/);
+  assert.match(freshReadyHtml, /Continue →/);
+  assert.doesNotMatch(freshReadyHtml, /4\.15\.600/);
+  assert.doesNotMatch(freshReadyHtml, /Software update needed/);
+  assertCleanConsumerHtml(freshReadyHtml, "Screen 1 fresh ready");
+
+  // Screen 1: Older firmware (< 4.15.600) -> routes to Firmware Update sub-screen
+  st.classifyResult.firmwareGate = { passes: false, currentFirmware: "4.15.330" };
+  const fwNeededHtml = wizardFlow.renderWizardPage(st);
+  assert.match(fwNeededHtml, /Software update needed before setup/);
+  assert.match(fwNeededHtml, /Continue to Update →/);
+  assertCleanConsumerHtml(fwNeededHtml, "Screen 1 firmware needed");
+
+  st.subScreen = "firmware-update";
+  const fwSubHtml = wizardFlow.renderWizardPage(st);
+  assert.match(fwSubHtml, /Choose Update File \(\.hfw2\)…/);
+  assertCleanConsumerHtml(fwSubHtml, "Firmware Update sub-screen");
+  st.subScreen = null;
   st.firmwarePassed = true;
-  assert.equal(wizardFlow.computeFreshChecklistStatus(st).currentStage, 2);
-  st.wifiConnected = true;
-  st.confirmedHost = "192.168.0.235";
-  assert.equal(wizardFlow.computeFreshChecklistStatus(st).currentStage, 3);
-  st.tdeDone = true;
-  st.provisionLocalDone = true;
-  st.seedAutomationDone = true;
-  assert.equal(wizardFlow.computeFreshChecklistStatus(st).currentStage, 4);
+
+  // Screen 1: Mismatch (picked Fresh, hub still has old setup) -> Factory Reset sub-screen
+  st.intent = "fresh";
+  st.classifyResult = {
+    verdict: "provisioned-local",
+    signals: {
+      usb: { connected: true, preflightOk: true },
+      lan: { host: "192.168.0.235", ports: { 5222: false, 22: false } },
+      ssdp: {},
+    },
+    firmwareGate: { passes: true, currentFirmware: "4.15.600" },
+    mismatch: { hasMismatch: true, recommendedIntent: "provisioned" },
+  };
+  const mismatchHtml = wizardFlow.renderWizardPage(st);
+  assert.match(
+    mismatchHtml,
+    /This hub still has an old setup on it\. You can keep that setup or erase it to start fresh\./
+  );
+  assert.match(mismatchHtml, /Keep Existing Setup/);
+  assert.match(mismatchHtml, /Erase Hub &amp; Start Fresh/);
+  assertCleanConsumerHtml(mismatchHtml, "Screen 1 mismatch");
+
+  st.subScreen = "factory-reset";
+  const resetBeforeHtml = wizardFlow.renderWizardPage(st);
+  assert.match(resetBeforeHtml, /Erase Hub/);
+  assertCleanConsumerHtml(resetBeforeHtml, "Factory Reset sub-screen");
+
+  st.factoryResetSent = true;
+  const resetAfterHtml = wizardFlow.renderWizardPage(st);
+  assert.match(resetAfterHtml, /Unplug the USB cable from your Mac for 15 seconds\./);
+  assert.match(resetAfterHtml, /Check Hub/);
+  assertCleanConsumerHtml(resetAfterHtml, "Factory Reset post-erase walkthrough");
+  st.subScreen = null;
+  st.factoryResetSent = false;
+
+  // Screen 1: Provisioned with XMPP closed vs XMPP open
+  st.intent = "provisioned";
+  const xmppClosedHtml = wizardFlow.renderWizardPage(st);
+  assert.match(xmppClosedHtml, /Enable XMPP/);
+  assert.match(xmppClosedHtml, /Check Again/);
+  assert.match(xmppClosedHtml, /Set Up Over USB Instead/);
+  assertCleanConsumerHtml(xmppClosedHtml, "Screen 1 XMPP closed");
+
+  st.classifyResult.verdict = "provisioned-xmpp-on";
+  st.classifyResult.signals.lan.ports["5222"] = true;
+  const xmppOpenHtml = wizardFlow.renderWizardPage(st);
+  assert.match(xmppOpenHtml, /Harmony Hub found on Wi-Fi and ready/);
+  assert.match(xmppOpenHtml, /Continue →/);
+  assertCleanConsumerHtml(xmppOpenHtml, "Screen 1 Provisioned ready");
+
+  // Screen 2: Connect Wi-Fi (friendly signal labels, no raw signal numbers)
   st.step = 2;
   st.flowPath = "fresh";
-  const step2FreshHtml = wizardFlow.renderWizardPage(st);
-  assert.match(step2FreshHtml, /Root &amp; Install Melodious/);
+  st.wifiScanned = true;
+  st.wifiNetworks = [{ ssid: "LivingRoom24", encryption: "WPA2-PSK", signal_strength: 224 }];
+  const step2WifiHtml = wizardFlow.renderWizardPage(st);
+  assert.match(step2WifiHtml, /Connect your hub to Wi-Fi/);
+  assert.match(step2WifiHtml, /WPA2 · Strong/);
+  assert.doesNotMatch(step2WifiHtml, /signal 224/i);
+  assert.match(step2WifiHtml, /Connect to Wi-Fi/);
+  assert.doesNotMatch(step2WifiHtml, /Enter hub IP from your router/);
+  assertCleanConsumerHtml(step2WifiHtml, "Screen 2 Wi-Fi");
 
+  st.wifiConnected = true;
+  st.confirmedHost = "";
+  const step2ManualIpHtml = wizardFlow.renderWizardPage(st);
+  assert.match(step2ManualIpHtml, /Enter hub IP from your router/);
+  st.confirmedHost = "192.168.0.235";
+  const step2ConnectedHtml = wizardFlow.renderWizardPage(st);
+  assert.match(step2ConnectedHtml, /Connected to/);
+  assert.match(step2ConnectedHtml, /Continue →/);
+  assert.doesNotMatch(step2ConnectedHtml, /Enter hub IP from your router/);
+  assertCleanConsumerHtml(step2ConnectedHtml, "Screen 2 Wi-Fi connected");
+
+  // Screen 3: Unified 1-click Install Melodious + 4-item checklist + collapsed Advanced options
   st.step = 3;
+  const step3InstallHtml = wizardFlow.renderWizardPage(st);
+  assert.match(step3InstallHtml, /Install Melodious/);
+  assert.match(step3InstallHtml, /Preparing hub for offline use…/);
+  assert.match(step3InstallHtml, /Setting up local hub access…/);
+  assert.match(step3InstallHtml, /Downloading and installing Melodious…/);
+  assert.match(step3InstallHtml, /Restarting hub and checking connection…/);
+  assert.match(step3InstallHtml, /Advanced options/);
+  assert.doesNotMatch(step3InstallHtml, /<details[^>]*id="wizardAdvancedOptions"[^>]*open/);
+  assertCleanConsumerHtml(step3InstallHtml, "Screen 3 Install");
+
+  // Screen 3 error state pauses cleanly with Try Again + Show technical details toggle
+  st.installChecklistFailedStep = 2;
+  st.error = "Simulated USB timeout";
+  st.logLines = ["== step =="];
+  const step3ErrHtml = wizardFlow.renderWizardPage(st);
+  assert.match(step3ErrHtml, /Try Again/);
+  assert.match(step3ErrHtml, /Show technical details/);
+  assert.doesNotMatch(step3ErrHtml, /Simulated USB timeout/);
+  assertCleanConsumerHtml(step3ErrHtml, "Screen 3 paused error");
+  st.error = "";
+  st.installChecklistFailedStep = 0;
+
+  // Screen 4: Done
+  st.step = 4;
+  st.installDone = true;
   st.handoffConnected = true;
   st.handoffHost = "192.168.0.235";
-  const step3Html = wizardFlow.renderWizardPage(st);
-  assert.match(step3Html, /Add your first device/);
-  assert.match(step3Html, /Create your first activity/);
-  assert.match(step3Html, /Pair your remote/);
-  assert.match(step3Html, /Open Hub/);
+  const step4DoneHtml = wizardFlow.renderWizardPage(st);
+  assert.match(step4DoneHtml, /Your Harmony Hub is ready!/);
+  assert.match(step4DoneHtml, /Add your TV and devices/);
+  assert.match(step4DoneHtml, /Create an activity/);
+  assert.match(step4DoneHtml, /Pair your remote in Settings → Remotes/);
+  assert.match(step4DoneHtml, /Open Melodious →/);
+  assertCleanConsumerHtml(step4DoneHtml, "Screen 4 Done");
+
+  // Troubleshooting view renders manual overrides ONLY when troubleshootingOpen=true
+  st.troubleshootingOpen = true;
+  const tsHtml = wizardFlow.renderWizardPage(st);
+  assert.match(tsHtml, /data-wizard-manual-action="usb-tde-enable"/);
+  assert.match(tsHtml, /data-wizard-manual-action="post-root"/);
+  assert.match(tsHtml, /Preflight Check Only/);
+  assert.match(tsHtml, /Redact IDs/);
+  assert.match(tsHtml, /id="wizardRawLogViewer"/);
 });
 
 test("runWizardBridge surfaces nested result/progress errors without a type:error event", async () => {
@@ -1408,7 +1573,7 @@ test("runWizardAction gives usb-provision-local/usb-flash-firmware >=240000ms he
   });
   assert.equal(captured["usb-provision-local"].verifyTimeoutS, 0);
 
-  // Melodious-installed Step 1 keeps primary Connect button plus secondary fresh/reset link
+  // Melodious-installed Screen 1 keeps primary Open Melodious button plus subtle Erase & set up from scratch link
   const freshState = wizardFlow.createInitialWizardState(4150);
   freshState.classifyResult = {
     verdict: "melodious-installed",
@@ -1420,8 +1585,9 @@ test("runWizardAction gives usb-provision-local/usb-flash-firmware >=240000ms he
   };
   freshState.hostInput = "192.168.0.100";
   const step1Html = wizardFlow.renderWizardPage(freshState);
-  assert.match(step1Html, /Connect &amp; Open Hub/);
-  assert.match(step1Html, /Start fresh \/ Factory reset/);
+  assert.match(step1Html, /Melodious is already installed on this hub/);
+  assert.match(step1Html, /Open Melodious →/);
+  assert.match(step1Html, /Erase &amp; set up from scratch…/);
 });
 
 test("detectAndClassify isolates multi-hub SSDP from USB hub and strictly honors explicit host", async () => {
