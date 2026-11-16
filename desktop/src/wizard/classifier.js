@@ -261,7 +261,7 @@ function classifyHubSignals({
   let verdictSummary =
     "Could not gather enough LAN or USB signals to classify this hub. Check that the hub is powered on, settled (~5 minutes after boot), and connected via a data USB cable or on the same LAN.";
   let recommendedNextStep =
-    "Connect the hub to this Mac with a data-capable USB cable (or enter its LAN IP address) and run Detect & Classify again.";
+    "Connect the hub to this computer with a data-capable USB cable (or enter its LAN IP address) and run Detect & Classify again.";
 
   if (port8080Open) {
     verdict = VERDICTS.MELODIOUS_INSTALLED;
@@ -316,7 +316,7 @@ function classifyHubSignals({
       (usbConnected && usbPreflightOk ? ", confirmed over USB HID." : ".");
     recommendedNextStep = usbConnected && usbPreflightOk
       ? "Ready for the fresh-hub USB activation chain: verify 4.15.600 firmware gate → open TDE gate (usb-tde-enable) → write local mode-3 provisioning (usb-provision-local, numeric remoteId) → seed AutomationConfig (usb-seed-automation) → root over USB (usb-root) → install Melodious."
-      : "Connect the hub to this Mac with a data-capable USB cable so the fresh-hub USB activation chain can run.";
+      : "Connect the hub to this computer with a data-capable USB cable so the fresh-hub USB activation chain can run.";
   }
 
   const firmwareGate = evaluateFirmwareGate({

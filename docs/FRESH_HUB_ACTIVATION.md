@@ -1,5 +1,15 @@
 # Activating a factory-fresh hub (no account, no Logitech cloud)
 
+Melodious supports **Windows, Linux and macOS**. Use the
+[desktop Setup Wizard](SETUP_GUIDE.md) or the bundled CLI described here.
+The wizard is on `main`, joining Windows and macOS desktop releases in
+the first release after `v2.1.0`; Linux runs it from source. The CLI in
+[`tools/hub-root/`](../tools/hub-root/README.md), followed by
+`install_webui.py` (all three platforms) or `install_webui.ps1` (Windows),
+works now. Windows uses native `winhid` with no Python USB packages;
+Linux and macOS need the tool's Python USB dependencies. For source and
+USB prerequisites, see [`desktop/README.md`](../desktop/README.md).
+
 The complete runbook, as executed on hardware 2026-11-11: a second-hand
 Harmony Hub (Pimento, skin 106) bound to a stranger's account was updated,
 factory-reset over USB, rooted, provisioned on a fresh local account,
@@ -31,16 +41,20 @@ factory reset, firmware upload — is now **bundled into this repository** at
 additions there are the fresh-hub transports (POST, USB hbus) and the
 TDE-gate handling that let the chain start from a blank hub.
 
-## Coming next: automated fresh-hub installation
+## Desktop Setup Wizard (Windows, Linux and macOS)
 
-Everything in this runbook is currently a guided manual procedure. The
-planned next step is a **one-command automated installer for fresh hubs**:
-detect the hub over USB, check (and, with approval, update) the firmware,
-reset, join Wi-Fi, open the TDE gate, provision the local account, seed
-the starter config, root, install Melodious, and finish ready to pair a
-remote — with the same checkpoints this runbook documents, and the
-two wizard gaps below fixed so a blank hub needs no SSH workarounds.
-Until that lands, this runbook is the procedure.
+The desktop app's Setup Wizard runs this chain for you: detect the
+hub over USB, check (and, with approval, update) the firmware, reset,
+join Wi-Fi, open the TDE gate, provision the local account, seed the
+starter config, root, install Melodious, and finish ready to pair a
+remote. Windows and macOS releases bundle Python and the USB backend;
+Linux uses the same wizard from source with dependencies installed.
+The user guide is [SETUP_GUIDE.md](SETUP_GUIDE.md). This runbook is the
+command-line alternative on all three platforms and the historical
+hardware reference for what each wizard step does. Commands use `python3`;
+on Windows use `python` or `py -3` instead. Steps 0–6 run from
+`tools/hub-root/`; Step 7 runs from the repository or extracted hub-release
+directory containing `install_webui.py` and `payload/`.
 
 ## Before you start: what is irreversible
 

@@ -1,8 +1,12 @@
-# Melodious for macOS (`desktop/`)
+# Melodious desktop (`desktop/`)
 
-The Melodious web app in a Mac window, plus Logitech catalog lookup. The
+The Melodious web app in a desktop window on Windows, Linux and macOS,
+plus hub Setup Wizard and Logitech catalog lookup. Windows and macOS
+releases include the wizard after `v2.1.0`; it is on `main` and Linux can
+run it from source. The bundled CLI works on all three platforms now. The
 plan and its security model are in [`docs/DESKTOP_APP.md`](../docs/DESKTOP_APP.md);
-the user guide is in the main [README](../README.md#the-macos-app).
+user guides are [Setup Guide](../docs/SETUP_GUIDE.md) and the main
+[README](../README.md#the-desktop-app-windows-linux-and-macos).
 
 The app serves the packaged web UI (`tools/package_harmony_shell.sh`) over
 `melodious://app` and forwards hub requests over the LAN. Logitech sign-in,
@@ -10,6 +14,14 @@ search and download run in the main process; the page reaches them only
 through the `window.melodiousDesktop.catalog` bridge.
 
 ## Setup
+
+Source prerequisites: Node.js, npm, the pinned bun
+(`sh tools/ci/install_bun.sh "$HOME/.local/bin"` from the repository root,
+then add that directory to PATH), and a shell (Git Bash on Windows).
+The wizard additionally needs Python 3, `ssh` and `ssh-keygen` on PATH.
+Windows' native `winhid` needs no Python USB package; macOS/Linux need
+`tools/hub-root/requirements-usb.txt` in `tools/hub-root/.venv`.
+Packaged Windows/macOS apps bundle Python and their USB backend instead.
 
 ```sh
 cd desktop
@@ -56,7 +68,7 @@ silicon; without Rosetta it is skipped.
 
 None of the tests contact Logitech or a real hub.
 
-## Build the downloads
+## macOS downloads
 
 ```sh
 cd desktop
@@ -148,9 +160,48 @@ npm run test:dist:win
 - The app doesn't replace itself on Windows. An update notice opens the
   release page, and only for a release that carries the Windows installer.
 - Saved sign-ins are encrypted with Windows data protection (DPAPI).
-- The Root & Setup Wizard and USB rooting tools remain macOS-only (`dist:win`
-  does not bundle the wizard Python runtime or root helpers, and
-  `wizardDevAvailable` stays `false` on Windows).
+- `dist:win` runs `scripts/stage-wizard-runtime-win.sh` before packaging:
+  official `python-3.12.10-embed-amd64.zip` from python.org, pinned by
+  SHA-256 (published in its `.sigstore` bundle), cached in gitignored
+  `build/wizard-cache/`, staged into `build/wizard-python/win-x64/`.
+  3.12.10 is the last official 3.12 Windows binary release; subsequent
+  3.12 security releases are source-only. `LICENSE.txt` is retained.
+- `python312._pth` allows only the bundled stdlib zip and runtime directory;
+  no `site`, registry, user packages or Python environment overrides.
+  `wizard_bridge.py` adds its own sibling-module directory explicitly.
+  The installer needs only the stdlib, even in a private staging workspace.
+- `win.extraResources` bundles that runtime, `tools/hub-root`,
+  `install_webui.py` and the three installer helpers outside `app.asar`,
+  excluding venvs, tests, caches and Hub ID handoff files. Windows `winhid`
+  uses built-in `ctypes`, so no HID wheel or host Python is required.
+- `test:dist:win` checks resources, runs installer help with no host Python
+  on PATH, invokes real `winhid` USB enumeration via packaged wizard IPC,
+  and verifies Welcome and the File-menu wizard entry. No hub is needed.
+
+## Linux from source
+
+Install your distribution's Node.js/Electron runtime dependencies, Python 3
+with venv support, OpenSSH client (`ssh`, `ssh-keygen`), `unzip` (hub release
+extraction) and libusb. On Debian/Ubuntu the USB library is `libusb-1.0-0`.
+Set up the pinned bun and npm dependencies as above, then from the repo root:
+
+```sh
+python3 -m venv tools/hub-root/.venv
+tools/hub-root/.venv/bin/python -m pip install -r tools/hub-root/requirements-usb.txt
+cd desktop
+npm start
+```
+
+Give your user access to `046d:c129` with the
+[USB udev rule](../tools/hub-root/README.md#usb-setup-and-diagnostics),
+reload the rules and reconnect the cable. Don't run Electron as root or
+disable its sandbox. Linux uses `hidapi` (libusb); the kernel normally
+doesn't create a hidraw node for this hub. The source wizard is enabled
+automatically and also opens from **File → Set Up a New Harmony Hub…**.
+`MELODIOUS_WIZARD_PYTHON` can override the default tool `.venv` interpreter.
+No Linux desktop download or bundled Linux Python runtime is published.
+The [CLI](../tools/hub-root/README.md) plus `install_webui.py` is an equal
+alternative on Windows, Linux and macOS.
 
 The app icon is `resources/icon.png`, made from the Melodious artwork:
 
@@ -165,8 +216,8 @@ The owner publishes releases. A release:
 
 - is tagged `desktop-v<version>` on the same commit as a hub build, so the
   app's bundle matches that commit's `codex_webui`;
-- is named "Melodious for macOS <version>";
-- has the two `.dmg` and two `.zip` files and `SHA256SUMS.txt` attached,
+- includes Windows and macOS downloads (Linux remains source-only);
+- has the macOS `.dmg`/`.zip` and Windows installer/zip files and checksums attached,
   with the checksums in the notes (`RELEASE_NOTES.md` is the text);
 - says which Electron version it ships.
 

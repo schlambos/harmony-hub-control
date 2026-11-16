@@ -202,10 +202,8 @@ test("Playwright _electron end-to-end shell suite against webui-sim", { timeout:
     const page = await electronApp.firstWindow();
     await page.setViewportSize({ width: 1280, height: 800 });
 
-    // 1. First run with no saved hub: on macOS (wizard available) the app
-    //    opens straight into the OOB Setup Wizard; the existing-hub escape
-    //    reaches Connect. On Windows (wizard unavailable) it opens Connect.
-    if (process.platform === "darwin") {
+    // 1. All supported source platforms open the OOB wizard on first run.
+    if (["darwin", "win32", "linux"].includes(process.platform)) {
       await page.waitForSelector("#hubSetupWizard", { timeout: 10000 });
       assert.equal(await page.title(), "Hub Setup · Melodious");
       assert.match(await page.textContent("#hubSetupWizard"), /Welcome to Melodious/);
@@ -214,7 +212,7 @@ test("Playwright _electron end-to-end shell suite against webui-sim", { timeout:
     }
     await page.waitForSelector("#connectForm", { timeout: 10000 });
     assert.equal(await page.title(), "Connect · Melodious");
-    if (process.platform === "darwin") {
+    if (["darwin", "win32", "linux"].includes(process.platform)) {
       const entryBeforeForm = await page.evaluate(() => {
         const entry = document.getElementById("openWizardConnectBtn");
         const form = document.getElementById("connectForm");
@@ -648,8 +646,8 @@ test(
 
       const page = await electronApp.firstWindow();
       await page.setViewportSize({ width: 1280, height: 840 });
-      // Fresh profile: OOB wizard on macOS source builds, Connect elsewhere.
-      await page.waitForSelector("#hubSetupWizard, #connectForm", { timeout: 10000 });
+      // Fresh profiles open the OOB wizard on every supported source platform.
+      await page.waitForSelector("#hubSetupWizard", { timeout: 10000 });
 
       // 1. Packaged / gated-off check (isWizardAvailable = false): hides all wizard UI & rejects IPC
       await electronApp.evaluate(() => {
@@ -924,8 +922,8 @@ test(
       await page.click("#settingsBackBtn");
       await page.waitForSelector("#connectForm", { timeout: 10000 });
 
-      // 3c. macOS app menu: Melodious -> Set Up a New Harmony Hub… (1 click from anywhere)
-      if (process.platform === "darwin") {
+      // 3c. App menu (macOS) or File (Windows/Linux): setup in one click.
+      if (["darwin", "win32", "linux"].includes(process.platform)) {
         const menuItemFound = await electronApp.evaluate(({ Menu }) => {
           const item = Menu.getApplicationMenu()?.items[0]?.submenu?.items.find(
             (i) => i.label === "Set Up a New Harmony Hub…"

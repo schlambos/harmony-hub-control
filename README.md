@@ -21,7 +21,7 @@
 
 Melodious runs on a rooted Harmony Hub, next to Logitech's own firmware. It takes over the cloud's
 jobs (devices, activities, remote sync) and connects the hub and Home Assistant both ways. Set it up
-from the hub's web app, the Android app or the desktop app (macOS; Windows from the next release).
+from the hub's web app, the Android app or the desktop app (Windows and macOS releases; Linux from source).
 
 **Installing Melodious keeps your setup.** Your existing devices, activities and remote button
 bindings stay as they are, including any made with the Logitech app. Melodious runs beside
@@ -99,7 +99,7 @@ can back up, restore and edit account-free.
 
 | Requirement | Details |
 | --- | --- |
-| Harmony Hub | Rooted with the bundled command-line root tool, [`tools/hub-root/`](tools/hub-root/README.md) (tested on firmware 4.15.600). A factory-fresh hub with no Logitech account: [docs/FRESH_HUB_ACTIVATION.md](docs/FRESH_HUB_ACTIVATION.md). The installer and the apps don't root hubs themselves. |
+| Harmony Hub | Firmware 4.15.600, rooted. The desktop Setup Wizard roots and installs Melodious on existing, new or reset hubs: Windows and macOS releases after `v2.1.0`, plus Linux from source ([guide](docs/SETUP_GUIDE.md); wizard on `main`). The bundled CLI, [`tools/hub-root/`](tools/hub-root/README.md), works on all three platforms now; then run `install_webui.ps1` or `install_webui.py`. For a hub with no Logitech account, see [docs/FRESH_HUB_ACTIVATION.md](docs/FRESH_HUB_ACTIVATION.md). The installer scripts and the web and Android apps don't root hubs. |
 | SSH key | The root tool's private key, `harmony_owner_*`, in `~/.ssh` (`%USERPROFILE%\.ssh` on Windows). |
 | Hub ID | The numeric Hub ID the root tool prints. Don't guess it: Melodious sends it with every command to the hub's engine. |
 | Free flash | About 1.6 MB of the hub's 5 MB data flash for the first install (about 1.2 MB if the root tool's Dropbear can be reused); each later web app update needs about 0.65 MB (the first one that adds BusyBox, about 0.25 MB more). The installer measures it and stops before writing anything if there isn't enough — see [docs/INSTALL.md](docs/INSTALL.md#if-the-hubs-flash-is-full). |
@@ -107,9 +107,16 @@ can back up, restore and edit account-free.
 | Network | A trusted home network. The web app is plain HTTP. |
 | Home Assistant (optional) | Any recent Home Assistant with [HACS](https://hacs.xyz/), reachable from the hub over plain `http://`. An MQTT broker is needed only for the MQTT bridge. |
 | Android app (optional) | Android 8.0 or later. Building it needs JDK 17 or 21 and the Android SDK. |
-| Desktop app (optional) | macOS 13 or later, on Apple silicon or Intel; or Windows 10/11 x64 (experimental, unsigned), with downloads starting in the release after `v2.1.0`. Catalog lookup needs a Logitech account; building the app needs Node.js. |
+| Desktop app (optional) | Windows 10/11 x64 (experimental, unsigned), macOS 13+ (Apple silicon or Intel), or Linux from source. Windows downloads and the Windows/macOS Setup Wizard start in the release after `v2.1.0`. Catalog lookup needs a Logitech account; source builds need Node.js and the [platform prerequisites](desktop/README.md). |
 
 ## Quick start
+
+**Windows, Linux and macOS: the Setup Wizard.** The desktop app finds the hub over Wi-Fi or USB, roots it, installs
+Melodious and hands you to the hub's screens, with no commands to type. It handles hubs set up in
+the Harmony app (keeping their devices and activities) and new, factory-reset or second-hand hubs
+(offline, no Logitech account). Step-by-step with screenshots: **[docs/SETUP_GUIDE.md](docs/SETUP_GUIDE.md)**.
+The wizard is on `main`, ships in Windows and macOS releases after `v2.1.0`, and runs on Linux
+from source. The command-line alternative works on all three platforms right now:
 
 1. Root the hub with the bundled root tool. It is in this repository, not in the release zip, so
    clone it and run:
@@ -417,19 +424,28 @@ Wi-Fi/MQTT/Backup/System stay web-only. Details: [`Android/README.md`](Android/R
 
 <a id="the-macos-app"></a>
 
-### The desktop app (macOS and Windows)
+### The desktop app (Windows, Linux and macOS)
 
-The web app in a desktop window ([`desktop/`](desktop/), Electron, macOS 13+, same bundle), plus
-native Logitech catalog lookup. **Windows (experimental):** the same app builds for Windows 10/11
-x64; its installer and zip join the downloads in the release after `v2.1.0`, unsigned, so SmartScreen
-warns before the first launch ([`desktop/README.md`](desktop/README.md#windows-experimental)). It
-does not root hubs. **Install on a Mac:** release `-arm64`/`-x64` dmg → drag to Applications; unsigned,
-so Control-click → Open first time, then **Allow** local-network access (hub via SSDP or typed
-address). Building: [`desktop/README.md`](desktop/README.md). **Catalog:** Import codes → Logitech
-catalog — sign in, search brand/model, import from a skip-explaining preview; tokens stay
-Keychain-encrypted, no telemetry. Design/security: **[docs/DESKTOP_APP.md](docs/DESKTOP_APP.md)**.
+The same web app in an Electron desktop window, plus native Logitech catalog lookup and a
+cross-platform **Setup Wizard**. On first run, or from **File → Set Up a New Harmony Hub…**
+(Windows/Linux) or **Melodious → Set Up a New Harmony Hub…** (macOS), it roots the hub over Wi-Fi
+or USB and installs Melodious. The wizard is on `main`, joining Windows and macOS releases in
+the first release after `v2.1.0`; Linux uses source. [Setup guide with screenshots](docs/SETUP_GUIDE.md).
+
+- **Windows 10/11 x64 (experimental):** release `-win-x64-setup.exe` or `-win-x64.zip`;
+  unsigned, so SmartScreen may ask **More info → Run anyway**. Downloads start after `v2.1.0`.
+- **macOS 13+:** release `-arm64.dmg` or `-x64.dmg` → drag to Applications; Control-click → Open
+  (or Privacy & Security → Open Anyway), then **Allow** local-network access.
+- **Linux:** [run from source](desktop/README.md#linux-from-source), with Python and USB
+  dependencies installed. No Linux desktop download is published.
+
+**Catalog:** Import codes → Logitech catalog — sign in, search brand/model, import from a
+preview that explains skipped codes. Tokens stay in the main process, using the operating
+system's secure storage when available; no telemetry. Build/security details:
+[`desktop/README.md`](desktop/README.md), **[docs/DESKTOP_APP.md](docs/DESKTOP_APP.md)**.
 
 <table>
+<tr><td align="center"><img src="docs/screenshots/desktop/wizard/01-welcome-oob.png" alt="The Setup Wizard's Welcome screen" width="420"><br><sub>Setup Wizard: choose your hub's path</sub></td><td align="center"><img src="docs/screenshots/desktop/wizard/11-done-ready.png" alt="The Setup Wizard's finished screen" width="420"><br><sub>Setup Wizard: hub ready</sub></td></tr>
 <tr><td align="center"><img src="docs/screenshots/desktop/catalog-search-1280.png" alt="Searching Logitech's catalog" width="420"><br><sub>Search and download</sub></td><td align="center"><img src="docs/screenshots/desktop/catalog-preview-1280.png" alt="The catalog preview with a skipped command" width="420"><br><sub>Preview, with skipped commands</sub></td></tr>
 </table>
 
@@ -451,8 +467,8 @@ reboot only for cloud-blocker changes. Failure = nothing in use changes, or orig
 Useful flags: `--preflight-only` (dry run in RAM), `--remove-root-tool-leftovers` (clears root-tool
 staging, ~0.5 MB each — the usual full-flash fix), `--skip-flash-check`. `--help` lists all.
 
-- **Update:** re-run the installer, or macOS Settings → Updates → **Update hub…** (checksum-checked
-  download, SSH install with rollback, finishes on-hub if the Mac disconnects; settings unchanged).
+- **Update:** re-run the installer, or desktop Settings → Updates → **Update hub…** (checksum-checked
+  download, SSH install with rollback, finishes on-hub if the computer disconnects; settings unchanged).
   **Reinstall / repair hub software…** does the same at any hub version, from the latest release or a
   hub zip you choose ([details](docs/INSTALL.md#updating)).
   Android only notifies — it never holds the SSH key.
@@ -553,6 +569,7 @@ tools/shipped_copy_hygiene.mjs`. Full test list and rebuilding `codex_webui` (Zi
 
 | Document | What it covers |
 | --- | --- |
+| [docs/SETUP_GUIDE.md](docs/SETUP_GUIDE.md) | Windows, Linux and macOS Setup Wizard, start to finish, with screenshots: hubs set up in the Harmony app and new, reset or second-hand ones |
 | [tools/hub-root/README.md](tools/hub-root/README.md) | The bundled root tool: LAN and USB rooting, Wi-Fi setup, factory reset and firmware upload |
 | [docs/FRESH_HUB_ACTIVATION.md](docs/FRESH_HUB_ACTIVATION.md) | Taking a factory-fresh hub to rooted, on Melodious and paired, with no Logitech account or cloud |
 | [docs/INSTALL.md](docs/INSTALL.md) | Installing, updating, turning Melodious off/on, and rolling back: the full installer walkthrough, every flag, and flash-full troubleshooting |
@@ -567,7 +584,7 @@ tools/shipped_copy_hygiene.mjs`. Full test list and rebuilding `codex_webui` (Zi
 | [DESIGN.md](DESIGN.md) | The design system shared by the web and Android apps |
 | [docs/ANDROID_CATALOG.md](docs/ANDROID_CATALOG.md) | Logitech catalog lookup and sign-in in the Android app |
 | [docs/DESKTOP_APP.md](docs/DESKTOP_APP.md) | The desktop app's design, catalog lookup and security model |
-| [desktop/README.md](desktop/README.md) | Building, testing and releasing the desktop app, on macOS and Windows |
+| [desktop/README.md](desktop/README.md) | Running, building and testing the desktop app on Windows, Linux and macOS |
 | [tools/catalog/README.md](tools/catalog/README.md) | The Logitech catalog helper for the command line |
 | [docs/BUILD.md](docs/BUILD.md) | Building the MIPS binaries with the pinned toolchain |
 | [docs/CI.md](docs/CI.md) | What CI checks on every pull request, and how to run the same checks yourself |

@@ -36,8 +36,7 @@ mac:
   darkModeSupport: true
   extendInfo:
     NSLocalNetworkUsageDescription: Melodious connects to your Harmony Hub on your local network.
-  # Root & Setup Wizard runtime and helpers (macOS only; kept out of app.asar
-  # and out of Windows builds).
+  # Root & Setup Wizard runtime and helpers, kept outside app.asar.
   extraResources:
     - from: build/wizard-python/${arch}
       to: wizard-python
@@ -100,6 +99,37 @@ win:
       arch: [x64]
   icon: resources/icon.png
   artifactName: Melodious-${version}-win-${arch}.${ext}
+  extraResources:
+    - from: build/wizard-python/win-x64
+      to: wizard-python
+      filter:
+        - "**/*"
+        - "!**/__pycache__{,/**}"
+        - "!**/*.pyc"
+        - "!**/*.pyo"
+        - "!**/.DS_Store"
+    - from: ../tools/hub-root
+      to: hub-root
+      filter:
+        - "**/*"
+        - "!.venv{,/**}"
+        - "!tests{,/**}"
+        - "!**/__pycache__{,/**}"
+        - "!**/.pytest_cache{,/**}"
+        - "!**/*.pyc"
+        - "!**/*.pyo"
+        - "!**/.git*{,/**}"
+        - "!.github{,/**}"
+        - "!harmony_hub_id.*"
+        - "!**/.DS_Store"
+    - from: ../install_webui.py
+      to: installer/install_webui.py
+    - from: ../payload/helpers
+      to: installer/payload/helpers
+      filter:
+        - codex_flash_free
+        - hal_multiremote_patch.json
+        - hal_remotes_patch.json
 
 # Installs for the current user only, so it never asks for administrator rights.
 nsis:

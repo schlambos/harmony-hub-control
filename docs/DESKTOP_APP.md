@@ -1,8 +1,12 @@
-# Melodious for macOS: the desktop app with Logitech catalog lookup
+# Melodious desktop: setup and Logitech catalog lookup
 
-Melodious for macOS is the hub's web UI in a desktop window, plus the one
-thing a page served by the hub can't do: sign in to the user's own Logitech
-account and pull a device's codes from Logitech's catalog.
+Melodious runs on **Windows, Linux and macOS**: the hub's web UI in a
+desktop window, a guided hub setup, and Logitech catalog lookup. Windows
+and macOS have desktop downloads; Linux runs from source. The built-in
+Setup Wizard is on `main`, joining Windows and macOS releases in the first
+release after `v2.1.0`. The bundled [CLI](../tools/hub-root/README.md) and
+`install_webui.py` work on all three platforms now; Windows can also use
+`install_webui.ps1`.
 
 - **Same interface.** The window runs the packaged web shell unchanged:
   Remote, Activities, Devices and Settings, in the Melodious look. It talks
@@ -11,29 +15,42 @@ account and pull a device's codes from Logitech's catalog.
   tab gets Sign in, a brand and model search, a results list and Download.
   The downloaded package goes through the existing preview and
   `/api/catalog-import`. No Python helper, no terminal, no file to copy.
+- **Setup Wizard.** Takes a hub from the Harmony app's setup, or
+  from new, factory reset or second-hand, to rooted and running Melodious,
+  over Wi-Fi or USB, with no commands. It's on `main` and ships in the
+  first release after `v2.1.0`. The user guide, with a screenshot of every
+  screen, is **[SETUP_GUIDE.md](SETUP_GUIDE.md)**.
 
 ## Install and first run (user guide)
 
-- **Install.** Download `Melodious-<version>-arm64.dmg` (Apple silicon)
-  or `-x64.dmg` (Intel) from the
-  [release page](https://github.com/schlambos/harmony-hub-control/releases),
-  open it and drag Melodious to Applications. It needs macOS 13 or
-  later, on Apple silicon or Intel. The app isn't signed with an Apple
-  Developer ID, so macOS asks before the first launch: Control-click
-  Melodious → Open, or System Settings → Privacy & Security → Open
-  Anyway. To build it yourself, see
-  [`desktop/README.md`](../desktop/README.md) (needs Node.js).
-- **First run.** When macOS asks whether Melodious may find and connect
-  to devices on your local network, choose **Allow**; without it, the
-  app can't reach the hub. The app then looks for the hub with SSDP, or
-  you type its address.
+- **Install:** choose your platform from the
+  [release page](https://github.com/schlambos/harmony-hub-control/releases).
+  - **Windows 10/11 x64:** `Melodious-<version>-win-x64-setup.exe`, or extract
+    `Melodious-<version>-win-x64.zip` and run `Melodious.exe`. The app is
+    unsigned; SmartScreen may ask **More info → Run anyway**. Windows
+    downloads start in the release after `v2.1.0`.
+  - **macOS 13+ (Apple silicon or Intel):** `Melodious-<version>-arm64.dmg`
+    or `Melodious-<version>-x64.dmg`; drag Melodious to Applications.
+    Control-click → Open, or System Settings → Privacy & Security → Open
+    Anyway. Choose **Allow** for local-network access.
+  - **Linux:** [run from source](../desktop/README.md#linux-from-source).
+    Python, USB dependencies, OpenSSH and `unzip` must be installed; no
+    Linux desktop download is published. Don't run Electron as root.
+- **First run.** With no hub saved, the app opens the Setup Wizard's Welcome screen
+  ([SETUP_GUIDE.md](SETUP_GUIDE.md)); **My hub already runs Melodious —
+  Connect →** goes to the connect screen, which looks for the hub with
+  SSDP or takes a typed address. This applies to Windows, Linux and macOS.
+- **Setup Wizard later.** File → **Set Up a New Harmony Hub…** on
+  Windows/Linux, or Melodious → **Set Up a New Harmony Hub…** on macOS; the
+  **Set up or re-root a hub** card at the top of Settings, or the
+  **Set up a new or unrooted Harmony Hub** card on the connect screen.
 - **Logitech catalog.** Open a device, then Import codes → Logitech
   catalog: (1) **Sign in** — Logitech's sign-in opens in its own
   window, and Google sign-in works too; (2) **Search** by brand and
   model, then pick a match; (3) **Download and import** — the preview
   shows what will import and why anything is skipped, and **Import**
   adds the rest. Your Logitech tokens stay in the app's background
-  process, encrypted with your Keychain; the web page, the hub and the
+  process, using the operating system's secure storage when available; the web page, the hub and the
   logs never see them. The app has no telemetry. Without the app, the
   same tab opens a package made with
   `tools/catalog/harmony_catalog.py` (see
@@ -55,7 +72,7 @@ Limits:
 ## Architecture
 
 ```
-┌──────────────────────── Melodious.app (Electron) ────────────────────────┐
+┌──────────────────────── Melodious desktop (Electron) ────────────────────┐
 │ main process (Node)                                                      │
 │  ├─ melodious://app scheme (protocol.handle)                             │
 │  │    /, /index.html, /assets/harmony-shell.{js,css},                    │
@@ -132,7 +149,8 @@ page (`desktop/src/connect/`) built from the shell's `tokens.css` and
 `app.css` components (`.m-title`, `.m-list`, `.m-row`, `.m-field`, buttons),
 so it looks like the rest of the app.
 
-- **First run** shows it before the shell. On later runs the app opens the
+- **First run** opens the Setup Wizard, with a link to Connect for a hub
+  that already runs Melodious. On later runs the app opens the
   shell for the saved hub, and the connect screen comes back when the hub
   can't be reached.
 - **Find hubs:** SSDP `M-SEARCH` to `239.255.255.250:1900` with
@@ -144,7 +162,8 @@ so it looks like the rest of the app.
   same way.
 - **Hub sign-in:** user name and password, only when the hub asks (401).
   Stored as a Basic header in `safeStorage`.
-- **Settings** (macOS menu Melodious → Settings…, ⌘,): the hub (change or
+- **Settings** (File → Settings… on Windows/Linux, Melodious → Settings…
+  on macOS): the hub (change or
   forget), the hub sign-in, Logitech account (signed in or not; Sign out),
   and an Advanced field for the OAuth client_id (empty means the built-in
   public one). The shared Settings tab doesn't change.
@@ -213,7 +232,8 @@ window.melodiousDesktop = {
 | --- | --- |
 | Remote, Activities, Devices, Settings and every sub-page | The packaged web shell, unchanged (`docs/MELODIOUS_WEB_UI.md`) |
 | Connect: find hubs, enter address, hub sign-in | New desktop page, built from the shell's CSS components, after the Android `HubConnectScreen` |
-| Desktop settings (⌘,) | Same page, in settings mode |
+| Setup Wizard: Welcome, Wi-Fi, Install, Done | Same cross-platform page, in wizard mode (`desktop/src/wizard/flow.js`); every screen is in [SETUP_GUIDE.md](SETUP_GUIDE.md), captured by `desktop/scripts/capture-oob-screenshots.mjs` |
+| Desktop settings (File → Settings… or Melodious → Settings…) | Same page, in settings mode |
 | Logitech sign-in | Logitech's own page in a separate window; it closes itself on success |
 | Import codes → Logitech catalog | Shared tab: in the app it gains the account line, search, results and Download; on the hub it keeps "Open a catalog package…" |
 
@@ -249,7 +269,8 @@ The catalog tab in the app, top to bottom:
 ```
 desktop/
   package.json, package-lock.json   Electron and electron-builder pinned to exact versions
-  electron-builder.yml              mac zip and dmg, arm64 and x64, ad-hoc signing
+  electron-builder.yml              Windows x64 installer/zip; macOS arm64/x64 zip/dmg
+  scripts/stage-wizard-runtime*.sh   SHA-256-verified Python + platform USB backend
   scripts/bundle-shell.sh           runs the packager, copies the bundle into build/shell/,
                                     fails if payload/source/harmony_shell_assets.h changed
   src/main.js                       app lifecycle, windows, menu, CSP, navigation locks
@@ -304,10 +325,14 @@ bundle copy, catalog package or token is ever committed.
   The state must match, and the window closes.
 
 **Secrets:**
-- Logitech tokens (access, id and refresh) and the hub password are
-  encrypted with Electron `safeStorage`, whose key is in the user's login
-  Keychain. The encrypted files are mode 600, in the app's per-user data
-  folder (`~/Library/Application Support/Melodious/`).
+- Logitech tokens (access, id and refresh) and the hub password use Electron
+  `safeStorage`: Windows DPAPI, macOS login Keychain, or the Linux desktop's
+  available secret store. Linux storage depends on the desktop environment;
+  don't assume the same protection without a working secret service.
+  Files request mode 600 (Windows uses account ACLs) in Electron's per-user
+  app-data folder: `%APPDATA%/Melodious/`,
+  `~/Library/Application Support/Melodious/`, or `$XDG_CONFIG_HOME/Melodious/`
+  (normally `~/.config/Melodious/`) respectively.
 - If `safeStorage` isn't available, nothing secret is stored: tokens last
   only while the app runs.
 - With ad-hoc signing, macOS may ask again for Keychain access after an
@@ -334,13 +359,15 @@ bundle copy, catalog package or token is ever committed.
 **Background traffic:**
 - No telemetry and no crash upload.
 - Update checks happen only if you choose "Check daily" (asked once) or
-  click Check now / Melodious → Check for Updates…. A check is one request
+  click Check now / File → Check for Updates… (Windows/Linux) or
+  Melodious → Check for Updates… (macOS). A check is one request
   to `api.github.com/repos/schlambos/harmony-hub-control/releases`, which
   shows GitHub your IP address and the app's version, plus
   `GET /api/version` on your hub. Nothing downloads until you choose
-  Install and Restart, which fetches this Mac's zip and `SHA256SUMS.txt` from
-  that GitHub release (redirects only within GitHub). Turn checks off in
-  Settings → Updates.
+  an update. On macOS, Install and Restart fetches the matching zip and
+  `SHA256SUMS.txt` from that release (redirects only within GitHub).
+  Windows opens the release page for a new installer; Linux source users
+  update their checkout. Turn checks off in Settings → Updates.
 - **Update hub…** (Settings → Updates, when a newer hub release is out)
   downloads `melodious-hub-<v>.zip` and `SHA256SUMS.txt` from that release.
   It then talks to your hub over SSH with `~/.ssh/harmony_owner_*`, the
@@ -357,33 +384,26 @@ bundle copy, catalog package or token is ever committed.
 
 ## Packaging and release
 
-- electron-builder (version pinned) makes `Melodious-<version>-arm64.zip`
-  and `-x64.zip`, plus `.dmg` files.
-  - Separate per-architecture builds, not a universal one, which would
-    double the download.
-  - Expected size: about 100 MB per download and over 250 MB installed,
-    almost all of it Electron's Chromium. Measured with Electron
-    45.0.0: dmg 123 MB (arm64) and 130 MB (x64), zip 121 MB and 128 MB,
-    installed 254 MB and 261 MB.
-- Ad-hoc signed (`codesign --force --deep -s -`; electron-builder
-  `identity: "-"`), with the hardened runtime off. No Developer ID, no
-  notarisation.
-- Build steps (`desktop/README.md`):
-  1. `npm ci` in `desktop/`.
-  2. `scripts/bundle-shell.sh`: packages the shell from the same checkout
-     and fails if `payload/source/harmony_shell_assets.h` changed, so the
-     app carries exactly the bundle the matching `codex_webui` embeds.
-  3. `npx electron-builder --mac --arm64 --x64`.
-  4. `shasum -a 256 dist/*.zip dist/*.dmg`.
-- Release:
-  - a GitHub release "Melodious for macOS <version>", tagged
-    `desktop-v<version>`, on the same commit as a hub build;
-  - the zips and dmgs attached, with their SHA-256 in the notes;
-  - published by hand.
-- Opening an unsigned app (README and release notes):
-  - Finder: Control-click → Open. On recent macOS, where that no longer
-    offers Open: System Settings → Privacy & Security → Open Anyway.
-  - Terminal: `xattr -dr com.apple.quarantine /Applications/Melodious.app`.
+- **Windows:** `npm run dist:win` stages the shell and official CPython
+  3.12.10 embeddable x64 runtime, SHA-256-verified from python.org, then
+  builds the unsigned per-user installer and zip. `winhid` uses stdlib
+  `ctypes`; no host Python, pip or HID wheel is required. Windows' OpenSSH
+  Client (`ssh.exe`, `ssh-keygen.exe`) must be enabled. CI runs source and
+  packaged E2E tests, including native USB enumeration without a hub.
+- **macOS:** `npm run dist` stages the same shell plus relocatable CPython
+  and `hidapi` for arm64 and x64, then builds separate zip/dmg files.
+  Nested Mach-O files and the app are ad-hoc signed; no Developer ID or
+  notarisation. `npm run test:dist` verifies both architectures.
+- Both packages put `wizard-python`, `hub-root`, the installer script and
+  required payload helpers outside `app.asar`. Upstream runtime licences
+  are retained. Resources exclude venvs, tests, caches and Hub ID handoffs.
+- **Linux:** source only, with Python/USB dependencies, OpenSSH and `unzip`
+  supplied by the user. `npm start` runs the same wizard; no Linux runtime
+  or desktop release artifact is bundled.
+- Build, test and prerequisite details: [`desktop/README.md`](../desktop/README.md).
+  Shell staging checks that the committed shell header hasn't changed.
+- The owner publishes releases with the platform downloads and SHA-256
+  checksums on the same commit as the hub build. No automatic publishing.
 - **Hub and app versions:** the app's bundle matches the hub software from
   the same commit. An older hub without a route the bundle uses answers
   404. The catalog import then says "Your hub's Melodious software is older
