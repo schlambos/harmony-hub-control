@@ -49,9 +49,19 @@
   function extractDetectedHost(classifyResult) {
     if (!classifyResult || typeof classifyResult !== "object") return "";
     const lanHost = classifyResult.signals?.lan?.host;
-    if (isUnmaskedHost(lanHost)) return String(lanHost).trim();
-    const ssdpFirst = classifyResult.signals?.ssdp?.candidates?.[0]?.host;
-    if (isUnmaskedHost(ssdpFirst)) return String(ssdpFirst).trim();
+    if (isUnmaskedHost(lanHost) && String(lanHost).trim() !== "0.0.0.0") {
+      return String(lanHost).trim();
+    }
+    const usbIp = classifyResult.signals?.usb?.discoveryInfo?.ip;
+    if (isUnmaskedHost(usbIp) && String(usbIp).trim() !== "0.0.0.0") {
+      return String(usbIp).trim();
+    }
+    const usbConnected = Boolean(classifyResult.signals?.usb?.connected);
+    const candidates = classifyResult.signals?.ssdp?.candidates;
+    if (!usbConnected && Array.isArray(candidates) && candidates.length === 1) {
+      const ssdpOnly = candidates[0]?.host;
+      if (isUnmaskedHost(ssdpOnly)) return String(ssdpOnly).trim();
+    }
     return "";
   }
 
@@ -416,7 +426,10 @@
           <div style="display:flex;justify-content:flex-end;gap:var(--space-2);flex-wrap:wrap;margin-top:var(--space-2)">
             ${
               r.verdict === "melodious-installed" && (detectedHost || wiz.hostInput.trim())
-                ? `<button type="button" class="btn btn-filled" id="wizardSkipToStep3Btn" ${wiz.busy ? "disabled" : ""}>
+                ? `<button type="button" class="btn btn-text btn-sm" id="wizardStartFreshBtn" ${wiz.busy ? "disabled" : ""}>
+                     Start fresh / Factory reset…
+                   </button>
+                   <button type="button" class="btn btn-filled" id="wizardSkipToStep3Btn" ${wiz.busy ? "disabled" : ""}>
                      Connect &amp; Open Hub →
                    </button>`
                 : `<button type="button" class="btn btn-filled" id="wizardToStep2Btn" data-next-branch="${escapeHtml(nextBranch)}" ${wiz.busy ? "disabled" : ""}>

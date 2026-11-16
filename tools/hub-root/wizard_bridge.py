@@ -162,7 +162,10 @@ def is_usb_wedge_error(message: str) -> bool:
         needle in low
         for needle in (
             "ltcp hbus error frame",
+            "returned raw ltcp error packet",
+            "returned unsupported raw ltcp error ack packet",
             "write returned no bytes",
+            "hid write failed at output report",
             "timed out without matching response",
             "did not return the expected raw ltcp response",
             "returned no data before eof",
@@ -614,6 +617,49 @@ def resolve_single_usb_device(
     usb_args.device_path = chosen.path
     usb_args.backend = chosen.backend
     return devices, summarized_devices, None
+
+
+def reenumerate_single_usb_device(
+    usb_args: argparse.Namespace,
+) -> usb.DeviceInfo | None:
+    """Re-enumerate USB HID devices after a hub reboot, updating usb_args in place.
+
+    The caller MUST clear any stale pre-reboot ``device_path`` before calling:
+    on macOS ``hidapi`` the pre-reboot path is an ephemeral IOKit
+    ``DevSrvsID:...`` handle that is never valid after re-enumeration, and
+    ``HarmonyUsbBridge.enumerate_devices()`` short-circuits to that stale
+    path whenever ``device_path`` is non-empty. Returns the single device
+    (with ``usb_args`` updated) or ``None`` when 0 or 2+ devices are present.
+    """
+    usb_args.device_path = ""
+    try:
+        with silence_library_stdout():
+            bridge = usb.HarmonyUsbBridge(usb_args)
+            devices = bridge.enumerate_devices()
+    except Exception:
+        return None
+    if len(devices) != 1:
+        return None
+    usb_args.device_path = devices[0].path
+    usb_args.backend = devices[0].backend
+    return devices[0]
+
+
+def post_reboot_raw_preflight_ready(
+    usb_args: argparse.Namespace,
+) -> tuple[bool, Exception | None]:
+    """Run a quick raw /rf/deviceinfo preflight inside usb_process_lock() before HBus.
+
+    Prevents calling UsbHbusTransport mid-boot while hal is still initializing
+    the USB HID gadget after a hub reboot.
+    """
+    try:
+        with silence_library_stdout(), usb.usb_process_lock():
+            preflight_bridge = usb.HarmonyUsbBridge(usb_args)
+            usb.raw_read_file(preflight_bridge, usb.RAW_DEVICE_INFO_PATH, 50, 5000)
+        return True, None
+    except Exception as exc:
+        return False, exc
 
 
 def run_usb_probes(
@@ -1137,6 +1183,7 @@ def run_usb_flash_firmware_action(
 
     emit({"type": "progress", "step": "usb-flash-validate-bundle", "status": "ok", "bundle": bundle_summary})
 
+    explicit_device_path = bool((usb_args.device_path or "").strip())
     devices, summarized_devices, enum_error = resolve_single_usb_device(usb_args, mask=mask, emit=emit)
     if enum_error:
         return False, {"ok": False, "connected": False, "devices": summarized_devices, "error": enum_error}
@@ -1253,8 +1300,21 @@ def run_usb_flash_firmware_action(
                 "message": f"Waiting for hub reboot and verifying firmware {REQUIRED_FIRMWARE}",
             }
         )
+        # Give the hub a moment to drop off USB after the firmware reboot so
+        # post-reboot polling does not race re-enumeration.
+        time.sleep(5.0)
         deadline = time.monotonic() + verify_timeout_s
         while time.monotonic() < deadline:
+            if not explicit_device_path:
+                # macOS hidapi DevSrvsID:... handles go stale across reboot;
+                # re-enumerate first and only probe once exactly one device is back.
+                if reenumerate_single_usb_device(usb_args) is None:
+                    time.sleep(1.0)
+                    continue
+            preflight_ok, _preflight_exc = post_reboot_raw_preflight_ready(usb_args)
+            if not preflight_ok:
+                time.sleep(2.0)
+                continue
             try:
                 with silence_library_stdout():
                     transport = usb.UsbHbusTransport(usb_args)
@@ -1390,16 +1450,35 @@ def run_usb_tde_enable_action(
                 {
                     "type": "step",
                     "step": "usb-tde-marker-fallback",
-                    "message": "Writing fallback marker 1 to ../../etc/tdeenable because /etc/tdeenable read back empty (598)",
+                    "message": "Writing fallback marker '1' to ../../etc/tdeenable because /etc/tdeenable read back empty (598)",
                 }
             )
             with silence_library_stdout():
                 transport = usb.UsbHbusTransport(usb_args)
-                transport.call(
+                put_reply = transport.call(
                     "connect.jsonfiletransfer?put",
-                    {"path": "../../etc", "file": "tdeenable", "content": 1},
+                    {"path": "../../etc", "file": "tdeenable", "content": "1"},
                     timeout=timeout_sec,
                 )
+            put_inner = put_reply.get("data") if isinstance(put_reply, dict) else {}
+            put_code = str(
+                put_inner.get("errorCode", put_reply.get("code", ""))
+                if isinstance(put_inner, dict) and "errorCode" in put_inner
+                else put_reply.get("code", "")
+            )
+            put_err_str = str(
+                put_inner.get("errorString", "")
+                if isinstance(put_inner, dict)
+                else ""
+            ).strip()
+            if put_code not in ("200", ""):
+                detail = f": {put_err_str}" if put_err_str else ""
+                msg = f"Fallback ../../etc/tdeenable write failed (errorCode={put_code}{detail})"
+                emit({"type": "progress", "step": "usb-tde-marker-fallback", "status": "failed", "code": put_code, "error": msg})
+                return False, {"ok": False, "tdeReadback": tde_text, "fallbackWritten": False, "code": put_code, "error": msg}
+
+            with silence_library_stdout():
+                transport = usb.UsbHbusTransport(usb_args)
                 verify_reply = transport.call(
                     "connect.jsonfiletransfer?get",
                     {"path": "../../etc", "file": "tdeenable"},
@@ -1476,6 +1555,7 @@ def run_usb_provision_local_action(
         "language": "en",
     }
 
+    explicit_device_path = bool((usb_args.device_path or "").strip())
     devices, summarized_devices, enum_error = resolve_single_usb_device(usb_args, mask=mask, emit=emit)
     if enum_error:
         return False, {"ok": False, "connected": False, "devices": summarized_devices, "error": enum_error}
@@ -1562,14 +1642,34 @@ def run_usb_provision_local_action(
             emit({"type": "progress", "step": "usb-provision-reboot", "status": "warning", "warning": msg})
 
     emit({"type": "step", "step": "usb-provision-verify", "message": "Verifying setup.account?getProvisionInfo reports mode 3 and numeric activeRemoteId"})
+    if not no_reboot and reboot_sent and verify_timeout_s > 0:
+        # Give the hub a moment to drop off USB after the 0xFF/0x00 reboot so
+        # post-reboot polling does not race re-enumeration.
+        time.sleep(5.0)
     deadline = time.monotonic() + max(0, verify_timeout_s)
     last_error: Exception | None = None
     prov_summary: dict[str, Any] = {}
     while True:
+        if not no_reboot and reboot_sent:
+            if not explicit_device_path:
+                # macOS hidapi DevSrvsID:... handles go stale across reboot;
+                # re-enumerate first and only probe once exactly one device is back.
+                if reenumerate_single_usb_device(usb_args) is None:
+                    if time.monotonic() >= deadline:
+                        break
+                    time.sleep(1.0)
+                    continue
+            preflight_ok, preflight_exc = post_reboot_raw_preflight_ready(usb_args)
+            if not preflight_ok:
+                last_error = preflight_exc
+                if time.monotonic() >= deadline:
+                    break
+                time.sleep(2.0)
+                continue
         try:
             with silence_library_stdout():
                 transport = usb.UsbHbusTransport(usb_args)
-                prov_reply = transport.call("setup.account?getProvisionInfo", {}, timeout=timeout_sec)
+                prov_reply = transport.call("setup.account?getProvisionInfo", {}, timeout=8)
             prov_summary = summarize_provision_info_reply(prov_reply, mask=mask)
             verified = (
                 bool(prov_summary.get("ok"))
@@ -1719,6 +1819,80 @@ def run_usb_seed_automation_action(
         return False, {"ok": False, "error": msg, "usbWedge": wedge}
 
 
+def wait_for_usb_log_writer_ready(
+    usb_args: argparse.Namespace,
+    *,
+    timeout_s: float = 60.0,
+    mask: bool = True,
+    emit: Callable[[dict[str, Any]], None],
+) -> tuple[bool, dict[str, Any] | None]:
+    """Wait until mode-3 harmony.log?put answers 200 over USB hbus before staging Lua code.
+
+    After usb-provision-local's 0xFF/0x00 reboot, setup.account?getProvisionInfo and
+    connect.jsonfiletransfer come online ~20s earlier in boot than the harmony.log Lua
+    plugin. Starting usb-root before harmony.log?put is registered causes
+    harmony_xmpp_root_shell.py to fall back to connect.jsonfiletransfer?put, which
+    rejects Lua source with 598 ('Failed to decode json'). Probing with an empty
+    resource list writes zero files while confirming harmony.log?put is live.
+    """
+    emit(
+        {
+            "type": "step",
+            "step": "usb-log-writer-ready",
+            "message": "Verifying mode-3 harmony.log?put writer readiness over USB hbus",
+        }
+    )
+    deadline = time.monotonic() + max(0.0, float(timeout_s))
+    last_code = ""
+    last_exc: Exception | None = None
+    while True:
+        try:
+            with silence_library_stdout():
+                transport = usb.UsbHbusTransport(usb_args)
+                reply = transport.call("harmony.log?put", {"resource": []}, timeout=8)
+            inner = reply.get("data") if isinstance(reply, dict) else {}
+            code = str(
+                inner.get("errorCode", reply.get("code", ""))
+                if isinstance(inner, dict)
+                else reply.get("code", "")
+            )
+            if code in ("200", ""):
+                emit({"type": "progress", "step": "usb-log-writer-ready", "status": "ok"})
+                return True, None
+            last_code = code
+            last_exc = None
+        except Exception as exc:
+            if is_usb_wedge_error(str(exc)):
+                msg = mask_free_text(str(exc), mask)
+                emit(
+                    {
+                        "type": "progress",
+                        "step": "usb-log-writer-ready",
+                        "status": "failed",
+                        "error": msg,
+                        "usbWedge": True,
+                    }
+                )
+                return False, {"ok": False, "error": msg, "usbWedge": True}
+            last_exc = exc
+
+        if time.monotonic() >= deadline:
+            break
+        time.sleep(2.0)
+
+    detail = (
+        f"error={mask_free_text(str(last_exc), mask)}"
+        if last_exc is not None
+        else f"code={last_code or '?'}"
+    )
+    msg = (
+        f"Mode-3 harmony.log?put writer is not ready over USB ({detail}). "
+        "Ensure local mode-3 provisioning succeeded and the hub has finished booting."
+    )
+    emit({"type": "progress", "step": "usb-log-writer-ready", "status": "failed", "error": msg})
+    return False, {"ok": False, "error": msg, "usbWedge": False}
+
+
 def run_root_action(
     *,
     action: str,
@@ -1764,6 +1938,15 @@ def run_root_action(
             wedge = is_usb_wedge_error(str(exc))
             emit({"type": "progress", "step": "usb-preflight", "status": "failed", "error": msg, "usbWedge": wedge})
             return False, {"ok": False, "error": msg, "usbWedge": wedge}
+
+        log_ready, log_err = wait_for_usb_log_writer_ready(
+            usb_args,
+            timeout_s=60.0,
+            mask=mask,
+            emit=emit,
+        )
+        if not log_ready and log_err is not None:
+            return False, log_err
 
     priv_path = pathlib.Path(private_key).expanduser() if private_key.strip() else lan.default_key_path()
     pub_path = pathlib.Path(pubkey).expanduser() if pubkey.strip() else pathlib.Path(str(priv_path) + ".pub")
@@ -1865,7 +2048,7 @@ def build_parser() -> argparse.ArgumentParser:
     ssid_group.add_argument("--hide-ssids", dest="show_ssids", action="store_false")
     # Firmware flash options
     parser.add_argument("--firmware-file", default="")
-    parser.add_argument("--verify-timeout-s", type=int, default=90)
+    parser.add_argument("--verify-timeout-s", type=int, default=180)
     parser.add_argument("--skip-post-reboot-verify", action="store_true")
     # Local provisioning / AutomationConfig / root options
     parser.add_argument("--remote-id", default="")

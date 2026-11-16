@@ -26,7 +26,7 @@
 const fs = require("node:fs");
 const os = require("node:os");
 const path = require("node:path");
-const { spawn } = require("node:child_process");
+const { execFile, spawn } = require("node:child_process");
 const { normalizeHost } = require("../settings");
 const { probeHub } = require("../discovery");
 const { RELEASES_URL, isGitHubUrl, latestHubRelease } = require("../updates");
@@ -183,6 +183,56 @@ function buildInstallerArgs({
     args.push("--preflight-only");
   }
   return args;
+}
+
+function detectHostKeyChanged(lines) {
+  if (!Array.isArray(lines) || lines.length === 0) {
+    return { hostKeyChanged: false, fingerprint: "" };
+  }
+  const text = lines.map((l) => String(l ?? "")).join("\n");
+  const changed =
+    /REMOTE HOST IDENTIFICATION HAS CHANGED/i.test(text) ||
+    /Host key verification failed/i.test(text);
+  if (!changed) {
+    return { hostKeyChanged: false, fingerprint: "" };
+  }
+  const fpMatch = /\b(SHA256:[A-Za-z0-9+/=]+)/.exec(text);
+  return {
+    hostKeyChanged: true,
+    fingerprint: fpMatch ? fpMatch[1] : "",
+  };
+}
+
+async function clearKnownHost({
+  host,
+  sshPort = 22,
+  sshKeygenPath = "/usr/bin/ssh-keygen",
+  execFileImpl = execFile,
+} = {}) {
+  const cleanHost = validateInstallerHost(host);
+  const numericPort = Number(sshPort ?? 22);
+  if (!Number.isInteger(numericPort) || numericPort < 1 || numericPort > 65535) {
+    throw new Error("Invalid SSH port");
+  }
+  const target = numericPort === 22 ? cleanHost : `[${cleanHost}]:${numericPort}`;
+  return new Promise((resolve, reject) => {
+    execFileImpl(sshKeygenPath, ["-R", target], (err, stdout = "", stderr = "") => {
+      const combined = `${stdout ?? ""}\n${stderr ?? ""}\n${err?.message ?? ""}`;
+      if (err) {
+        if (/not found|no such file or directory/i.test(combined)) {
+          resolve({ ok: true, target, removed: false });
+          return;
+        }
+        reject(
+          new Error(
+            `Failed to clear stale SSH host key for ${target}: ${(stderr || err.message || String(err)).trim()}`
+          )
+        );
+        return;
+      }
+      resolve({ ok: true, target, removed: !/not found/i.test(combined) });
+    });
+  });
 }
 
 function stageInstallerWorkspace({
@@ -524,6 +574,7 @@ async function installFreshHub({
   authHeader = null,
   preflightOnly = false,
   removeRootToolLeftovers = true,
+  replaceStaleHostKey = false,
   processTimeoutMs = 900000,
   probeTimeoutMs = 3000,
   probeWaitMs = 90000,
@@ -541,6 +592,8 @@ async function installFreshHub({
   installerScriptPath = DEFAULT_INSTALLER_SCRIPT,
   helpersDirPath = DEFAULT_HELPERS_DIR,
   spawnImpl = spawn,
+  execFileImpl = execFile,
+  clearKnownHostImpl = clearKnownHost,
   tmpRootDir = os.tmpdir(),
   onEvent = null,
 } = {}) {
@@ -643,6 +696,20 @@ async function installFreshHub({
       removeRootToolLeftovers,
     });
 
+    if (replaceStaleHostKey === true) {
+      emit({
+        type: "step",
+        step: "install-refresh-known-host",
+        host: cleanHost,
+        message: `Refreshing saved SSH host key for ${cleanHost} after fresh root…`,
+      });
+      await clearKnownHostImpl({
+        host: cleanHost,
+        sshPort,
+        execFileImpl,
+      });
+    }
+
     emit({
       type: "step",
       step: "install-webui",
@@ -668,6 +735,7 @@ async function installFreshHub({
       runOutcome.verdict === "ALLOWED";
 
     if (!allowedAndZero) {
+      const hostKeyInfo = detectHostKeyChanged(runOutcome.lines);
       const lastErrLine = [...runOutcome.stderrLines]
         .reverse()
         .find((l) => l.startsWith("ERROR:") || Boolean(l));
@@ -676,6 +744,9 @@ async function installFreshHub({
         errMsg = runOutcome.spawnError;
       } else if (runOutcome.timedOut) {
         errMsg = `install_webui.py timed out after ${processTimeoutMs} ms`;
+      } else if (hostKeyInfo.hostKeyChanged) {
+        const fpSuffix = hostKeyInfo.fingerprint ? ` (${hostKeyInfo.fingerprint})` : "";
+        errMsg = `SSH host key changed on ${cleanHost}${fpSuffix}. This is normal after a factory reset or re-root, which generates a new Dropbear SSH key on the hub.`;
       } else if (runOutcome.verdict && runOutcome.verdict !== "ALLOWED") {
         const detail = runOutcome.verdictReasons.length
           ? `: ${runOutcome.verdictReasons.join("; ")}`
@@ -693,6 +764,8 @@ async function installFreshHub({
         type: "error",
         step: "install-webui",
         verdict: runOutcome.verdict || null,
+        hostKeyChanged: hostKeyInfo.hostKeyChanged,
+        hostKeyFingerprint: hostKeyInfo.fingerprint || null,
         message: errMsg,
       });
 
@@ -709,6 +782,8 @@ async function installFreshHub({
         timedOut: runOutcome.timedOut,
         verdict: runOutcome.verdict || null,
         verdictReasons: runOutcome.verdictReasons,
+        hostKeyChanged: hostKeyInfo.hostKeyChanged,
+        hostKeyFingerprint: hostKeyInfo.fingerprint || null,
         webUiReachable: false,
         webUi: null,
         lines: runOutcome.lines,
@@ -825,6 +900,8 @@ module.exports = {
   validateInstallerHost,
   buildInstallerArgs,
   stageInstallerWorkspace,
+  detectHostKeyChanged,
+  clearKnownHost,
   fetchLatestHubRelease,
   installFreshHub,
 };

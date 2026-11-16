@@ -601,10 +601,30 @@ function runWizardBridge({
       }
       const exitCode = typeof code === "number" ? code : -1;
       const errorEvent = [...events].reverse().find((e) => e && e.type === "error");
+      const failedProgressEvent = [...events]
+        .reverse()
+        .find((e) => e && e.type === "progress" && e.status === "failed");
+      const failedProgressErr =
+        failedProgressEvent?.error || failedProgressEvent?.message || null;
+      const nestedResultErr =
+        resultEvent?.provisionLocal?.error ||
+        resultEvent?.firmwareFlash?.error ||
+        resultEvent?.tdeEnable?.error ||
+        resultEvent?.automationConfig?.error ||
+        resultEvent?.wifiConnect?.error ||
+        resultEvent?.factoryReset?.error ||
+        resultEvent?.root?.error ||
+        resultEvent?.wifiScan?.error ||
+        resultEvent?.wifiStatus?.error ||
+        resultEvent?.usb?.error ||
+        null;
       const ok = Boolean(!timedOut && exitCode === 0 && resultEvent && resultEvent.ok);
       const cleanStderr = scrubSecretText(stderrText.trim(), secretToScrub);
       const rawFallbackErr =
-        errorEvent?.message || (ok ? null : cleanStderr || resultEvent?.usb?.error || null);
+        errorEvent?.message ||
+        failedProgressErr ||
+        nestedResultErr ||
+        (ok ? null : cleanStderr || null);
       finish({
         ok,
         exitCode,

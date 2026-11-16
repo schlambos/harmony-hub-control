@@ -654,13 +654,16 @@ class WizardBridgeTests(unittest.TestCase):
             )
 
         buf = io.StringIO()
+        preflight_read = usb.RawFileRead(device.path, usb.RAW_DEVICE_INFO_PATH, 2, b"{}", Mock(), [], Mock())
         with (
             patch.object(usb, "usb_process_lock", return_value=contextlib.nullcontext()),
             patch.object(usb, "parse_hfw2_bundle", return_value=fake_bundle),
             patch.object(usb, "firmware_bundle_summary", return_value=fake_bundle_summary),
             patch.object(usb.HarmonyUsbBridge, "enumerate_devices", return_value=[device]),
+            patch.object(usb, "raw_read_file", return_value=preflight_read),
             patch.object(usb, "UsbHbusTransport", side_effect=MatchingSkinHbus),
             patch.object(usb, "run_flash_firmware", side_effect=fake_run_flash),
+            patch.object(wb.time, "sleep", return_value=None),
         ):
             rc = wb.run_wizard_bridge(
                 [
@@ -807,11 +810,13 @@ class WizardBridgeTests(unittest.TestCase):
                 raise AssertionError(cmd)
 
         buf = io.StringIO()
+        preflight_read = usb.RawFileRead(device.path, usb.RAW_DEVICE_INFO_PATH, 2, b"{}", Mock(), [], Mock())
         with (
             patch.object(usb, "usb_process_lock", return_value=contextlib.nullcontext()),
             patch.object(usb.HarmonyUsbBridge, "enumerate_devices", return_value=[device]),
             patch.object(usb.HarmonyUsbBridge, "open_handle", return_value=(fake_handle, device)),
             patch.object(usb, "raw_reboot_device_on_handle", return_value=Mock()),
+            patch.object(usb, "raw_read_file", return_value=preflight_read),
             patch.object(usb, "UsbHbusTransport", side_effect=ReconnectingHbus),
             patch.object(wb.time, "sleep") as mock_sleep,
         ):
@@ -830,7 +835,9 @@ class WizardBridgeTests(unittest.TestCase):
 
         self.assertEqual(rc, 0)
         self.assertEqual(provision_attempts, 3)
-        self.assertEqual(mock_sleep.call_count, 2)
+        # 5.0s post-reboot settle delay + 2x 1.0s transient-disconnect retries
+        self.assertEqual(mock_sleep.call_count, 3)
+        self.assertEqual(mock_sleep.call_args_list[0].args, (5.0,))
         result = parse_ndjson(buf.getvalue())[-1]["provisionLocal"]
         self.assertTrue(result["ok"])
         self.assertTrue(result["rebootSent"])
@@ -926,8 +933,9 @@ class WizardBridgeTests(unittest.TestCase):
         self.assertTrue(tde_res["fallbackWritten"])
         self.assertEqual(
             jft_calls[1],
-            ("connect.jsonfiletransfer?put", {"path": "../../etc", "file": "tdeenable", "content": 1}),
+            ("connect.jsonfiletransfer?put", {"path": "../../etc", "file": "tdeenable", "content": "1"}),
         )
+        self.assertIs(type(jft_calls[1][1]["content"]), str)
 
         # 3. usb-provision-local writes mode 3 with strictly integer remoteId + reboots + verifies getProvisionInfo
         written_prefs: dict = {}
@@ -958,12 +966,15 @@ class WizardBridgeTests(unittest.TestCase):
                 raise AssertionError(cmd)
 
         buf = io.StringIO()
+        preflight_ok_read = usb.RawFileRead(device.path, usb.RAW_DEVICE_INFO_PATH, 2, b"{}", Mock(), [], Mock())
         with (
             patch.object(usb, "usb_process_lock", return_value=contextlib.nullcontext()),
             patch.object(usb.HarmonyUsbBridge, "enumerate_devices", return_value=[device]),
             patch.object(usb.HarmonyUsbBridge, "open_handle", return_value=(fake_handle, device)),
             patch.object(usb, "raw_reboot_device_on_handle", return_value=Mock()),
+            patch.object(usb, "raw_read_file", return_value=preflight_ok_read),
             patch.object(usb, "UsbHbusTransport", side_effect=ProvisionHbus),
+            patch.object(wb.time, "sleep", return_value=None),
             patch.object(
                 wb.sys,
                 "stdin",
@@ -1031,10 +1042,22 @@ class WizardBridgeTests(unittest.TestCase):
         # 5. Root actions: usb-root, lan-root-xmpp, and post-root (with --allow-unproven-post)
         lan_main_calls: list[list[str]] = []
         preflight_read = usb.RawFileRead(device.path, usb.RAW_DEVICE_INFO_PATH, 2, b"{}", Mock(), [], Mock())
+
+        class ReadyLogHbus:
+            def __init__(self, _args):
+                pass
+
+            def call(self, cmd, params, timeout=20):
+                self.last = (cmd, params, timeout)
+                if cmd == "harmony.log?put":
+                    return {"id": "log1", "code": 200, "data": {"errorCode": "200", "resource": []}}
+                raise AssertionError(cmd)
+
         with (
             patch.object(usb, "usb_process_lock", return_value=contextlib.nullcontext()),
             patch.object(usb.HarmonyUsbBridge, "enumerate_devices", return_value=[device]),
             patch.object(usb, "raw_read_file", return_value=preflight_read),
+            patch.object(usb, "UsbHbusTransport", side_effect=ReadyLogHbus),
             patch.object(lan, "main", side_effect=lambda argv: lan_main_calls.append(argv)),
             patch.object(lan, "is_port_open", return_value=True),
         ):
@@ -1077,6 +1100,372 @@ class WizardBridgeTests(unittest.TestCase):
             post_root_res = parse_ndjson(buf_post_root.getvalue())[-1]["root"]
             self.assertTrue(post_root_res["ok"])
             self.assertTrue(post_root_res["experimental"])
+
+    def test_provision_local_reenumerates_stale_devsrvsid_after_reboot(self) -> None:
+        old_dev = usb.DeviceInfo(backend="hidapi", path="DevSrvsID:old", vendor_id=0x046D, product_id=0xC129)
+        new_dev = usb.DeviceInfo(backend="hidapi", path="DevSrvsID:new", vendor_id=0x046D, product_id=0xC129)
+        fake_handle = Mock()
+        seen_paths: list[str] = []
+        written_prefs: dict = {}
+
+        class TrackingHbus:
+            def __init__(self, args):
+                seen_paths.append(args.device_path)
+                self.args = args
+
+            def call(self, cmd, params, timeout=20):
+                if cmd == "connect.jsonfiletransfer?put":
+                    written_prefs.update(params["content"])
+                    return {"id": "1", "code": 200, "data": {"errorCode": "200"}}
+                if cmd == "connect.jsonfiletransfer?get":
+                    return {"id": "2", "code": 200, "data": {"errorCode": "200", "content": written_prefs}}
+                if cmd == "setup.account?getProvisionInfo":
+                    return {
+                        "id": "3",
+                        "code": 200,
+                        "data": {"mode": 3, "activeRemoteId": written_prefs["remoteId"], "accountId": written_prefs["accountId"]},
+                    }
+                raise AssertionError(cmd)
+
+        buf = io.StringIO()
+        new_preflight = usb.RawFileRead(new_dev.path, usb.RAW_DEVICE_INFO_PATH, 2, b"{}", Mock(), [], Mock())
+        with (
+            patch.object(usb, "usb_process_lock", return_value=contextlib.nullcontext()),
+            patch.object(usb.HarmonyUsbBridge, "enumerate_devices", side_effect=[[old_dev], [new_dev], [new_dev], [new_dev]]),
+            patch.object(usb.HarmonyUsbBridge, "open_handle", return_value=(fake_handle, old_dev)),
+            patch.object(usb, "raw_reboot_device_on_handle", return_value=Mock()),
+            patch.object(usb, "raw_read_file", return_value=new_preflight),
+            patch.object(usb, "UsbHbusTransport", side_effect=TrackingHbus),
+            patch.object(wb.time, "sleep", return_value=None),
+        ):
+            rc = wb.run_wizard_bridge(
+                ["--action", "usb-provision-local", "--confirm-action", "usb-provision-local", "--verify-timeout-s", "5"],
+                stream=buf,
+                stdin_stream=io.StringIO('{"remoteId": 20261111}\n'),
+            )
+        self.assertEqual(rc, 0)
+        result = parse_ndjson(buf.getvalue())[-1]["provisionLocal"]
+        self.assertTrue(result["ok"])
+        # Post-reboot verify must have picked up the re-enumerated DevSrvsID:new device,
+        # never the stale pre-reboot DevSrvsID:old handle.
+        self.assertIn("DevSrvsID:new", seen_paths)
+        self.assertNotEqual(seen_paths[-1], "DevSrvsID:old")
+
+    def test_provision_local_keeps_explicit_device_path(self) -> None:
+        pinned = usb.DeviceInfo(backend="hidapi", path="DevSrvsID:pinned", vendor_id=0x046D, product_id=0xC129)
+        fake_handle = Mock()
+        seen_paths: list[str] = []
+        written_prefs: dict = {}
+
+        class TrackingHbus:
+            def __init__(self, args):
+                seen_paths.append(args.device_path)
+                self.args = args
+
+            def call(self, cmd, params, timeout=20):
+                if cmd == "connect.jsonfiletransfer?put":
+                    written_prefs.update(params["content"])
+                    return {"id": "1", "code": 200, "data": {"errorCode": "200"}}
+                if cmd == "connect.jsonfiletransfer?get":
+                    return {"id": "2", "code": 200, "data": {"errorCode": "200", "content": written_prefs}}
+                if cmd == "setup.account?getProvisionInfo":
+                    return {
+                        "id": "3",
+                        "code": 200,
+                        "data": {"mode": 3, "activeRemoteId": written_prefs["remoteId"], "accountId": written_prefs["accountId"]},
+                    }
+                raise AssertionError(cmd)
+
+        buf = io.StringIO()
+        pinned_preflight = usb.RawFileRead(pinned.path, usb.RAW_DEVICE_INFO_PATH, 2, b"{}", Mock(), [], Mock())
+        with (
+            patch.object(usb, "usb_process_lock", return_value=contextlib.nullcontext()),
+            patch.object(usb.HarmonyUsbBridge, "enumerate_devices", return_value=[pinned]),
+            patch.object(usb.HarmonyUsbBridge, "open_handle", return_value=(fake_handle, pinned)),
+            patch.object(usb, "raw_reboot_device_on_handle", return_value=Mock()),
+            patch.object(usb, "raw_read_file", return_value=pinned_preflight),
+            patch.object(usb, "UsbHbusTransport", side_effect=TrackingHbus),
+            patch.object(wb.time, "sleep", return_value=None),
+        ):
+            rc = wb.run_wizard_bridge(
+                [
+                    "--action", "usb-provision-local", "--confirm-action", "usb-provision-local",
+                    "--usb-device-path", "DevSrvsID:pinned",
+                    "--verify-timeout-s", "5",
+                ],
+                stream=buf,
+                stdin_stream=io.StringIO('{"remoteId": 20261111}\n'),
+            )
+        self.assertEqual(rc, 0)
+        self.assertTrue(seen_paths)
+        for p in seen_paths:
+            self.assertEqual(p, "DevSrvsID:pinned")
+
+    def test_flash_firmware_reenumerates_stale_devsrvsid_after_reboot(self) -> None:
+        old_dev = usb.DeviceInfo(backend="hidapi", path="DevSrvsID:old", vendor_id=0x046D, product_id=0xC129)
+        new_dev = usb.DeviceInfo(backend="hidapi", path="DevSrvsID:new", vendor_id=0x046D, product_id=0xC129)
+        fake_bundle = usb.FirmwareBundle(
+            path=pathlib.Path("/tmp/4.15.600.2987731.hfw2"),
+            intended_skins=[106],
+            images=[
+                usb.FirmwareImage(
+                    name="ota-image.bin", remote_path="/fw/otaupdate", operation_type="firmwareupgrade",
+                    data=b"fwdata", checksum_type="MD5", checksum_seed=0, checksum_offset=0,
+                    checksum_length=6, checksum_expected="0" * 32, reset=True,
+                )
+            ],
+        )
+        fake_bundle_summary = {
+            "path": "/tmp/4.15.600.2987731.hfw2", "size": 6, "sha256": "abc",
+            "intendedSkins": [106],
+            "images": [{"name": "ota-image.bin", "remotePath": "/fw/otaupdate", "operationType": "firmwareupgrade", "bytes": 6}],
+        }
+        seen_paths: list[str] = []
+        sysinfo_calls = 0
+
+        class TrackingHbus:
+            def __init__(self, args):
+                seen_paths.append(args.device_path)
+                self.args = args
+
+            def call(self, cmd, params, timeout=20):
+                nonlocal sysinfo_calls
+                sysinfo_calls += 1
+                return {"id": str(sysinfo_calls), "code": 200, "data": {"fw_ver": "4.15.600", "skin": "0x6a"}}
+
+        def fake_run_flash(bridge, args):
+            print(json.dumps({"ok": True, "action": "flash-firmware", "usbHandoffOk": True, "images": [], "reboot": True}), flush=True)
+
+        buf = io.StringIO()
+        new_preflight = usb.RawFileRead(new_dev.path, usb.RAW_DEVICE_INFO_PATH, 2, b"{}", Mock(), [], Mock())
+        with (
+            patch.object(usb, "usb_process_lock", return_value=contextlib.nullcontext()),
+            patch.object(usb, "parse_hfw2_bundle", return_value=fake_bundle),
+            patch.object(usb, "firmware_bundle_summary", return_value=fake_bundle_summary),
+            patch.object(usb.HarmonyUsbBridge, "enumerate_devices", side_effect=[[old_dev], [new_dev], [new_dev]]),
+            patch.object(usb, "raw_read_file", return_value=new_preflight),
+            patch.object(usb, "UsbHbusTransport", side_effect=TrackingHbus),
+            patch.object(usb, "run_flash_firmware", side_effect=fake_run_flash),
+            patch.object(wb.time, "sleep", return_value=None),
+        ):
+            rc = wb.run_wizard_bridge(
+                ["--action", "usb-flash-firmware", "--confirm-action", "usb-flash-firmware",
+                 "--firmware-file", "/tmp/4.15.600.2987731.hfw2", "--verify-timeout-s", "5"],
+                stream=buf,
+            )
+        self.assertEqual(rc, 0)
+        flash_res = parse_ndjson(buf.getvalue())[-1]["firmwareFlash"]
+        self.assertTrue(flash_res["ok"])
+        self.assertIn("DevSrvsID:new", seen_paths)
+
+    def test_flash_firmware_keeps_explicit_device_path(self) -> None:
+        pinned = usb.DeviceInfo(backend="hidapi", path="DevSrvsID:pinned", vendor_id=0x046D, product_id=0xC129)
+        fake_bundle = usb.FirmwareBundle(
+            path=pathlib.Path("/tmp/4.15.600.2987731.hfw2"),
+            intended_skins=[106],
+            images=[
+                usb.FirmwareImage(
+                    name="ota-image.bin", remote_path="/fw/otaupdate", operation_type="firmwareupgrade",
+                    data=b"fwdata", checksum_type="MD5", checksum_seed=0, checksum_offset=0,
+                    checksum_length=6, checksum_expected="0" * 32, reset=True,
+                )
+            ],
+        )
+        fake_bundle_summary = {
+            "path": "/tmp/4.15.600.2987731.hfw2", "size": 6, "sha256": "abc",
+            "intendedSkins": [106],
+            "images": [{"name": "ota-image.bin", "remotePath": "/fw/otaupdate", "operationType": "firmwareupgrade", "bytes": 6}],
+        }
+        seen_paths: list[str] = []
+
+        class TrackingHbus:
+            def __init__(self, args):
+                seen_paths.append(args.device_path)
+                self.args = args
+
+            def call(self, cmd, params, timeout=20):
+                return {"id": "1", "code": 200, "data": {"fw_ver": "4.15.600", "skin": "0x6a"}}
+
+        def fake_run_flash(bridge, args):
+            print(json.dumps({"ok": True, "action": "flash-firmware", "usbHandoffOk": True, "images": [], "reboot": True}), flush=True)
+
+        buf = io.StringIO()
+        pinned_preflight = usb.RawFileRead(pinned.path, usb.RAW_DEVICE_INFO_PATH, 2, b"{}", Mock(), [], Mock())
+        with (
+            patch.object(usb, "usb_process_lock", return_value=contextlib.nullcontext()),
+            patch.object(usb, "parse_hfw2_bundle", return_value=fake_bundle),
+            patch.object(usb, "firmware_bundle_summary", return_value=fake_bundle_summary),
+            patch.object(usb.HarmonyUsbBridge, "enumerate_devices", return_value=[pinned]),
+            patch.object(usb, "raw_read_file", return_value=pinned_preflight),
+            patch.object(usb, "UsbHbusTransport", side_effect=TrackingHbus),
+            patch.object(usb, "run_flash_firmware", side_effect=fake_run_flash),
+            patch.object(wb.time, "sleep", return_value=None),
+        ):
+            rc = wb.run_wizard_bridge(
+                ["--action", "usb-flash-firmware", "--confirm-action", "usb-flash-firmware",
+                 "--firmware-file", "/tmp/4.15.600.2987731.hfw2",
+                 "--usb-device-path", "DevSrvsID:pinned",
+                 "--verify-timeout-s", "5"],
+                stream=buf,
+            )
+        self.assertEqual(rc, 0)
+        self.assertTrue(seen_paths)
+        for p in seen_paths:
+            self.assertEqual(p, "DevSrvsID:pinned")
+
+    def test_tde_enable_fallback_reports_failed_put_reply(self) -> None:
+        device = make_test_device()
+        fake_handle = Mock()
+        ack_resp = usb.RawResponse(
+            device.path, 0x03, 0, True, 10, "",
+            usb.hex_string(bytes.fromhex("FF 03 80 01 01 0A") + (b"\x00" * 58)),
+            usb.hex_string(bytes.fromhex("FF 03 80 01 01 0A") + (b"\x00" * 58)),
+            [], None,
+        )
+        tde_read = usb.RawFileRead(device.path, "/tde/enable", 1, b"1", Mock(), [], Mock())
+        seen_put_content: list[object] = []
+
+        class FailingPutTdeHbus:
+            def __init__(self, args):
+                self.args = args
+
+            def call(self, cmd, params, timeout=20):
+                if cmd == "connect.jsonfiletransfer?get":
+                    return {"id": "1", "code": "598", "msg": "Empty file", "data": {"errorCode": "598"}}
+                if cmd == "connect.jsonfiletransfer?put":
+                    seen_put_content.append(params.get("content"))
+                    return {
+                        "id": "2",
+                        "code": "598",
+                        "data": {"errorCode": "598", "errorString": "Invalid JSON content"},
+                    }
+                raise AssertionError(cmd)
+
+        buf = io.StringIO()
+        with (
+            patch.object(usb, "usb_process_lock", return_value=contextlib.nullcontext()),
+            patch.object(usb.HarmonyUsbBridge, "enumerate_devices", return_value=[device]),
+            patch.object(usb.HarmonyUsbBridge, "open_handle", return_value=(fake_handle, device)),
+            patch.object(usb, "raw_open_write_file_on_handle", return_value=10),
+            patch.object(usb.HarmonyUsbBridge, "raw_write_data_on_handle", return_value=[ack_resp]),
+            patch.object(usb, "raw_close_file_on_handle", return_value=Mock()),
+            patch.object(usb, "raw_read_file", return_value=tde_read),
+            patch.object(usb, "UsbHbusTransport", side_effect=FailingPutTdeHbus),
+        ):
+            rc = wb.run_wizard_bridge(
+                ["--action", "usb-tde-enable", "--confirm-action", "usb-tde-enable"],
+                stream=buf,
+            )
+        self.assertEqual(rc, 1)
+        self.assertEqual(seen_put_content, ["1"])
+        self.assertIs(type(seen_put_content[0]), str)
+        res = parse_ndjson(buf.getvalue())[-1]["tdeEnable"]
+        self.assertFalse(res["ok"])
+        self.assertIn("errorCode=598", res["error"])
+        self.assertIn("Invalid JSON content", res["error"])
+
+    def test_post_reboot_polling_gates_hbus_behind_raw_deviceinfo_preflight(self) -> None:
+        old_dev = usb.DeviceInfo(backend="hidapi", path="DevSrvsID:old", vendor_id=0x046D, product_id=0xC129)
+        new_dev = usb.DeviceInfo(backend="hidapi", path="DevSrvsID:new", vendor_id=0x046D, product_id=0xC129)
+        fake_handle = Mock()
+        written_prefs: dict = {}
+        events_log: list[str] = []
+        raw_preflight_calls = 0
+
+        def fake_raw_read_file(bridge, remote_path, packets_per_chunk, timeout_ms):
+            nonlocal raw_preflight_calls
+            self.assertEqual(remote_path, usb.RAW_DEVICE_INFO_PATH)
+            self.assertEqual(packets_per_chunk, 50)
+            self.assertEqual(timeout_ms, 5000)
+            raw_preflight_calls += 1
+            events_log.append(f"raw_preflight_{raw_preflight_calls}")
+            if raw_preflight_calls < 3:
+                raise usb.UsbBridgeError("hal still initializing USB gadget")
+            return usb.RawFileRead(new_dev.path, usb.RAW_DEVICE_INFO_PATH, 2, b"{}", Mock(), [], Mock())
+
+        class GateCheckedHbus:
+            def __init__(self, args):
+                self.args = args
+
+            def call(self, cmd, params, timeout=20):
+                if cmd == "connect.jsonfiletransfer?put":
+                    written_prefs.update(params["content"])
+                    return {"id": "1", "code": 200, "data": {"errorCode": "200"}}
+                if cmd == "connect.jsonfiletransfer?get":
+                    return {"id": "2", "code": 200, "data": {"errorCode": "200", "content": written_prefs}}
+                if cmd == "setup.account?getProvisionInfo":
+                    events_log.append("hbus_getProvisionInfo")
+                    return {
+                        "id": "3",
+                        "code": 200,
+                        "data": {"mode": 3, "activeRemoteId": written_prefs["remoteId"], "accountId": written_prefs["accountId"]},
+                    }
+                raise AssertionError(cmd)
+
+        buf = io.StringIO()
+        with (
+            patch.object(usb, "usb_process_lock", return_value=contextlib.nullcontext()),
+            patch.object(usb.HarmonyUsbBridge, "enumerate_devices", side_effect=[[old_dev], [new_dev], [new_dev], [new_dev]]),
+            patch.object(usb.HarmonyUsbBridge, "open_handle", return_value=(fake_handle, old_dev)),
+            patch.object(usb, "raw_reboot_device_on_handle", return_value=Mock()),
+            patch.object(usb, "raw_read_file", side_effect=fake_raw_read_file),
+            patch.object(usb, "UsbHbusTransport", side_effect=GateCheckedHbus),
+            patch.object(wb.time, "sleep") as mock_sleep,
+        ):
+            rc = wb.run_wizard_bridge(
+                ["--action", "usb-provision-local", "--confirm-action", "usb-provision-local", "--verify-timeout-s", "10"],
+                stream=buf,
+                stdin_stream=io.StringIO('{"remoteId": 20261111}\n'),
+            )
+        self.assertEqual(rc, 0)
+        # HBus getProvisionInfo must NOT be called until raw_preflight_3 succeeds!
+        self.assertEqual(
+            events_log,
+            ["raw_preflight_1", "raw_preflight_2", "raw_preflight_3", "hbus_getProvisionInfo"],
+        )
+        # 5.0s initial post-reboot sleep + two 2.0s sleeps after failed raw preflights
+        self.assertEqual([c.args[0] for c in mock_sleep.call_args_list], [5.0, 2.0, 2.0])
+        # Verify raw LTCP error packet is classified as a USB wedge
+        self.assertTrue(wb.is_usb_wedge_error("read /rf/deviceinfo returned raw LTCP error packet: FF 04 FF 02"))
+
+    def test_usb_root_waits_for_log_writer_after_provision_reboot(self) -> None:
+        dev = usb.DeviceInfo(backend="hidapi", path="DevSrvsID:42", vendor_id=0x046D, product_id=0xC129)
+        preflight_read = usb.RawFileRead(dev.path, usb.RAW_DEVICE_INFO_PATH, 2, b"{}", Mock(), [], Mock())
+        log_probe_calls = 0
+        lan_called: list[list[str]] = []
+        outer = self
+
+        class BootingLogHbus:
+            def __init__(self, _args):
+                pass
+
+            def call(self, cmd, params, timeout=20):
+                nonlocal log_probe_calls
+                outer.assertEqual(cmd, "harmony.log?put")
+                outer.assertEqual(params, {"resource": []})
+                log_probe_calls += 1
+                if log_probe_calls < 3:
+                    return {"id": str(log_probe_calls), "code": 200, "data": {"errorCode": "503", "errorString": "Service initializing"}}
+                return {"id": "3", "code": 200, "data": {"errorCode": "200", "resource": []}}
+
+        buf = io.StringIO()
+        with (
+            patch.object(usb, "usb_process_lock", return_value=contextlib.nullcontext()),
+            patch.object(usb.HarmonyUsbBridge, "enumerate_devices", return_value=[dev]),
+            patch.object(usb, "raw_read_file", return_value=preflight_read),
+            patch.object(usb, "UsbHbusTransport", side_effect=BootingLogHbus),
+            patch.object(lan, "main", side_effect=lambda argv: lan_called.append(argv)),
+            patch.object(lan, "is_port_open", return_value=True),
+            patch.object(wb.time, "sleep") as mock_sleep,
+        ):
+            rc = wb.run_wizard_bridge(
+                ["--action", "usb-root", "--confirm-action", "usb-root", "--hub-host", "192.168.0.235"],
+                stream=buf,
+            )
+        self.assertEqual(rc, 0)
+        self.assertEqual(log_probe_calls, 3)
+        self.assertEqual([c.args[0] for c in mock_sleep.call_args_list], [2.0, 2.0])
+        self.assertEqual(len(lan_called), 1)
 
 
 if __name__ == "__main__":
