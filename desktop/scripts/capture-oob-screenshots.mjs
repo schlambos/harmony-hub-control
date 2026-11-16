@@ -1,5 +1,5 @@
 #!/usr/bin/env node
-// capture-oob-screenshots.mjs — reproducible screenshots of the macOS
+// capture-oob-screenshots.mjs — reproducible screenshots of the cross-platform
 // first-run Setup Wizard (both paths) for docs/SETUP_GUIDE.md.
 //
 // Runs the desktop app from source with MELODIOUS_E2E=1 against the

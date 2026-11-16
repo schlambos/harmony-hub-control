@@ -7,6 +7,9 @@ on:
   pull_request:
     paths:
       - desktop/**
+      - tools/hub-root/**
+      - install_webui.py
+      - payload/helpers/**
       - tools/webui-sim/**
       - tools/package_harmony_shell.sh
       - tools/ci/install_bun.sh
@@ -16,6 +19,9 @@ on:
     branches: [main]
     paths:
       - desktop/**
+      - tools/hub-root/**
+      - install_webui.py
+      - payload/helpers/**
       - tools/webui-sim/**
       - tools/package_harmony_shell.sh
       - tools/ci/install_bun.sh
@@ -75,7 +81,9 @@ jobs:
         run: node --test test/e2e/shell-e2e.mjs
       - name: Build the installer and zip
         working-directory: desktop
-        run: npx electron-builder --win --x64 --publish never
+        run: |
+          sh scripts/stage-wizard-runtime-win.sh
+          npx electron-builder --win --x64 --publish never
       - name: Test the built app against the simulator
         working-directory: desktop
         run: node --test test/e2e/packaged-win-e2e.mjs

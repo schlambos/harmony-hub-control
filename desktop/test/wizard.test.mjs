@@ -29,6 +29,7 @@ const {
   buildBridgeArgs,
   buildInstallerArgs,
   detectHostKeyChanged,
+  defaultSshKeygenPath,
   clearKnownHost,
   runWizardBridge,
   classifyHubSignals,
@@ -45,7 +46,14 @@ const {
   signMachOFiles,
 } = require("../scripts/after-pack.js");
 
-test("isWizardDevAvailable enables macOS source & packaged builds (when resources exist) and keeps Windows/Linux disabled", () => {
+test("wizard and Connect copy never assume a Mac", () => {
+  for (const file of ["wizard/flow.js", "wizard/classifier.js", "connect/connect.js"]) {
+    const text = fs.readFileSync(new URL(`../src/${file}`, import.meta.url), "utf8");
+    assert.doesNotMatch(text, /\bMac\b|macOS Keychain/, file);
+  }
+});
+
+test("wizard availability enables supported source platforms and complete Windows/macOS packages only", () => {
   const macRes = "/Applications/Melodious.app/Contents/Resources";
   const bundledSet = new Set([
     `${macRes}/wizard-python/bin/python3`,
@@ -90,18 +98,27 @@ test("isWizardDevAvailable enables macOS source & packaged builds (when resource
     true
   );
 
-  // Windows and Linux stay strictly false even if resourcesPath is populated
-  assert.equal(isWizardDevAvailable({ isPackaged: false, platform: "win32" }), false);
+  const winRes = "C:\\Users\\owner\\Melodious\\resources";
+  const winSet = new Set([...bundledSet].map((p) =>
+    p.replace(macRes, winRes).replace("wizard-python/bin/python3", "wizard-python/python.exe").replaceAll("/", "\\")
+  ));
+  assert.equal(isWizardDevAvailable({ isPackaged: false, platform: "win32" }), true);
   assert.equal(
     isWizardDevAvailable({
       isPackaged: true,
       platform: "win32",
-      resourcesPath: macRes,
-      existsSync: () => true,
+      resourcesPath: winRes,
+      existsSync: (p) => winSet.has(p),
     }),
-    false
+    true
   );
-  assert.equal(isWizardDevAvailable({ isPackaged: false, platform: "linux" }), false);
+  for (const required of winSet) {
+    assert.equal(hasBundledWizardResources({ platform: "win32", resourcesPath: winRes,
+      existsSync: (p) => winSet.has(p) && p !== required }), false, `missing ${required} fails closed`);
+  }
+  assert.equal(isWizardDevAvailable({ isPackaged: true, platform: "win32", resourcesPath: "" }), false);
+  assert.equal(isWizardDevAvailable({ isPackaged: false, platform: "linux" }), true);
+  assert.equal(isWizardDevAvailable({ isPackaged: false, platform: "freebsd" }), false);
   assert.equal(
     isWizardDevAvailable({
       isPackaged: true,
@@ -111,6 +128,13 @@ test("isWizardDevAvailable enables macOS source & packaged builds (when resource
     }),
     false
   );
+});
+
+test("defaultSshKeygenPath uses platform-native OpenSSH paths", () => {
+  assert.equal(defaultSshKeygenPath("darwin", {}), "/usr/bin/ssh-keygen");
+  assert.equal(defaultSshKeygenPath("linux", {}), "/usr/bin/ssh-keygen");
+  assert.equal(defaultSshKeygenPath("win32", {}), "C:\\Windows\\System32\\OpenSSH\\ssh-keygen.exe");
+  assert.equal(defaultSshKeygenPath("win32", { SystemRoot: "D:\\Windows" }), "D:\\Windows\\System32\\OpenSSH\\ssh-keygen.exe");
 });
 
 test("buildBridgeArgs enforces action allowlist, confirmAction guards, numeric remoteId, and forbids passwords on argv", () => {
@@ -244,6 +268,16 @@ test("resolvePythonExecutable, bridge/installer packaged resource resolvers, and
   );
 
   // 3. Source checkout ignores resourcesPath when isPackaged=false and prefers .venv
+  const winRes = "C:\\Melodious\\resources";
+  assert.equal(resolvePythonExecutable({ env: {}, platform: "win32", isPackaged: true,
+    resourcesPath: winRes, existsSync: (p) => p === `${winRes}\\wizard-python\\python.exe` }),
+  `${winRes}\\wizard-python\\python.exe`);
+  assert.equal(resolveBridgeScriptPath({ platform: "win32", isPackaged: true, resourcesPath: winRes }),
+    `${winRes}\\hub-root\\wizard_bridge.py`);
+  assert.deepEqual(resolveInstallerPaths({ platform: "win32", isPackaged: true, resourcesPath: winRes }), {
+    installerScriptPath: `${winRes}\\installer\\install_webui.py`,
+    helpersDirPath: `${winRes}\\installer\\payload\\helpers`,
+  });
   assert.equal(
     resolvePythonExecutable({
       env: {},
@@ -354,6 +388,10 @@ test("resolvePythonExecutable, bridge/installer packaged resource resolvers, and
   assert.equal(isolated.PYTHONDONTWRITEBYTECODE, "1");
   assert.equal(isolated.PYTHONUNBUFFERED, "1");
   assert.equal(isolated.HARMONY_NO_PAUSE, "1");
+  const windowsEnv = buildIsolatedPythonEnv({ SystemRoot: "C:\\Windows", Path: "C:\\Windows\\System32\\OpenSSH", PYTHONPATH: "bad" });
+  assert.equal(windowsEnv.SystemRoot, "C:\\Windows");
+  assert.equal(windowsEnv.Path, "C:\\Windows\\System32\\OpenSSH");
+  assert.equal(windowsEnv.PYTHONPATH, undefined);
 });
 
 test("after-pack.js detects Mach-O binaries/dylibs/.so and skips ELF MIPS binaries (dropbearmulti, codex_flash_free), scripts, and symlinks", () => {
@@ -474,6 +512,7 @@ test("runWizardBridge parses fragmented NDJSON chunks, pipes stdinJson without l
   });
   assert.equal(out.ok, true);
   assert.deepEqual(capturedStdio, ["pipe", "pipe", "pipe"]);
+  assert.deepEqual(capturedSpawnArgs.slice(0, 2), ["-u", "-B"]);
   assert.equal(capturedSpawnArgs.join(" ").includes("TopSecretPass99"), false);
   assert.equal(JSON.parse(capturedStdinText.trim()).password, "TopSecretPass99");
   // Secret is scrubbed even if echoed in stdout
@@ -984,6 +1023,7 @@ test("installFreshHub stages verified payload + install_webui.py, enforces CLI f
       hasRemotesPatch: true,
     });
     assert.ok(capturedArgs.includes("--no-prompt"));
+    assert.deepEqual(capturedArgs.slice(0, 2), ["-u", "-B"]);
     assert.ok(capturedArgs.includes("--mqtt-disabled"));
     assert.ok(capturedArgs.includes("--remove-root-tool-leftovers"));
     assert.ok(!capturedArgs.includes("--preflight-only"));
@@ -1099,8 +1139,8 @@ test("installFreshHub stages verified payload + install_webui.py, enforces CLI f
       );
       assert.deepEqual(fs.readdirSync(tmpRootDir), [], "temp dir cleaned up on thrown zip error");
 
-      // 6. Real .zip archive unpacked by default readLocalHubZip on macOS and Windows
-      if (process.platform === "darwin" || process.platform === "win32") {
+      // 6. Real .zip archive unpacked on every supported platform
+      if (["darwin", "win32", "linux"].includes(process.platform)) {
         const zipBuildDir = fs.mkdtempSync(path.join(os.tmpdir(), "melodious-real-zip-"));
         try {
           const top = path.join(zipBuildDir, "melodious-hub-2.2.0");
@@ -1117,6 +1157,8 @@ test("installFreshHub stages verified payload + install_webui.py, enforces CLI f
           const realZip = path.join(zipBuildDir, "melodious-hub-2.2.0.zip");
           if (process.platform === "win32") {
             execFileSync(unzipCommand(realZip, zipBuildDir)[0], ["-a", "-c", "-f", realZip, "-C", zipBuildDir, "melodious-hub-2.2.0"]);
+          } else if (process.platform === "linux") {
+            execFileSync("python3", ["-m", "zipfile", "-c", realZip, top]);
           } else {
             execFileSync("/usr/bin/ditto", ["-c", "-k", "--keepParent", top, realZip]);
           }
@@ -1339,7 +1381,7 @@ test("wizard/flow.js renders jargon-free 4-screen consumer flow, optional sub-sc
   oobState.firstRunOob = true;
   const oobHtml = wizardFlow.renderWizardPage(oobState);
   assert.match(oobHtml, /Welcome to Melodious/);
-  assert.match(oobHtml, /Let's set up your Harmony Hub\. Plug it into this Mac with a USB cable, or make sure it's on your Wi-Fi\./);
+  assert.match(oobHtml, /Let's set up your Harmony Hub\. Plug it into this computer with a USB cable, or make sure it's on your Wi-Fi\./);
   assert.match(oobHtml, /id="wizardUseExistingConnectBtn"/);
   assert.match(oobHtml, /My hub already runs Melodious — Connect →/);
   assert.match(oobHtml, /Find My Hub/);
@@ -1411,7 +1453,7 @@ test("wizard/flow.js renders jargon-free 4-screen consumer flow, optional sub-sc
 
   st.factoryResetSent = true;
   const resetAfterHtml = wizardFlow.renderWizardPage(st);
-  assert.match(resetAfterHtml, /Unplug the USB cable from your Mac for 15 seconds\./);
+  assert.match(resetAfterHtml, /Unplug the USB cable from your computer for 15 seconds\./);
   assert.match(resetAfterHtml, /Check Hub/);
   assertCleanConsumerHtml(resetAfterHtml, "Factory Reset post-erase walkthrough");
   st.subScreen = null;
@@ -1849,7 +1891,7 @@ test("detectHostKeyChanged, clearKnownHost, installFreshHub, and wizard:install-
     fingerprint: "",
   });
 
-  // 2. clearKnownHost invokes /usr/bin/ssh-keygen -R <host> (and [host]:port for non-22) with safe argv
+  // 2. clearKnownHost invokes native ssh-keygen with safe argv
   const execCalls = [];
   const cleared22 = await clearKnownHost({
     host: "192.168.0.235",
@@ -1879,8 +1921,8 @@ test("detectHostKeyChanged, clearKnownHost, installFreshHub, and wizard:install-
   assert.deepEqual(missingKnownHosts, { ok: true, target: "192.168.0.235", removed: false });
 
   assert.deepEqual(execCalls, [
-    { bin: "/usr/bin/ssh-keygen", args: ["-R", "192.168.0.235"] },
-    { bin: "/usr/bin/ssh-keygen", args: ["-R", "[192.168.0.235]:2222"] },
+    { bin: defaultSshKeygenPath(), args: ["-R", "192.168.0.235"] },
+    { bin: defaultSshKeygenPath(), args: ["-R", "[192.168.0.235]:2222"] },
   ]);
 
   await assert.rejects(

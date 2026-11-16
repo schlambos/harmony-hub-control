@@ -1,15 +1,18 @@
-# Setting up your Harmony Hub with Melodious (Mac)
+# Setting up your Harmony Hub with Melodious
 
-This guide takes you from a Harmony Hub to a hub running Melodious, with
-your remote paired, using the Melodious app's built-in Setup Wizard on a
-Mac. You don't type any commands.
+Set up your Harmony Hub with Melodious on **Windows, Linux or macOS**.
+This guide follows the desktop app's built-in Setup Wizard from first
+launch to a hub running Melodious, with your remote paired. Packaged
+Windows and macOS apps need no commands; Linux runs the same app from source.
 
-> **Availability.** The Setup Wizard is in the macOS app on `main` and
-> ships in the first release after `v2.1.0`. The `v2.1.0` app doesn't have
-> it yet. On Windows or Linux, or with an older app, use the command-line
-> steps instead: [INSTALL.md](INSTALL.md) for a hub that's already set up in
-> the Harmony app, and [FRESH_HUB_ACTIVATION.md](FRESH_HUB_ACTIVATION.md) for
-> a new, reset or second-hand hub.
+> **Availability.** The built-in Setup Wizard is on `main` and joins the
+> Windows and macOS desktop releases in the first release after `v2.1.0`.
+> The `v2.1.0` app doesn't have it yet. Linux uses the desktop app from
+> source. The bundled CLI works on all three platforms now:
+> [`tools/hub-root/`](../tools/hub-root/README.md) for rooting, then
+> `install_webui.ps1` (Windows) or `install_webui.py` (all three) for installation.
+> See [INSTALL.md](INSTALL.md) for an existing Harmony setup, or
+> [FRESH_HUB_ACTIVATION.md](FRESH_HUB_ACTIVATION.md) for a new, reset or used hub.
 
 The screenshots come from a simulated hub, so the addresses and network
 names in them are examples.
@@ -28,7 +31,10 @@ names in them are examples.
 
 You need:
 
-- **A Mac** with macOS 13 or later, Apple silicon or Intel.
+- **A computer:** Windows 10/11 x64, macOS 13 or later (Apple silicon or
+  Intel), or Linux with the [source prerequisites](../desktop/README.md#linux-from-source).
+  Windows needs its OpenSSH Client optional feature (`ssh.exe` and
+  `ssh-keygen.exe`); enable it in Windows Settings if it is missing.
 - **A micro-USB data cable** for a new, reset or second-hand hub (Path B).
   Many cables that came with phones or lights only carry power and can't
   talk to the hub. If the wizard can't see a hub that's plugged in, try a
@@ -38,18 +44,14 @@ You need:
   often under the same name.
 - **About 10 minutes.**
 
-Install the app:
+Install the app from the
+[releases page](https://github.com/schlambos/harmony-hub-control/releases):
 
-1. Download `Melodious-<version>-arm64.dmg` (Apple silicon) or
-   `Melodious-<version>-x64.dmg` (Intel) from the
-   [releases page](https://github.com/schlambos/harmony-hub-control/releases).
-2. Open the `.dmg` and drag **Melodious** into **Applications**.
-3. The app isn't signed with an Apple Developer ID, so macOS asks before
-   the first launch. In Applications, **Control-click Melodious → Open**,
-   then **Open** again. On recent macOS, if that doesn't offer Open, go to
-   **System Settings → Privacy & Security** and click **Open Anyway**.
-4. When macOS asks whether Melodious may find devices on your local
-   network, choose **Allow**. Without it the app can't reach your hub.
+| Platform | Install and first launch |
+| --- | --- |
+| **Windows** | Download `Melodious-<version>-win-x64-setup.exe` and run it, or extract `Melodious-<version>-win-x64.zip` and open `Melodious.exe`. The app is unsigned; if SmartScreen warns, choose **More info → Run anyway** after checking the download's source. Python and the USB backend are bundled; no Python installation or HID driver replacement is needed. |
+| **macOS** | Download `Melodious-<version>-arm64.dmg` (Apple silicon) or `Melodious-<version>-x64.dmg` (Intel), open it and drag **Melodious** into **Applications**. The app has no Apple Developer ID: Control-click → **Open**, or **System Settings → Privacy & Security → Open Anyway**. Choose **Allow** when asked for local-network access. Python and the USB backend are bundled. |
+| **Linux** | Run the desktop app from source using [`desktop/README.md`](../desktop/README.md#linux-from-source). Install Python, the USB dependencies and USB access permissions first. No Linux desktop download is published. Or use the bundled CLI in [`tools/hub-root/`](../tools/hub-root/README.md), followed by `install_webui.py`. |
 
 ## Step 0: Open Melodious
 
@@ -60,8 +62,10 @@ The first time you open Melodious, it goes straight to the Setup Wizard.
 To start the wizard again later, for a second hub or a reset one, use
 either of these:
 
-- The menu bar: **Melodious → Set Up a New Harmony Hub…**
-- **Settings** (Melodious → Settings…, or ⌘,): **Set up or re-root a hub**,
+- The menu bar: **File → Set Up a New Harmony Hub…** (Windows/Linux) or
+  **Melodious → Set Up a New Harmony Hub…** (macOS).
+- **Settings** (File → Settings… on Windows/Linux, or Melodious → Settings…
+  on macOS): **Set up or re-root a hub**,
   at the top under **Current hub**.
 
 ![Settings with "Set up or re-root a hub" under Current hub](screenshots/desktop/wizard/03-settings-top-entry.png)
@@ -90,7 +94,7 @@ offers the right path before changing anything.
 
 ### A1. Find your hub
 
-Make sure the hub is powered on and on the same Wi-Fi as your Mac, choose
+Make sure the hub is powered on and on the same Wi-Fi as your computer, choose
 **Already set up in the Harmony app**, and click **Find My Hub**.
 
 When the hub is ready, you'll see **Harmony Hub found on Wi-Fi and ready**.
@@ -114,7 +118,7 @@ shows how to turn it on:
 ![Turn on local access in the Harmony app](screenshots/desktop/wizard/05a-prov-xmpp-closed.png)
 
 If you can't use the Harmony app any more, click **Set Up Over USB
-Instead** and plug the hub into your Mac with a micro-USB data cable. Your
+Instead** and plug the hub into your computer with a micro-USB data cable. Your
 devices and activities are still kept.
 
 ### A3. Install Melodious
@@ -139,7 +143,7 @@ account or Logitech's servers.
 
 ### B1. Plug in and find your hub
 
-1. Connect the hub to your Mac with a **micro-USB data cable**. The cable
+1. Connect the hub to your computer with a **micro-USB data cable**. The cable
    also powers the hub.
 2. Wait about 3 minutes for the hub's light to settle after plugging in.
 3. Choose **Brand new, factory reset, or bought used** and click
@@ -167,7 +171,7 @@ then shows **Old setup found on this hub**:
 After **Erase Hub & Start Fresh**, the wizard explains what is erased.
 Click **Erase Hub**. When it's done, finish restarting the hub:
 
-1. **Unplug the USB cable from your Mac for 15 seconds.** Wait until the
+1. **Unplug the USB cable from your computer for 15 seconds.** Wait until the
    fast-blinking red light stops first.
 2. **Plug it back in, wait about 3 minutes** for the blinking red light to
    settle, then click **Check Hub**.
@@ -175,7 +179,7 @@ Click **Erase Hub**. When it's done, finish restarting the hub:
 ![Finish restarting your hub: the 15-second unplug](screenshots/desktop/wizard/06b-fresh-factory-reset.png)
 
 The 15 seconds matter. The cable is also the hub's power, and a full
-power-off is what lets your Mac see the freshly erased hub again.
+power-off is what lets your computer see the freshly erased hub again.
 
 ### B3. If the hub needs a software update
 
@@ -217,7 +221,7 @@ What the four lines mean:
 
 1. **Preparing hub for offline use** sets the hub up with a local account
    instead of a Logitech one, so it never needs Logitech's servers.
-2. **Setting up local hub access** gives your Mac a secure key to the hub,
+2. **Setting up local hub access** gives your computer a secure key to the hub,
    so Melodious can be installed and updated.
 3. **Downloading and installing Melodious** downloads the latest Melodious
    release for the hub, checks it and installs it.
@@ -266,14 +270,15 @@ use Home Assistant devices on your remote, see
 [Set up Home Assistant](../README.md#set-up-home-assistant).
 
 **Updates.** When a newer Melodious is out, **Settings → Updates → Update
-hub…** in the Mac app installs it. It uses the key the wizard created on
-your Mac (`~/.ssh/harmony_owner_ed25519`), so keep that file.
+hub…** in the desktop app installs it. It uses the key the wizard created on
+your computer (`~/.ssh/harmony_owner_ed25519`, or
+`%USERPROFILE%\.ssh\harmony_owner_ed25519` on Windows), so keep that file.
 
 ## Questions and troubleshooting
 
 **The wizard can't find my hub over USB.**
 Most often the cable only carries power. Try another micro-USB cable,
-plugged straight into the Mac (not a hub or dock), and wait about 3
+plugged straight into the computer (not a USB hub or dock), and wait about 3
 minutes after plugging in before clicking **Find My Hub** again.
 
 **My Wi-Fi network isn't in the list.**
@@ -284,7 +289,7 @@ turn on 2.4 GHz in the router's settings.
 **The wizard says "Your hub needs a 15-second power reset", or setup
 stops partway.**
 The USB link to the hub sometimes stops responding, especially after
-an erase or a restart. Unplug the USB cable **at the Mac end** for 15
+an erase or a restart. Unplug the USB cable **at the computer end** for 15
 seconds, plug it back in, wait about 3 minutes for the light to settle,
 then click **Try Again** or **Find My Hub**. The wizard remembers what's
 already done and carries on from there.
@@ -295,8 +300,8 @@ click **Try Again**. **Show technical details** reveals the log if someone
 helping you asks for it.
 
 **A box asks to "Trust & Continue" about a security key.**
-This can appear when you run setup on a hub your Mac has connected to
-before, and the hub's security key no longer matches the one your Mac
+This can appear when you run setup on a hub your computer has connected to
+before, and the hub's security key no longer matches the one your computer
 saved. That's normal after a reset or a re-setup. If you reset or set up
 this hub again yourself, click **Trust & Continue**. If you didn't,
 cancel and check that you have the right hub.
@@ -310,6 +315,15 @@ That link is at the bottom of every wizard screen. It holds individual
 setup steps for diagnosing a problem. You don't need it for a normal
 setup.
 
-**I'm on Windows or Linux.**
-The Setup Wizard is Mac-only for now. Use the command-line steps in
+**Do I need Python or a terminal?**
+Not with a Windows or macOS release that includes the wizard: Python is
+bundled. Linux source users need Python and USB dependencies installed
+first. If you prefer commands on any platform, use
 [INSTALL.md](INSTALL.md) and [FRESH_HUB_ACTIVATION.md](FRESH_HUB_ACTIVATION.md).
+
+**Linux sees the hub but can't use USB.**
+Install `tools/hub-root/requirements-usb.txt` in the tool's `.venv` and
+make sure your user has access to the USB device (see the
+[USB setup instructions](../tools/hub-root/README.md#usb-setup-and-diagnostics)). Linux
+needs the `hidapi` backend; a missing `/dev/hidraw*` node is expected for
+Harmony Hubs. Don't run the desktop app as root.

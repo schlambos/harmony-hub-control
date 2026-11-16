@@ -200,7 +200,7 @@ function buildAppMenu() {
           },
         ]
       : [
-          // Windows has no app menu: Settings and the update check live here.
+          // Windows/Linux have no app menu: Settings and setup live here.
           {
             label: "File",
             submenu: [
@@ -209,6 +209,9 @@ function buildAppMenu() {
                 accelerator: "CmdOrCtrl+,",
                 click: () => openSettingsPage(),
               },
+              ...(getWizardDevAvailable()
+                ? [{ label: "Set Up a New Harmony Hub…", click: () => openWizardPage() }]
+                : []),
               {
                 label: "Check for Updates…",
                 click: () => checkForUpdatesNow(),
@@ -411,7 +414,7 @@ async function hubKeyOrExplain() {
       message: "Melodious needs your hub's SSH key",
       detail:
         "Updating the hub uses the same SSH key as the installer: ~/.ssh/harmony_owner_…, created when the hub was rooted. " +
-        `Put it in ${process.platform === "darwin" ? "~/.ssh on this Mac" : `${path.join(os.homedir(), ".ssh")} on this PC`}, or run the installer from the release page instead.`,
+        `Put it in ${path.join(os.homedir(), ".ssh")} on this computer, or run the installer from the release page instead.`,
     });
   }
   return keyPath;

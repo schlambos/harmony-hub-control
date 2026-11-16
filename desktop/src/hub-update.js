@@ -109,11 +109,12 @@ function run(cmd, args) {
   });
 }
 
-/** The system's own unzip: ditto on macOS, bsdtar (tar.exe, part of Windows 10 1803 and later) on Windows. */
+/** System unzip: ditto on macOS, bsdtar on Windows, unzip on Linux. */
 function unzipCommand(zipPath, dir, platform = process.platform, env = process.env) {
   if (platform === "win32") {
     return [path.win32.join(env.SystemRoot || "C:\\Windows", "System32", "tar.exe"), ["-x", "-f", zipPath, "-C", dir]];
   }
+  if (platform === "linux") return ["/usr/bin/unzip", ["-q", zipPath, "-d", dir]];
   return ["/usr/bin/ditto", ["-x", "-k", zipPath, dir]];
 }
 

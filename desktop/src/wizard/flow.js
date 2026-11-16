@@ -316,7 +316,7 @@
         <div style="font-weight:600;margin-bottom:6px">Your hub needs a 15-second power reset</div>
         <div style="margin-bottom:6px">The USB connection stopped responding. Follow these quick steps to reset it:</div>
         <ol style="padding-left:20px;list-style:decimal;display:grid;gap:4px;font-size:var(--fs-body-sm)">
-          <li>Unplug the USB cable from your Mac and wait <strong>15 seconds</strong>.</li>
+          <li>Unplug the USB cable from your computer and wait <strong>15 seconds</strong>.</li>
           <li>Plug it back in and wait <strong>about 3 minutes</strong> for the blinking light to settle.</li>
           <li>Click <strong>Try Again</strong> or <strong>Find My Hub</strong>.</li>
         </ol>
@@ -544,7 +544,7 @@
             ${renderPill("Ready", "is-done")}
           </div>
           <p class="muted" style="margin:0;font-size:var(--fs-body-sm)">
-            Connected to this Mac and ready to join your Wi-Fi.
+            Connected to this computer and ready to join your Wi-Fi.
           </p>
           <div style="display:flex;justify-content:flex-end">
             <button type="button" class="btn btn-filled" id="wizardToStep2Btn" data-next-branch="fresh" ${wiz.busy ? "disabled" : ""}>
@@ -559,11 +559,11 @@
       return `
         <div class="setup-status-card is-warn" id="wizardResultCard">
           <div style="display:flex;align-items:center;justify-content:space-between;gap:var(--space-2)">
-            <strong style="font-size:var(--fs-body-lg)" id="wizardVerdictTitle">Plug your hub into this Mac with a USB cable</strong>
+            <strong style="font-size:var(--fs-body-lg)" id="wizardVerdictTitle">Plug your hub into this computer with a USB cable</strong>
             ${renderPill("USB cable needed", "is-warn")}
           </div>
           <p class="muted" style="margin:0;font-size:var(--fs-body-sm)">
-            A new or factory-reset hub needs a micro-USB data cable for initial setup (many charging cables only carry power). Plug it into this Mac, wait for the light to settle, and check again.
+            A new or factory-reset hub needs a micro-USB data cable for initial setup (many charging cables only carry power). Plug it into this computer, wait for the light to settle, and check again.
           </p>
           <div style="display:flex;justify-content:flex-end">
             <button type="button" class="btn btn-filled" id="wizardRecheckBtn" ${wiz.busy ? "disabled" : ""}>
@@ -625,7 +625,7 @@
         </div>
         <ul style="margin:0;padding-left:20px;list-style:disc;display:grid;gap:6px;font-size:var(--fs-body-sm);color:var(--on-surface-variant)">
           <li>Make sure the hub has power and wait about 2–3 minutes if it just started up.</li>
-          <li>If plugged into this Mac, try another micro-USB cable (charging-only cables don't carry data).</li>
+          <li>If plugged into this computer, try another micro-USB cable (charging-only cables don't carry data).</li>
           <li>If your hub is already on Wi-Fi, open <strong>Can't find it? Enter IP address</strong> above.</li>
         </ul>
       </div>
@@ -641,7 +641,7 @@
     return `
       <div class="wiz-intro">
         <h2>${wiz.firstRunOob ? "Welcome to Melodious" : "Set up your Harmony Hub"}</h2>
-        <p>${wiz.firstRunOob ? "Let's set up your Harmony Hub. Plug it into this Mac with a USB cable, or make sure it's on your Wi-Fi." : "Plug your hub into this Mac with a micro-USB data cable (or make sure it's on your Wi-Fi)."}</p>
+          <p>${wiz.firstRunOob ? "Let's set up your Harmony Hub. Plug it into this computer with a USB cable, or make sure it's on your Wi-Fi." : "Plug your hub into this computer with a micro-USB data cable (or make sure it's on your Wi-Fi)."}</p>
       </div>
 
       ${renderWedgeBanner(wiz)}
@@ -709,12 +709,12 @@
       return `
         <div class="wiz-intro">
           <h2>Finish restarting your hub</h2>
-          <p>Your hub has been erased. Complete these two steps so your Mac can reconnect to it:</p>
+          <p>Your hub has been erased. Complete these two steps so your computer can reconnect to it:</p>
         </div>
 
         <div class="setup-focus-card" id="wizardResetRecoveryNotice">
           <ol style="margin:0;padding-left:22px;list-style:decimal;display:grid;gap:var(--space-3);font-size:var(--fs-body)">
-            <li><strong>Unplug the USB cable from your Mac for 15 seconds.</strong> (Wait until the fast blinking red light stops first.)</li>
+            <li><strong>Unplug the USB cable from your computer for 15 seconds.</strong> (Wait until the fast blinking red light stops first.)</li>
             <li><strong>Plug it back in, wait ~3 minutes for the blinking red light to settle, then click Check Hub.</strong></li>
           </ol>
 
@@ -731,7 +731,7 @@
     return `
       <div class="wiz-intro">
         <h2>Erase hub and start fresh</h2>
-        <p>Keep your hub plugged into this Mac with a micro-USB data cable.</p>
+        <p>Keep your hub plugged into this computer with a micro-USB data cable.</p>
       </div>
 
       ${renderWedgeBanner(wiz)}
@@ -749,7 +749,7 @@
         ${
           wiz.error
             ? `<div class="notice notice-error" id="wizardErrorNotice" role="alert">
-                 <div>Couldn't erase the hub over USB. Check that a micro-USB data cable is connected to this Mac and try again.</div>
+                 <div>Couldn't erase the hub over USB. Check that a micro-USB data cable is connected to this computer and try again.</div>
                  ${renderTechDetailsBlock(wiz)}
                </div>`
             : ""
@@ -781,7 +781,7 @@
       <div class="setup-focus-card" id="wizardFirmwareUpdateScreen">
         <div style="display:grid;gap:var(--space-2);font-size:var(--fs-body-sm);color:var(--on-surface-variant)">
           <p style="margin:0;color:var(--on-surface);font-size:var(--fs-body)">
-            ${currentFw ? `This hub currently has version ${escapeHtml(currentFw)}. ` : ""}Choose your official 4.15.600 update file (<code>.hfw2</code>) on this Mac to update it over USB.
+            ${currentFw ? `This hub currently has version ${escapeHtml(currentFw)}. ` : ""}Choose your official 4.15.600 update file (<code>.hfw2</code>) on this computer to update it over USB.
           </p>
           <p style="margin:0">
             The update takes about 2–3 minutes and restarts the hub automatically. Keep the USB cable plugged in until it finishes.
@@ -973,10 +973,10 @@
     const headline =
       stepLabels[wiz.installChecklistFailedStep] || "Setup paused before finishing.";
     const hint = wedged
-      ? "Unplug the USB cable from your Mac for 15 seconds, plug it back in, wait about 3 minutes for the light to settle, then click Try Again."
+      ? "Unplug the USB cable from your computer for 15 seconds, plug it back in, wait about 3 minutes for the light to settle, then click Try Again."
       : wiz.flowPath === "fresh" || wiz.provisionedTransport === "usb"
-        ? "Make sure the USB cable is firmly connected to this Mac and the hub has power, then click Try Again."
-        : "Make sure your hub is powered on and connected to the same Wi-Fi network as this Mac, then click Try Again.";
+        ? "Make sure the USB cable is firmly connected to this computer and the hub has power, then click Try Again."
+        : "Make sure your hub is powered on and connected to the same Wi-Fi network as this computer, then click Try Again.";
 
     return `
       <div class="notice notice-error" id="wizardErrorNotice" role="alert" style="display:grid;gap:6px">
@@ -1089,7 +1089,7 @@
           <span class="m-tile m-tile--hub" style="--tile:44px;color:var(--live)">${CHECK_ICON_SVG}</span>
           <h2 style="margin:0">Your Harmony Hub is ready!</h2>
         </div>
-        <p>Melodious is installed, offline-protected, and ready to use on this Mac.</p>
+        <p>Melodious is installed, offline-protected, and ready to use on this computer.</p>
       </div>
 
       <div class="setup-focus-card" id="wizardStep4DoneCard">

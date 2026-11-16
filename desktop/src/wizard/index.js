@@ -47,6 +47,7 @@ const {
   buildInstallerArgs,
   stageInstallerWorkspace,
   detectHostKeyChanged,
+  defaultSshKeygenPath,
   clearKnownHost,
   installFreshHub,
 } = require("./installer");
@@ -64,16 +65,19 @@ function hasBundledWizardResources({
   platform = process.platform,
   existsSync = fs.existsSync,
 } = {}) {
-  if (platform !== "darwin") return false;
+  if (!["darwin", "win32"].includes(platform)) return false;
   const cleanResources = String(resourcesPath ?? "").trim();
   if (!cleanResources) return false;
+  const pathMod = platform === "win32" ? path.win32 : path.posix;
   const requiredPaths = [
-    path.posix.join(cleanResources, "wizard-python", "bin", "python3"),
-    path.posix.join(cleanResources, "hub-root", "wizard_bridge.py"),
-    path.posix.join(cleanResources, "hub-root", "dropbearmulti"),
-    path.posix.join(cleanResources, "installer", "install_webui.py"),
+    platform === "win32"
+      ? pathMod.join(cleanResources, "wizard-python", "python.exe")
+      : pathMod.join(cleanResources, "wizard-python", "bin", "python3"),
+    pathMod.join(cleanResources, "hub-root", "wizard_bridge.py"),
+    pathMod.join(cleanResources, "hub-root", "dropbearmulti"),
+    pathMod.join(cleanResources, "installer", "install_webui.py"),
     ...INSTALLER_HELPER_NAMES.map((helperName) =>
-      path.posix.join(cleanResources, "installer", "payload", "helpers", helperName)
+      pathMod.join(cleanResources, "installer", "payload", "helpers", helperName)
     ),
   ];
   for (const target of requiredPaths) {
@@ -92,7 +96,7 @@ function isWizardDevAvailable({
   resourcesPath = DEFAULT_RESOURCES_PATH,
   existsSync = fs.existsSync,
 } = {}) {
-  if (platform !== "darwin") return false;
+  if (!["darwin", "win32", "linux"].includes(platform)) return false;
   if (!isPackaged) return true;
   return hasBundledWizardResources({ resourcesPath, platform, existsSync });
 }
@@ -811,6 +815,7 @@ module.exports = {
   buildInstallerArgs,
   stageInstallerWorkspace,
   detectHostKeyChanged,
+  defaultSshKeygenPath,
   clearKnownHost,
   runWizardBridge,
   evaluateFirmwareGate,

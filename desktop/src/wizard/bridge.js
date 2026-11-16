@@ -502,7 +502,9 @@ function runWizardBridge({
 
     let child;
     try {
-      child = spawnImpl(pythonPath, [bridgePath, ...bridgeArgs], {
+      // The Windows embeddable runtime ignores PYTHON* environment settings.
+      // Set streaming/no-bytecode explicitly for immutable packaged resources.
+      child = spawnImpl(pythonPath, ["-u", "-B", bridgePath, ...bridgeArgs], {
         cwd: path.dirname(bridgePath),
         stdio: ["pipe", "pipe", "pipe"],
         env: buildIsolatedPythonEnv(process.env, {

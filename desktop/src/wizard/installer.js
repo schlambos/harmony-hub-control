@@ -203,10 +203,16 @@ function detectHostKeyChanged(lines) {
   };
 }
 
+function defaultSshKeygenPath(platform = process.platform, env = process.env) {
+  return platform === "win32"
+    ? path.win32.join(env.SystemRoot || "C:\\Windows", "System32", "OpenSSH", "ssh-keygen.exe")
+    : "/usr/bin/ssh-keygen";
+}
+
 async function clearKnownHost({
   host,
   sshPort = 22,
-  sshKeygenPath = "/usr/bin/ssh-keygen",
+  sshKeygenPath = defaultSshKeygenPath(),
   execFileImpl = execFile,
 } = {}) {
   const cleanHost = validateInstallerHost(host);
@@ -447,7 +453,7 @@ function runStagedInstaller({
 
     let child;
     try {
-      child = spawnImpl(pythonPath, installerArgs, {
+      child = spawnImpl(pythonPath, ["-u", "-B", ...installerArgs], {
         cwd,
         stdio: ["pipe", "pipe", "pipe"],
         env: buildIsolatedPythonEnv(process.env),
@@ -901,6 +907,7 @@ module.exports = {
   buildInstallerArgs,
   stageInstallerWorkspace,
   detectHostKeyChanged,
+  defaultSshKeygenPath,
   clearKnownHost,
   fetchLatestHubRelease,
   installFreshHub,
