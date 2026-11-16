@@ -134,6 +134,7 @@
     const defaultRemoteId = suggestNumericRemoteId(seedNumber);
     return {
       open: false,
+      firstRunOob: false,
       returnMode: "connect",
       step: 1, // 1: Find Your Hub, 2: Connect Wi-Fi (Fresh), 3: Install Melodious, 4: Done
       subScreen: null, // null | "factory-reset" | "firmware-update"
@@ -289,16 +290,14 @@
   function renderWizardSettingsEntry({ disabled = false } = {}) {
     return `
       <h3 class="m-section">Hub setup</h3>
-      <div class="m-list">
-        <button type="button" class="m-row" id="openWizardSettingsBtn" ${disabled ? "disabled" : ""}>
-          <span class="m-tile m-tile--hub" style="--tile:40px">${SETUP_ICON_SVG}</span>
-          <span class="m-row-text">
-            <span class="m-row-title">Set up or re-root a hub</span>
-            <span class="m-row-sub">Step-by-step setup for new, factory-reset, or replacement Harmony Hubs.</span>
-          </span>
-          ${CHEVRON_SVG}
-        </button>
-      </div>
+      <button type="button" class="setup-entry-card" id="openWizardSettingsBtn" ${disabled ? "disabled" : ""}>
+        <span class="m-tile m-tile--hub" style="--tile:44px">${SETUP_ICON_SVG}</span>
+        <span class="m-row-text">
+          <span class="m-row-title">Set up or re-root a hub</span>
+          <span class="m-row-sub">Step-by-step setup for new, factory-reset, or replacement Harmony Hubs.</span>
+        </span>
+        ${CHEVRON_SVG}
+      </button>
     `;
   }
 
@@ -641,8 +640,8 @@
 
     return `
       <div class="wiz-intro">
-        <h2>Set up your Harmony Hub</h2>
-        <p>Plug your hub into this Mac with a micro-USB data cable (or make sure it's on your Wi-Fi).</p>
+        <h2>${wiz.firstRunOob ? "Welcome to Melodious" : "Set up your Harmony Hub"}</h2>
+        <p>${wiz.firstRunOob ? "Let's set up your Harmony Hub. Plug it into this Mac with a USB cable, or make sure it's on your Wi-Fi." : "Plug your hub into this Mac with a micro-USB data cable (or make sure it's on your Wi-Fi)."}</p>
       </div>
 
       ${renderWedgeBanner(wiz)}
@@ -691,6 +690,14 @@
             <span>${wiz.busy && wiz.busyAction === "detect" ? "Finding your hub…" : "Find My Hub"}</span>
           </button>
         </div>
+
+        ${
+          wiz.firstRunOob
+            ? `<button type="button" class="btn btn-outlined btn-block" id="wizardUseExistingConnectBtn" ${wiz.busy ? "disabled" : ""}>
+                 My hub already runs Melodious — Connect →
+               </button>`
+            : ""
+        }
       </div>
 
       ${renderScreen1StatusCard(wiz, outcome)}

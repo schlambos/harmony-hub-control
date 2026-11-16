@@ -344,6 +344,17 @@ for (const { arch, dir } of APPS) {
         /Set up a new or unrooted Harmony Hub/
       );
 
+      // Packaged app menu carries the 1-click wizard entry and opens the wizard.
+      const packagedMenuItemFound = await electronApp.evaluate(({ Menu }) => {
+        const item = Menu.getApplicationMenu()?.items[0]?.submenu?.items.find(
+          (i) => i.label === "Set Up a New Harmony Hub…"
+        );
+        item?.click();
+        return Boolean(item);
+      });
+      assert.equal(packagedMenuItemFound, true);
+      await page.waitForSelector("#hubSetupWizard", { timeout: 15000 });
+
       console.log(`packaged ${arch}: ad-hoc signed, wizard Python + hidapi + resources verified, launched, catalog & wizard ready: OK`);
     } finally {
       if (electronApp) {

@@ -47,6 +47,7 @@
   let updatesBusy = false;
   let hubStep = "";
   let lastWizardViewKey = "";
+  let connectExistingChosen = false;
 
   let wiz = wizardFlow
     ? wizardFlow.createInitialWizardState()
@@ -117,6 +118,7 @@
         : "";
 
     return `
+      ${wizardEntryHtml}
       <div style="display:flex;align-items:center;justify-content:space-between;margin-top:var(--space-6);margin-bottom:var(--space-2)">
         <h3 class="m-section" style="margin:0">Hubs on this network</h3>
         ${
@@ -126,7 +128,6 @@
         }
       </div>
       ${renderDiscoveredList()}
-      ${wizardEntryHtml}
 
       <h3 class="m-section">Enter address</h3>
       <form id="connectForm" class="m-card m-form" novalidate>
@@ -288,6 +289,8 @@
         </div>
       </div>
 
+      ${wizardSettingsEntry}
+
       ${renderConnectAndAddressSection({ includeWizardCard: false })}
 
       <h3 class="m-section">Hub sign-in</h3>
@@ -337,7 +340,6 @@
       </div>
 
       ${renderUpdatesSection()}
-      ${wizardSettingsEntry}
 
       <h3 class="m-section">Advanced</h3>
       <form id="clientIdForm" class="m-card m-form" novalidate>
@@ -384,6 +386,7 @@
           appbarActions.innerHTML = `<span class="appbar-note" id="connectAppbarStepNote">${escapeHtml(stepNote)}</span>`;
         }
       }
+      wiz.firstRunOob = !state.hub;
       root.innerHTML = wizardFlow.renderWizardPage(wiz);
       const viewKey = `${wiz.step}:${wiz.subScreen || ""}:${wiz.troubleshootingOpen ? "ts" : ""}`;
       if (viewKey !== lastWizardViewKey) {
@@ -1358,6 +1361,18 @@
     }
 
     if (wiz.open && state.wizardDevAvailable) {
+      if (target.closest("#wizardUseExistingConnectBtn")) {
+        syncInputsFromDom();
+        connectExistingChosen = true;
+        wiz.open = false;
+        wiz.error = "";
+        wiz.showTechDetails = false;
+        await bridge.openConnect();
+        state.mode = "connect";
+        render();
+        runDiscovery();
+        return;
+      }
       if (target.closest("#wizardOpenTroubleshootingBtn")) {
         syncInputsFromDom();
         wiz.troubleshootingOpen = true;
@@ -1810,7 +1825,13 @@
       if (wiz.returnMode === "settings") {
         await bridge.openSettings();
         state.mode = "settings";
+      } else if (wiz.returnMode === "shell" && state.hub) {
+        await bridge.openShell();
+        window.location.hash = "#remote";
+        window.location.reload();
+        return;
       } else {
+        connectExistingChosen = true;
         await bridge.openConnect();
         state.mode = "connect";
       }
@@ -1861,6 +1882,26 @@
     formUser = state.hubUsername || "";
     formClientId = state.clientId || "";
     showSignIn = Boolean(state.hasHubAuth);
+    if (state.wizardDevAvailable && wizardBridge && wizardFlow) {
+      if (state.mode === "wizard") {
+        wiz.open = true;
+        wiz.step = 1;
+        wiz.subScreen = null;
+        wiz.troubleshootingOpen = false;
+        wiz.returnMode = state.hub ? "shell" : "connect";
+      } else if (
+        state.mode === "connect" &&
+        !state.hub &&
+        !state.unreachableError &&
+        !connectExistingChosen
+      ) {
+        wiz.open = true;
+        wiz.step = 1;
+        wiz.subScreen = null;
+        wiz.troubleshootingOpen = false;
+        wiz.returnMode = "connect";
+      }
+    }
     render();
     if (state.mode === "settings") loadUpdates();
     runDiscovery();

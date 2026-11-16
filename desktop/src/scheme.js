@@ -451,7 +451,8 @@ function createSchemeHandler({
 
     const mode = getPageMode();
     const useConnectBundle =
-      bundle.connectBundle && (mode === "connect" || mode === "settings");
+      bundle.connectBundle &&
+      (mode === "connect" || mode === "settings" || mode === "wizard");
 
     if (
       (method === "GET" || method === "HEAD") &&
