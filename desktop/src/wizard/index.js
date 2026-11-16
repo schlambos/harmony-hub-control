@@ -46,6 +46,8 @@ const {
   validateInstallerHost,
   buildInstallerArgs,
   stageInstallerWorkspace,
+  detectHostKeyChanged,
+  clearKnownHost,
   installFreshHub,
 } = require("./installer");
 
@@ -738,6 +740,7 @@ function createWizardIpcHandlers({
         hubId: validHubId,
         preflightOnly: args.preflightOnly === true,
         removeRootToolLeftovers: args.removeRootToolLeftovers !== false,
+        replaceStaleHostKey: args.replaceStaleHostKey === true,
         authHeader: getSavedAuthHeader(),
         userAgent,
         onEvent: forwardEventToWindow(win),
@@ -807,6 +810,8 @@ module.exports = {
   buildBridgeArgs,
   buildInstallerArgs,
   stageInstallerWorkspace,
+  detectHostKeyChanged,
+  clearKnownHost,
   runWizardBridge,
   evaluateFirmwareGate,
   evaluateMismatch,

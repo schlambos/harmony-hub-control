@@ -1038,6 +1038,11 @@
         );
       }
       if (runInstall) {
+        if (rootAction) {
+          stepsDesc.push(
+            `• Replace any previous SSH host key saved for ${host} in ~/.ssh/known_hosts after rooting.`
+          );
+        }
         stepsDesc.push(
           `• Run first-time Melodious installer (${wiz.installSource === "local" ? "local hub zip chosen next" : "latest GitHub release"}) on ${host} with Hub ID ${hubIdInt}, enable the cloud blocker, reboot if needed, and verify port 8080.`
         );
@@ -1099,16 +1104,51 @@
           ? `Running Melodious preflight check on ${host}…`
           : `Installing Melodious on ${host}…`;
         render();
-        const installRes = await wizardBridge.installHub({
+        let installRes = await wizardBridge.installHub({
           source: wiz.installSource,
           host,
           hubId: hubIdInt,
           preflightOnly,
           removeRootToolLeftovers: true,
+          replaceStaleHostKey: Boolean(rootAction),
         });
         if (installRes?.canceled) {
           wiz.stepText = "";
           return;
+        }
+        if (!installRes?.ok && !rootAction && installRes?.hostKeyChanged) {
+          const fpNote = installRes.hostKeyFingerprint
+            ? `\n\nNew host key fingerprint:\n${installRes.hostKeyFingerprint}`
+            : "";
+          const trustOk = await confirmWizardStep({
+            title: `SSH host key changed on ${host}`,
+            body:
+              `SSH host key changed on ${host} — normal after a factory reset or re-root. Trust this key and retry ${preflightOnly ? "preflight check" : "installation"}?` +
+              fpNote,
+            confirmLabel: "Trust Key & Retry",
+          });
+          if (!trustOk) {
+            wiz.error = installRes?.error || "Melodious installation canceled after SSH host key change.";
+            wiz.stepText = "";
+            return;
+          }
+          wiz.logLines = [];
+          wiz.stepText = preflightOnly
+            ? `Refreshing SSH host key and re-running preflight check on ${host}…`
+            : `Refreshing SSH host key and installing Melodious on ${host}…`;
+          render();
+          installRes = await wizardBridge.installHub({
+            source: wiz.installSource,
+            host,
+            hubId: hubIdInt,
+            preflightOnly,
+            removeRootToolLeftovers: true,
+            replaceStaleHostKey: true,
+          });
+          if (installRes?.canceled) {
+            wiz.stepText = "";
+            return;
+          }
         }
         if (!installRes?.ok) {
           wiz.error = installRes?.error || "Melodious installation failed.";

@@ -28,6 +28,8 @@ const {
   validatePositiveHubId,
   buildBridgeArgs,
   buildInstallerArgs,
+  detectHostKeyChanged,
+  clearKnownHost,
   runWizardBridge,
   classifyHubSignals,
   detectAndClassify,
@@ -1623,4 +1625,199 @@ test("detectAndClassify isolates multi-hub SSDP from USB hub and strictly honors
   ]);
   assert.equal(noUsbRes.verdict, "melodious-installed");
   assert.equal(wizardFlow.extractDetectedHost(noUsbRes), "192.168.0.234");
+});
+
+test("detectHostKeyChanged, clearKnownHost, installFreshHub, and wizard:install-hub handle stale SSH known_hosts safely", async () => {
+  // 1. detectHostKeyChanged extracts SHA256:... on SSH exit 255 host-key mismatch and returns false on normal errors
+  const mismatchLines = [
+    "== Checking SSH ==",
+    "ERROR: ssh failed with exit 255",
+    "stderr=@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@",
+    "@    WARNING: REMOTE HOST IDENTIFICATION HAS CHANGED!     @",
+    "@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@",
+    "The fingerprint for the ED25519 key sent by the remote host is",
+    "SHA256:iBUS0y/T7zckz4UB4K5mj8w55uLM3KczRAGKleMWb9I.",
+    "Offending ED25519 key in /Users/matt/.ssh/known_hosts:45",
+    "Host key verification failed.",
+    "ERROR: Host key verification failed.",
+  ];
+  assert.deepEqual(detectHostKeyChanged(mismatchLines), {
+    hostKeyChanged: true,
+    fingerprint: "SHA256:iBUS0y/T7zckz4UB4K5mj8w55uLM3KczRAGKleMWb9I",
+  });
+  assert.deepEqual(detectHostKeyChanged(["ERROR: Host key verification failed."]), {
+    hostKeyChanged: true,
+    fingerprint: "",
+  });
+  assert.deepEqual(
+    detectHostKeyChanged([
+      "== Checking SSH ==",
+      "ERROR: ssh: connect to host 192.168.0.235 port 22: Connection refused",
+    ]),
+    {
+      hostKeyChanged: false,
+      fingerprint: "",
+    }
+  );
+  assert.deepEqual(detectHostKeyChanged([]), {
+    hostKeyChanged: false,
+    fingerprint: "",
+  });
+
+  // 2. clearKnownHost invokes /usr/bin/ssh-keygen -R <host> (and [host]:port for non-22) with safe argv
+  const execCalls = [];
+  const cleared22 = await clearKnownHost({
+    host: "192.168.0.235",
+    execFileImpl: (bin, args, cb) => {
+      execCalls.push({ bin, args });
+      cb(null, "# Host 192.168.0.235 found: line 45\n", "/Users/owner/.ssh/known_hosts updated.\n");
+    },
+  });
+  assert.deepEqual(cleared22, { ok: true, target: "192.168.0.235", removed: true });
+
+  const cleared2222 = await clearKnownHost({
+    host: "192.168.0.235",
+    sshPort: 2222,
+    execFileImpl: (bin, args, cb) => {
+      execCalls.push({ bin, args });
+      cb(new Error("exit 1"), "", "Host [192.168.0.235]:2222 not found in /Users/owner/.ssh/known_hosts\n");
+    },
+  });
+  assert.deepEqual(cleared2222, { ok: true, target: "[192.168.0.235]:2222", removed: false });
+
+  const missingKnownHosts = await clearKnownHost({
+    host: "192.168.0.235",
+    execFileImpl: (_bin, _args, cb) => {
+      cb(new Error("exit 255"), "", "Cannot stat /Users/owner/.ssh/known_hosts: No such file or directory\n");
+    },
+  });
+  assert.deepEqual(missingKnownHosts, { ok: true, target: "192.168.0.235", removed: false });
+
+  assert.deepEqual(execCalls, [
+    { bin: "/usr/bin/ssh-keygen", args: ["-R", "192.168.0.235"] },
+    { bin: "/usr/bin/ssh-keygen", args: ["-R", "[192.168.0.235]:2222"] },
+  ]);
+
+  await assert.rejects(
+    () => clearKnownHost({ host: "--option-inject", execFileImpl: () => {} }),
+    /Invalid hub host/
+  );
+  await assert.rejects(
+    () => clearKnownHost({ host: "192.168.0.235; rm -rf /", execFileImpl: () => {} }),
+    /Invalid hub host/
+  );
+
+  // 3. installFreshHub default replaceStaleHostKey=false does NOT call clearKnownHost and surfaces hostKeyChanged + fingerprint
+  const tmpRootDir = fs.mkdtempSync(path.join(os.tmpdir(), "melodious-wiz-kh-test-"));
+  const localZip = path.join(tmpRootDir, "fake-hub.zip");
+  fs.writeFileSync(localZip, Buffer.from("PK-fake", "utf8"));
+  try {
+    let clearCalls = 0;
+    const mismatchRes = await installFreshHub({
+      source: "local",
+      hubZipPath: localZip,
+      host: "192.168.0.235",
+      hubId: 20266868,
+      readLocalHubZipImpl: async () => makeSyntheticVerifiedPayload("2.0.0"),
+      clearKnownHostImpl: async () => {
+        clearCalls += 1;
+        return { ok: true };
+      },
+      spawnImpl: () => {
+        const child = new EventEmitter();
+        child.stdin = { on() {}, end() {} };
+        child.stdout = new EventEmitter();
+        child.stderr = new EventEmitter();
+        child.kill = () => {};
+        setImmediate(() => {
+          child.stdout.emit("data", Buffer.from("== Checking SSH ==\n"));
+          child.stderr.emit(
+            "data",
+            Buffer.from(`${mismatchLines.slice(1).join("\n")}\n`)
+          );
+          child.emit("close", 1);
+        });
+        return child;
+      },
+      tmpRootDir,
+    });
+    assert.equal(clearCalls, 0, "must not clear known_hosts by default");
+    assert.equal(mismatchRes.ok, false);
+    assert.equal(mismatchRes.hostKeyChanged, true);
+    assert.equal(
+      mismatchRes.hostKeyFingerprint,
+      "SHA256:iBUS0y/T7zckz4UB4K5mj8w55uLM3KczRAGKleMWb9I"
+    );
+    assert.match(mismatchRes.error, /SSH host key changed on 192\.168\.0\.235/);
+
+    // When replaceStaleHostKey=true, clearKnownHost runs BEFORE install_webui.py and emits step event
+    const order = [];
+    const events = [];
+    const refreshedRes = await installFreshHub({
+      source: "local",
+      hubZipPath: localZip,
+      host: "192.168.0.235",
+      hubId: 20266868,
+      replaceStaleHostKey: true,
+      preflightOnly: true,
+      readLocalHubZipImpl: async () => makeSyntheticVerifiedPayload("2.0.0"),
+      clearKnownHostImpl: async ({ host, sshPort }) => {
+        order.push(`clear:${host}:${sshPort}`);
+        return { ok: true, target: host, removed: true };
+      },
+      spawnImpl: () => {
+        order.push("spawn:install_webui.py");
+        const child = new EventEmitter();
+        child.stdin = { on() {}, end() {} };
+        child.stdout = new EventEmitter();
+        child.stderr = new EventEmitter();
+        child.kill = () => {};
+        setImmediate(() => {
+          child.stdout.emit("data", Buffer.from("verdict=ALLOWED\n"));
+          child.emit("close", 0);
+        });
+        return child;
+      },
+      onEvent: (evt) => events.push(evt),
+      tmpRootDir,
+    });
+    assert.equal(refreshedRes.ok, true);
+    assert.deepEqual(order, ["clear:192.168.0.235:22", "spawn:install_webui.py"]);
+    assert.ok(
+      events.some(
+        (e) =>
+          e.type === "step" &&
+          e.step === "install-refresh-known-host" &&
+          /Refreshing saved SSH host key for 192\.168\.0\.235/.test(e.message)
+      )
+    );
+  } finally {
+    fs.rmSync(tmpRootDir, { recursive: true, force: true });
+  }
+
+  // 4. wizard:install-hub IPC forwards replaceStaleHostKey strictly as boolean
+  const mainFrame = { url: "melodious://app/" };
+  const mainWin = { isDestroyed: () => false, webContents: { mainFrame, send() {} } };
+  const trustedEvent = { sender: mainWin.webContents, senderFrame: mainFrame };
+  const forwarded = [];
+  const handlers = createWizardIpcHandlers({
+    getMainWindow: () => mainWin,
+    isWizardAvailable: () => true,
+    installFreshHubImpl: async (opts) => {
+      forwarded.push(opts.replaceStaleHostKey);
+      return { ok: true, version: "2.0.0" };
+    },
+  });
+  await handlers[WIZARD_CHANNELS.installHub](trustedEvent, {
+    source: "latest",
+    host: "192.168.0.235",
+    hubId: 20266868,
+  });
+  await handlers[WIZARD_CHANNELS.installHub](trustedEvent, {
+    source: "latest",
+    host: "192.168.0.235",
+    hubId: 20266868,
+    replaceStaleHostKey: true,
+  });
+  assert.deepEqual(forwarded, [false, true]);
 });
