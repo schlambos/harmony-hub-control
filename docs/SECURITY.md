@@ -23,7 +23,8 @@ trusted-LAN equipment.
   password over SSH (`passwd`) after install.
 - **The Wi-Fi recovery portal needs physical access.** `recovery_ap.sh` only
   starts `codex_portal` after the hub's reset button is held for 5 seconds
-  (station mode is torn down first). The portal binds only to the recovery
+  (station mode is torn down first); join the `Harmony-Recovery-xxxxxx`
+  network and open `http://192.168.76.1/`. The portal binds only to the recovery
   AP address (`192.168.76.1`), times idle clients out after 5 seconds, and
   validates SSID/password before writing `wpa_supplicant.conf` (control
   characters are stripped, so a submitted value cannot inject config lines).
@@ -34,6 +35,28 @@ trusted-LAN equipment.
   `-apply`) with a checksum list the client supplied. On a hub with sign-in
   off, any device on the network could replace a hub program that way. 1.3.0
   removed those routes, so update older hubs with the installer.
+
+## Safety and limits
+
+- **Trusted LAN only:** plain HTTP, optional sign-in (off by default), no origin checks — never
+  expose the hub to the internet.
+- **Secret-safe exports:** with sign-in off, MQTT/Wi-Fi passwords export as `__REDACTED__` (restores
+  keep the hub's); with it on, treat exports as secrets. SSH keeps password login as lockout
+  recovery — set a strong `passwd`.
+- **MQTT/HA webhooks are control channels** over plain HTTP (webhook ID = only secret): use an
+  authenticated broker and keep HA on the LAN.
+- **Unsigned updates:** install only from a repo copy or release you trust. Wi-Fi
+  changes/reboots/restores interrupt the room (confirmed in-app).
+- **Small hub:** back up before big imports. Limits: 32 devices · 2,048 commands/device ·
+  1,024/import. Offline is the supported mode — Logitech app/cloud use can overwrite local edits.
+- **Catalog lookup** uses your Logitech account under their terms (one device, read-only);
+  IRDB/files/learning still work if that path closes. App/hub self-updates are opt-in and
+  checksum-checked.
+- **Locked out?** Android SSH recovery, or delete `/data/codex/webui_auth.conf` via SSH and restart
+  `codex_webui`.
+- **Hand-edited JSON** must follow the remote's rules ([API.md](API.md)) — an action-less
+  button can freeze the remote. Audit with `node tools/activity_graph_repair.mjs --base-url
+  http://<hub-ip>:8080` (read-only without `--apply`).
 
 ## Checking a download
 

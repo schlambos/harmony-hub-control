@@ -1,5 +1,5 @@
 #!/usr/bin/env node
-// Local links/images and GitHub-style heading anchors in the four entry guides.
+// Local links/images and GitHub-style heading anchors in the README and the docs it routes to.
 // No HTTP requests: in particular, never probe example hub addresses in docs.
 import assert from "node:assert/strict";
 import fs from "node:fs";
@@ -7,7 +7,12 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 
 const repo = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../..");
-const files = ["README.md", "docs/SETUP_GUIDE.md", "docs/DEVICES_AND_CODES_GUIDE.md", "docs/ACTIVITIES_GUIDE.md"];
+const files = [
+  "README.md", "docs/SETUP_GUIDE.md", "docs/DEVICES_AND_CODES_GUIDE.md", "docs/ACTIVITIES_GUIDE.md",
+  "docs/COMPATIBILITY.md", "docs/BLUETOOTH_KEYBOARD.md", "docs/ARCHITECTURE.md", "docs/MELODIOUS_WEB_UI.md",
+  "docs/SECURITY.md", "docs/HOME_ASSISTANT.md", "docs/INSTALL.md", "docs/DESKTOP_APP.md",
+  "Android/README.md", "desktop/README.md",
+];
 const withoutCode = (s) => s.replace(/^```[^\n]*\n[\s\S]*?^```\s*$/gm, "");
 const slug = (s) => s.toLowerCase()
   .replace(/<[^>]+>/g, "").replace(/\[([^\]]+)\]\([^)]*\)/g, "$1")

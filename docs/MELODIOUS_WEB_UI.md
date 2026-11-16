@@ -230,6 +230,8 @@ and Settings. On phones they're a bottom bar; on screens 840 px and
 wider they're a navigation rail. Every screen has its own address,
 such as `#devices/<id>`, so you can bookmark it.
 
+<p align="center"><img src="screenshots/web/desktop-remote.png" alt="The web app on a computer, with the navigation rail and More keys beside the remote"><br><sub>On a computer: the navigation rail, with More keys beside the remote</sub></p>
+
 **Remote**
 
 - With nothing running, the tab shows "Everything's off" and a card for
@@ -250,6 +252,10 @@ such as `#devices/<id>`, so you can bookmark it.
   Volume, channel and the D-pad fire on touch and repeat while held;
   the hub keeps the command going until you let go.
 
+<table>
+<tr><td align="center"><img src="screenshots/web/remote.png" alt="The web app's remote with an activity running" width="200"><br><sub>Remote</sub></td><td align="center"><img src="screenshots/web/remote-more-keys.png" alt="The More keys sheet with on-screen buttons, colour keys and the number pad" width="200"><br><sub>More keys</sub></td><td align="center"><img src="screenshots/web/remote-fix-it.png" alt="The Fix it sheet with power and input resends for each device" width="200"><br><sub>Fix it</sub></td><td align="center"><img src="screenshots/web/remote-switch.png" alt="The Switch activity sheet with Turn everything off" width="200"><br><sub>Switch activity</sub></td></tr>
+</table>
+
 **Activities**
 
 - The running activity's card has On-screen buttons, Open remote and
@@ -257,6 +263,10 @@ such as `#devices/<id>`, so you can bookmark it.
   up buttons, On-screen buttons, Try the buttons (its remote, without
   starting it), Advanced editor, Move up, Move down and Delete.
 - **+** opens the setup wizard.
+
+<table>
+<tr><td align="center"><img src="screenshots/web/activities.png" alt="The Activities tab with the running activity's card" width="200"><br><sub>Activities</sub></td><td align="center"><img src="screenshots/web/activity-menu.png" alt="An activity's menu" width="200"><br><sub>Activity menu</sub></td><td align="center"><img src="screenshots/web/wizard-devices.png" alt="The setup wizard's Devices step" width="200"><br><sub>Wizard: Devices</sub></td><td align="center"><img src="screenshots/web/wizard-buttons.png" alt="The setup wizard's Buttons step" width="200"><br><sub>Wizard: Buttons</sub></td></tr>
+</table>
 
 **Devices**
 
@@ -269,6 +279,11 @@ such as `#devices/<id>`, so you can bookmark it.
 - The ⋮ menu has Edit details, Delete device and the device screen
   actions (Make, Rebuild or Remove Touch screen). A device that is
   still in use can't be deleted, and the page says where it's used.
+
+<table>
+<tr><td align="center"><img src="screenshots/web/devices.png" alt="The Devices tab" width="200"><br><sub>Devices</sub></td><td align="center"><img src="screenshots/web/device-commands.png" alt="A device's Commands tab" width="200"><br><sub>Commands</sub></td><td align="center"><img src="screenshots/web/import-find.png" alt="The Import codes sheet" width="200"><br><sub>Import codes</sub></td><td align="center"><img src="screenshots/web/device-settings.png" alt="A device's settings" width="200"><br><sub>Device settings</sub></td></tr>
+<tr><td align="center"><img src="screenshots/web/devices-ha.png" alt="Devices with Home Assistant, Network, Bluetooth and IR badges" width="200"><br><sub>Devices (HA)</sub></td><td align="center"><img src="screenshots/web/add-device-androidtv.png" alt="Add a device: Android TV network pairing" width="200"><br><sub>Add: Android TV</sub></td><td align="center"><img src="screenshots/web/device-live-state.png" alt="A device with live power, input, and volume state from Home Assistant" width="200"><br><sub>Live state</sub></td><td align="center"><img src="screenshots/web/remote-fix-it-state.png" alt="Fix it sheet showing live device state" width="200"><br><sub>Fix it (live)</sub></td></tr>
+</table>
 
 **Settings**
 
@@ -292,3 +307,21 @@ such as `#devices/<id>`, so you can bookmark it.
 - **System**: status and logs, the cloud blocker, the time zone,
   sign-in, the hub's software version, Home Assistant discovery and
   reboot.
+
+<table>
+<tr><td align="center"><img src="screenshots/web/remotes-pairing.png" alt="Remotes page with paired Smart Control and Touch, showing the pairing UI" width="200"><br><sub>Remotes</sub></td><td align="center"><img src="screenshots/web/onscreen-buttons.png" alt="The on-screen buttons editor for Touch" width="200"><br><sub>On-screen buttons</sub></td><td align="center"><img src="screenshots/web/hold-command-picker.png" alt="The hold-command picker with device chips and command search" width="200"><br><sub>Hold command</sub></td><td></td></tr>
+</table>
+
+<details>
+<summary>More web app screenshots</summary>
+
+<table>
+<tr><td align="center"><img src="screenshots/web/remote-keyboard.png" alt="The Keyboard tab" width="200"><br><sub>Keyboard</sub></td><td align="center"><img src="screenshots/web/wizard-name.png" alt="The wizard's Name step" width="200"><br><sub>Wizard: Name</sub></td><td align="center"><img src="screenshots/web/wizard-inputs.png" alt="The wizard's Inputs step" width="200"><br><sub>Wizard: Inputs</sub></td><td align="center"><img src="screenshots/web/wizard-review.png" alt="The wizard's Review step" width="200"><br><sub>Wizard: Review</sub></td></tr>
+<tr><td align="center"><img src="screenshots/web/device-remote.png" alt="A device's own remote" width="200"><br><sub>Device remote</sub></td><td align="center"><img src="screenshots/web/learn.png" alt="The Learn a button sheet" width="200"><br><sub>Learn a button</sub></td><td align="center"><img src="screenshots/web/import-paste.png" alt="Import codes: Paste" width="200"><br><sub>Import: Paste</sub></td><td align="center"><img src="screenshots/web/send-all.png" alt="The Send all commands page" width="200"><br><sub>Send all</sub></td></tr>
+<tr><td align="center"><img src="screenshots/web/ir-lab.png" alt="The IR lab" width="200"><br><sub>IR lab</sub></td><td align="center"><img src="screenshots/web/settings.png" alt="The Settings tab" width="200"><br><sub>Settings</sub></td><td align="center"><img src="screenshots/web/bluetooth.png" alt="The Bluetooth keyboard page" width="200"><br><sub>Bluetooth</sub></td><td align="center"><img src="screenshots/web/mqtt.png" alt="The MQTT page" width="200"><br><sub>MQTT</sub></td></tr>
+<tr><td align="center"><img src="screenshots/web/backup.png" alt="The Backup page" width="200"><br><sub>Backup</sub></td><td align="center"><img src="screenshots/web/system.png" alt="The System page" width="200"><br><sub>System</sub></td><td align="center"><img src="screenshots/web/wifi.png" alt="The Wi-Fi page" width="200"><br><sub>Wi-Fi</sub></td><td></td></tr>
+</table>
+
+<p align="center"><img src="screenshots/web/desktop-editor.png" alt="The advanced editor on a computer"><br><sub>The advanced editor</sub></p>
+
+</details>

@@ -269,7 +269,7 @@ For a new hub, do these three things:
 
 **Home Assistant (optional).** To control the hub from Home Assistant and
 use Home Assistant devices on your remote, see
-[Set up Home Assistant](../README.md#set-up-home-assistant).
+[Set up Home Assistant](HOME_ASSISTANT.md#setup).
 
 **Updates.** When a newer Melodious is out, **Settings → Updates → Update
 hub…** in the desktop app installs it. It uses the key the wizard created on
