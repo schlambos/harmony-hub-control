@@ -11,6 +11,11 @@ account and pull a device's codes from Logitech's catalog.
   tab gets Sign in, a brand and model search, a results list and Download.
   The downloaded package goes through the existing preview and
   `/api/catalog-import`. No Python helper, no terminal, no file to copy.
+- **Setup Wizard (macOS).** Takes a hub from the Harmony app's setup, or
+  from new, factory reset or second-hand, to rooted and running Melodious,
+  over Wi-Fi or USB, with no commands. It's on `main` and ships in the
+  first release after `v2.1.0`. The user guide, with a screenshot of every
+  screen, is **[SETUP_GUIDE.md](SETUP_GUIDE.md)**.
 
 ## Install and first run (user guide)
 
@@ -25,8 +30,14 @@ account and pull a device's codes from Logitech's catalog.
   [`desktop/README.md`](../desktop/README.md) (needs Node.js).
 - **First run.** When macOS asks whether Melodious may find and connect
   to devices on your local network, choose **Allow**; without it, the
-  app can't reach the hub. The app then looks for the hub with SSDP, or
-  you type its address.
+  app can't reach the hub. With no hub saved, the macOS app opens the
+  Setup Wizard's Welcome screen
+  ([SETUP_GUIDE.md](SETUP_GUIDE.md)); **My hub already runs Melodious —
+  Connect →** goes to the connect screen, which looks for the hub with
+  SSDP or takes a typed address. The Windows app opens the connect screen.
+- **Setup Wizard later.** Melodious → **Set Up a New Harmony Hub…**, the
+  **Set up or re-root a hub** card at the top of Settings, or the
+  **Set up a new or unrooted Harmony Hub** card on the connect screen.
 - **Logitech catalog.** Open a device, then Import codes → Logitech
   catalog: (1) **Sign in** — Logitech's sign-in opens in its own
   window, and Google sign-in works too; (2) **Search** by brand and
@@ -213,6 +224,7 @@ window.melodiousDesktop = {
 | --- | --- |
 | Remote, Activities, Devices, Settings and every sub-page | The packaged web shell, unchanged (`docs/MELODIOUS_WEB_UI.md`) |
 | Connect: find hubs, enter address, hub sign-in | New desktop page, built from the shell's CSS components, after the Android `HubConnectScreen` |
+| Setup Wizard (macOS): Welcome, Wi-Fi, Install, Done | Same page, in wizard mode (`desktop/src/wizard/flow.js`); every screen is in [SETUP_GUIDE.md](SETUP_GUIDE.md), captured by `desktop/scripts/capture-oob-screenshots.mjs` |
 | Desktop settings (⌘,) | Same page, in settings mode |
 | Logitech sign-in | Logitech's own page in a separate window; it closes itself on success |
 | Import codes → Logitech catalog | Shared tab: in the app it gains the account line, search, results and Download; on the hub it keeps "Open a catalog package…" |

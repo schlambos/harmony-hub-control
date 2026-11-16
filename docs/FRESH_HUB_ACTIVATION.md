@@ -31,16 +31,16 @@ factory reset, firmware upload — is now **bundled into this repository** at
 additions there are the fresh-hub transports (POST, USB hbus) and the
 TDE-gate handling that let the chain start from a blank hub.
 
-## Coming next: automated fresh-hub installation
+## On a Mac: the Setup Wizard
 
-Everything in this runbook is currently a guided manual procedure. The
-planned next step is a **one-command automated installer for fresh hubs**:
-detect the hub over USB, check (and, with approval, update) the firmware,
-reset, join Wi-Fi, open the TDE gate, provision the local account, seed
-the starter config, root, install Melodious, and finish ready to pair a
-remote — with the same checkpoints this runbook documents, and the
-two wizard gaps below fixed so a blank hub needs no SSH workarounds.
-Until that lands, this runbook is the procedure.
+The macOS desktop app's Setup Wizard runs this chain for you: detect the
+hub over USB, check (and, with approval, update) the firmware, reset,
+join Wi-Fi, open the TDE gate, provision the local account, seed the
+starter config, root, install Melodious, and finish ready to pair a
+remote. It's on `main` and ships in the first release after `v2.1.0`;
+the user guide is [SETUP_GUIDE.md](SETUP_GUIDE.md). This runbook is the
+procedure on Windows and Linux, and the reference for what each wizard
+step does.
 
 ## Before you start: what is irreversible
 
