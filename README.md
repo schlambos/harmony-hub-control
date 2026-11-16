@@ -194,6 +194,9 @@ No remote needs modified firmware; reports for other remotes welcome ([CONTRIBUT
 
 ### Activities
 
+Start here: **[Creating Activities & Customizing Your Remote](docs/ACTIVITIES_GUIDE.md)** —
+step-by-step setup, button maps, screen controls and everyday troubleshooting.
+
 - **Setup wizard:** Name → Devices → Inputs → Buttons (36 keys, press + hold) → Review. New
   activities power on Display → Volume → Player with warm-up waits (2.5 s TV, 1.5 s AVR/soundbar, 1
   s player) and get the Touch's number pad and on-screen Home button; existing ones keep their saved
@@ -205,12 +208,15 @@ No remote needs modified firmware; reports for other remotes welcome ([CONTRIBUT
 
 ### Devices and codes
 
+Start here: **[Adding Devices & Importing IR Codes](docs/DEVICES_AND_CODES_GUIDE.md)** —
+catalog lookup, learning, safe testing, and the power/input/timing settings activities need.
+
 - **Device settings:** power mode (discrete/toggle/none), warm-up, Always on / Keep on, inputs,
   timing. **Learn a button** from the original remote, then test and save.
 - **Import codes** via IRDB search, Flipper `.ir` files, pasted IRDB CSV / `name|mode|code` / Pronto
   hex, a RemoteCentral fetch, or typing a code — NEC, Samsung, Sony, RC5/6 and more converted with
   proper frame timing.
-- **Logitech catalog** (macOS/Android): sign in, search brand/model, preview (skips explained),
+- **Logitech catalog** (Desktop app on Windows, Linux, macOS + Android app): sign in, search brand/model, preview (skips explained),
   import. Credentials never reach the hub. See [docs/DESKTOP_APP.md](docs/DESKTOP_APP.md) ·
   [docs/ANDROID_CATALOG.md](docs/ANDROID_CATALOG.md).
 - **Find what works:** Send all (dry run, set gap, Stop) or the IR lab scratch device.
@@ -570,6 +576,8 @@ tools/shipped_copy_hygiene.mjs`. Full test list and rebuilding `codex_webui` (Zi
 | Document | What it covers |
 | --- | --- |
 | [docs/SETUP_GUIDE.md](docs/SETUP_GUIDE.md) | Windows, Linux and macOS Setup Wizard, start to finish, with screenshots: hubs set up in the Harmony app and new, reset or second-hand ones |
+| [docs/DEVICES_AND_CODES_GUIDE.md](docs/DEVICES_AND_CODES_GUIDE.md) | Add devices, import Logitech/IRDB codes, learn and test buttons, and configure power, inputs and timing across Desktop, Web and Android |
+| [docs/ACTIVITIES_GUIDE.md](docs/ACTIVITIES_GUIDE.md) | Create activities, customize press/hold, screen and Home control buttons, add start/end steps and troubleshoot |
 | [tools/hub-root/README.md](tools/hub-root/README.md) | The bundled root tool: LAN and USB rooting, Wi-Fi setup, factory reset and firmware upload |
 | [docs/FRESH_HUB_ACTIVATION.md](docs/FRESH_HUB_ACTIVATION.md) | Taking a factory-fresh hub to rooted, on Melodious and paired, with no Logitech account or cloud |
 | [docs/INSTALL.md](docs/INSTALL.md) | Installing, updating, turning Melodious off/on, and rolling back: the full installer walkthrough, every flag, and flash-full troubleshooting |

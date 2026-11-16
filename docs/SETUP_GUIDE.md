@@ -247,15 +247,17 @@ any phone or computer on your network at `http://<hub address>:8080/`.
 A hub you set up with Path A already has your devices and activities.
 For a new hub, do these three things:
 
-1. **Add your TV and devices.** Go to **Devices** and click **+** (Add a
-   device). Import codes by brand and model, add an Android or Google TV
-   over the network, or teach the hub buttons from the device's own remote.
+1. **[Add your TV and devices](DEVICES_AND_CODES_GUIDE.md).** Follow
+   **Adding Devices & Importing IR Codes** for the Desktop app on Windows,
+   Linux and macOS, the Web UI, and Android: choose the right device type,
+   import or learn commands, then configure power, inputs and timing.
 
    ![Devices → Add a device](screenshots/desktop/wizard/12-hub-add-device.png)
 
-2. **Create an activity.** Go to **Activities → Add activity**. An activity
-   such as "Watch TV" turns on the right devices and sets their inputs in
-   one press.
+2. **[Create an activity](ACTIVITIES_GUIDE.md).** Follow **Creating
+   Activities & Customizing Your Remote** to choose devices and inputs,
+   set up press/hold actions, screen and Home control buttons, and test an
+   activity such as "Watch TV" from start to finish.
 3. **Pair your remote.** Go to **Settings → Remotes** and click **Open
    pairing window**. On a Harmony Smart Control, hold **Menu** and **Mute**
    together for about 5 seconds. Other remotes use their own pairing steps.
