@@ -22,6 +22,9 @@ test("preload exposes version 1 and exactly six fixed catalog invoke channels wi
   for (const key of Object.keys(bridge.catalog)) await bridge.catalog[key]({ id: 1, manufacturer: "Sony", model: "Fixture" });
   assert.deepEqual(calls.map(([channel]) => channel), ["catalog:status", "catalog:sign-in", "catalog:sign-out", "catalog:check-model", "catalog:search", "catalog:download"]);
   await assert.rejects(bridge.catalog.search({ manufacturer: "Sony", model: "FAIL" }), /^Error: Sign in to Logitech first$/);
+  assert.deepEqual(Object.keys(bridge.hub), ["getState", "discover", "connect", "saveHubAuth", "clearHubAuth", "forgetHub", "saveClientId", "openShell", "openConnect", "openSettings", "openWizard"]);
+  await bridge.hub.openWizard();
+  assert.deepEqual(calls.at(-1), ["desktop:open-wizard", undefined]);
 });
 
 test("preload exposes seven fixed update channels and passes only the documented arguments", async () => {

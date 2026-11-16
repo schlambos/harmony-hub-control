@@ -141,6 +141,38 @@ test("filterForwardResponseHeaders strips WWW-Authenticate and Set-Cookie", () =
   assert.equal("Set-Cookie" in filtered, false);
 });
 
+test("scheme handler serves the connect bundle in wizard page mode (app-menu OOB entry), shell bundle in shell mode", async () => {
+  const { dir } = makeTempShellDir();
+  const srcDir = fs.mkdtempSync(path.join(os.tmpdir(), "melodious-connect-test-"));
+  try {
+    const connectDir = path.join(srcDir, "connect");
+    fs.mkdirSync(connectDir, { recursive: true });
+    fs.writeFileSync(
+      path.join(connectDir, "index.html"),
+      "<!doctype html><html><head><title>Connect</title></head><body>CONNECT_PAGE<!-- CONNECT_SCRIPT --></body></html>"
+    );
+    fs.writeFileSync(path.join(connectDir, "connect.js"), "console.log('connect');");
+    let mode = "wizard";
+    const handler = createSchemeHandler({
+      shellDir: dir,
+      connectDir,
+      getHub: () => null,
+      getSavedAuthHeader: () => null,
+      getPageMode: () => mode,
+    });
+    const wizRes = await handler.handle(new Request("melodious://app/"));
+    assert.equal(wizRes.status, 200);
+    assert.match(await wizRes.text(), /CONNECT_PAGE/);
+    mode = "shell";
+    const shellRes = await handler.handle(new Request("melodious://app/"));
+    assert.equal(shellRes.status, 200);
+    assert.doesNotMatch(await shellRes.text(), /CONNECT_PAGE/);
+  } finally {
+    fs.rmSync(dir, { recursive: true, force: true });
+    fs.rmSync(srcDir, { recursive: true, force: true });
+  }
+});
+
 test("scheme handler serves the 5 bundle files and forwards other paths with 401/502 handling, Content-Length framing and abort", async () => {
   const { dir } = makeTempShellDir();
   let lastReq = null;

@@ -149,6 +149,14 @@ function openSettingsPage() {
   }
 }
 
+function openWizardPage() {
+  if (!getWizardDevAvailable()) return;
+  pageMode = "wizard";
+  if (mainWindow && !mainWindow.isDestroyed()) {
+    mainWindow.loadURL("melodious://app/");
+  }
+}
+
 function buildAppMenu() {
   const isMac = process.platform === "darwin";
   const template = [
@@ -172,6 +180,14 @@ function buildAppMenu() {
                 accelerator: "CmdOrCtrl+,",
                 click: () => openSettingsPage(),
               },
+              ...(getWizardDevAvailable()
+                ? [
+                    {
+                      label: "Set Up a New Harmony Hub…",
+                      click: () => openWizardPage(),
+                    },
+                  ]
+                : []),
               { type: "separator" },
               { role: "services" },
               { type: "separator" },
@@ -708,6 +724,15 @@ function registerIpcHandlers() {
   ipcMain.handle("desktop:open-settings", (event) => {
     checkSender(event);
     pageMode = "settings";
+    return { ok: true, mode: pageMode };
+  });
+
+  ipcMain.handle("desktop:open-wizard", (event) => {
+    checkSender(event);
+    if (!getWizardDevAvailable()) {
+      return { ok: false, mode: pageMode };
+    }
+    pageMode = "wizard";
     return { ok: true, mode: pageMode };
   });
 

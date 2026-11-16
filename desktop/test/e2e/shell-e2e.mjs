@@ -202,9 +202,28 @@ test("Playwright _electron end-to-end shell suite against webui-sim", { timeout:
     const page = await electronApp.firstWindow();
     await page.setViewportSize({ width: 1280, height: 800 });
 
-    // 1. First run shows the Connect screen; connect by address to SIM_PORT
+    // 1. First run with no saved hub: on macOS (wizard available) the app
+    //    opens straight into the OOB Setup Wizard; the existing-hub escape
+    //    reaches Connect. On Windows (wizard unavailable) it opens Connect.
+    if (process.platform === "darwin") {
+      await page.waitForSelector("#hubSetupWizard", { timeout: 10000 });
+      assert.equal(await page.title(), "Hub Setup · Melodious");
+      assert.match(await page.textContent("#hubSetupWizard"), /Welcome to Melodious/);
+      await page.screenshot({ path: path.join(shotsDir, "oob-wizard-1280.png") });
+      await page.click("#wizardUseExistingConnectBtn");
+    }
     await page.waitForSelector("#connectForm", { timeout: 10000 });
     assert.equal(await page.title(), "Connect · Melodious");
+    if (process.platform === "darwin") {
+      const entryBeforeForm = await page.evaluate(() => {
+        const entry = document.getElementById("openWizardConnectBtn");
+        const form = document.getElementById("connectForm");
+        return Boolean(
+          entry && form && (entry.compareDocumentPosition(form) & Node.DOCUMENT_POSITION_FOLLOWING)
+        );
+      });
+      assert.equal(entryBeforeForm, true, "wizard entry sits at the top of Connect, above the address form");
+    }
 
     await page.fill("#connectHost", "127.0.0.1");
     await page.fill("#connectPort", String(SIM_PORT));
@@ -629,7 +648,8 @@ test(
 
       const page = await electronApp.firstWindow();
       await page.setViewportSize({ width: 1280, height: 840 });
-      await page.waitForSelector("#connectForm", { timeout: 10000 });
+      // Fresh profile: OOB wizard on macOS source builds, Connect elsewhere.
+      await page.waitForSelector("#hubSetupWizard, #connectForm", { timeout: 10000 });
 
       // 1. Packaged / gated-off check (isWizardAvailable = false): hides all wizard UI & rejects IPC
       await electronApp.evaluate(() => {
@@ -657,6 +677,10 @@ test(
         }
       });
       assert.match(gatedErr, /Root Wizard dev actions are not available/);
+      const gatedOpenWizard = await page.evaluate(() =>
+        window.melodiousDesktop.hub.openWizard()
+      );
+      assert.equal(gatedOpenWizard.ok, false);
 
       // 2. Enable source-mode wizard availability + install deterministic offline wizard stubs
       await electronApp.evaluate((_electron, { simPort }) => {
@@ -857,6 +881,16 @@ test(
       await page.reload();
       await page.waitForSelector("#openWizardSettingsBtn", { timeout: 10000 });
       assert.match(await page.textContent("#openWizardSettingsBtn"), /Set up or re-root a hub/);
+      const settingsOrder = await page.evaluate(() => {
+        const entry = document.getElementById("openWizardSettingsBtn");
+        const before = (el) =>
+          Boolean(el && entry && (entry.compareDocumentPosition(el) & Node.DOCUMENT_POSITION_FOLLOWING));
+        return {
+          aboveAddress: before(document.getElementById("connectHost")),
+          aboveUpdates: before(document.getElementById("updatesCheckBtn")),
+        };
+      });
+      assert.deepEqual(settingsOrder, { aboveAddress: true, aboveUpdates: true });
       await page.click("#openWizardSettingsBtn");
       await page.waitForSelector("#hubSetupWizard", { timeout: 10000 });
       assert.equal(await page.title(), "Hub Setup · Melodious");
@@ -878,6 +912,33 @@ test(
       await page.waitForSelector("#openWizardSettingsBtn", { timeout: 10000 });
       assert.equal(await page.title(), "Settings · Melodious");
 
+      // 3b. hub.openWizard() IPC launches straight into the wizard; Back (no saved hub) returns to Connect
+      const openWizardRes = await page.evaluate(async () => {
+        const res = await window.melodiousDesktop.hub.openWizard();
+        window.location.reload();
+        return res;
+      });
+      assert.deepEqual(openWizardRes, { ok: true, mode: "wizard" });
+      await page.waitForSelector("#hubSetupWizard", { timeout: 10000 });
+      assert.equal(await page.title(), "Hub Setup · Melodious");
+      await page.click("#settingsBackBtn");
+      await page.waitForSelector("#connectForm", { timeout: 10000 });
+
+      // 3c. macOS app menu: Melodious -> Set Up a New Harmony Hub… (1 click from anywhere)
+      if (process.platform === "darwin") {
+        const menuItemFound = await electronApp.evaluate(({ Menu }) => {
+          const item = Menu.getApplicationMenu()?.items[0]?.submenu?.items.find(
+            (i) => i.label === "Set Up a New Harmony Hub…"
+          );
+          item?.click();
+          return Boolean(item);
+        });
+        assert.equal(menuItemFound, true);
+        await page.waitForSelector("#hubSetupWizard", { timeout: 10000 });
+        await page.click("#settingsBackBtn");
+        await page.waitForSelector("#connectForm", { timeout: 10000 });
+      }
+
       // 4. Provisioned 1-click path: Screen 1 -> Screen 3 (lan-root-xmpp -> install) -> Screen 4 (Done)
       await electronApp.evaluate(() => {
         globalThis.__wizardSimMode = "provisioned";
@@ -886,6 +947,10 @@ test(
         await window.melodiousDesktop.hub.openConnect();
         window.location.reload();
       });
+      // No saved hub yet, so Connect opens straight into the OOB wizard;
+      // escape to Connect to verify its top entry, then re-enter the wizard.
+      await page.waitForSelector("#hubSetupWizard", { timeout: 10000 });
+      await page.click("#wizardUseExistingConnectBtn");
       await page.waitForSelector("#openWizardConnectBtn", { timeout: 10000 });
       assert.match(
         await page.textContent("#openWizardConnectBtn"),
@@ -970,9 +1035,9 @@ test(
         await window.melodiousDesktop.hub.openConnect();
         window.location.reload();
       });
-      await page.waitForSelector("#openWizardConnectBtn", { timeout: 10000 });
-      await page.click("#openWizardConnectBtn");
+      // Forgotten hub = first-run state again: straight into the OOB wizard.
       await page.waitForSelector("#hubSetupWizard", { timeout: 10000 });
+      assert.match(await page.textContent("#hubSetupWizard"), /Welcome to Melodious/);
 
       // IP disclosure is closed by default and #wizardHostInput starts blank
       assert.equal(

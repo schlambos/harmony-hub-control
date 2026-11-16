@@ -1330,7 +1330,26 @@ test("wizard/flow.js renders jargon-free 4-screen consumer flow, optional sub-sc
   assert.match(step1Html, /Can't find it\? Enter IP address/);
   assert.doesNotMatch(step1Html, /<details[^>]*id="wizardIpDisclosure"[^>]*open/);
   assert.match(step1Html, /Troubleshooting tools/);
+  assert.doesNotMatch(step1Html, /Welcome to Melodious/);
+  assert.doesNotMatch(step1Html, /id="wizardUseExistingConnectBtn"/);
   assertCleanConsumerHtml(step1Html, "Screen 1 initial");
+
+  // Screen 1 in true first-run OOB mode: Welcome greeting + existing-hub escape
+  const oobState = wizardFlow.createInitialWizardState(4150);
+  oobState.firstRunOob = true;
+  const oobHtml = wizardFlow.renderWizardPage(oobState);
+  assert.match(oobHtml, /Welcome to Melodious/);
+  assert.match(oobHtml, /Let's set up your Harmony Hub\. Plug it into this Mac with a USB cable, or make sure it's on your Wi-Fi\./);
+  assert.match(oobHtml, /id="wizardUseExistingConnectBtn"/);
+  assert.match(oobHtml, /My hub already runs Melodious — Connect →/);
+  assert.match(oobHtml, /Find My Hub/);
+  assertCleanConsumerHtml(oobHtml, "Screen 1 first-run OOB");
+
+  // Wizard entry cards (Connect top + Settings top share the prominent card)
+  assert.match(wizardFlow.renderWizardConnectEntry({}), /class="setup-entry-card" id="openWizardConnectBtn"/);
+  const settingsEntryHtml = wizardFlow.renderWizardSettingsEntry({});
+  assert.match(settingsEntryHtml, /class="setup-entry-card" id="openWizardSettingsBtn"/);
+  assert.match(settingsEntryHtml, /Set up or re-root a hub/);
 
   // Screen 1: Fresh hub found over USB on 4.15.600 -> never shows firmware card
   st.classifyResult = {

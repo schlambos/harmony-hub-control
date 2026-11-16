@@ -32,6 +32,7 @@ contextBridge.exposeInMainWorld("melodiousDesktop", {
     openShell: () => ipcRenderer.invoke("desktop:open-shell"),
     openConnect: () => ipcRenderer.invoke("desktop:open-connect"),
     openSettings: () => ipcRenderer.invoke("desktop:open-settings"),
+    openWizard: () => ipcRenderer.invoke("desktop:open-wizard"),
   },
   updates: {
     get: () => ipcRenderer.invoke("desktop:updates-get"),
