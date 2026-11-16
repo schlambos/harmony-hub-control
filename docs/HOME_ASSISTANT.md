@@ -6,9 +6,10 @@ Melodious connects the hub and Home Assistant in both directions:
 | --- | --- |
 | **Harmony controls Home Assistant** | The [Melodious integration](https://github.com/schlambos/ha-melodious) turns whole Home Assistant devices (merged) or single entities into ordinary devices on the hub (`TransportType: 64`). Activities, physical remote buttons, Touch screens and the apps drive them through a local webhook, and every command also fires a `melodious.command_received` event in Home Assistant, so a button can chain into any automation. |
 | **Home Assistant controls Harmony** | The Melodious integration also exposes the hub itself as a `remote` entity in Home Assistant: `turn_on` / `turn_off` start and stop activities, and `send_command` sends any command to any IR, Bluetooth or Home Assistant device on the hub. The optional MQTT bridge and Home Assistant's built-in Logitech Harmony integration also keep working over the hub's local connections. |
+| **Harmony devices in Home Assistant** | The integration mirrors selected hub-only devices (IR, Bluetooth, network) into HA as power switches, input selectors, command buttons and activity sensors. Opt-in per device in the integration's Configure; loop guard excludes mirrored entities from the HA→hub pickers. See [Hub devices in Home Assistant](#hub-devices-in-home-assistant-mirror-devices). |
 | **Live state back to Harmony** | Home Assistant pushes live device state (power, input/source, current app, playing or paused, volume and mute, plus an LG webOS TV's HDMI port and ARC status) to the hub's RAM-only `/api/ha-state` channel, where the web and Android apps show it. |
 
-This page is the deep reference for all three: merged device profiles,
+This page is the deep reference for all of these: merged device profiles,
 the per-domain command table, the `remote` entity and event, live state,
 LG theater/ARC state and port links, redundant-command skipping, the
 MQTT topic table, and the hub-side rules each piece must follow.
@@ -200,6 +201,18 @@ repository of type **Integration**.
 3. Open the integration's **Configure**, and pick whole devices and/or
    single entities. The review step lists each merged device's entities
    and commands; untick any entity or command you don't want on the hub.
+   To mirror hub devices into Home Assistant, pick them in the **Mirror
+   devices** section — each appears as power switch, input selector,
+   command buttons and an activity sensor
+   ([below](#hub-devices-in-home-assistant-mirror-devices)).
+
+Once set up, a Home Assistant device or entity can be used anywhere a
+hub device can: as an activity member, on any button as a non-member
+**Extra**, on its own Touch screen (auto-built), or from its device page
+in the apps. Lights hold to dim and toggles fire once per press
+([press modes](ARCHITECTURE.md#press-modes)). Commands and inputs ever
+reported are kept, in-use removals are refused with a notification, and
+no Home Assistant token is stored on the hub.
 
 Setup sends the Hub an empty dry run, which saves nothing, to check that
 the Hub has the device writer. Each pick becomes a Hub device. Removing
@@ -351,6 +364,24 @@ Harmony integration keeps working locally over the hub's WebSocket
 (and `/api/androidtv/devices`) pushes are memoized in RAM on the hub,
 so an unchanged or refused device set never triggers a flash backup or
 reloads the engine.
+
+### Hub devices in Home Assistant (mirror devices)
+
+Integration 0.7.1 or later can mirror hub-only devices (IR, Bluetooth,
+network) into Home Assistant. In **Configure**, pick them in the
+**Mirror devices** section; nothing is mirrored automatically. Each
+mirrored device appears as:
+
+- a **power switch** (when the hub reports a power feature; optimistic,
+  since IR gives no confirmation);
+- an **input selector** that sends the matching input command;
+- one **command button** per enabled command (tap only; to hold, use
+  `remote.send_command` with `hold_secs`);
+- an **activity sensor** showing the running activity it belongs to.
+
+A loop guard excludes mirrored entities from the HA→hub pickers, so a
+mirrored device can't be pushed back to the same hub. Full details are in
+the [integration's README](https://github.com/schlambos/ha-melodious#mirrored-hub-devices).
 
 ### The MQTT bridge
 

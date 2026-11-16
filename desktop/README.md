@@ -5,8 +5,8 @@ plus hub Setup Wizard and Logitech catalog lookup. Windows and macOS
 releases include the wizard after `v2.1.0`; it is on `main` and Linux can
 run it from source. The bundled CLI works on all three platforms now. The
 plan and its security model are in [`docs/DESKTOP_APP.md`](../docs/DESKTOP_APP.md);
-user guides are [Setup Guide](../docs/SETUP_GUIDE.md) and the main
-[README](../README.md#the-desktop-app-windows-linux-and-macos).
+user guides are [Setup Guide](../docs/SETUP_GUIDE.md) and
+[install and first run](../docs/DESKTOP_APP.md#install-and-first-run-user-guide).
 
 The app serves the packaged web UI (`tools/package_harmony_shell.sh`) over
 `melodious://app` and forwards hub requests over the LAN. Logitech sign-in,

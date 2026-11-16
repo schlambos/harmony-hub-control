@@ -111,6 +111,27 @@ device inputs, Find codes, Fetch from RemoteCentral, Type a code, the
 IR lab, the advanced editor, reordering activities, and the Wi-Fi,
 MQTT, Backup and System pages.
 
+### Screenshots
+
+<table>
+<tr><td align="center"><img src="../docs/screenshots/android/remote.png" alt="The Android app's remote" width="200"><br><sub>Remote</sub></td><td align="center"><img src="../docs/screenshots/android/touchpad.png" alt="The Touchpad remote mode" width="200"><br><sub>Touchpad</sub></td><td align="center"><img src="../docs/screenshots/android/sleep-timer.png" alt="The Sleep timer sheet" width="200"><br><sub>Sleep timer</sub></td><td align="center"><img src="../docs/screenshots/android/editor-start-end.png" alt="The activity editor's Start and end step" width="200"><br><sub>Start &amp; end</sub></td></tr>
+<tr><td align="center"><img src="../docs/screenshots/android/on-screen-buttons.png" alt="The on-screen buttons editor" width="200"><br><sub>On-screen buttons</sub></td><td></td><td></td><td></td></tr>
+</table>
+
+<details>
+<summary>More Android screenshots</summary>
+
+<table>
+<tr><td align="center"><img src="../docs/screenshots/android/everything-off.png" alt="Nothing running" width="200"><br><sub>Everything's off</sub></td><td align="center"><img src="../docs/screenshots/android/keyboard.png" alt="Keyboard" width="200"><br><sub>Keyboard</sub></td><td align="center"><img src="../docs/screenshots/android/more-keys.png" alt="More keys" width="200"><br><sub>More keys</sub></td><td align="center"><img src="../docs/screenshots/android/fix-it.png" alt="Fix it with Resend everything" width="200"><br><sub>Fix it</sub></td></tr>
+<tr><td align="center"><img src="../docs/screenshots/android/switch-activity.png" alt="Switch activity" width="200"><br><sub>Switch activity</sub></td><td align="center"><img src="../docs/screenshots/android/activities.png" alt="Activities" width="200"><br><sub>Activities</sub></td><td align="center"><img src="../docs/screenshots/android/activity-menu.png" alt="Activity menu" width="200"><br><sub>Activity menu</sub></td><td align="center"><img src="../docs/screenshots/android/editor-name.png" alt="Editor: Name" width="200"><br><sub>Editor: Name</sub></td></tr>
+<tr><td align="center"><img src="../docs/screenshots/android/editor-devices.png" alt="Editor: Devices" width="200"><br><sub>Editor: Devices</sub></td><td align="center"><img src="../docs/screenshots/android/editor-inputs.png" alt="Editor: Inputs" width="200"><br><sub>Editor: Inputs</sub></td><td align="center"><img src="../docs/screenshots/android/editor-buttons.png" alt="Editor: Buttons" width="200"><br><sub>Editor: Buttons</sub></td><td align="center"><img src="../docs/screenshots/android/editor-button-picker.png" alt="Button picker" width="200"><br><sub>Button picker</sub></td></tr>
+<tr><td align="center"><img src="../docs/screenshots/android/devices.png" alt="Devices" width="200"><br><sub>Devices</sub></td><td align="center"><img src="../docs/screenshots/android/device-remote.png" alt="Device remote" width="200"><br><sub>Device remote</sub></td><td align="center"><img src="../docs/screenshots/android/device-commands.png" alt="Commands" width="200"><br><sub>Commands</sub></td><td align="center"><img src="../docs/screenshots/android/learn.png" alt="Learn a button" width="200"><br><sub>Learn a button</sub></td></tr>
+<tr><td align="center"><img src="../docs/screenshots/android/import.png" alt="Import codes" width="200"><br><sub>Import codes</sub></td><td align="center"><img src="../docs/screenshots/android/device-settings.png" alt="Device settings" width="200"><br><sub>Device settings</sub></td><td align="center"><img src="../docs/screenshots/android/device-settings-timing.png" alt="Device timing" width="200"><br><sub>Device timing</sub></td><td align="center"><img src="../docs/screenshots/android/bluetooth.png" alt="Bluetooth keyboard" width="200"><br><sub>Bluetooth keyboard</sub></td></tr>
+<tr><td align="center"><img src="../docs/screenshots/android/settings.png" alt="Settings" width="200"><br><sub>Settings</sub></td><td align="center"><img src="../docs/screenshots/android/advanced.png" alt="Advanced" width="200"><br><sub>Advanced</sub></td><td align="center"><img src="../docs/screenshots/android/ssh-recovery.png" alt="SSH recovery" width="200"><br><sub>SSH recovery</sub></td><td></td></tr>
+</table>
+
+</details>
+
 ## Running Against the Existing Simulator or Hub Emulator
 
 1. Start the repository's zero-dependency UI simulator on your host machine:

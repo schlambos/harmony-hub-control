@@ -2,20 +2,34 @@
 
 The full reference for installing Melodious on a rooted Harmony Hub,
 updating it, turning it off and back on, and rolling back an update.
-The [README](../README.md#quick-start) has the short version.
+The [README](../README.md#install-update-and-roll-back) has the short version;
+the guided desktop Setup Wizard is in [SETUP_GUIDE.md](SETUP_GUIDE.md).
 
 ## Before you start
 
 | Requirement | Details |
 | --- | --- |
-| Harmony Hub | Rooted with [harmony-hub-root](https://github.com/Ripthulhu/harmony-hub-root). Melodious doesn't root hubs. |
+| Harmony Hub | Rooted with [harmony-hub-root](https://github.com/Ripthulhu/harmony-hub-root), bundled in [`tools/hub-root/`](../tools/hub-root/README.md) (see below), or by the desktop [Setup Wizard](SETUP_GUIDE.md). The installer itself doesn't root hubs. |
 | SSH key | The root tool's private key, `harmony_owner_*`, in `~/.ssh` (`%USERPROFILE%\.ssh` on Windows). |
 | Hub ID | The numeric Hub ID the root tool prints. Don't guess it: Melodious sends it with every command to the hub's engine. |
 | Free flash | About 1.6 MB of the hub's 5 MB data flash for the first install, or about 1.2 MB when the root tool's Dropbear can be reused. Each later web app update needs about 0.65 MB free (the first one that adds BusyBox, about 0.25 MB more). The installer measures it and stops before writing anything if there isn't enough (see [If the hub's flash is full](#if-the-hubs-flash-is-full)). |
 | Install computer | Windows with PowerShell, Linux or macOS with Python 3, or a Docker or Unraid host. The installer needs only `ssh`, not `scp` or `sftp`. |
 | Network | A trusted home network. The web app is plain HTTP. |
 
-Download `melodious-hub-<version>.zip` from the
+Root the hub first with the bundled root tool. It is in this repository,
+not in the release zip, so clone it and run:
+
+```bash
+python3 tools/hub-root/run_harmony_hub_tool.py --action lan-root --hub-host <hub-ip>
+```
+
+Keep the SSH key it creates (`harmony_owner_*` in `~/.ssh`) and the
+numeric Hub ID it prints ([tools/hub-root/README.md](../tools/hub-root/README.md)).
+The hub needs its initial setup first; for a factory-fresh hub with no
+Logitech account, follow [FRESH_HUB_ACTIVATION.md](FRESH_HUB_ACTIVATION.md)
+instead.
+
+Then download `melodious-hub-<version>.zip` from the
 [latest release](https://github.com/schlambos/harmony-hub-control/releases/latest)
 and unzip it, or clone this repository. From a computer on the same
 network:

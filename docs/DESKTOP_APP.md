@@ -237,6 +237,11 @@ window.melodiousDesktop = {
 | Logitech sign-in | Logitech's own page in a separate window; it closes itself on success |
 | Import codes → Logitech catalog | Shared tab: in the app it gains the account line, search, results and Download; on the hub it keeps "Open a catalog package…" |
 
+<table>
+<tr><td align="center"><img src="screenshots/desktop/wizard/01-welcome-oob.png" alt="The Setup Wizard's Welcome screen" width="420"><br><sub>Setup Wizard: choose your hub's path</sub></td><td align="center"><img src="screenshots/desktop/wizard/11-done-ready.png" alt="The Setup Wizard's finished screen" width="420"><br><sub>Setup Wizard: hub ready</sub></td></tr>
+<tr><td align="center"><img src="screenshots/desktop/catalog-search-1280.png" alt="Searching Logitech's catalog" width="420"><br><sub>Search and download</sub></td><td align="center"><img src="screenshots/desktop/catalog-preview-1280.png" alt="The catalog preview with a skipped command" width="420"><br><sub>Preview, with skipped commands</sub></td></tr>
+</table>
+
 The catalog tab in the app, top to bottom:
 1. Account line: "Signed in to Logitech" with Sign out, or a Sign in
    button.
