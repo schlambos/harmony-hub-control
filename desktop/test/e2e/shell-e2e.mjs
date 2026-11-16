@@ -662,6 +662,8 @@ test(
       await electronApp.evaluate((_electron, { simPort }) => {
         const classifyHubSignals = globalThis.__melodiousClassifyHubSignals;
         globalThis.__melodiousWizardAvailable = true;
+        globalThis.__wizardSimMode = "fresh";
+        globalThis.__wizardFailNextAction = "";
         globalThis.__wizardActionCalls = [];
         globalThis.__wizardInstallCalls = [];
         globalThis.__wizardDetectHosts = [];
@@ -674,24 +676,44 @@ test(
               step: "usb-preflight",
               message: "Reading /rf/deviceinfo over USB HID",
             });
+            const isProvMode = globalThis.__wizardSimMode === "provisioned";
             const classified = classifyHubSignals({
               userIntent: opts.userIntent,
-              ssdpCandidates: [],
+              ssdpCandidates: isProvMode
+                ? [{ host: "127.0.0.1", webUiPort: 8080, hbusPort: 8088 }]
+                : [],
               webUiProbe: null,
-              bridgeResult: {
-                usb: {
-                  ok: true,
-                  connected: true,
-                  deviceCount: 1,
-                  device: { backend: "hidapi", vendorId: "046D", productId: "C129" },
-                  preflight: { ok: true, hasHubId: false, pairedDeviceCount: 0 },
-                  sysinfo: { ok: true, fwVer: "4.15.600", skinDecimal: 106, ramSize: "64MB" },
-                  provisionInfo: { ok: true, provisioned: false, mode: null },
-                  discoveryInfo: { ok: true, provisioned: false, currentFwVersion: "4.15.600" },
-                  usbWedge: false,
-                },
-                lan: { ok: false, skipped: true, ports: {} },
-              },
+              bridgeResult: isProvMode
+                ? {
+                    usb: { ok: false, connected: false, deviceCount: 0 },
+                    lan: {
+                      ok: true,
+                      host: "127.0.0.1",
+                      provisionInfo: {
+                        ok: true,
+                        provisioned: true,
+                        mode: 3,
+                        activeRemoteId: 15984321,
+                        hasActiveRemoteId: true,
+                        remoteIdType: "number",
+                      },
+                      ports: { 8080: false, 8088: true, 5222: true, 22: false },
+                    },
+                  }
+                : {
+                    usb: {
+                      ok: true,
+                      connected: true,
+                      deviceCount: 1,
+                      device: { backend: "hidapi", vendorId: "046D", productId: "C129" },
+                      preflight: { ok: true, hasHubId: false, pairedDeviceCount: 0 },
+                      sysinfo: { ok: true, fwVer: "4.15.600", skinDecimal: 106, ramSize: "64MB" },
+                      provisionInfo: { ok: true, provisioned: false, mode: null },
+                      discoveryInfo: { ok: true, provisioned: false, currentFwVersion: "4.15.600" },
+                      usbWedge: false,
+                    },
+                    lan: { ok: false, skipped: true, ports: {} },
+                  },
               mask: opts.mask,
             });
             return {
@@ -720,6 +742,15 @@ test(
               step: opts.action,
               message: `Simulated ${opts.action}`,
             });
+            if (globalThis.__wizardFailNextAction === opts.action) {
+              globalThis.__wizardFailNextAction = "";
+              return {
+                ok: false,
+                action: opts.action,
+                error: `Simulated transient failure on ${opts.action}`,
+                result: { ok: false, usbWedge: true },
+              };
+            }
             if (opts.action === "usb-wifi-scan") {
               return {
                 ok: true,
@@ -752,7 +783,7 @@ test(
                 },
               };
             }
-            if (opts.action === "usb-root") {
+            if (opts.action === "usb-root" || opts.action === "lan-root-xmpp") {
               return {
                 ok: true,
                 action: opts.action,
@@ -760,8 +791,8 @@ test(
                   ok: true,
                   root: {
                     ok: true,
-                    action: "usb-root",
-                    transport: "usb",
+                    action: opts.action,
+                    transport: opts.action === "usb-root" ? "usb" : "lan",
                     host: opts.host,
                     sshPort: 22,
                     sshPortOpen: true,
@@ -783,6 +814,7 @@ test(
               hubIdType: typeof opts.hubId,
               preflightOnly: opts.preflightOnly,
               removeRootToolLeftovers: opts.removeRootToolLeftovers,
+              replaceStaleHostKey: opts.replaceStaleHostKey,
             });
             opts.onEvent?.({
               type: "step",
@@ -813,6 +845,14 @@ test(
         };
       }, { simPort: wizSimPort });
 
+      const assertTroubleshootingHiddenFromDom = async () => {
+        assert.equal(await page.locator('[data-wizard-manual-action="usb-tde-enable"]').count(), 0);
+        assert.equal(await page.locator('[data-wizard-manual-action="post-root"]').count(), 0);
+        assert.equal(await page.locator("#wizardRunPreflightBtn").count(), 0);
+        assert.equal(await page.locator("#wizardMaskIds").count(), 0);
+        assert.equal(await page.locator("#wizardIncludeUsb").count(), 0);
+      };
+
       // 3. Settings entry ("Set up or re-root a hub") opens wizard and Back returns to Settings
       await page.reload();
       await page.waitForSelector("#openWizardSettingsBtn", { timeout: 10000 });
@@ -821,12 +861,27 @@ test(
       await page.waitForSelector("#hubSetupWizard", { timeout: 10000 });
       assert.equal(await page.title(), "Hub Setup · Melodious");
       assert.equal((await page.textContent("#connectAppbarStepNote")).trim(), "Step 1 of 3");
+      await assertTroubleshootingHiddenFromDom();
+
+      // Footer link ("Troubleshooting tools") opens dedicated view with manual overrides, and Back to setup removes them from DOM
+      await page.click("#wizardOpenTroubleshootingBtn");
+      await page.waitForSelector("#wizardTroubleshootingView", { timeout: 10000 });
+      assert.equal(await page.locator('[data-wizard-manual-action="usb-tde-enable"]').count(), 1);
+      assert.equal(await page.locator('[data-wizard-manual-action="post-root"]').count(), 1);
+      assert.equal(await page.locator("#wizardRunPreflightBtn").count(), 1);
+      assert.equal(await page.locator("#wizardMaskIds").count(), 1);
+      await page.click("#wizardCloseTroubleshootingBtn");
+      await page.waitForSelector("#wizardStep1Controls", { timeout: 10000 });
+      await assertTroubleshootingHiddenFromDom();
 
       await page.click("#settingsBackBtn");
       await page.waitForSelector("#openWizardSettingsBtn", { timeout: 10000 });
       assert.equal(await page.title(), "Settings · Melodious");
 
-      // 4. OOB Connect entry ("Set up a new or unrooted Harmony Hub") below discovered hubs
+      // 4. Provisioned 1-click path: Screen 1 -> Screen 3 (lan-root-xmpp -> install) -> Screen 4 (Done)
+      await electronApp.evaluate(() => {
+        globalThis.__wizardSimMode = "provisioned";
+      });
       await page.evaluate(async () => {
         await window.melodiousDesktop.hub.openConnect();
         window.location.reload();
@@ -836,81 +891,176 @@ test(
         await page.textContent("#openWizardConnectBtn"),
         /Set up a new or unrooted Harmony Hub/
       );
-      // Even though saved settings already hold a connected host (127.0.0.1),
-      // opening Fresh OOB wizard must leave #wizardHostInput blank!
       await page.click("#openWizardConnectBtn");
       await page.waitForSelector("#hubSetupWizard", { timeout: 10000 });
+
+      // Mismatch when Fresh is picked against a provisioned hub -> offers Keep Existing Setup & Erase Hub & Start Fresh
+      await page.click("#wizardDetectBtn");
+      await page.waitForSelector("#wizardMismatchBanner", { timeout: 10000 });
+      assert.match(
+        await page.textContent("#wizardMismatchBanner"),
+        /This hub still has an old setup on it\. You can keep that setup or erase it to start fresh\./
+      );
+      // Verify Factory Reset sub-screen opens cleanly and returns
+      await page.click("#wizardEraseAndStartFreshBtn");
+      await page.waitForSelector("#wizardFactoryResetScreen", { timeout: 10000 });
+      assert.match(await page.textContent("#wizardConfirmFactoryResetBtn"), /Erase Hub/);
+      await page.click("#wizardSubScreenBackBtn");
+      await page.waitForSelector("#wizardMismatchBanner", { timeout: 10000 });
+
+      // Keep Existing Setup switches to Provisioned, shows plain-English ready card, and advances to Screen 3
+      await page.click("#wizardKeepExistingBtn");
+      await page.waitForSelector("#wizardToStep2Btn:not([disabled])", { timeout: 10000 });
+      assert.match(await page.textContent("#wizardResultCard"), /Harmony Hub found on Wi-Fi and ready/);
+      await page.click("#wizardToStep2Btn");
+      await page.waitForSelector("#wizardStep3Install", { timeout: 10000 });
+      assert.equal((await page.textContent("#connectAppbarStepNote")).trim(), "Step 3 of 3");
+      await assertTroubleshootingHiddenFromDom();
+
+      // Pause-on-error + Try Again check on Screen 3: pauses cleanly at step 2 with recovery hint & hidden logs until toggled
+      const wizShotsDir = process.env.MELODIOUS_E2E_SCREENSHOT_DIR || "";
+      if (wizShotsDir) {
+        fs.mkdirSync(wizShotsDir, { recursive: true });
+      }
+      await electronApp.evaluate(() => {
+        globalThis.__wizardFailNextAction = "lan-root-xmpp";
+      });
+      await page.click("#wizardInstallMelodiousBtn");
+      await page.waitForSelector("#wizardErrorNotice", { timeout: 10000 });
+      assert.match(await page.textContent("#wizardInstallMelodiousBtn"), /Try Again/);
+      assert.equal(await page.locator("#wizardProgressLog").count(), 0);
+      await page.click("#wizardToggleTechDetailsBtn");
+      await page.waitForSelector("#wizardProgressLog", { timeout: 10000 });
+      assert.match(await page.textContent("#wizardProgressLog"), /Simulated transient failure/);
+
+      // Try Again succeeds cleanly and lands on Screen 4 (Done)
+      await page.click("#wizardInstallMelodiousBtn");
+      await page.waitForSelector("#wizardStep4DoneCard", { timeout: 10000 });
+      assert.equal((await page.textContent("#connectAppbarStepNote")).trim(), "Done");
+      assert.match(await page.textContent("#hubSetupWizard"), /Your Harmony Hub is ready!/);
+      assert.match(await page.textContent("#wizardOpenHubBtn"), /Open Melodious →/);
+
+      const provRecorded = await electronApp.evaluate(() => ({
+        actions: globalThis.__wizardActionCalls.splice(0),
+        installs: globalThis.__wizardInstallCalls.splice(0),
+        detectHosts: globalThis.__wizardDetectHosts.splice(0),
+      }));
+      assert.deepEqual(provRecorded.actions.map((a) => a.action), [
+        "lan-root-xmpp",
+        "lan-root-xmpp",
+      ]);
+      assert.deepEqual(provRecorded.installs, [
+        {
+          source: "latest",
+          host: "127.0.0.1",
+          hubId: 15984321,
+          hubIdType: "number",
+          preflightOnly: false,
+          removeRootToolLeftovers: true,
+          replaceStaleHostKey: true,
+        },
+      ]);
+
+      // 5. Fresh 4-screen 1-click path: Screen 1 -> Screen 2 (Wi-Fi) -> Screen 3 (TDE -> Provision -> Seed -> USB Root -> Install) -> Screen 4 (Done -> Open Melodious)
+      await electronApp.evaluate(() => {
+        globalThis.__wizardSimMode = "fresh";
+      });
+      await page.evaluate(async () => {
+        await window.melodiousDesktop.hub.forgetHub();
+        await window.melodiousDesktop.hub.openConnect();
+        window.location.reload();
+      });
+      await page.waitForSelector("#openWizardConnectBtn", { timeout: 10000 });
+      await page.click("#openWizardConnectBtn");
+      await page.waitForSelector("#hubSetupWizard", { timeout: 10000 });
+
+      // IP disclosure is closed by default and #wizardHostInput starts blank
+      assert.equal(
+        await page.evaluate(() => document.getElementById("wizardIpDisclosure")?.open),
+        false
+      );
       assert.equal(await page.inputValue("#wizardHostInput"), "");
 
-      // Typing an explicit IP on Step 1 always takes precedence, and clearing it resets confirmedHost
+      // Typing an explicit IP inside the disclosure takes precedence, and clearing it resets confirmedHost
+      await page.click("#wizardIpDisclosure > summary");
       await page.fill("#wizardHostInput", "192.168.0.235");
       await page.click("#wizardDetectBtn");
       await page.waitForSelector("#wizardResultCard", { timeout: 10000 });
       assert.equal(await page.inputValue("#wizardHostInput"), "192.168.0.235");
       await page.fill("#wizardHostInput", "");
+      await page.click("#wizardIpDisclosure > summary");
 
-      // Developer overrides accordion stays collapsed by default (no wall of buttons)
-      assert.equal(
-        await page.evaluate(() => document.getElementById("wizardDevOverrides")?.open),
-        false
-      );
-
-      // 5. Step 1: Select "Already set up with Logitech" against a fresh hub -> prominent mismatch banner -> switch to Fresh
+      // Select "Already set up in the Harmony app" against a fresh hub -> plain-English notice -> Continue switches to Fresh
       await page.click("#wizardIntentProvisionedLabel");
       await page.click("#wizardDetectBtn");
       await page.waitForSelector("#wizardMismatchBanner", { timeout: 10000 });
       assert.match(
         await page.textContent("#wizardMismatchBanner"),
-        /Mismatch: Hub is unprovisioned \/ factory-reset/
+        /This hub doesn't have an existing setup/
       );
-      assert.match(await page.textContent("#wizardFirmwareCard"), /4\.15\.600 · Pass/);
-
       await page.click("#wizardSwitchIntentBtn");
-      await page.waitForSelector("#wizardMismatchBanner", {
-        state: "detached",
-        timeout: 10000,
-      });
       await page.waitForSelector("#wizardToStep2Btn:not([disabled])", { timeout: 10000 });
       assert.equal(await page.locator("#wizardMismatchBanner").count(), 0);
+      assert.match(
+        await page.textContent("#wizardResultCard"),
+        /Harmony Hub found over USB and ready for setup/
+      );
+      // Firmware is already 4.15.600 -> never show a firmware card!
+      assert.equal(await page.locator("#wizardFirmwareUpdateScreen").count(), 0);
+      assert.doesNotMatch(await page.textContent("#wizardResultCard"), /4\.15\.600/);
+      if (wizShotsDir) {
+        await page.screenshot({ path: path.join(wizShotsDir, "wiz-screen1-1280.png") });
+      }
 
-      // 6. Step 2: Guided Fresh progression (Wi-Fi -> TDE/Provision/Seed -> USB Root & Install)
+      // Screen 2: Connect Your Hub to Wi-Fi (auto-scans on entry, friendly signal label, no raw signal numbers)
       await page.click("#wizardToStep2Btn");
-      await page.waitForSelector("#wizardStep2Fresh", { timeout: 10000 });
+      await page.waitForSelector("#wizardStep2Wifi", { timeout: 10000 });
       assert.equal((await page.textContent("#connectAppbarStepNote")).trim(), "Step 2 of 3");
-
-      // 6a. Scan Wi-Fi, pick network, enter password, connect -> auto-detects 127.0.0.1
-      await page.click("#freshWifiScanBtn");
       await page.waitForSelector('[data-wifi-idx="0"]', { timeout: 10000 });
+      const wifiRowText = await page.textContent('[data-wifi-idx="0"]');
+      assert.match(wifiRowText, /Home24GHz/);
+      assert.match(wifiRowText, /WPA2 · Strong/);
+      assert.doesNotMatch(wifiRowText, /192/);
+
       await page.click('[data-wifi-idx="0"]');
       assert.equal(await page.inputValue("#wizardWifiSsidInput"), "Home24GHz");
       await page.fill("#wizardWifiPassInput", "TestPassphrase123");
+      if (wizShotsDir) {
+        await page.screenshot({ path: path.join(wizShotsDir, "wiz-screen2-1280.png") });
+      }
       await page.click("#freshWifiConnectBtn");
-      await page.waitForFunction(
-        () => document.getElementById("freshConfirmedHostInput")?.value === "127.0.0.1",
-        null,
-        { timeout: 10000 }
-      );
+      await page.waitForSelector("#wizardWifiConnectedNotice", { timeout: 10000 });
+      assert.match(await page.textContent("#wizardWifiConnectedNotice"), /Connected to Home24GHz/);
+      assert.match(await page.textContent("#wizardWifiConnectedNotice"), /127\.0\.0\.1/);
 
-      // 6b. Unlock & Prepare Hub (TDE -> Provision Local with numeric remoteId -> Seed AutomationConfig)
-      await page.fill("#wizardRemoteIdInput", "20264150");
-      await page.click("#freshPrepareHubBtn");
-      await page.waitForSelector("dialog#wizardConfirmDialog[open]", { timeout: 10000 });
-      await page.click("#wizardConfirmAcceptBtn");
-      await page.waitForSelector("#freshStagePrepare.is-done", { timeout: 10000 });
-
-      // 6c. Root & Install Melodious -> advances automatically to Step 3 Handoff
-      await page.click("#freshRootAndInstallBtn");
-      await page.waitForSelector("dialog#wizardConfirmDialog[open]", { timeout: 10000 });
-      await page.click("#wizardConfirmAcceptBtn");
-
-      // 7. Step 3: Verify desktop connected to hub, post-install checklist rendered, and "Open Hub" opens web UI
-      await page.waitForSelector("#wizardStep3ConnectedCard", { timeout: 10000 });
+      // Screen 3: Install Melodious (Advanced options collapsed by default; 1 click runs full chain)
+      await page.click("#wizardWifiContinueBtn");
+      await page.waitForSelector("#wizardStep3Install", { timeout: 10000 });
       assert.equal((await page.textContent("#connectAppbarStepNote")).trim(), "Step 3 of 3");
+      assert.equal(
+        await page.evaluate(() => document.getElementById("wizardAdvancedOptions")?.open),
+        false
+      );
+      await assertTroubleshootingHiddenFromDom();
+      if (wizShotsDir) {
+        await page.screenshot({ path: path.join(wizShotsDir, "wiz-screen3-1280.png") });
+      }
+
+      await page.click("#wizardAdvancedOptions > summary");
+      await page.fill("#wizardCustomHubIdInput", "20264150");
+      await page.click("#wizardInstallMelodiousBtn");
+
+      // Screen 4: Automatically lands on Done ("Your Harmony Hub is ready!") with Open Melodious ->
+      await page.waitForSelector("#wizardStep4DoneCard", { timeout: 10000 });
+      if (wizShotsDir) {
+        await page.screenshot({ path: path.join(wizShotsDir, "wiz-screen4-1280.png") });
+      }
+      assert.equal((await page.textContent("#connectAppbarStepNote")).trim(), "Done");
       assert.match(await page.textContent("#wizardStep3ConnectedCard"), /Connected · Melodious 2\.1\.0/);
       const checklistText = await page.textContent("#wizardPostInstallChecklist");
-      assert.match(checklistText, /Add your first device/);
-      assert.match(checklistText, /Create your first activity/);
-      assert.match(checklistText, /Pair your remote/);
+      assert.match(checklistText, /Add your TV and devices/);
+      assert.match(checklistText, /Create an activity/);
+      assert.match(checklistText, /Pair your remote in Settings → Remotes/);
 
       const recorded = await electronApp.evaluate(() => ({
         detectHosts: globalThis.__wizardDetectHosts,
@@ -943,6 +1093,7 @@ test(
           hubIdType: "number",
           preflightOnly: false,
           removeRootToolLeftovers: true,
+          replaceStaleHostKey: true,
         },
       ]);
 
