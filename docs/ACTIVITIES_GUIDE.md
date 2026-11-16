@@ -17,10 +17,11 @@ simulator examples; they do not certify real equipment or remote hardware.
 
 - [How activities work](#how-activities-work)
 - [Create your first activity](#create-your-first-activity)
-- [On-screen buttons and gestures](#on-screen-buttons-and-gestures)
-- [Home control buttons and dimming](#home-control-buttons-and-dimming)
-- [Power order and extra start/end steps](#power-order-and-extra-startend-steps)
-- [Time restrictions and paired remotes](#time-restrictions-and-paired-remotes)
+- Optional customization (skip until needed):
+  - [On-screen buttons and gestures](#on-screen-buttons-and-gestures)
+  - [Home control buttons and dimming](#home-control-buttons-and-dimming)
+  - [Power order and extra start/end steps](#power-order-and-extra-startend-steps)
+  - [Time restrictions and paired remotes](#time-restrictions-and-paired-remotes)
 - [Everyday troubleshooting](#everyday-troubleshooting)
 
 ## How activities work
@@ -198,7 +199,9 @@ correct it, then return and click **Save activity**.
 ![Review step with device roles, inputs, mapped-key count and Save activity](screenshots/guides/wizard-review-1280.png)
 
 **Android:** there is no separate Review page. Check the earlier steps
-with **Back**, then tap **Save activity** from **Buttons**.
+with **Back**, then tap **Save activity** from **Buttons** (`Step 5 of 5`).
+
+<p align="center"><img src="screenshots/android/editor-buttons.png" alt="Android activity editor's Check the buttons step (Step 5 of 5) with Save activity at the bottom" width="320"><br><sub>Android Step 5 of 5: Check the buttons and Save activity</sub></p>
 
 Wait for confirmation. A successful save publishes a new configuration
 revision. Remotes with screens pick up the changed configuration
@@ -221,6 +224,17 @@ Now test in the room:
 If the hub refuses a save because something changed elsewhere, reopen the
 latest activity and reapply the edit. Do not keep saving an old editor
 over work made from another app. Avoid simultaneous edits while learning.
+
+> **Milestone — your basic activity is complete!**
+> Once that room test passes, your activity is ready for everyday use (take a quick backup in Web/Desktop's **Settings → Backup**). If a device missed power or an input during testing, jump straight to **[Everyday troubleshooting](#everyday-troubleshooting)**.
+>
+> Everything between here and Troubleshooting is **optional customization** — skip it for now, or come back anytime for the specific feature you want:
+> - **[On-screen buttons and gestures](#on-screen-buttons-and-gestures)** (screen remotes: Touch, Ultimate, Elite, 950)
+> - **[Home control buttons and dimming](#home-control-buttons-and-dimming)** (Companion, Elite, 950)
+> - **[Power order and extra start/end steps](#power-order-and-extra-startend-steps)** (custom startup/shutdown order or extra commands)
+> - **[Time restrictions and paired remotes](#time-restrictions-and-paired-remotes)** (quiet hours, remote pairing, per-remote overrides)
+
+---
 
 ## On-screen buttons and gestures
 
@@ -304,19 +318,21 @@ another PowerToggle as an "extra" or you may turn it off again.
 
 ### Android: guided Start & end
 
-Open the activity's editor and go to **Start & end**:
+Open the activity's editor and go to **Start and end** (`Step 4 of 5`, reached via **Next: start & end**):
+
+<p align="center"><img src="screenshots/android/editor-start-end.png" alt="Android activity editor's Start and end screen (Step 4 of 5) showing Turn on in this order, waits, Turn off in the same order, and start/end commands" width="320"><br><sub>Android Step 4 of 5: guided Start and end</sub></p>
 
 1. Under **Turn on in this order**, move devices with the up/down arrows.
    Adjust **then wait** with −/+, for example to let a slow receiver wake
    before starting the streamer.
 2. Keep **Turn off in the same order**, or turn it off to choose a separate
-   shutdown order.
+   **Turn off in this order** shutdown sequence.
 3. Under **When this activity starts**, use **+ Command** for an extra
    non-power/input command (such as a sound mode) and **+ Wait** for a delay.
    These extras run **after** devices are on and on the right inputs.
 4. Under **When this activity ends**, add extras that must run **before**
    devices turn off. Put each wait next to the command that needs it.
-5. Continue to **Buttons → Save activity**, then test a complete start/end.
+5. Tap **Next: buttons**, then **Save activity**, and test a complete start/end.
 
 ### Web/Desktop: Advanced editor
 

@@ -10,6 +10,7 @@
 </p>
 
 <p align="center">
+  <a href="#start-here">Start here</a> ·
   <a href="#quick-start">Quick start</a> ·
   <a href="#harmony">Harmony</a> ·
   <a href="#home-assistant">Home Assistant</a> ·
@@ -40,6 +41,13 @@ backups.
   <img src="docs/screenshots/android/remote.png" alt="The Android app's remote" height="480">
   <br><sub>The web app (left) and the Android app (right)</sub>
 </p>
+
+<a id="start-here"></a>
+
+> **Start here — new to Melodious?** Follow the three guides in order:
+> 1. **[Setup Guide](docs/SETUP_GUIDE.md)** — root your hub and install Melodious (Windows, Linux, macOS Setup Wizard or CLI).
+> 2. **[Adding Devices & Importing IR Codes](docs/DEVICES_AND_CODES_GUIDE.md)** — add TVs/AVRs/players, import or learn codes, and configure power, inputs, and timing.
+> 3. **[Creating Activities & Customizing Your Remote](docs/ACTIVITIES_GUIDE.md)** — build activities, map hard/screen/Home Control buttons, and troubleshoot.
 
 ## At a glance
 
@@ -99,15 +107,14 @@ can back up, restore and edit account-free.
 
 | Requirement | Details |
 | --- | --- |
-| Harmony Hub | Firmware 4.15.600, rooted. The desktop Setup Wizard roots and installs Melodious on existing, new or reset hubs: Windows and macOS releases after `v2.1.0`, plus Linux from source ([guide](docs/SETUP_GUIDE.md); wizard on `main`). The bundled CLI, [`tools/hub-root/`](tools/hub-root/README.md), works on all three platforms now; then run `install_webui.ps1` or `install_webui.py`. For a hub with no Logitech account, see [docs/FRESH_HUB_ACTIVATION.md](docs/FRESH_HUB_ACTIVATION.md). The installer scripts and the web and Android apps don't root hubs. |
-| SSH key | The root tool's private key, `harmony_owner_*`, in `~/.ssh` (`%USERPROFILE%\.ssh` on Windows). |
-| Hub ID | The numeric Hub ID the root tool prints. Don't guess it: Melodious sends it with every command to the hub's engine. |
-| Free flash | About 1.6 MB of the hub's 5 MB data flash for the first install (about 1.2 MB if the root tool's Dropbear can be reused); each later web app update needs about 0.65 MB (the first one that adds BusyBox, about 0.25 MB more). The installer measures it and stops before writing anything if there isn't enough — see [docs/INSTALL.md](docs/INSTALL.md#if-the-hubs-flash-is-full). |
-| Install computer | Windows with PowerShell, Linux or macOS with Python 3, or a Docker or Unraid host. The installer needs only `ssh`, not `scp` or `sftp`. |
+| Harmony Hub | Firmware 4.15.600, rooted. The desktop Setup Wizard roots and installs Melodious on existing, new or reset hubs: Windows and macOS releases after `v2.1.0`, plus Linux from source ([Setup Guide](docs/SETUP_GUIDE.md); wizard on `main`). The bundled CLI, [`tools/hub-root/`](tools/hub-root/README.md), works on all three platforms now; then run `install_webui.ps1` or `install_webui.py` ([fresh-hub CLI guide](docs/FRESH_HUB_ACTIVATION.md)). The web and Android apps don't root hubs. |
+| SSH key & Hub ID | Created automatically by the Setup Wizard, or printed/saved by the root CLI (`harmony_owner_*` in `~/.ssh` or `%USERPROFILE%\.ssh` on Windows, plus the numeric Hub ID — never guess the Hub ID). |
+| Free flash | About 1.2–1.6 MB free on the hub's data flash (~0.65 MB for updates), checked automatically before writing anything — see [if the hub's flash is full](docs/INSTALL.md#if-the-hubs-flash-is-full). |
+| Computer or host | Windows (Desktop app or PowerShell), Linux (Desktop app from source or Python 3), macOS (Desktop app or Python 3), or Docker/Unraid ([UNRAID.md](UNRAID.md)). CLI installs need only `ssh`, not `scp` or `sftp`. |
 | Network | A trusted home network. The web app is plain HTTP. |
 | Home Assistant (optional) | Any recent Home Assistant with [HACS](https://hacs.xyz/), reachable from the hub over plain `http://`. An MQTT broker is needed only for the MQTT bridge. |
-| Android app (optional) | Android 8.0 or later. Building it needs JDK 17 or 21 and the Android SDK. |
-| Desktop app (optional) | Windows 10/11 x64 (experimental, unsigned), macOS 13+ (Apple silicon or Intel), or Linux from source. Windows downloads and the Windows/macOS Setup Wizard start in the release after `v2.1.0`. Catalog lookup needs a Logitech account; source builds need Node.js and the [platform prerequisites](desktop/README.md). |
+| Android app (optional) | Android 8.0 or later ([`Android/README.md`](Android/README.md) for source builds). |
+| Desktop app (optional) | Windows 10/11 x64 (experimental, unsigned), macOS 13+ (Apple silicon or Intel), or [Linux from source](desktop/README.md#linux-from-source). Windows downloads and the Windows/macOS Setup Wizard start in the release after `v2.1.0`. Catalog lookup needs a Logitech account; source build prerequisites are in [`desktop/README.md`](desktop/README.md) and [docs/BUILD.md](docs/BUILD.md). |
 
 ## Quick start
 
@@ -192,20 +199,6 @@ A lost or unused remote can be unpaired in **Settings → Remotes**: every radio
 
 No remote needs modified firmware; reports for other remotes welcome ([CONTRIBUTING.md](CONTRIBUTING.md)).
 
-### Activities
-
-Start here: **[Creating Activities & Customizing Your Remote](docs/ACTIVITIES_GUIDE.md)** —
-step-by-step setup, button maps, screen controls and everyday troubleshooting.
-
-- **Setup wizard:** Name → Devices → Inputs → Buttons (36 keys, press + hold) → Review. New
-  activities power on Display → Volume → Player with warm-up waits (2.5 s TV, 1.5 s AVR/soundbar, 1
-  s player) and get the Touch's number pad and on-screen Home button; existing ones keep their saved
-  order/waits.
-- **Advanced editor:** roles, per-remote button maps, activity JSON. Android adds **Start and end**
-  (power order + start/end commands).
-- **Saves are transactions:** validated, written, read back, rolled back on failure; a setup changed
-  since opening refuses the save.
-
 ### Devices and codes
 
 Start here: **[Adding Devices & Importing IR Codes](docs/DEVICES_AND_CODES_GUIDE.md)** —
@@ -220,6 +213,20 @@ catalog lookup, learning, safe testing, and the power/input/timing settings acti
   import. Credentials never reach the hub. See [docs/DESKTOP_APP.md](docs/DESKTOP_APP.md) ·
   [docs/ANDROID_CATALOG.md](docs/ANDROID_CATALOG.md).
 - **Find what works:** Send all (dry run, set gap, Stop) or the IR lab scratch device.
+
+### Activities
+
+Start here: **[Creating Activities & Customizing Your Remote](docs/ACTIVITIES_GUIDE.md)** —
+step-by-step setup, button maps, screen controls and everyday troubleshooting.
+
+- **Setup wizard:** Name → Devices → Inputs → Buttons (36 keys, press + hold) → Review. New
+  activities power on Display → Volume → Player with waits between devices (2.5 s TV, 1.5 s AVR/soundbar, 1
+  s player) and get the Touch's number pad and on-screen Home button; existing ones keep their saved
+  order/waits.
+- **Advanced editor:** roles, per-remote button maps, activity JSON. Android adds **Start and end**
+  (power order + start/end commands).
+- **Saves are transactions:** validated, written, read back, rolled back on failure; a setup changed
+  since opening refuses the save.
 
 ### Network TVs
 
@@ -487,7 +494,7 @@ staging, ~0.5 MB each — the usual full-flash fix), `--skip-flash-check`. `--he
   (`-IUnderstandExperimental`).
 - **Turn back on (experimental, same caveat):** `python3 install_webui.py --hub-host <hub-ip> --turn-on`
   (`-TurnOn`) unlinks `/etc/melodious-off` (zero flash needed) and reboots back into Melodious with the
-  cloud blocker on (normal installer runs and macOS **Update hub…** refuse while turned off).
+  cloud blocker on (normal installer runs and desktop **Update hub…** refuse while turned off).
 - **Roll back an update:** `.\restore_backup.ps1 -HubHost <hub-ip> -KeyPath "$env:USERPROFILE\.ssh\<key>"`
   goes back one update from the newest handoff backup (boot script, `netservicestarter.lua`, SSH
   wrappers, Hub ID and MQTT), then reboot; use `--turn-off` to stop running Melodious.
@@ -499,9 +506,9 @@ Full walkthrough, `--turn-off`/`--turn-on` gates, all flags and flash-full help:
 
 ```text
 Phone or computer
-  ├─ web app ────► http://<hub-ip>:8080 ── codex_webui (one static C binary)
-  ├─ Android app ► the same API, plus the hub's WebSocket on :8088
-  └─ macOS app ──► the web app's bundle; only the app itself talks to Logitech
+  ├─ web app ─────► http://<hub-ip>:8080 ── codex_webui (one static C binary)
+  ├─ Android app ─► the same API, plus the hub's WebSocket on :8088
+  └─ desktop app ─► the web app's bundle; only the app itself talks to Logitech
 
 codex_webui
   ├─ codex_hbus ─────────► the hub's activity engine (activities, IR, learning)
