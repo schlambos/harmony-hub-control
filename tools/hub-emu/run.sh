@@ -11,10 +11,14 @@ REBUILD=${1:-}
 echo "== seed from webui-sim fixture =="
 "$NODE" "$HERE/make-seed.mjs"
 
-echo "== embedded asset generation (vendor + harmony shell) =="
-sh "$REPO/tools/embed_activity_ui.sh"
-
-if [ ! -f "$HERE/build/codex_webui.mips" ] || [ "$REBUILD" = "--rebuild" ]; then
+mkdir -p "$HERE/build"
+if [ "$REBUILD" = "--pinned" ]; then
+    python3 "$REPO/tools/ci/verify_pins.py"
+    for bin in codex_webui codex_hbus; do
+        cp "$REPO/payload/bin/$bin" "$HERE/build/$bin.mips"
+    done
+elif [ ! -f "$HERE/build/codex_webui.mips" ] || [ "$REBUILD" = "--rebuild" ]; then
+    sh "$REPO/tools/embed_activity_ui.sh"
     echo "== cross-compiling real binaries (MIPS32 BE, production recipe) =="
     (cd "$REPO" && zig cc -target mips-linux-musleabi -Os -static -s -Wl,-T,build/discard-mips-pdr.ld \
         -I payload/source -o "$HERE/build/codex_webui.mips" payload/source/codex_webui.c)

@@ -62,6 +62,17 @@ job waited 15 minutes for a runner and was dropped.)
 and then on a busy machine, a different one each time. A failed run is tried
 once more and reported as `FLAKY`.
 
+**Real MIPS backend:** the `emulator` job starts the pinned `codex_webui`
+and `codex_hbus` under QEMU on its own hosted VM. Its loopback ports are
+isolated from the sim suites; it does not start the front-end proxy. To
+repeat locally, run `sh tools/hub-emu/run.sh --pinned`, then `node
+tools/hub-emu/qa.mjs` and `node tools/hub-emu/hub-update-qa.mjs`.
+The desktop `HUB_EMU_SSH` case remains manual: this image serves HTTP and
+the fixture control API only. That test needs an SSH server on loopback
+port 2222 with an authorized `HUB_EMU_KEY`, plus a matching release archive
+(`HUB_ZIP` and `HUB_ZIP_VERSION`). The container-side updater QA needs none
+of those.
+
 **Not in CI yet:** the Android tests (need the Android SDK), the desktop
 end-to-end tests (need Electron and a display), `hal_remotes` under Unicorn
 (needs the stock `hal`, which is not in the repository), the Android TV
