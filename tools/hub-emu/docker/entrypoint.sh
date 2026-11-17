@@ -46,6 +46,13 @@ if [ ! -f /etc/version ]; then
     install -m 0644 /seed/settings/version /etc/version
 fi
 
+# Fake bounded log sources System status reads (render_system_status_json
+# tails /cache/codex-init.log and, when present, /cache/codex-recovery.log).
+# Contents are obvious fakes; without them the recovery section is absent
+# by design and the seeded-firmware check cannot assert it (issue #186).
+printf '%s\n' 'hub-emu fake startup: codex services started' > /cache/codex-init.log
+printf '%s\n' 'hub-emu fake recovery: no recovery was needed' > /cache/codex-recovery.log
+
 # Identity file the binary expects on the box.
 printf '12345678\n' > /data/codex/hub_id
 

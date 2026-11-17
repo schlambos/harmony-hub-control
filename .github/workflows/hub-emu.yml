@@ -18,7 +18,7 @@ jobs:
       - run: sh tools/hub-emu/run.sh --pinned
       - run: node tools/hub-emu/hub-update-qa.mjs
       # Start from a clean fixture after the updater deliberately replaces files.
-      - if: github.event_name == 'workflow_dispatch'
-        run: |
+      # qa.mjs is a PR gate since #186 reconciled it with the pinned backend.
+      - run: |
           sh tools/hub-emu/run.sh --pinned
           node tools/hub-emu/qa.mjs
