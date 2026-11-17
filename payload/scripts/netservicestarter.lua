@@ -748,6 +748,45 @@ local function emptyDeviceContent(cmd, uri, deviceId, encode)
   })
 end
 
+-- A screen remote also fetches the user content record during every sync,
+-- and the Ultimate (skin 105) stalls at 58% on a 404 (#180). Hubs set up
+-- entirely offline have no ContentUser file, so answer with the record
+-- Logitech kept for a user with no content services. The id and profile
+-- come from the household in Context, so repeated syncs see the same
+-- record; a stored ContentUser file is still served untouched above.
+local function emptyUserContent(cmd, uri, encode)
+  local id = "00000000-0000-4000-8000-000000000000"
+  local profileUri = "svcs.myharmony.com/res//household/0-melodious/user/default"
+  local _, _, context = resMgr.getResource("Context")
+  if type(context) == "table" then
+    local householdId = tonumber(context["HouseholdId-"])
+    if householdId and householdId > 0 then
+      id = string.format("00000000-0000-4000-8000-%012d", householdId)
+    end
+    if type(context.HouseholdUserProfileUri) == "string" and
+        context.HouseholdUserProfileUri ~= "" then
+      profileUri = context.HouseholdUserProfileUri
+    end
+  end
+  local resource = {
+    id = id,
+    user_profile_uri = profileUri,
+    services = {}
+  }
+  if encode then
+    resource = json.encode(resource)
+  end
+  log.notice("codex offline guard served empty user content", uri)
+  return connectUtils.createResponse(cmd, "200", "OK", {
+    code = "200",
+    uri = uri,
+    etag = "\"melodious-empty-user-content\"",
+    hetag = "1",
+    resource = resource,
+    localOnly = true
+  })
+end
+
 -- A remote with a screen fetches its background, and the thumbnail its
 -- settings page shows, from Logitech's image bucket:
 -- https://<bucket host>/UserImages/<skin>/<name>.png and <name>_small.png.
@@ -828,6 +867,9 @@ local function offlineResourceGet(cmd, verb, params)
     local deviceId = string.match(resourceName, "^CD_(%d+)$")
     if deviceId then
       return emptyDeviceContent(cmd, uri, deviceId, params.encode)
+    end
+    if resourceName == "ContentUser" then
+      return emptyUserContent(cmd, uri, params.encode)
     end
     log.notice(
       "codex offline guard could not serve local resource",
@@ -916,6 +958,106 @@ local function keepActivityConfirmations(params)
   end
   log.notice("codex kept activity confirmation for", table.concat(changed, ", "))
   return etag, hetag
+end
+
+-- A hub that never finished cloud provisioning can store remoteId as a JSON
+-- string ("remoteId":"20264150" in /data/luaworks/provision/preferences).
+-- Stock hbushttpserverconnector compares tonumber(hubId) ~= prefMgr.remoteId,
+-- so a string id never equals the number and every WebSocket is rejected
+-- with 401 "Wrong hubId" (#172). This runs before that task loads, so
+-- rewriting the preference as a number fixes the compare in RAM and on disk.
+-- An already-numeric or missing/non-numeric remoteId is left alone.
+local function normalizeRemoteId()
+  if type(prefMgr.remoteId) ~= "string" then
+    return
+  end
+  local value = tonumber(prefMgr.remoteId)
+  if not value or value <= 0 or value ~= math.floor(value) then
+    return
+  end
+  local ok, err = pcall(function()
+    prefMgr.save("remoteId", value)
+    prefMgr.remoteId = value
+  end)
+  if ok then
+    log.notice("codex normalized string remoteId to number", value)
+  else
+    log.notice("codex could not normalize string remoteId:", tostring(err))
+  end
+end
+
+local function jsonEscape(s)
+  return (string.gsub(tostring(s or ""), '[%c"\\]', function(c)
+    if c == '"' then
+      return '\\"'
+    end
+    if c == "\\" then
+      return "\\\\"
+    end
+    return string.format("\\u%04x", string.byte(c))
+  end))
+end
+
+-- Stock automation/main.lua waits forever for sync.getAutomationConfig()
+-- when AutomationConfig is absent from /data/resources/, and codexactivity
+-- is an automation plugin, so on a blank hub that never had a cloud config
+-- the plugin (and its blank-hub seed) never starts (#172). Seed the minimal
+-- record here, at connectserver boot before automation discover runs, and
+-- let codexactivity's seedBlankHub() create the base resources. The record
+-- is built as exact JSON text so the empty collections stay objects ({})
+-- and are never serialized as arrays ([]) by json.encode. An existing
+-- record -- in the resource index, on disk, or with a hub etag -- is never
+-- touched. Local mode only (cloudBlockerEnabled, which also honors
+-- /etc/melodious-off), and never during a stock sync.
+local function ensureMinimalAutomationConfig()
+  if not cloudBlockerEnabled() then
+    return
+  end
+  local syncOk, syncing = pcall(function()
+    return resMgr.isAnySyncInProgress()
+  end)
+  if syncOk and syncing then
+    return
+  end
+  local statusOk, status = pcall(function()
+    return (resMgr.getResource("AutomationConfig"))
+  end)
+  if statusOk and tostring(status or "") == "200" then
+    return
+  end
+  if fileExists("/data/resources/AutomationConfig.json") then
+    return
+  end
+  local etagOk, hubEtag = pcall(function()
+    return resMgr.getHubEtag("AutomationConfig")
+  end)
+  if etagOk and hubEtag ~= nil then
+    return
+  end
+  local remoteId = tostring(prefMgr.remoteId or "")
+  local accountId = prefMgr.accountId
+  if accountId == nil or accountId == "" then
+    accountId = "hub-local-" .. remoteId
+  end
+  local jsonText = '{"id":"' .. jsonEscape(remoteId) ..
+    '","enableXMPP":1,"account_uri":"harmony://Account/' ..
+    jsonEscape(tostring(accountId)) ..
+    '","devices":{},"programs":{},"maps":{},"scenes":{},"scenes2":{},' ..
+    '"groups":{},"gateways":{},"unknownDevices":{}}'
+  local ok, saved, detail = pcall(function()
+    return resMgr.saveResource(
+      "application/json", newResourceEtag(), jsonText, "AutomationConfig",
+      nil, "1"
+    )
+  end)
+  if ok and saved then
+    log.notice("codex blank hub; seeded minimal AutomationConfig")
+  else
+    log.notice(
+      "codex could not seed minimal AutomationConfig:",
+      tostring(detail or saved)
+    )
+  end
 end
 
 local function offlineResourcePut(cmd, verb, params)
@@ -1473,6 +1615,18 @@ local function noteAddrEvents(events)
 end
 
 if not melodiousOff() then
+  -- Blank-hub boot fixes (#172): normalize a string remoteId before
+  -- hbushttpserverconnector loads below (either branch), and seed a
+  -- minimal AutomationConfig before automation discover can block on it.
+  -- pcall'd: a failure here must never stop connectserver from booting.
+  local remoteOk, remoteErr = pcall(normalizeRemoteId)
+  if not remoteOk then
+    log.notice("codex remoteId normalization failed:", tostring(remoteErr))
+  end
+  local autoOk, autoErr = pcall(ensureMinimalAutomationConfig)
+  if not autoOk then
+    log.notice("codex AutomationConfig seed failed:", tostring(autoErr))
+  end
   installCloudHttpGuard()
   installOfflineApiGuards()
   installActivityRestrictions()

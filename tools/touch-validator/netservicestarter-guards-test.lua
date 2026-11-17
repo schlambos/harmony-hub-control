@@ -2,9 +2,12 @@
 -- that answer the Harmony Touch's own Sync: the time is answered locally, the
 -- hub firmware check is deliberately left to the stock handler (a successful
 -- check strands the Touch on a "myharmony.com" screen offline), a device
--- content file the hub doesn't have is answered with an empty record (a 404
--- aborts every Touch sync), and a remote background saved on the hub is sent
--- as the stock image handler sends one (PNG bytes as the binary payload).
+-- or user content file the hub doesn't have is answered with an empty record
+-- (a 404 aborts every Touch sync, and stalls the Ultimate at 58%, #180), and
+-- a remote background saved on the hub is sent as the stock image handler
+-- sends one (PNG bytes as the binary payload). Also covers the blank-hub boot
+-- fixes (#172): string remoteId normalization and seeding a genuinely absent
+-- AutomationConfig.
 --
 -- Loads the script with stubbed hub modules (mfgData.hasNetwork = false, so
 -- it only "loads" its transport tasks), captures what it registers with the
@@ -199,6 +202,53 @@ check("stored device content: the hub's own file, untouched",
   r.data.code == "200" and r.data.etag == '"etag-2"' and r.data.hetag == "42" and
   r.data.resource.id == "stored-2", encode(r))
 
+-- User content (ContentUser), as the Ultimate asks for it mid-sync (#180).
+local userUri = "content://1.0/user"
+
+r = getResource("proxy.resource?get", nil, { uri = userUri })
+d = r.data or {}
+res = type(d.resource) == "table" and d.resource or {}
+check("missing user content: answered 200, not 404",
+  r.code == "200" and d.code == "200" and d.uri == userUri, encode(r))
+check("missing user content: an empty record with the fallback identity",
+  res.id == "00000000-0000-4000-8000-000000000000" and
+  res.user_profile_uri == "svcs.myharmony.com/res//household/0-melodious/user/default" and
+  type(res.services) == "table" and next(res.services) == nil, encode(res))
+again = getResource("proxy.resource?get", nil, { uri = userUri })
+check("missing user content: the same etag and id every sync",
+  d.etag == '"melodious-empty-user-content"' and again.data.etag == d.etag and
+  again.data.resource.id == res.id, encode(again))
+
+stored.Context = {
+  etag = '"etag-ctx"', hetag = "7",
+  resource = {
+    ["HouseholdId-"] = 6105026,
+    HouseholdUserProfileUri = "svcs.myharmony.com/res//household/6105026-abc/user/default",
+  },
+}
+r = getResource("proxy.resource?get", nil, { uri = userUri })
+check("missing user content with Context: identity from the household",
+  r.data.code == "200" and
+  r.data.resource.id == "00000000-0000-4000-8000-000006105026" and
+  r.data.resource.user_profile_uri ==
+    "svcs.myharmony.com/res//household/6105026-abc/user/default", encode(r))
+stored.Context = nil
+
+r = getResource("proxy.resource?get", nil, { uri = userUri, encode = true })
+check("missing user content: encoded when the remote asks for text",
+  type(r.data.resource) == "string" and r.data.resource:find('"services":[]', 1, true) ~= nil,
+  encode(r))
+
+stored.ContentUser = {
+  etag = '"etag-user"', hetag = "9",
+  resource = { id = "stored-user", user_profile_uri = "svcs.myharmony.com/res//household/1-x/user/default", services = {} },
+}
+r = getResource("proxy.resource?get", nil, { uri = userUri })
+check("stored user content: the hub's own file, untouched",
+  r.data.code == "200" and r.data.etag == '"etag-user"' and r.data.hetag == "9" and
+  r.data.resource.id == "stored-user", encode(r))
+stored.ContentUser = nil
+
 r = getResource("proxy.resource?get", nil, { uri = "harmony://Account/1/InstallerInfo" })
 check("other missing resources: still 404", r.data.code == "404", encode(r))
 
@@ -364,6 +414,172 @@ check("legacy /data/codex/melodious-off fallback: also skips guards/tasks and st
   #legacyOff.handlers == 0 and legacyOff.http.request == legacyOff.origRequest and
   #legacyOff.tasks == 0 and legacyOff.cloudStarted.cloudapi == 1 and
   legacyOff.cloudStarted.pubnub == 1 and legacyOff.cloudStarted.packagemgr == 1)
+
+
+-- Blank-hub boot fixes (#172): a string remoteId is rewritten as a number
+-- before hbushttpserverconnector loads, and a genuinely absent
+-- AutomationConfig is seeded so stock automation/main.lua cannot block
+-- codexactivity (an automation plugin) from ever starting. Each case
+-- reloads the script at boot (mfgData.hasNetwork = false) with its own
+-- preference and resource managers and records every write.
+local function runBootCase(opts)
+  local files = { ["/data/codex/cloud_blocker.conf"] = opts.blocker or "1" }
+  if opts.off then files["/etc/melodious-off"] = "off" end
+  if opts.autoFile then files["/data/resources/AutomationConfig.json"] = "{}" end
+  local prefSaves, resSaves = {}, {}
+  local pref = {
+    remoteId = opts.remoteId,
+    accountId = opts.accountId,
+    save = function(key, value)
+      prefSaves[#prefSaves + 1] = { key = key, value = value }
+    end,
+  }
+  local res = {
+    getResource = function(name)
+      if name == "AutomationConfig" and opts.storedAuto then
+        return "200", '"etag-auto"', { id = "stored" }
+      end
+      return nil, "indexInfo not available for the resource " .. name
+    end,
+    getHubEtag = function(name)
+      if name == "AutomationConfig" and opts.autoEtag then return "3" end
+      return nil
+    end,
+    isAnySyncInProgress = function() return opts.syncing or false end,
+    saveResource = function(mime, etag, body, name, _, hetag)
+      resSaves[#resSaves + 1] =
+        { mime = mime, etag = etag, body = body, name = name, hetag = hetag }
+      return true
+    end,
+  }
+  for _, mod in ipairs({
+    "system", "socket.http", "socket", "tasks.connectserver.core.engine",
+    "tasks.mfg.core.mfgdata", "tasks.harmonywebservices.core.preferencemanager",
+    "tasks.harmonywebservices.core.resourcemanager",
+    "tasks.harmonywebservices.core.session",
+    "tasks.harmonywebservices.apihandler.resource",
+    "tasks.setup.apihandler.sync", "tasks.hal.core.hbus",
+    "tasks.connectserver.core.utils",
+  }) do
+    package.loaded[mod] = nil
+  end
+  package.preload["system"] = function()
+    local s = anything()
+    rawset(s, "io", {
+      open = function(path)
+        local body = files[path]
+        if not body then return nil end
+        return { read = function() return body end, close = noop }
+      end,
+    })
+    rawset(s, "getFirmwareVersion", function() return "4.15.600" end)
+    rawset(s, "uuid", function() return "12345678-1234-4234-a234-1234567890ab" end)
+    return s
+  end
+  package.preload["tasks.harmonywebservices.core.preferencemanager"] =
+    function() return pref end
+  package.preload["tasks.harmonywebservices.core.resourcemanager"] =
+    function() return res end
+  package.preload["tasks.mfg.core.mfgdata"] =
+    function() return { hasNetwork = false } end
+  package.preload["tasks.connectserver.core.engine"] =
+    function() return { registerMessage = noop } end
+  package.preload["socket.http"] = function() return { request = noop } end
+  package.preload["socket"] = function() return anything() end
+  package.preload["tasks.hal.core.hbus"] =
+    function() return { instance = function() return anything() end } end
+  package.preload["tasks.connectserver.core.utils"] = function()
+    return {
+      createResponse = function(cmd, code, msg, data)
+        return { cmd = cmd, code = code, msg = msg, data = data }
+      end,
+      fixHbusData = noop,
+    }
+  end
+  for _, name in ipairs({
+    "tasks.harmonywebservices.apihandler.resource",
+    "tasks.setup.apihandler.sync",
+    "tasks.harmonywebservices.core.session",
+  }) do
+    package.preload[name] = function() return anything() end
+  end
+
+  local ok, err = pcall(assert(loadfile(repoRoot .. "/payload/scripts/netservicestarter.lua")))
+  assert(ok, "boot case failed to load: " .. tostring(err))
+  return { pref = pref, prefSaves = prefSaves, resSaves = resSaves }
+end
+
+local boot = runBootCase({ remoteId = "20264150", accountId = "12345" })
+check("string remoteId: rewritten as a number at boot",
+  #boot.prefSaves == 1 and boot.prefSaves[1].key == "remoteId" and
+  type(boot.prefSaves[1].value) == "number" and boot.prefSaves[1].value == 20264150 and
+  boot.pref.remoteId == 20264150, encode(boot.prefSaves))
+check("missing AutomationConfig: seeded once at boot",
+  #boot.resSaves == 1 and boot.resSaves[1].name == "AutomationConfig" and
+  boot.resSaves[1].mime == "application/json" and boot.resSaves[1].hetag == "1" and
+  type(boot.resSaves[1].etag) == "string" and boot.resSaves[1].etag ~= "",
+  encode(boot.resSaves))
+local autoBody = #boot.resSaves == 1 and tostring(boot.resSaves[1].body) or ""
+check("seeded AutomationConfig: id, XMPP flag and account uri",
+  autoBody:find('"id":"20264150"', 1, true) ~= nil and
+  autoBody:find('"enableXMPP":1', 1, true) ~= nil and
+  autoBody:find('"account_uri":"harmony://Account/12345"', 1, true) ~= nil, autoBody)
+local objectsOk = true
+for _, key in ipairs({ "devices", "programs", "maps", "scenes", "scenes2", "groups", "gateways", "unknownDevices" }) do
+  if not autoBody:find('"' .. key .. '":{}', 1, true) or
+      autoBody:find('"' .. key .. '":[]', 1, true) then
+    objectsOk = false
+  end
+end
+check("seeded AutomationConfig: the 8 collections are objects, not arrays",
+  objectsOk, autoBody)
+
+boot = runBootCase({ remoteId = "20264150" })
+autoBody = #boot.resSaves == 1 and tostring(boot.resSaves[1].body) or ""
+check("seeded AutomationConfig without an accountId: hub-local account uri",
+  #boot.resSaves == 1 and
+  autoBody:find('"account_uri":"harmony://Account/hub-local-20264150"', 1, true) ~= nil,
+  autoBody)
+
+boot = runBootCase({ remoteId = 20264150 })
+check("numeric remoteId: left alone", #boot.prefSaves == 0, encode(boot.prefSaves))
+
+boot = runBootCase({ remoteId = "not-a-number" })
+check("non-numeric remoteId: left alone", #boot.prefSaves == 0, encode(boot.prefSaves))
+
+boot = runBootCase({ remoteId = "0" })
+check("zero remoteId: left alone (not a positive integer)",
+  #boot.prefSaves == 0, encode(boot.prefSaves))
+
+boot = runBootCase({})
+check("missing remoteId: left alone", #boot.prefSaves == 0, encode(boot.prefSaves))
+
+boot = runBootCase({ remoteId = 20264150, storedAuto = true })
+check("AutomationConfig in the resource index: never overwritten",
+  #boot.resSaves == 0, encode(boot.resSaves))
+
+boot = runBootCase({ remoteId = 20264150, autoFile = true })
+check("AutomationConfig.json on disk: never overwritten",
+  #boot.resSaves == 0, encode(boot.resSaves))
+
+boot = runBootCase({ remoteId = 20264150, autoEtag = true })
+check("AutomationConfig hub etag present: never overwritten",
+  #boot.resSaves == 0, encode(boot.resSaves))
+
+boot = runBootCase({ remoteId = 20264150, syncing = true })
+check("sync in progress: AutomationConfig is not seeded",
+  #boot.resSaves == 0, encode(boot.resSaves))
+
+boot = runBootCase({ remoteId = "20264150", blocker = "0" })
+check("blocker off: AutomationConfig is not seeded",
+  #boot.resSaves == 0, encode(boot.resSaves))
+check("blocker off: a string remoteId is still normalized",
+  #boot.prefSaves == 1 and boot.prefSaves[1].value == 20264150, encode(boot.prefSaves))
+
+boot = runBootCase({ remoteId = "20264150", off = true })
+check("melodious-off: remoteId untouched and nothing seeded",
+  #boot.prefSaves == 0 and #boot.resSaves == 0 and boot.pref.remoteId == "20264150",
+  encode(boot.prefSaves))
 
 print(string.format("%d/%d checks passed", count - failures, count))
 os.exit(failures == 0 and 0 or 1)

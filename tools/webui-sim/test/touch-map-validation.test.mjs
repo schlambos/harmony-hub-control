@@ -112,7 +112,7 @@ describe("codexactivity.lua validateGraph (LuaJIT)", () => {
 });
 
 describe("netservicestarter.lua Touch Sync guards (LuaJIT)", () => {
-  it("answers the time offline, leaves the firmware check to stock, serves missing device content, and defers otherwise", (t) => {
+  it("answers the time offline, leaves the firmware check to stock, serves missing device and user content and saved remote backgrounds, defers otherwise, and boots a blank hub (string remoteId, missing AutomationConfig)", (t) => {
     const probe = spawnSync("luajit", ["-v"], { encoding: "utf8" });
     if (probe.error || probe.status !== 0) {
       t.skip("luajit is not available");
@@ -122,7 +122,7 @@ describe("netservicestarter.lua Touch Sync guards (LuaJIT)", () => {
       cwd: new URL("../../../", import.meta.url).pathname,
       encoding: "utf8",
     });
-    assert.match(out, /17\/17 checks passed/);
+    assert.match(out, /48\/48 checks passed/);
   });
 });
 
