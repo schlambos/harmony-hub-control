@@ -5,7 +5,9 @@
    (#touch/<id>/<EquadID>); a remote without a screen also gets its activity
    buttons (#activitybuttons/<EquadID>), and the Companion its home control
    buttons (#homebuttons, #homebuttons/<id>); so does a Harmony Elite or 950
-   (#homebuttons/screen, #homebuttons/screen/<id>). Each remote has its own maps,
+   (#homebuttons/screen, #homebuttons/screen/<id>). The remote with a screen
+   also gets its Background: a picture framed here and saved on the hub
+   (remote-background-model.js). Each remote has its own maps,
    named by its EquadID. Their keys stay alike (the editor changes every remote
    unless a key is set for one remote only), so each activity row only says
    where they differ. Models in remotes-model.js.
@@ -42,6 +44,16 @@ import {
   remoteActivityMapsSaveOutcome,
   remoteModels,
 } from "./remotes-model.js";
+import {
+  SCREEN,
+  THUMBNAIL,
+  cropRect,
+  dragPan,
+  pictureUrl,
+  readBackground,
+  savedMessage,
+  uploadRequest,
+} from "./remote-background-model.js";
 import { saveMapList } from "./map-save.js";
 import { hasRemoteMaps } from "./touch-model.js";
 import { COMPANION_EQUAD, SCREEN_EQUAD, hasHomeButtons, homeRemote } from "./home-buttons-model.js";
@@ -63,9 +75,28 @@ export function createRemotesView(section) {
   let unpairing = 0; // slot being unpaired
   let addingKeys = false; // saving the activity maps a paired remote lacks
   let timer = null;
+  // The screen remote's background: undefined while loading, null when no
+  // remote with a screen has synced with the hub, false when the hub has no
+  // background API (an older hub), else readBackground()'s model.
+  let background = undefined;
+  let backgroundBusy = false;
+  // A picture being framed: { image, name, zoom, panX, panY } until uploaded or cancelled.
+  let framing = null;
+  let drag = null; // { x, y } while the preview is dragged
 
   section.innerHTML = `<div class="page" id="remotesRoot"></div>`;
   const root = section.querySelector("#remotesRoot");
+  /* The Background card lives in its own element that render() puts back in
+     place rather than rebuilding: the page re-renders on every hub update,
+     which would detach the canvas, the zoom slider and a pending file choice
+     mid-gesture. renderBackground() redraws it when its own state changes.
+     The file input sits outside the page so a picked file always arrives. */
+  const backgroundHost = document.createElement("div");
+  const fileInput = document.createElement("input");
+  fileInput.type = "file";
+  fileInput.accept = "image/*";
+  fileInput.hidden = true;
+  section.append(fileInput);
 
   const busy = () => Boolean(pairing) || Boolean(unpairing) || addingKeys;
   const paired = () => remotes?.remotes ?? [];
@@ -284,11 +315,133 @@ export function createRemotesView(section) {
     }
   }
 
+  /* The screen remote's background: what's on it, the pictures saved for it,
+     and a new picture to frame and upload. The hub keeps one remote with a
+     screen, so this is that remote's. */
+  function backgroundCard() {
+    if (background === false) return "";
+    const off = backgroundBusy;
+    let body;
+    if (background === undefined) {
+      body = `<div class="m-center remotes-loading">${spinner("Loading")}</div>`;
+    } else if (background === null) {
+      body = `<p class="list-note">The hub doesn't have this remote's settings yet. Choose Sync remote in the remote's own settings, then Refresh.</p>`;
+    } else if (framing) {
+      body = `<p class="list-note">Drag the picture to place it and use the slider to zoom. The frame is the remote's screen.</p>
+        <div class="remotes-bg">
+          <canvas class="remotes-bg-screen" width="${SCREEN.width}" height="${SCREEN.height}" data-bg-preview aria-label="New background"></canvas>
+          <div class="remotes-bg-frame">
+            <label>Zoom <input type="range" min="1" max="4" step="0.05" value="${framing.zoom}" data-bg-zoom${off ? " disabled" : ""}></label>
+            <div class="actions">
+              <button type="button" class="btn btn-text btn-sm" data-act="bg-cancel"${off ? " disabled" : ""}>Cancel</button>
+              <button type="button" class="btn btn-filled btn-sm" data-act="bg-upload"${off ? " disabled" : ""}>${backgroundBusy ? "Saving…" : "Use as background"}</button>
+            </div>
+          </div>
+        </div>`;
+    } else {
+      const now = background.isDefault ? "" : pictureUrl(background.current);
+      const screen = now
+        ? `<div class="remotes-bg-screen" role="img" aria-label="Current background" style="background-image:url('${now}')"></div>`
+        : `<div class="remotes-bg-screen">Logitech's default background</div>`;
+      const pictures = background.pictures.filter((p) => pictureUrl(p)).map((p) => `<button type="button" class="remotes-bg-thumb"
+          title="Use this picture" aria-label="Use this picture" aria-pressed="${p === background.current}"
+          data-bg-select="${escapeHtml(p)}" style="background-image:url('${pictureUrl(p, { small: true })}')"${off ? " disabled" : ""}></button>`).join("");
+      body = `<div class="remotes-bg">
+          ${screen}
+          <div class="remotes-bg-frame">
+            ${pictures ? `<div class="remotes-bg-pictures">${pictures}</div>` : ""}
+            <div class="actions">
+              ${background.isDefault ? "" : `<button type="button" class="btn btn-text btn-sm" data-act="bg-default"${off ? " disabled" : ""}>Logitech's default</button>`}
+              <button type="button" class="btn btn-filled btn-sm" data-act="bg-choose"${off ? " disabled" : ""}>Choose picture…</button>
+            </div>
+          </div>
+        </div>
+        <p class="list-note">The hub keeps the last ${background.maxCount} pictures. After a change, choose Sync remote in the remote's own settings to see it. Nothing goes through Logitech's servers.</p>`;
+    }
+    return `<div class="m-card">
+        <div class="m-card-head"><span>Background</span></div>
+        ${body}
+      </div>`;
+  }
+
+  async function loadBackground() {
+    try {
+      const reply = await api.getRemoteBackground();
+      background = readBackground(reply.settings);
+    } catch (error) {
+      // An older hub has no background API: no card rather than an error.
+      background = error.status === 404 ? false : null;
+    }
+    renderBackground();
+  }
+
+  function renderBackground() {
+    backgroundHost.innerHTML = backgroundCard();
+    drawPreview();
+  }
+
+  function drawPreview() {
+    const canvas = backgroundHost.querySelector("canvas[data-bg-preview]");
+    if (!canvas || !framing) return;
+    const r = cropRect(framing.image.naturalWidth, framing.image.naturalHeight, framing);
+    const ctx = canvas.getContext("2d");
+    ctx.imageSmoothingQuality = "high";
+    ctx.drawImage(framing.image, r.x, r.y, r.width, r.height, 0, 0, canvas.width, canvas.height);
+  }
+
+  function chooseFile(file) {
+    if (!file) return;
+    const url = URL.createObjectURL(file);
+    const image = new Image();
+    image.onload = () => {
+      framing = { image, url, zoom: 1, panX: 0, panY: 0 };
+      renderBackground();
+    };
+    image.onerror = () => {
+      URL.revokeObjectURL(url);
+      snackbar("That file isn't a picture the browser can open.", { error: true });
+    };
+    image.src = url;
+  }
+
+  function stopFraming() {
+    if (framing) URL.revokeObjectURL(framing.url);
+    framing = null;
+    drag = null;
+  }
+
+  function pngOf(size) {
+    const canvas = document.createElement("canvas");
+    canvas.width = size.width;
+    canvas.height = size.height;
+    const r = cropRect(framing.image.naturalWidth, framing.image.naturalHeight, framing);
+    const ctx = canvas.getContext("2d");
+    ctx.imageSmoothingQuality = "high";
+    ctx.drawImage(framing.image, r.x, r.y, r.width, r.height, 0, 0, size.width, size.height);
+    return canvas.toDataURL("image/png");
+  }
+
+  async function saveBackground(body) {
+    if (backgroundBusy) return;
+    backgroundBusy = true;
+    renderBackground();
+    try {
+      const reply = await api.setRemoteBackground(body);
+      snackbar(savedMessage(reply));
+      if (body.action === "upload") stopFraming();
+    } catch (error) {
+      snackbar(savedMessage({ ok: false, error: error.message }), { error: true });
+    } finally {
+      backgroundBusy = false;
+    }
+    await loadBackground();
+  }
+
   /* One section per model: remotes of one model share its maps. */
   function remoteSection(remote) {
     let body;
     if (remote.role === "no-screen") body = `${missingKeysNotice(remote)}${activityButtonsCard(remote)}${activitiesCard(remote)}`;
-    else if (remote.role === "screen") body = activitiesCard(remote);
+    else if (remote.role === "screen") body = `${activitiesCard(remote)}<div data-bg-slot></div>`;
     else body = `<div class="m-card"><p class="list-note">Nothing to set for this remote here yet.</p></div>`;
     if (hasHomeButtons(remote)) body += homeButtonsCard(remote);
     const count = remote.slots.length;
@@ -306,6 +459,7 @@ export function createRemotesView(section) {
     }
     const sections = hub.state.config ? models().map(remoteSection).join("") : "";
     root.innerHTML = `${remotesCard()}${pairCard()}${sections}`;
+    root.querySelector("[data-bg-slot]")?.replaceWith(backgroundHost);
   }
 
   async function loadRemotes() {
@@ -416,6 +570,38 @@ export function createRemotesView(section) {
     }
   });
 
+  fileInput.addEventListener("change", () => {
+    const file = fileInput.files?.[0];
+    fileInput.value = ""; // the same file can be chosen again
+    chooseFile(file);
+  });
+
+  root.addEventListener("input", (event) => {
+    if (framing && event.target.matches("input[data-bg-zoom]")) {
+      framing.zoom = Number(event.target.value) || 1;
+      drawPreview();
+    }
+  });
+
+  /* Dragging the framing preview moves the picture under the frame. */
+  root.addEventListener("pointerdown", (event) => {
+    if (!framing || !event.target.matches("canvas[data-bg-preview]")) return;
+    drag = { x: event.clientX, y: event.clientY };
+    event.target.setPointerCapture?.(event.pointerId);
+  });
+  root.addEventListener("pointermove", (event) => {
+    if (!drag || !framing || !event.target.matches("canvas[data-bg-preview]")) return;
+    const { naturalWidth: w, naturalHeight: h } = framing.image;
+    const pan = dragPan(framing, cropRect(w, h, framing), w, h,
+      event.clientX - drag.x, event.clientY - drag.y, event.target.clientWidth);
+    Object.assign(framing, pan);
+    drag = { x: event.clientX, y: event.clientY };
+    drawPreview();
+  });
+  for (const type of ["pointerup", "pointercancel"]) {
+    root.addEventListener(type, () => { drag = null; });
+  }
+
   root.addEventListener("click", (event) => {
     const act = event.target.closest("[data-act]")?.dataset.act;
     if (act === "refresh") {
@@ -423,8 +609,17 @@ export function createRemotesView(section) {
       render();
       loadRemotes();
       hub.reloadConfig();
+      background = undefined;
+      renderBackground();
+      loadBackground();
     } else if (act === "pair") pair();
     else if (act === "add-keys") addMissingKeys();
+    else if (act === "bg-choose" && !backgroundBusy) fileInput.click();
+    else if (act === "bg-cancel") { stopFraming(); renderBackground(); }
+    else if (act === "bg-upload" && framing) saveBackground(uploadRequest(pngOf(SCREEN), pngOf(THUMBNAIL)));
+    else if (act === "bg-default") saveBackground({ action: "default" });
+    const picture = event.target.closest("[data-bg-select]")?.dataset.bgSelect;
+    if (picture && picture !== background?.current) saveBackground({ action: "select", image: picture });
     const slot = event.target.closest("[data-unpair]")?.dataset.unpair;
     if (slot) unpair(Number(slot));
   });
@@ -447,9 +642,16 @@ export function createRemotesView(section) {
         remotes = undefined;
         loadRemotes();
       }
+      if (!framing) {
+        background = undefined;
+        renderBackground();
+        loadBackground();
+      }
       render();
     },
-    onHide() {},
+    onHide() {
+      stopFraming();
+    },
     confirmLeave,
   };
 }

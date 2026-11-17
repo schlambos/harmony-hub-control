@@ -1886,6 +1886,64 @@ details > summary {
   font-weight: 500;
 }
 
+/* Background: the remote's 3:4 screen, its saved pictures and the framing preview. */
+.remotes-bg {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: flex-start;
+  gap: var(--space-4);
+  margin-top: var(--space-2);
+}
+
+.remotes-bg-screen {
+  width: 120px;
+  height: 160px;
+  border-radius: 10px;
+  border: 1px solid var(--outline-variant);
+  background: var(--surface-container) center / cover no-repeat;
+  display: grid;
+  place-items: center;
+  color: var(--on-surface-variant);
+  font-size: var(--fs-caption);
+  text-align: center;
+  padding: var(--space-2);
+}
+
+canvas.remotes-bg-screen {
+  padding: 0;
+  cursor: grab;
+  touch-action: none;
+}
+
+.remotes-bg-pictures {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-2);
+}
+
+.remotes-bg-thumb {
+  width: 45px;
+  height: 60px;
+  padding: 0;
+  border-radius: 6px;
+  border: 2px solid transparent;
+  background: var(--surface-container) center / cover no-repeat;
+  cursor: pointer;
+}
+
+.remotes-bg-thumb[aria-pressed="true"] {
+  border-color: var(--primary);
+}
+
+.remotes-bg-frame {
+  display: grid;
+  gap: var(--space-2);
+}
+
+.remotes-bg-frame input[type="range"] {
+  width: 120px;
+}
+
 /* Phones: each button's name on its own row, its two choices side by side. */
 @media (max-width: 640px) {
   .remotes-buttons {

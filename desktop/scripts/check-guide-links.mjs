@@ -11,7 +11,7 @@ const files = [
   "README.md", "docs/SETUP_GUIDE.md", "docs/DEVICES_AND_CODES_GUIDE.md", "docs/ACTIVITIES_GUIDE.md",
   "docs/COMPATIBILITY.md", "docs/BLUETOOTH_KEYBOARD.md", "docs/ARCHITECTURE.md", "docs/MELODIOUS_WEB_UI.md",
   "docs/SECURITY.md", "docs/HOME_ASSISTANT.md", "docs/INSTALL.md", "docs/DESKTOP_APP.md",
-  "Android/README.md", "desktop/README.md",
+  "docs/REMOTE_BACKGROUNDS.md", "Android/README.md", "desktop/README.md",
 ];
 const withoutCode = (s) => s.replace(/^```[^\n]*\n[\s\S]*?^```\s*$/gm, "");
 const slug = (s) => s.toLowerCase()
