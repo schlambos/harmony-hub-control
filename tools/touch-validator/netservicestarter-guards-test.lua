@@ -2,8 +2,8 @@
 -- that answer the Harmony Touch's own Sync: the time is answered locally, the
 -- hub firmware check is deliberately left to the stock handler (a successful
 -- check strands the Touch on a "myharmony.com" screen offline), and a device
--- content file the hub doesn't have is answered with an empty record (a 404
--- aborts every Touch sync).
+-- or user content file the hub doesn't have is answered with an empty record
+-- (a 404 aborts every Touch sync, and stalls the Ultimate at 58%, #180).
 --
 -- Loads the script with stubbed hub modules (mfgData.hasNetwork = false, so
 -- it only "loads" its transport tasks), captures what it registers with the
@@ -185,6 +185,53 @@ r = getResource("proxy.resource?get", nil, { uri = "content://1.0/device/8000000
 check("stored device content: the hub's own file, untouched",
   r.data.code == "200" and r.data.etag == '"etag-2"' and r.data.hetag == "42" and
   r.data.resource.id == "stored-2", encode(r))
+
+-- User content (ContentUser), as the Ultimate asks for it mid-sync (#180).
+local userUri = "content://1.0/user"
+
+r = getResource("proxy.resource?get", nil, { uri = userUri })
+d = r.data or {}
+res = type(d.resource) == "table" and d.resource or {}
+check("missing user content: answered 200, not 404",
+  r.code == "200" and d.code == "200" and d.uri == userUri, encode(r))
+check("missing user content: an empty record with the fallback identity",
+  res.id == "00000000-0000-4000-8000-000000000000" and
+  res.user_profile_uri == "svcs.myharmony.com/res//household/0-melodious/user/default" and
+  type(res.services) == "table" and next(res.services) == nil, encode(res))
+again = getResource("proxy.resource?get", nil, { uri = userUri })
+check("missing user content: the same etag and id every sync",
+  d.etag == '"melodious-empty-user-content"' and again.data.etag == d.etag and
+  again.data.resource.id == res.id, encode(again))
+
+stored.Context = {
+  etag = '"etag-ctx"', hetag = "7",
+  resource = {
+    ["HouseholdId-"] = 6105026,
+    HouseholdUserProfileUri = "svcs.myharmony.com/res//household/6105026-abc/user/default",
+  },
+}
+r = getResource("proxy.resource?get", nil, { uri = userUri })
+check("missing user content with Context: identity from the household",
+  r.data.code == "200" and
+  r.data.resource.id == "00000000-0000-4000-8000-000006105026" and
+  r.data.resource.user_profile_uri ==
+    "svcs.myharmony.com/res//household/6105026-abc/user/default", encode(r))
+stored.Context = nil
+
+r = getResource("proxy.resource?get", nil, { uri = userUri, encode = true })
+check("missing user content: encoded when the remote asks for text",
+  type(r.data.resource) == "string" and r.data.resource:find('"services":[]', 1, true) ~= nil,
+  encode(r))
+
+stored.ContentUser = {
+  etag = '"etag-user"', hetag = "9",
+  resource = { id = "stored-user", user_profile_uri = "svcs.myharmony.com/res//household/1-x/user/default", services = {} },
+}
+r = getResource("proxy.resource?get", nil, { uri = userUri })
+check("stored user content: the hub's own file, untouched",
+  r.data.code == "200" and r.data.etag == '"etag-user"' and r.data.hetag == "9" and
+  r.data.resource.id == "stored-user", encode(r))
+stored.ContentUser = nil
 
 r = getResource("proxy.resource?get", nil, { uri = "harmony://Account/1/InstallerInfo" })
 check("other missing resources: still 404", r.data.code == "404", encode(r))
