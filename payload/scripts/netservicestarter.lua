@@ -748,6 +748,45 @@ local function emptyDeviceContent(cmd, uri, deviceId, encode)
   })
 end
 
+-- A screen remote also fetches the user content record during every sync,
+-- and the Ultimate (skin 105) stalls at 58% on a 404 (#180). Hubs set up
+-- entirely offline have no ContentUser file, so answer with the record
+-- Logitech kept for a user with no content services. The id and profile
+-- come from the household in Context, so repeated syncs see the same
+-- record; a stored ContentUser file is still served untouched above.
+local function emptyUserContent(cmd, uri, encode)
+  local id = "00000000-0000-4000-8000-000000000000"
+  local profileUri = "svcs.myharmony.com/res//household/0-melodious/user/default"
+  local _, _, context = resMgr.getResource("Context")
+  if type(context) == "table" then
+    local householdId = tonumber(context["HouseholdId-"])
+    if householdId and householdId > 0 then
+      id = string.format("00000000-0000-4000-8000-%012d", householdId)
+    end
+    if type(context.HouseholdUserProfileUri) == "string" and
+        context.HouseholdUserProfileUri ~= "" then
+      profileUri = context.HouseholdUserProfileUri
+    end
+  end
+  local resource = {
+    id = id,
+    user_profile_uri = profileUri,
+    services = {}
+  }
+  if encode then
+    resource = json.encode(resource)
+  end
+  log.notice("codex offline guard served empty user content", uri)
+  return connectUtils.createResponse(cmd, "200", "OK", {
+    code = "200",
+    uri = uri,
+    etag = "\"melodious-empty-user-content\"",
+    hetag = "1",
+    resource = resource,
+    localOnly = true
+  })
+end
+
 local function offlineResourceGet(cmd, verb, params)
   if not cloudBlockerEnabled() then
     return nativeResourceHandler.processGetResource(cmd, verb, params)
@@ -770,6 +809,9 @@ local function offlineResourceGet(cmd, verb, params)
     local deviceId = string.match(resourceName, "^CD_(%d+)$")
     if deviceId then
       return emptyDeviceContent(cmd, uri, deviceId, params.encode)
+    end
+    if resourceName == "ContentUser" then
+      return emptyUserContent(cmd, uri, params.encode)
     end
     log.notice(
       "codex offline guard could not serve local resource",
