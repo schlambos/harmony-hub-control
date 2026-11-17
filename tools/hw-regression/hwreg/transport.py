@@ -4,6 +4,8 @@ from __future__ import annotations
 
 import base64
 from dataclasses import dataclass, field
+import socket as _socket
+from typing import Any
 from pathlib import Path
 import platform
 import re
@@ -281,6 +283,91 @@ class HubTransport:
         except Exception as exc:
             return HttpResult(status=0, body="", error=str(exc))
 
+    def mqtt_roundtrip(
+        self,
+        *,
+        broker_host: str,
+        broker_port: int,
+        base_topic: str,
+        discovery_prefix: str,
+        username: str = "",
+        password: str = "",
+        activity_payload: str = "",
+        client_id_suffix: str = "hwreg",
+        timeout_sec: float = 12.0,
+    ) -> dict[str, Any]:
+        """Subscribe to discovery/state/result, publish one activity select, collect replies.
+
+        Returns a plain dict (never raises for broker-side failures) so checks
+        can report evidence uniformly. Credentials are used only for CONNECT
+        and are never included in the result.
+        """
+        result: dict[str, Any] = {
+            "connected": False,
+            "discovery_topics": [],
+            "state_payloads": [],
+            "result_payloads": [],
+            "published_topic": "",
+            "error": "",
+        }
+        base = base_topic.rstrip("/")
+        state_topic = f"{base}/state"
+        result_topic = f"{base}/result"
+        discovery_topic = f"{discovery_prefix}/select/+/config"
+        sock = None
+        try:
+            sock = _socket.create_connection((broker_host, broker_port), timeout=timeout_sec)
+            sock.settimeout(2.0)
+            client_id = f"harmony-hwreg-{client_id_suffix}"
+            sock.sendall(mqtt_build_connect(client_id, username=username, password=password))
+            ptype, body = mqtt_read_packet(sock)
+            if ptype != 2 or len(body) < 2 or body[1] != 0:
+                result["error"] = f"broker refused CONNECT (packet={ptype})"
+                return result
+            result["connected"] = True
+            sock.sendall(mqtt_build_subscribe(1, [state_topic, result_topic, discovery_topic]))
+            if activity_payload:
+                result["published_topic"] = f"{base}/activity/set"
+            deadline = time.monotonic() + timeout_sec
+            published = False
+            while time.monotonic() < deadline:
+                try:
+                    ptype, body = mqtt_read_packet(sock)
+                except _socket.timeout:
+                    if not published and activity_payload:
+                        sock.sendall(mqtt_build_publish(f"{base}/activity/set", activity_payload))
+                        published = True
+                    continue
+                if ptype == 9:  # SUBACK: now safe to publish the activity select
+                    if not published and activity_payload:
+                        sock.sendall(mqtt_build_publish(f"{base}/activity/set", activity_payload))
+                        published = True
+                    continue
+                if ptype != 3:
+                    continue
+                topic, payload = mqtt_parse_publish(body)
+                if topic == state_topic:
+                    result["state_payloads"].append(payload)
+                elif topic == result_topic:
+                    result["result_payloads"].append(payload)
+                elif topic.startswith(f"{discovery_prefix}/"):
+                    result["discovery_topics"].append(topic)
+                if published and result["state_payloads"] and result["result_payloads"]:
+                    break
+        except Exception as exc:  # broker unreachable / protocol error: reported, not raised
+            result["error"] = str(exc)
+        finally:
+            if sock is not None:
+                try:
+                    sock.sendall(bytes([0xE0, 0x00]))
+                except Exception:
+                    pass
+                try:
+                    sock.close()
+                except Exception:
+                    pass
+        return result
+
     def host_ping(self, target_ip: str, count: int = 3, timeout_sec: int = 2) -> tuple[bool, str]:
         """Run a short ICMP ping from the contributor's host to target_ip."""
         sys_name = platform.system().lower()
@@ -325,3 +412,84 @@ class HubTransport:
                 if norm not in {"00:00:00:00:00:00", "ff:ff:ff:ff:ff:ff"}:
                     return norm
         return ""
+
+
+# ---------------------------------------------------------------------------
+# Minimal MQTT 3.1.1 client (stdlib socket only) for mqtt.broker_roundtrip.
+# Supports CONNECT (optional user/pass), SUBSCRIBE QoS 0, PUBLISH QoS 0, and
+# collecting PUBLISH packets for a bounded time. No TLS (LAN brokers only).
+# ---------------------------------------------------------------------------
+
+def _mqtt_utf(text: str) -> bytes:
+    raw = text.encode("utf-8")
+    return len(raw).to_bytes(2, "big") + raw
+
+
+def mqtt_encode_remaining_length(length: int) -> bytes:
+    out = bytearray()
+    while True:
+        digit = length % 128
+        length //= 128
+        if length:
+            digit |= 0x80
+        out.append(digit)
+        if not length:
+            return bytes(out)
+
+
+def mqtt_build_connect(client_id: str, *, username: str = "", password: str = "", keepalive_sec: int = 15) -> bytes:
+    flags = 0x02  # clean session
+    payload = _mqtt_utf(client_id)
+    if username:
+        flags |= 0x80
+        payload += _mqtt_utf(username)
+        if password:
+            flags |= 0x40
+            payload += _mqtt_utf(password)
+    variable = _mqtt_utf("MQTT") + bytes([4, flags]) + keepalive_sec.to_bytes(2, "big")
+    body = variable + payload
+    return b"\x10" + mqtt_encode_remaining_length(len(body)) + body
+
+
+def mqtt_build_subscribe(packet_id: int, topics: list[str]) -> bytes:
+    body = packet_id.to_bytes(2, "big") + b"".join(_mqtt_utf(t) + b"\x00" for t in topics)
+    return b"\x82" + mqtt_encode_remaining_length(len(body)) + body
+
+
+def mqtt_build_publish(topic: str, payload: str) -> bytes:
+    body = _mqtt_utf(topic) + payload.encode("utf-8")
+    return b"\x30" + mqtt_encode_remaining_length(len(body)) + body
+
+
+def _mqtt_read_exact(sock: Any, count: int) -> bytes:
+    data = b""
+    while len(data) < count:
+        chunk = sock.recv(count - len(data))
+        if not chunk:
+            raise ConnectionError("MQTT broker closed the connection")
+        data += chunk
+    return data
+
+
+def mqtt_read_packet(sock: Any) -> tuple[int, bytes]:
+    """Read one MQTT control packet; returns (packet_type, body_bytes)."""
+    first = _mqtt_read_exact(sock, 1)[0]
+    multiplier = 1
+    remaining = 0
+    while True:
+        digit = _mqtt_read_exact(sock, 1)[0]
+        remaining += (digit & 0x7F) * multiplier
+        multiplier *= 128
+        if not digit & 0x80:
+            break
+    body = _mqtt_read_exact(sock, remaining) if remaining else b""
+    return first >> 4, body
+
+
+def mqtt_parse_publish(body: bytes) -> tuple[str, str]:
+    if len(body) < 2:
+        return "", ""
+    topic_len = int.from_bytes(body[:2], "big")
+    topic = body[2 : 2 + topic_len].decode("utf-8", "replace")
+    payload = body[2 + topic_len :].decode("utf-8", "replace")
+    return topic, payload

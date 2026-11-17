@@ -22,6 +22,15 @@ class HoldProbeTarget:
 
 
 @dataclass
+class AndroidTvInputTarget:
+    """Explicit user-opted-in Android TV input for the Try probe."""
+
+    device_id: str
+    method: str
+    value: str
+
+
+@dataclass
 class RunConfig:
     """Contributor-supplied local configuration + per-run CLI safety flags.
 
@@ -48,6 +57,16 @@ class RunConfig:
     test_activity_id: str = ""  # Optional activity ID to use when --allow-activity-toggle is set
     test_hold: HoldProbeTarget | None = None
     ha_webhook_url: str = ""
+    # Phase-3 optional probe targets (contributor-supplied; never hub-discovered secrets)
+    mqtt_broker_host: str = ""
+    mqtt_broker_port: int = 1883
+    mqtt_base_topic: str = "harmony/hub"
+    mqtt_discovery_prefix: str = "homeassistant"
+    mqtt_username: str = ""
+    mqtt_password: str = ""
+    test_ha_device_key: str = ""  # e.g. a scratch HA device key for the webhook round-trip
+    test_ha_command: str = ""  # command value sent to test_ha_device_key via the webhook
+    test_androidtv_input: AndroidTvInputTarget | None = None
 
     # Safety tiering & explicit per-run opt-in gates (all False by default)
     tier: SafetyTier = SafetyTier.SAFE
@@ -139,6 +158,15 @@ def load_local_config(path: Path) -> RunConfig:
             f"pass them on the command line per run."
         )
 
+    atv_cfg = data.get("test_androidtv_input")
+    atv_target: AndroidTvInputTarget | None = None
+    if isinstance(atv_cfg, dict):
+        atv_dev = str(atv_cfg.get("device_id", "")).strip()
+        atv_method = str(atv_cfg.get("method", "")).strip()
+        atv_value = str(atv_cfg.get("value", "")).strip()
+        if atv_dev and atv_method and atv_value:
+            atv_target = AndroidTvInputTarget(device_id=atv_dev, method=atv_method, value=atv_value)
+
     hold_cfg = data.get("test_hold")
     hold_target: HoldProbeTarget | None = None
     if isinstance(hold_cfg, dict):
@@ -146,6 +174,15 @@ def load_local_config(path: Path) -> RunConfig:
         cmd = str(hold_cfg.get("command", "")).strip()
         if dev_id and cmd:
             hold_target = HoldProbeTarget(device_id=dev_id, command=cmd)
+
+    atv_cfg = data.get("test_androidtv_input")
+    atv_target: AndroidTvInputTarget | None = None
+    if isinstance(atv_cfg, dict):
+        a_dev = str(atv_cfg.get("device_id", "")).strip()
+        a_method = str(atv_cfg.get("method", "")).strip()
+        a_value = str(atv_cfg.get("value", "")).strip()
+        if a_dev and a_method and a_value:
+            atv_target = AndroidTvInputTarget(device_id=a_dev, method=a_method, value=a_value)
 
     ssh_key_raw = str(data.get("ssh_key_path", "")).strip()
     ssh_key = str(Path(ssh_key_raw).expanduser()) if ssh_key_raw else ""
@@ -167,6 +204,16 @@ def load_local_config(path: Path) -> RunConfig:
         test_activity_id=str(data.get("test_activity_id", "")).strip(),
         test_hold=hold_target,
         ha_webhook_url=str(data.get("ha_webhook_url", "")).strip(),
+        mqtt_broker_host=str(data.get("mqtt_broker_host", "")).strip(),
+        mqtt_broker_port=int(data.get("mqtt_broker_port", 1883)),
+        mqtt_base_topic=str(data.get("mqtt_base_topic", "harmony/hub")).strip() or "harmony/hub",
+        mqtt_discovery_prefix=str(data.get("mqtt_discovery_prefix", "homeassistant")).strip()
+        or "homeassistant",
+        mqtt_username=str(data.get("mqtt_username", "")).strip(),
+        mqtt_password=str(data.get("mqtt_password", "")),
+        test_ha_device_key=str(data.get("test_ha_device_key", "")).strip(),
+        test_ha_command=str(data.get("test_ha_command", "")).strip(),
+        test_androidtv_input=atv_target,
     )
     cfg.effective_ssh_destination()
     return cfg

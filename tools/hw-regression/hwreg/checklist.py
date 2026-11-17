@@ -126,6 +126,32 @@ def _applies_usb_wol_physical(caps: HubCapabilities) -> tuple[bool, str]:
     return True, ""
 
 
+def _applies_androidtv_pairing(caps: HubCapabilities) -> tuple[bool, str]:
+    if not caps.androidtv_running:
+        return False, "Android TV daemon (codex_androidtv) is not running on this hub"
+    return True, ""
+
+
+def _applies_home_control_hitl(caps: HubCapabilities) -> tuple[bool, str]:
+    if not caps.home_control_remote_present:
+        return False, "no Companion (16422) or screen remote (16417) with Home Control keys is paired"
+    return True, ""
+
+
+def _applies_pair_after_activities_hitl(caps: HubCapabilities) -> tuple[bool, str]:
+    if caps.activity_count <= 0:
+        return False, "hub has 0 configured activities (pair a remote before creating activities instead)"
+    return True, ""
+
+
+def _applies_learn_and_gesture(caps: HubCapabilities) -> tuple[bool, str]:
+    if not caps.paired_remotes:
+        return False, "0 RF remotes paired in rf.info"
+    if caps.activity_count <= 0:
+        return False, "hub has 0 configured activities"
+    return True, ""
+
+
 def _applies_usb_handback(caps: HubCapabilities) -> tuple[bool, str]:
     if not caps.usb_eth_operational:
         return False, "USB Ethernet is not operational on this hub"
@@ -299,6 +325,125 @@ HITL_CHECKS: tuple[HitlCheckSpec, ...] = (
             "If both paths stop answering for >2 minutes, power the hub off, wait 30s, ensure cables are seated, "
             "and power back on."
         ),
+    ),
+    HitlCheckSpec(
+        check_id="hitl.androidtv_pairing",
+        title="Android TV pairing from scratch (TLS polo pairing)",
+        category="androidtv",
+        tier=SafetyTier.ACTIVE,
+        applies_when=_applies_androidtv_pairing,
+        safety_notice="Pairing shows a code on the TV screen; nothing is paired until you enter that code.",
+        setup_steps=[
+            "Put the Android/Google TV on the same LAN, awake, and on its home screen.",
+            "Open Settings -> Android TV on the hub and start discovery (androidtv.mdns_discovery_cross_if should see it).",
+        ],
+        operator_prompt=(
+            "1) Start pairing for the unpaired TV and read the code shown on the TV screen.\n"
+            "2) Enter the code in the hub UI and wait for the TLS connection to come up.\n"
+            "3) Send Power/Volume from the hub device page and confirm the TV responds, then Forget the TV if it was a scratch pairing."
+        ),
+        expected_result=(
+            "Pairing completes with the on-screen code, the TV shows connected, and hub-sent keys control it; "
+            "Forget cleanly removes a scratch pairing."
+        ),
+        recovery_steps="If pairing stalls, cancel on the hub, confirm the TV accepts network remote pairing, and retry.",
+    ),
+    HitlCheckSpec(
+        check_id="hitl.remote_home_control_buttons",
+        title="Home Control buttons: press, +/- dimming, does-nothing rocker, legacy replace/clear",
+        category="remote",
+        tier=SafetyTier.ACTIVE,
+        applies_when=_applies_home_control_hitl,
+        safety_notice="Exercises real lights/switches bound to Home Control keys; pick a lamp you can watch.",
+        setup_steps=[
+            "Bind one Home Control key to a dimmable light and leave one rocker/key deliberately unbound (does-nothing).",
+            "Note any legacy Logitech home-control binding still present for the replace/clear step (#161).",
+        ],
+        operator_prompt=(
+            "1) Press each bound Home Control key on the Companion (16422) and/or screen remote (16417) and confirm the light toggles.\n"
+            "2) Hold +/- (rocker) and confirm smooth dimming ramps and stops on release.\n"
+            "3) Press the unbound (does-nothing) key/rocker and confirm nothing changes and the remote does not freeze.\n"
+            "4) Replace, then Clear, a legacy Home Control binding in Settings and confirm the key follows the new state."
+        ),
+        expected_result=(
+            "Bound keys toggle their devices, +/- dims smoothly, the does-nothing rocker is a clean no-op, "
+            "and replace/clear of a legacy binding takes effect without a hub restart."
+        ),
+        recovery_steps="If a key sticks or dims run away, press the key again / PowerOff the activity and re-check bindings in Settings.",
+        pre_capture=_snap_hot_stats,
+        post_capture=_diff_hot_stats,
+    ),
+    HitlCheckSpec(
+        check_id="hitl.remote_pair_after_activities_backfill",
+        title="Pair a no-screen remote after activities exist; maps work without re-saving",
+        category="remote",
+        tier=SafetyTier.ACTIVE,
+        applies_when=_applies_pair_after_activities_hitl,
+        safety_notice="Pairs a real RF remote; keep the hub's existing remotes nearby and labelled.",
+        setup_steps=[
+            "Confirm the hub already has at least one activity (remote.pair_after_activities_backfill should PASS for existing remotes).",
+            "Have a spare no-screen remote (Companion/Smart Control) unpaired and with fresh batteries.",
+        ],
+        operator_prompt=(
+            "1) Pair the no-screen remote onto this hub (Settings -> Remotes) WITHOUT opening or re-saving any activity.\n"
+            "2) Start an activity from the newly paired remote.\n"
+            "3) Press Volume and then Off on the newly paired remote."
+        ),
+        expected_result=(
+            "The later-paired remote starts the activity, volume keys act, and Off works immediately (#149 backfill) "
+            "with no activity re-save and no action-less buttons."
+        ),
+        recovery_steps="If maps are missing, note the equad/activity, unpair the remote, and file the masked report; do not re-save activities as a workaround during the check.",
+        pre_capture=_snap_hot_stats,
+        post_capture=_diff_hot_stats,
+    ),
+    HitlCheckSpec(
+        check_id="hitl.remote_learn_and_gesture",
+        title="IR Learn capture then send; gesture/sequence from a physical remote",
+        category="remote",
+        tier=SafetyTier.ACTIVE,
+        applies_when=_applies_learn_and_gesture,
+        safety_notice="Learn points the OEM remote at the hub; gesture/sequence steps fire real device commands.",
+        setup_steps=[
+            "Have the device's OEM remote with fresh batteries and the target device visible.",
+            "Open the device's Learn page on the hub and pick a harmless command to learn (e.g. Info).",
+        ],
+        operator_prompt=(
+            "1) Learn the command from the OEM remote, then Send it from the hub and confirm the device responds.\n"
+            "2) On a paired screen remote, perform a mapped gesture (e.g. swipe/tap gesture) and confirm its command fires.\n"
+            "3) Trigger a mapped sequence (multi-command) and a one-shot command and confirm ordering and single execution."
+        ),
+        expected_result=(
+            "The learned code sends successfully, the gesture fires its command once, and the sequence runs "
+            "in order without repeats or a frozen remote."
+        ),
+        recovery_steps="If Learn times out, move the OEM remote 5-15 cm from the hub's front IR window and retry in a darker room.",
+        pre_capture=_snap_hot_stats,
+        post_capture=_diff_hot_stats,
+    ),
+    HitlCheckSpec(
+        check_id="hitl.usb_eth_adapter_matrix",
+        title="USB-Ethernet adapter matrix: traffic-test an untested chipset (definition only)",
+        category="usb_eth",
+        tier=SafetyTier.DISRUPTIVE,
+        applies_when=_applies_usb_handback,
+        safety_notice=(
+            "CRITICAL HARDWARE RULE: power the hub OFF, wait 30s, swap the micro-USB OTG adapter, re-apply "
+            "external 5 V power, then power on. NEVER hot-plug the OTG adapter on a powered hub."
+        ),
+        setup_steps=[
+            "Note the current adapter chipset (usb_eth.adapter_matrix) and have a Realtek, AX88179, or CDC adapter ready.",
+        ],
+        operator_prompt=(
+            "1) Power off, swap in the untested-chipset adapter, and power back on.\n"
+            "2) Run the suite's usb_eth.traffic_on_wire and confirm counters move with 0 errors.\n"
+            "3) Note the chipset result for the USB_ETHERNET.md evidence table."
+        ),
+        expected_result=(
+            "The swapped adapter reaches Operational and passes counter-verified traffic, retiring its "
+            "'built + audited only' status."
+        ),
+        recovery_steps="If the new adapter never reaches Operational, power off and restore the known-good adapter.",
     ),
 )
 
