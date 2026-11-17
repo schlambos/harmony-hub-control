@@ -10557,6 +10557,234 @@ static void render_remote_unpair_json(int fd, const struct request *req) {
     fclose(f);
 }
 
+/* Remote backgrounds (docs/REMOTE_BACKGROUNDS.md). The hub keeps the paired
+ * screen remote's own settings in the Settings resource, its background among
+ * them. The web app frames and scales a picture itself and sends two base64
+ * PNGs: the 240x320 background and the 60x80 thumbnail the remote's settings
+ * page shows. They are checked here, staged in RAM under this process's id and
+ * handed to codexactivity (CommitRemoteBackground), which saves them as images
+ * in the resource store and updates Settings; netservicestarter.lua answers
+ * the remote's own image fetches from there. */
+#define REMOTE_SETTINGS "/data/resources/Settings.json"
+#define MAX_REMOTE_SETTINGS (64 * 1024)
+#define MAX_REMOTE_BACKGROUND (512 * 1024)
+
+/* A picture's base name in the resource store: letters, digits, _ and -. */
+static int remote_image_name_ok(const char *name) {
+    size_t i, n = strlen(name);
+    if (n == 0 || n > 96) return 0;
+    for (i = 0; i < n; i++) {
+        unsigned char c = (unsigned char)name[i];
+        if (!isalnum(c) && c != '_' && c != '-') return 0;
+    }
+    return 1;
+}
+
+static int png_dimensions(const unsigned char *d, size_t len, unsigned long *w, unsigned long *h) {
+    if (len < 24 || memcmp(d, "\x89PNG\r\n\x1a\n", 8) != 0 || memcmp(d + 12, "IHDR", 4) != 0) return -1;
+    *w = ((unsigned long)d[16] << 24) | ((unsigned long)d[17] << 16) |
+        ((unsigned long)d[18] << 8) | (unsigned long)d[19];
+    *h = ((unsigned long)d[20] << 24) | ((unsigned long)d[21] << 16) |
+        ((unsigned long)d[22] << 8) | (unsigned long)d[23];
+    return 0;
+}
+
+/* GET: the remote's settings as the hub holds them ({"settings":null} before
+   a remote with a screen has synced with this hub); remote-background-model.js
+   reads them. */
+static void render_remote_background_json(int fd) {
+    size_t len = 0;
+    char *settings = read_file_alloc(REMOTE_SETTINGS, MAX_REMOTE_SETTINGS, &len);
+    FILE *f = send_json_start(fd, "200 OK");
+    if (f) {
+        fputs("{\"ok\":true,\"settings\":", f);
+        if (settings && len && settings[0] == '{') fwrite(settings, 1, len, f);
+        else fputs("null", f);
+        fputs("}\n", f);
+        fclose(f);
+    }
+    free(settings);
+}
+
+/* GET ?name=<name>: one picture saved on the hub, for the web app's previews. */
+static void render_remote_background_image(int fd, const struct request *req) {
+    char name[128], path[192], hdr[256];
+    char *data;
+    size_t len = 0;
+    query_value(req->path, "name", name, sizeof(name));
+    if (!remote_image_name_ok(name)) {
+        send_text(fd, "400 Bad Request", "Give a picture name: letters, digits, _ and -.\n");
+        return;
+    }
+    snprintf(path, sizeof(path), "/data/resources/%s.png", name);
+    data = read_file_alloc(path, MAX_REMOTE_BACKGROUND, &len);
+    if (!data || len < 8 || memcmp(data, "\x89PNG\r\n\x1a\n", 8) != 0) {
+        free(data);
+        send_text(fd, "404 Not Found", "That picture isn't saved on this hub.\n");
+        return;
+    }
+    snprintf(hdr, sizeof(hdr),
+        "HTTP/1.1 200 OK\r\nContent-Type: image/png\r\nContent-Length: %lu\r\n"
+        "Cache-Control: no-store\r\nConnection: close\r\n\r\n", (unsigned long)len);
+    send_all(fd, hdr, strlen(hdr));
+    send_all(fd, data, len);
+    free(data);
+}
+
+/* One base64 PNG member of the request (a data: URL is fine), decoded,
+   checked for its exact size and staged at path. 0, or -1 with msg set. */
+static int stage_remote_png(
+    const struct request *req,
+    const char *key,
+    unsigned long want_w,
+    unsigned long want_h,
+    const char *path,
+    const char *what,
+    char *msg,
+    size_t msg_len
+) {
+    char *text = (char *)malloc(req->body_len + 1);
+    char *bytes = (char *)malloc(MAX_REMOTE_BACKGROUND + 2);
+    const char *b64;
+    unsigned long w = 0, h = 0;
+    int n, rc = -1;
+    if (!text || !bytes) {
+        snprintf(msg, msg_len, "Not enough memory on the hub for the %s.", what);
+        goto out;
+    }
+    if (json_top_string(req->body, key, text, req->body_len + 1) != 1 || !text[0]) {
+        snprintf(msg, msg_len, "The %s is missing.", what);
+        goto out;
+    }
+    b64 = text;
+    if (strncmp(b64, "data:", 5) == 0) {
+        b64 = strchr(b64, ',');
+        if (!b64) {
+            snprintf(msg, msg_len, "The %s isn't base64.", what);
+            goto out;
+        }
+        b64++;
+    }
+    if (strlen(b64) / 4 * 3 > MAX_REMOTE_BACKGROUND + 3) {
+        snprintf(msg, msg_len, "The %s is larger than 512 KB.", what);
+        goto out;
+    }
+    n = base64_decode_text(b64, bytes, MAX_REMOTE_BACKGROUND + 2);
+    if (n <= 0 || (size_t)n > MAX_REMOTE_BACKGROUND) {
+        snprintf(msg, msg_len, "The %s isn't base64, or is larger than 512 KB.", what);
+        goto out;
+    }
+    if (png_dimensions((const unsigned char *)bytes, (size_t)n, &w, &h) != 0) {
+        snprintf(msg, msg_len, "The %s isn't a PNG.", what);
+        goto out;
+    }
+    if (w != want_w || h != want_h) {
+        snprintf(msg, msg_len, "The %s must be %lux%lu pixels, not %lux%lu.", what, want_w, want_h, w, h);
+        goto out;
+    }
+    if (write_file_atomic(path, bytes, (size_t)n) != 0) {
+        snprintf(msg, msg_len, "The hub couldn't hold the %s for saving.", what);
+        goto out;
+    }
+    chmod(path, 0600);
+    rc = 0;
+out:
+    free(text);
+    free(bytes);
+    return rc;
+}
+
+/* POST {"action":"upload","image":<base64>,"thumbnail":<base64>},
+   {"action":"select","image":"<name>.png"} or {"action":"default"}. */
+static void render_remote_background_set_json(int fd, const struct request *req) {
+    char action[16], image[128], base[128], request[768], request_id[96], msg[768], reply[4096];
+    char image_file[96], thumb_file[96];
+    const char *status;
+    size_t image_len;
+    int staged = 0, written, rc;
+    FILE *f;
+    action[0] = image[0] = msg[0] = reply[0] = 0;
+    image_file[0] = thumb_file[0] = 0;
+    if (!req->body || req->body_truncated ||
+        json_top_string(req->body, "action", action, sizeof(action)) != 1) {
+        snprintf(msg, sizeof(msg), "Send {\"action\":\"upload\"|\"select\"|\"default\"} as JSON.");
+        goto refuse;
+    }
+    if (strcmp(action, "upload") == 0) {
+        snprintf(image_file, sizeof(image_file), "/var/volatile/codex-remote-background-%ld.png", (long)getpid());
+        snprintf(thumb_file, sizeof(thumb_file), "/var/volatile/codex-remote-background-%ld-small.png", (long)getpid());
+        staged = 1;
+        if (stage_remote_png(req, "image", 240, 320, image_file, "picture", msg, sizeof(msg)) != 0 ||
+            stage_remote_png(req, "thumbnail", 60, 80, thumb_file, "thumbnail", msg, sizeof(msg)) != 0) {
+            goto refuse;
+        }
+    } else if (strcmp(action, "select") == 0) {
+        image_len = 0;
+        if (json_top_string(req->body, "image", image, sizeof(image)) == 1) image_len = strlen(image);
+        if (image_len > 4 && strcmp(image + image_len - 4, ".png") == 0) {
+            memcpy(base, image, image_len - 4);
+            base[image_len - 4] = 0;
+        } else {
+            base[0] = 0;
+        }
+        if (!remote_image_name_ok(base)) {
+            snprintf(msg, sizeof(msg), "Give the picture to use, as <name>.png.");
+            goto refuse;
+        }
+    } else if (strcmp(action, "default") != 0) {
+        snprintf(msg, sizeof(msg), "The action must be upload, select or default.");
+        goto refuse;
+    }
+    snprintf(request_id, sizeof(request_id), "%ld-%ld-%08x",
+        (long)getpid(), (long)time(NULL), resource_hash(req->body, req->body_len));
+    if (staged) {
+        written = snprintf(request, sizeof(request),
+            "{\"id\":\"%s\",\"op\":\"CommitRemoteBackground\",\"action\":\"upload\","
+            "\"imageFile\":\"%s\",\"thumbnailFile\":\"%s\"}",
+            request_id, image_file, thumb_file);
+    } else if (image[0]) {
+        written = snprintf(request, sizeof(request),
+            "{\"id\":\"%s\",\"op\":\"CommitRemoteBackground\",\"action\":\"select\",\"image\":\"%s\"}",
+            request_id, image);
+    } else {
+        written = snprintf(request, sizeof(request),
+            "{\"id\":\"%s\",\"op\":\"CommitRemoteBackground\",\"action\":\"default\"}", request_id);
+    }
+    rc = offline_writer_request(request, (size_t)written, request_id,
+        reply, sizeof(reply), msg, sizeof(msg));
+    if (staged) {
+        unlink(image_file);
+        unlink(thumb_file);
+    }
+    status = rc == 0 ? "200 OK" : (reply[0] ? "422 Unprocessable Entity" : "503 Service Unavailable");
+    f = send_json_start(fd, status);
+    if (!f) return;
+    fprintf(f, "{\"ok\":%s,\"saved\":%s,\"localOnly\":true",
+        rc == 0 ? "true" : "false", rc == 0 ? "true" : "false");
+    if (rc == 0) {
+        fputs(",\"message\":\"Saved. Sync the remote to see it.\"", f);
+    } else {
+        fputs(",\"error\":", f);
+        json_write_string(f, msg[0] ? msg : "The background was not saved.");
+    }
+    fputs(",\"reply\":", f);
+    json_write_string(f, reply);
+    fputs("}\n", f);
+    fclose(f);
+    return;
+refuse:
+    if (staged) {
+        unlink(image_file);
+        unlink(thumb_file);
+    }
+    f = send_json_start(fd, "400 Bad Request");
+    if (!f) return;
+    fputs("{\"ok\":false,\"error\":", f);
+    json_write_string(f, msg);
+    fputs("}\n", f);
+    fclose(f);
+}
+
 /* Cheap state poll.  connect.statedigest?get returns 304 unless the hub's
  * stateVersion has moved past the client's current_version, so the UI can poll
  * this often without a full engine round-trip and re-pull detail only when the
@@ -11739,6 +11967,7 @@ static void render_version_json(int fd) {
         "ha-devices-v2",
         "ha-state",
         "irdb-import",
+        "remote-background",
         "remote-pair"
     };
     FILE *f = send_json_start(fd, "200 OK");
@@ -12675,6 +12904,14 @@ static void handle_client(int client) {
         render_remote_pair_json(client, &req);
     } else if (strcmp(req.method, "POST") == 0 && strcmp(req.path, "/api/remote-unpair") == 0) {
         if (request_same_origin_json(&req)) render_remote_unpair_json(client, &req);
+        else send_cross_site_refused(client);
+    } else if (strcmp(req.method, "GET") == 0 && strcmp(req.path, "/api/remote-background") == 0) {
+        render_remote_background_json(client);
+    } else if (strcmp(req.method, "GET") == 0 && strncmp(req.path, "/api/remote-background/image", 28) == 0 &&
+        (req.path[28] == 0 || req.path[28] == '?')) {
+        render_remote_background_image(client, &req);
+    } else if (strcmp(req.method, "POST") == 0 && strcmp(req.path, "/api/remote-background") == 0) {
+        if (request_same_origin_json(&req)) render_remote_background_set_json(client, &req);
         else send_cross_site_refused(client);
     } else if (strcmp(req.method, "GET") == 0 && strcmp(req.path, "/api/activity-restrictions") == 0) {
         render_activity_restrictions_json(client);

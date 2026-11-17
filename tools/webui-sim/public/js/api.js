@@ -136,6 +136,18 @@ export function unpairRemote({ slot }) {
   return request("/api/remote-unpair", { method: "POST", body: { slot } });
 }
 
+// The paired screen remote's settings ({ settings }, null before one has
+// synced with the hub); remote-background-model.js reads its background.
+export function getRemoteBackground() {
+  return request("/api/remote-background");
+}
+
+// { action: "upload", image, thumbnail } (PNG data URLs, 240x320 and 60x80),
+// { action: "select", image: "<name>.png" } or { action: "default" }.
+export function setRemoteBackground(body) {
+  return request("/api/remote-background", { method: "POST", body });
+}
+
 // Multiple remotes of one model (experimental): state, and switching it (the hub reboots).
 export function getMultiRemote() {
   return request("/api/multi-remote");

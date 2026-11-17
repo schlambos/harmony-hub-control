@@ -568,6 +568,119 @@ let captureArmed = false;
    (POST /api/sim/multi-remote {"on":true}, or SIM_MULTI_REMOTE=1) only a
    remote with a screen or a keyboard replaces an older one, so the new Smart
    Control joins. */
+/* The screen remote's background (GET/POST /api/remote-background, GET
+   /api/remote-background/image). Like codex_webui and codexactivity: the
+   paired Touch's settings, an upload checked for a 240x320 PNG and a 60x80
+   thumbnail, the newest picture first in UserImages (at most MaxCount, the
+   dropped one's files deleted), "select" for a listed picture and "default"
+   for Logitech's. Picture names here are made up. */
+const SIM_BG_DEFAULT = "00000000-0000-4000-8000-0000000000d1.png";
+const SIM_BG_MAX_BYTES = 512 * 1024;
+let simBgSettings = null;
+const simBgImages = new Map(); // base name -> PNG bytes
+let simBgNext = 1;
+
+function resetSimBackground() {
+  simBgImages.clear();
+  simBgNext = 1;
+  simBgSettings = {
+    RemoteName: "Harmony Touch",
+    UserImageBucketUri: "https://images.example.invalid/UserImages/105/",
+    DefaultImageBucketUri: "https://images.example.invalid/DefaultImages/105/",
+    Settings: [
+      { SettingId: 1, Name: "UserImages", MaxCount: 5, MinCount: 0, DefaultValue: null, Values: [] },
+      { SettingId: 2, Name: "BackgroundImage", MaxCount: 1, MinCount: 0, DefaultValue: SIM_BG_DEFAULT, Values: [SIM_BG_DEFAULT] },
+      { SettingId: 5, Name: "ScreenTimeout", MaxCount: 1, MinCount: 0, DefaultValue: null, Values: ["10"] },
+    ],
+  };
+}
+resetSimBackground();
+
+function simBgEntry(name) {
+  return simBgSettings.Settings.find((s) => s.Name === name);
+}
+
+function simBgPng(text, width, height, what) {
+  let b64 = String(text ?? "");
+  if (!b64) return { error: `The ${what} is missing.` };
+  if (b64.startsWith("data:")) {
+    const comma = b64.indexOf(",");
+    if (comma < 0) return { error: `The ${what} isn't base64.` };
+    b64 = b64.slice(comma + 1);
+  }
+  const bytes = Buffer.from(b64, "base64");
+  if (!bytes.length || bytes.length > SIM_BG_MAX_BYTES) return { error: `The ${what} isn't base64, or is larger than 512 KB.` };
+  const sig = Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]);
+  if (bytes.length < 24 || !bytes.subarray(0, 8).equals(sig) || bytes.toString("latin1", 12, 16) !== "IHDR") {
+    return { error: `The ${what} isn't a PNG.` };
+  }
+  const w = bytes.readUInt32BE(16), h = bytes.readUInt32BE(20);
+  if (w !== width || h !== height) return { error: `The ${what} must be ${width}x${height} pixels, not ${w}x${h}.` };
+  return { bytes };
+}
+
+function handleRemoteBackgroundSet(res, params) {
+  const action = typeof params.action === "string" ? params.action : "";
+  const background = simBgEntry("BackgroundImage");
+  const user = simBgEntry("UserImages");
+  if (action === "upload") {
+    const image = simBgPng(params.image, 240, 320, "picture");
+    const small = image.error ? null : simBgPng(params.thumbnail, 60, 80, "thumbnail");
+    const error = image.error || small.error;
+    if (error) {
+      sendJson(res, 400, { ok: false, error });
+      return;
+    }
+    const base = `00000000-0000-4000-8000-${String(simBgNext++).padStart(12, "0")}`;
+    simBgImages.set(base, image.bytes);
+    simBgImages.set(`${base}_small`, small.bytes);
+    const saved = `${base}.png`;
+    const kept = [saved, ...user.Values.filter((v) => v !== saved)].slice(0, user.MaxCount || 5);
+    for (const dropped of user.Values.filter((v) => !kept.includes(v))) {
+      const b = dropped.replace(/\.png$/, "");
+      simBgImages.delete(b);
+      simBgImages.delete(`${b}_small`);
+    }
+    user.Values = kept;
+    background.Values = [saved];
+    logEvent({ kind: "remote-background", message: `Background ${saved} saved` });
+  } else if (action === "select") {
+    const image = typeof params.image === "string" ? params.image : "";
+    if (!/^[A-Za-z0-9_-]{1,96}\.png$/.test(image)) {
+      sendJson(res, 400, { ok: false, error: "Give the picture to use, as <name>.png." });
+      return;
+    }
+    if (!user.Values.includes(image)) {
+      sendJson(res, 422, { ok: false, saved: false, localOnly: true, error: "that picture isn't one of this remote's pictures" });
+      return;
+    }
+    background.Values = [image];
+  } else if (action === "default") {
+    background.Values = [background.DefaultValue];
+  } else {
+    sendJson(res, 400, { ok: false, error: "The action must be upload, select or default." });
+    return;
+  }
+  sendJson(res, 200, { ok: true, saved: true, localOnly: true, message: "Saved. Sync the remote to see it." });
+}
+
+function handleRemoteBackgroundImage(res, params) {
+  const name = String(params.name ?? "");
+  if (!/^[A-Za-z0-9_-]{1,96}$/.test(name)) {
+    res.writeHead(400, { "Content-Type": "text/plain", "Cache-Control": "no-store" });
+    res.end("Give a picture name: letters, digits, _ and -.\n");
+    return;
+  }
+  const bytes = simBgImages.get(name);
+  if (!bytes) {
+    res.writeHead(404, { "Content-Type": "text/plain", "Cache-Control": "no-store" });
+    res.end("That picture isn't saved on this hub.\n");
+    return;
+  }
+  res.writeHead(200, { "Content-Type": "image/png", "Content-Length": bytes.length, "Cache-Control": "no-store" });
+  res.end(bytes);
+}
+
 const SIM_PAIR_MS = 3000;
 const SIM_RF_SLOTS = 6;
 let simRemotes = [];
@@ -1859,7 +1972,7 @@ function handleExport(res, pathname) {
 /* Like codex_webui's request_same_origin_json(): the routes that change the
    radio or reboot the hub take only application/json, and a browser's Origin,
    when sent, must be this host. */
-const SAME_ORIGIN_JSON_ROUTES = new Set(["POST /api/multi-remote", "POST /api/remote-unpair", "POST /api/usb-eth", "POST /api/activity-restrictions"]);
+const SAME_ORIGIN_JSON_ROUTES = new Set(["POST /api/multi-remote", "POST /api/remote-unpair", "POST /api/remote-background", "POST /api/usb-eth", "POST /api/activity-restrictions"]);
 const SAME_ORIGIN_JSON_ERROR =
   "This change takes a JSON request (Content-Type: application/json) from the hub's own web app.";
 
@@ -1937,6 +2050,7 @@ async function handleApi(req, res, pathname, url) {
       try {
         loadFixture();
         resetSimRemotes();
+        resetSimBackground();
         state.events.length = 0;
         captureArmed = false;
         canceledRuns.clear();
@@ -2077,6 +2191,15 @@ async function handleApi(req, res, pathname, url) {
       sendJson(res, 200, simPairing
         ? { ok: true, pairing: true }
         : { ok: true, pairing: false, multiRemote: simMultiRemote, slots: SIM_RF_SLOTS, reply: simRfInfo() });
+      return;
+    case "GET /api/remote-background":
+      sendJson(res, 200, { ok: true, settings: simBgSettings });
+      return;
+    case "GET /api/remote-background/image":
+      handleRemoteBackgroundImage(res, params);
+      return;
+    case "POST /api/remote-background":
+      handleRemoteBackgroundSet(res, params);
       return;
     case "POST /api/remote-unpair": {
       // Like codex_webui's json_top_int(): the top-level token must be a plain
@@ -2221,7 +2344,7 @@ async function handleApi(req, res, pathname, url) {
         features: [
           "activity-save", "activity-sync", "catalog-import", "device-commands",
           "androidtv-devices", "androidtv-inputs", "device-screen", "device-settings", "ha-devices", "ha-devices-v2",
-          "ha-state", "irdb-import", "remote-pair"
+          "ha-state", "irdb-import", "remote-background", "remote-pair"
         ]
       });
       return;

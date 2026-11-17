@@ -777,13 +777,8 @@ local function statusResponse()
   }
 end
 
--- After a reload: wait for the activity engine, then publish a new revision
--- so the remote and /api/state see the change.
-local function publishLocalRevision()
-  local engineReady, engineError = waitForActivityEngine()
-  if not engineReady then
-    log.warning("activity engine barrier:", engineError)
-  end
+-- Publish a new revision so the remote and /api/state see a change.
+local function bumpRevision()
   digest.configVersion = (tonumber(digest.configVersion) or 0) + 1
   -- connect.statedigest?get answers 304 unless stateVersion changes.
   digest.stateVersion = (tonumber(digest.stateVersion) or 0) + 1
@@ -794,6 +789,15 @@ local function publishLocalRevision()
   if not digestOk then
     log.warning("codexactivity: could not publish the revision:", tostring(digestError))
   end
+end
+
+-- After a reload: wait for the activity engine, then publish a new revision.
+local function publishLocalRevision()
+  local engineReady, engineError = waitForActivityEngine()
+  if not engineReady then
+    log.warning("activity engine barrier:", engineError)
+  end
+  bumpRevision()
   return engineReady and true or false
 end
 
@@ -1871,6 +1875,252 @@ local function commitDeviceScreen(request)
   return result
 end
 
+-- Remote backgrounds. The hub keeps the paired screen remote's own settings in
+-- the Settings resource (Logitech's per-remote list: BackgroundImage,
+-- UserImages, brightness and so on), and the remote fetches its pictures from
+-- the image bucket named there (UserImageBucketUri). netservicestarter.lua
+-- answers those fetches with images saved here, so no cloud is involved.
+--
+-- codex_webui checks an upload (a 240x320 PNG and the 60x80 thumbnail the
+-- remote's own settings page shows) and stages both in RAM under its own
+-- process id, so two uploads can't swap files; this saves them
+-- through the stock resource manager as <name>.png and <name>_small.png, puts
+-- the new picture first in UserImages (at most MaxCount, 5 on hubs seen so
+-- far) and makes it the background. A picture that drops off the list loses
+-- its files. "select" switches to a picture already in the list; "default"
+-- goes back to Logitech's default background. Nothing reloads the engine:
+-- publishing a revision is enough for the remote to sync its settings.
+local REMOTE_BACKGROUND_FILE = "^/var/volatile/codex%-remote%-background%-%d+%.png$"
+local REMOTE_BACKGROUND_SMALL_FILE = "^/var/volatile/codex%-remote%-background%-%d+%-small%.png$"
+local REMOTE_BACKGROUND_SIZE = {width = 240, height = 320}
+local REMOTE_BACKGROUND_SMALL_SIZE = {width = 60, height = 80}
+local REMOTE_BACKGROUND_MAX_BYTES = 512 * 1024
+local REMOTE_IMAGE_NAME = "^[%w_%-]+%.png$"
+
+local function uint32At(data, offset)
+  local a, b, c, d = string.byte(data, offset, offset + 3)
+  if not d then
+    return nil
+  end
+  return ((a * 256 + b) * 256 + c) * 256 + d
+end
+
+-- The staged PNG, when it is one of the expected size; nil and why otherwise.
+local function stagedPng(path, pattern, size, what)
+  if type(path) ~= "string" or not string.match(path, pattern) then
+    return nil, "the " .. what .. " wasn't received"
+  end
+  local data = readFile(path)
+  if not data or #data == 0 then
+    return nil, "the " .. what .. " wasn't received"
+  end
+  if #data > REMOTE_BACKGROUND_MAX_BYTES then
+    return nil, "the " .. what .. " is larger than 512 KB"
+  end
+  if string.sub(data, 1, 8) ~= "\137PNG\r\n\26\n" or string.sub(data, 13, 16) ~= "IHDR" then
+    return nil, "the " .. what .. " isn't a PNG"
+  end
+  if uint32At(data, 17) ~= size.width or uint32At(data, 21) ~= size.height then
+    return nil, string.format("the %s must be %dx%d", what, size.width, size.height)
+  end
+  return data
+end
+
+local function settingsEntry(settings, name)
+  if type(settings.Settings) ~= "table" then
+    return nil
+  end
+  for _, entry in ipairs(settings.Settings) do
+    if type(entry) == "table" and entry.Name == name then
+      return entry
+    end
+  end
+  return nil
+end
+
+-- Logitech named a user's pictures <account id>_<uuid>.png; keep that form
+-- when the hub knows its account, else the uuid alone.
+local function newRemoteImageName()
+  local id = string.match(nextToken(), "^([%da-fA-F]+%-%x+%-%x+%-%x+%-%x+)") or
+    string.format("%08x-0000-4000-8000-%012d", os.time() or 0, tokenCounter)
+  local account
+  pcall(function()
+    local prefs = require("tasks.harmonywebservices.core.preferencemanager")
+    account = prefs and prefs.accountId
+  end)
+  account = tostring(account or "")
+  if string.match(account, "^%d+$") then
+    return account .. "_" .. string.lower(id)
+  end
+  return string.lower(id)
+end
+
+-- Save one PNG and read the store's answer back: 200 and a file path.
+local function saveRemoteImage(name, data)
+  local ok, detail = resources.saveResource("image/png", localEtag(), data, name, nil, localHetag())
+  if not ok then
+    return nil, tostring(detail or ("could not save " .. name))
+  end
+  local status, _, path = resources.getResource(name)
+  if tostring(status or "") ~= "200" or type(path) ~= "string" or
+      string.sub(path, -4) ~= ".png" then
+    return nil, "saved picture " .. name .. " could not be read back"
+  end
+  return true
+end
+
+local function deleteRemoteImage(fileName)
+  local base = string.match(fileName, "^([%w_%-]+)%.png$")
+  if not base then
+    return
+  end
+  for _, name in ipairs({base, base .. "_small"}) do
+    local status = resources.getResource(name)
+    if tostring(status or "") == "200" then
+      pcall(resources.deleteResource, "image/png", name)
+    end
+  end
+end
+
+local function stringValues(entry)
+  local values = {}
+  if type(entry.Values) == "table" then
+    for _, value in ipairs(entry.Values) do
+      if type(value) == "string" then
+        values[#values + 1] = value
+      end
+    end
+  end
+  return values
+end
+
+local function commitRemoteBackground(request)
+  if not blockerActive() then
+    return {
+      ok = false,
+      localOnly = true,
+      error = "offline background writer refused to run because the cloud blocker is not active"
+    }
+  end
+  if resources.isAnySyncInProgress() then
+    return {
+      ok = false,
+      localOnly = true,
+      error = "a Harmony sync is in progress; try again when it finishes"
+    }
+  end
+  local snapshot = resourceSnapshot("Settings")
+  if not snapshot then
+    return {
+      ok = false,
+      localOnly = true,
+      error = "this hub has no settings for a remote with a screen yet; " ..
+        "pair one and let it sync with the hub once"
+    }
+  end
+  local settings = snapshot.resource
+  local background = settingsEntry(settings, "BackgroundImage")
+  local userImages = settingsEntry(settings, "UserImages")
+  if not background or not userImages then
+    return {ok = false, localOnly = true, error = "this remote's settings have no background"}
+  end
+  local originalBackground, originalUserImages = background.Values, userImages.Values
+  local oldBackground = stringValues(background)
+  local oldUserImages = stringValues(userImages)
+  local newBackground, newUserImages = oldBackground, oldUserImages
+  local saved
+
+  if request.action == "upload" then
+    local image, imageError = stagedPng(
+      request.imageFile, REMOTE_BACKGROUND_FILE, REMOTE_BACKGROUND_SIZE, "picture"
+    )
+    if not image then
+      return {ok = false, localOnly = true, error = imageError}
+    end
+    local small, smallError = stagedPng(
+      request.thumbnailFile, REMOTE_BACKGROUND_SMALL_FILE, REMOTE_BACKGROUND_SMALL_SIZE, "thumbnail"
+    )
+    if not small then
+      return {ok = false, localOnly = true, error = smallError}
+    end
+    local name = newRemoteImageName()
+    local ok, saveError = saveRemoteImage(name, image)
+    if ok then
+      ok, saveError = saveRemoteImage(name .. "_small", small)
+    end
+    if not ok then
+      deleteRemoteImage(name .. ".png")
+      return {ok = false, localOnly = true, error = saveError}
+    end
+    saved = name .. ".png"
+    local limit = math.max(1, math.floor(tonumber(userImages.MaxCount) or 5))
+    newUserImages = {saved}
+    for _, value in ipairs(oldUserImages) do
+      if #newUserImages >= limit then
+        break
+      end
+      if value ~= saved then
+        newUserImages[#newUserImages + 1] = value
+      end
+    end
+    newBackground = {saved}
+  elseif request.action == "select" then
+    local wanted = type(request.image) == "string" and request.image or ""
+    local found = false
+    for _, value in ipairs(oldUserImages) do
+      if value == wanted then
+        found = true
+      end
+    end
+    if not found then
+      return {ok = false, localOnly = true, error = "that picture isn't one of this remote's pictures"}
+    end
+    newBackground = {wanted}
+  elseif request.action == "default" then
+    newBackground = type(background.DefaultValue) == "string" and {background.DefaultValue} or {}
+  else
+    return {ok = false, localOnly = true, error = "action must be upload, select or default"}
+  end
+
+  local result = {
+    ok = true,
+    localOnly = true,
+    saved = saved,
+    background = newBackground[1],
+    userImages = newUserImages,
+    changed = not (sameValue(oldBackground, newBackground) and sameValue(oldUserImages, newUserImages))
+  }
+  if not result.changed then
+    return result
+  end
+  background.Values = newBackground
+  userImages.Values = newUserImages
+  local settingsEtag = localEtag()
+  local ok, saveError = saveResource("Settings", settings, settingsEtag, localHetag())
+  if not ok then
+    background.Values = originalBackground
+    userImages.Values = originalUserImages
+    local restored = saveResource("Settings", settings, snapshot.etag, snapshot.hetag)
+    if saved then
+      deleteRemoteImage(saved)
+    end
+    return {ok = false, localOnly = true, rolledBack = restored and true or false, error = saveError}
+  end
+  local kept = {}
+  for _, value in ipairs(newUserImages) do
+    kept[value] = true
+  end
+  for _, value in ipairs(oldUserImages) do
+    if not kept[value] and string.match(value, REMOTE_IMAGE_NAME) then
+      deleteRemoteImage(value)
+    end
+  end
+  bumpRevision()
+  result.configVersion = digest.configVersion
+  result.settingsEtag = settingsEtag
+  return result
+end
+
 -- Home Assistant devices. Each entity the HA integration exposes becomes an
 -- ordinary device whose commands are TransportType 64. The engine renders
 -- their protocol's ControlSection into an HTTP POST to the integration's
@@ -2884,6 +3134,8 @@ local function processRequest(raw)
     response = commitHaDevices(request, ANDROIDTV_FAMILY)
   elseif request.op == "CommitDeviceScreen" then
     response = commitDeviceScreen(request)
+  elseif request.op == "CommitRemoteBackground" then
+    response = commitRemoteBackground(request)
   elseif request.op == "Status" then
     response = statusResponse()
   elseif request.op == "SimulateGesture" then

@@ -1,9 +1,10 @@
 -- LuaJIT tests for the offline guards in payload/scripts/netservicestarter.lua
 -- that answer the Harmony Touch's own Sync: the time is answered locally, the
 -- hub firmware check is deliberately left to the stock handler (a successful
--- check strands the Touch on a "myharmony.com" screen offline), and a device
+-- check strands the Touch on a "myharmony.com" screen offline), a device
 -- content file the hub doesn't have is answered with an empty record (a 404
--- aborts every Touch sync).
+-- aborts every Touch sync), and a remote background saved on the hub is sent
+-- as the stock image handler sends one (PNG bytes as the binary payload).
 --
 -- Loads the script with stubbed hub modules (mfgData.hasNetwork = false, so
 -- it only "loads" its transport tasks), captures what it registers with the
@@ -44,8 +45,18 @@ local function encode(v)
   return "{" .. table.concat(parts, ",") .. "}"
 end
 
+-- Files the fake io can open besides the blocker flag (remote images), by path.
+local files = {}
 local fakeIo = {
   open = function(path)
+    if files[path] then
+      local body = files[path]
+      return {
+        read = function() return body end,
+        seek = function(_, whence) return whence == "end" and #body or 0 end,
+        close = noop,
+      }
+    end
     if path ~= "/data/codex/cloud_blocker.conf" or blocker == nil then return nil end
     return { read = function() return blocker end, close = noop }
   end,
@@ -72,7 +83,9 @@ package.preload["socket.http"] = function() return { request = noop } end
 package.preload["socket"] = function() return anything() end
 package.preload["tasks.connectserver.core.utils"] = function()
   return {
-    createResponse = function(cmd, code, msg, data) return { cmd = cmd, code = code, msg = msg, data = data } end,
+    createResponse = function(cmd, code, msg, data, identity, binary)
+      return { cmd = cmd, code = code, msg = msg, data = data, identity = identity, binary = binary }
+    end,
     fixHbusData = noop,
   }
 end
@@ -188,6 +201,50 @@ check("stored device content: the hub's own file, untouched",
 
 r = getResource("proxy.resource?get", nil, { uri = "harmony://Account/1/InstallerInfo" })
 check("other missing resources: still 404", r.data.code == "404", encode(r))
+
+-- Remote backgrounds: the remote fetches <bucket>/UserImages/<skin>/<name>.png
+-- and <name>_small.png. A saved image goes back as the stock image handler
+-- sends one: no resource in the body, the PNG bytes as the binary payload.
+local BUCKET = "https://images.example.invalid/UserImages/111/"
+local png = "\137PNG\r\n\26\n" .. string.rep("x", 40)
+stored.bg_1 = { etag = '"img-etag"', hetag = "77", resource = "resources/bg_1.png" }
+files["/data/resources/bg_1.png"] = png
+stored.bg_1_small = { etag = '"small-etag"', hetag = "78", resource = "resources/bg_1_small.png" }
+files["/data/resources/bg_1_small.png"] = png .. "s"
+
+r = getResource("proxy.resource?get", nil, { uri = BUCKET .. "bg_1.png" })
+check("saved background: 200 with its etag, hetag and a max age",
+  r.code == "200" and r.data.code == "200" and r.data.uri == BUCKET .. "bg_1.png" and
+  r.data.etag == '"img-etag"' and r.data.hetag == "77" and r.data.maxAge == 86400, encode(r))
+check("saved background: the PNG goes as the binary payload, not in the body",
+  r.binary == png and r.data.resource == nil, encode(r))
+
+r = getResource("proxy.resource?get", nil, { uri = BUCKET .. "bg_1_small.png" })
+check("saved background thumbnail: served the same way",
+  r.data.code == "200" and r.data.etag == '"small-etag"' and r.binary == png .. "s", encode(r))
+
+r = getResource("proxy.resource?get", nil, { uri = BUCKET .. "not_saved.png" })
+check("background the hub doesn't hold: still blocked (404)",
+  r.data.code == "404" and r.binary == nil, encode(r))
+
+stored.bg_gone = { etag = '"gone"', hetag = "1", resource = "resources/bg_gone.png" }
+r = getResource("proxy.resource?get", nil, { uri = BUCKET .. "bg_gone.png" })
+check("indexed background whose file is missing: 404",
+  r.data.code == "404" and r.binary == nil, encode(r))
+
+stored.bg_json = { etag = '"j"', hetag = "1", resource = { not_a = "path" } }
+r = getResource("proxy.resource?get", nil, { uri = BUCKET .. "bg_json.png" })
+check("a store entry that isn't an image file: 404", r.data.code == "404" and r.binary == nil, encode(r))
+
+stored.bg_big = { etag = '"big"', hetag = "1", resource = "resources/bg_big.png" }
+files["/data/resources/bg_big.png"] = string.rep("x", 512 * 1024 + 1)
+r = getResource("proxy.resource?get", nil, { uri = BUCKET .. "bg_big.png" })
+check("background over 512 KiB: not sent", r.data.code == "404" and r.binary == nil, encode(r))
+
+r = getResource("proxy.resource?get", nil, { uri = BUCKET .. "..%2Fbg_1.png" })
+check("a name outside [A-Za-z0-9_-]: blocked", r.data.code == "404" and r.binary == nil, encode(r))
+r = getResource("proxy.resource?get", nil, { uri = "https://images.example.invalid/DefaultImages/111/bg_1.png" })
+check("only the UserImages bucket is answered", r.data.code == "404" and r.binary == nil, encode(r))
 
 -- Melodious turned off (/etc/melodious-off, and legacy /data/codex/melodious-off):
 -- even with cloud_blocker.conf = "1" and restrictions/timezone files present,

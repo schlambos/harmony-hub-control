@@ -295,7 +295,9 @@ such as `#devices/<id>`, so you can bookmark it.
   paired remote gets the same section: its buttons for each activity,
   opening the same editor for every remote (a remote without a screen,
   such as the Smart Control or Companion, also has its activity
-  buttons; the Companion also has its home control buttons). Every
+  buttons; the Companion also has its home control buttons; a remote with
+  a screen also has its Background, a picture framed in the browser and
+  saved on the hub — [REMOTE_BACKGROUNDS.md](REMOTE_BACKGROUNDS.md)). Every
   remote's keys stay the same: a key you change goes on all of them
   unless you set it for one remote only, and each activity row says where
   they differ.

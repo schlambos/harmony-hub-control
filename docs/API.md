@@ -1044,6 +1044,57 @@ Invoke-RestMethod "http://<hub-ip>:8080/api/remote-unpair" -Method Post `
   web page can't send it from a browser while sign-in is off. The same goes
   for `POST /api/multi-remote`.
 
+### Remote background
+
+The paired remote with a screen keeps its own settings on the hub (the
+`Settings` resource), its background among them. Pictures are saved on the hub
+and the remote fetches them from it; nothing goes through Logitech. See
+[REMOTE_BACKGROUNDS.md](REMOTE_BACKGROUNDS.md).
+
+```powershell
+Invoke-RestMethod "http://<hub-ip>:8080/api/remote-background"
+```
+
+```json
+{"ok":true,"settings":{"RemoteName":"Harmony Elite","Settings":[
+  {"Name":"UserImages","MaxCount":5,"Values":["<name>.png"]},
+  {"Name":"BackgroundImage","DefaultValue":"<default>.png","Values":["<name>.png"]}]}}
+```
+
+- `settings` is the remote's `Settings` resource as the hub holds it, or
+  `null` before a remote with a screen has synced with the hub.
+  `BackgroundImage` is the picture on its screen, `UserImages` the pictures
+  saved for it (newest first, at most `MaxCount`).
+- `GET /api/remote-background/image?name=<name>` answers a saved picture
+  (`image/png`); `<name>_small` is its thumbnail. `400` for a name outside
+  letters, digits, `_` and `-`; `404` when the hub doesn't have it.
+
+```powershell
+Invoke-RestMethod "http://<hub-ip>:8080/api/remote-background" -Method Post `
+  -ContentType "application/json" -Body '{"action":"select","image":"<name>.png"}'
+```
+
+```json
+{"ok":true,"saved":true,"localOnly":true,"message":"Saved. Sync the remote to see it.",
+ "reply":"<codexactivity's answer>"}
+```
+
+- `{"action":"upload","image":<PNG>,"thumbnail":<PNG>}`: base64 or `data:`
+  URLs of a 240x320 PNG and its 60x80 thumbnail, at most 512 KB each. The hub
+  checks both, saves them as `<name>.png` and `<name>_small.png`, makes the
+  picture the background and puts it first in `UserImages`; a picture that
+  drops off the list (past `MaxCount`) is deleted.
+- `{"action":"select","image":"<name>.png"}` makes a picture already in
+  `UserImages` the background; `{"action":"default"}` goes back to Logitech's
+  default.
+- The change is a `CommitRemoteBackground` transaction in codexactivity and
+  publishes a new revision. Choose **Sync remote** in the remote's own
+  settings to see it.
+- `400` for a bad body (a picture of the wrong size or not a PNG, an unknown
+  action), `422` when the writer refuses (no remote settings on the hub yet, a
+  picture that isn't in the list, the cloud blocker off), `503` when the
+  writer doesn't answer. `403` as for `/api/remote-unpair`.
+
 ### Multiple remotes of one model (experimental)
 
 The Settings switch for [MULTI_REMOTE.md](MULTI_REMOTE.md)
@@ -1344,7 +1395,7 @@ Invoke-RestMethod "http://<hub-ip>:8080/api/version"
 {"ok":true,"product":"melodious","version":"1.3.0","api":1,"update":{"protocol":0},
  "features":["activity-save","activity-sync","androidtv-devices","androidtv-inputs","catalog-import","device-commands",
              "device-screen","device-settings","ha-devices","ha-devices-v2",
-             "ha-state","irdb-import","remote-pair"]}
+             "ha-state","irdb-import","remote-background","remote-pair"]}
 ```
 
 - `version` is the release the hub software belongs to (`MELODIOUS_VERSION`).
@@ -1448,6 +1499,8 @@ carries.
 | POST | `/api/led` | `render_led_json()` |
 | GET | `/api/remotes` | `render_remotes_json()` |
 | POST | `/api/remote-pair` | `render_remote_pair_json()` |
+| GET, POST | `/api/remote-background` | `render_remote_background_json()`, `render_remote_background_set_json()` |
+| GET | `/api/remote-background/image` | `render_remote_background_image()` |
 | GET, POST | `/api/usb-eth` | `render_usb_eth_json()`, `render_usb_eth_set_json()` |
 | GET | `/api/network-overview` | `render_network_overview_json()` |
 | POST | `/api/ir-test-learned` | `render_ir_test_learned_json()` |

@@ -748,6 +748,57 @@ local function emptyDeviceContent(cmd, uri, deviceId, encode)
   })
 end
 
+-- A remote with a screen fetches its background, and the thumbnail its
+-- settings page shows, from Logitech's image bucket:
+-- https://<bucket host>/UserImages/<skin>/<name>.png and <name>_small.png.
+-- The stock handler always fetches images from that bucket, so with the cloud
+-- blocked a background could never reach the remote. Images saved on the hub
+-- (codexactivity's CommitRemoteBackground) live in the resource store as
+-- <name>.png; answer the way the stock image handler does: the body carries
+-- code, etag, hetag and maxAge but no resource, and the raw PNG bytes go in
+-- createResponse's sixth argument (the reply's binary payload). Without the
+-- bytes there, the remote takes the answer and never fetches the picture.
+-- An image the store doesn't hold stays blocked.
+local REMOTE_IMAGE_MAX_BYTES = 512 * 1024
+
+local function remoteImageName(uri)
+  return string.match(uri, "^https?://[^/]+/UserImages/%d+/([%w_%-]+)%.png$")
+end
+
+local function localRemoteImage(cmd, uri, imageName)
+  local status, etag, path = resMgr.getResource(imageName)
+  if tostring(status or "") ~= "200" or type(path) ~= "string" or
+      not string.match(path, "^resources/[%w_%-]+%.png$") then
+    return nil
+  end
+  if not io or not io.open then
+    return nil
+  end
+  local f = io.open("/data/" .. path, "rb")
+  if not f then
+    return nil
+  end
+  local size = f:seek("end")
+  if not size or size <= 0 or size > REMOTE_IMAGE_MAX_BYTES then
+    f:close()
+    return nil
+  end
+  f:seek("set", 0)
+  local bytes = f:read("*a")
+  f:close()
+  if not bytes or #bytes ~= size then
+    return nil
+  end
+  log.notice("codex offline guard served local remote image", imageName, size)
+  return connectUtils.createResponse(cmd, "200", "OK", {
+    code = "200",
+    uri = uri,
+    etag = etag,
+    hetag = resMgr.getHubEtag(imageName),
+    maxAge = 86400
+  }, nil, bytes)
+end
+
 local function offlineResourceGet(cmd, verb, params)
   if not cloudBlockerEnabled() then
     return nativeResourceHandler.processGetResource(cmd, verb, params)
@@ -757,6 +808,13 @@ local function offlineResourceGet(cmd, verb, params)
   local uri = tostring(params.uri or "")
   local resourceName = localResourceName(params)
   if not resourceName then
+    local imageName = remoteImageName(uri)
+    if imageName then
+      local image = localRemoteImage(cmd, uri, imageName)
+      if image then
+        return image
+      end
+    end
     log.notice("codex offline guard blocked resource get", uri)
     local code = string.find(uri, "sus://", 1, true) and "304" or "404"
     return connectUtils.createResponse(cmd, "200", "OK", {
