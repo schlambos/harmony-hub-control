@@ -474,20 +474,56 @@ const MAP_TYPES = ["DeviceButtonMap", "ActivityButtonMap", "RootButtonMap"];
 const BUTTON_TYPES = ["HardRemoteButton", "SoftRemoteButton", "GestureRemoteButton"];
 const ACTION_FIELDS = ["ButtonAction", "ButtonLongPressAction", "ButtonDoublePressAction"];
 
+function baselineActivitySlotCounts(baselineConfig) {
+  const counts = new Map();
+  const oldMaps = Array.isArray(baselineConfig?.ButtonMaps)
+    ? baselineConfig.ButtonMaps
+    : Array.isArray(baselineConfig?.mapList?.ButtonMaps)
+      ? baselineConfig.mapList.ButtonMaps
+      : null;
+  if (!oldMaps) return counts;
+  for (const oldMap of oldMaps) {
+    if (!oldMap || typeof oldMap !== "object" || Array.isArray(oldMap)) continue;
+    const oldType = typeof oldMap.__type === "string" ? oldMap.__type : "";
+    const identifier = typeof oldMap.ButtonMapIdentifier === "string" && oldMap.ButtonMapIdentifier !== ""
+      ? oldMap.ButtonMapIdentifier
+      : null;
+    if (!identifier || counts.has(identifier) || !oldType.includes("ActivityButtonMap") || !Array.isArray(oldMap.Buttons)) {
+      continue;
+    }
+    const mapCounts = new Map();
+    counts.set(identifier, mapCounts);
+    for (const button of oldMap.Buttons) {
+      if (!button || typeof button !== "object" || Array.isArray(button)) continue;
+      const buttonType = typeof button.__type === "string" ? button.__type : "";
+      if (!buttonType.includes("SoftRemoteButton")) continue;
+      const index = button.MenuItem && typeof button.MenuItem === "object" ? button.MenuItem.IndexInMenu : undefined;
+      if (Number.isSafeInteger(index) && index >= 0) {
+        const slotKey = `${button.FunctionGroupType === 2 ? "pad" : "soft"}:${index}`;
+        mapCounts.set(slotKey, (mapCounts.get(slotKey) ?? 0) + 1);
+      }
+    }
+  }
+  return counts;
+}
+
 /**
  * Check a MapList against the shapes the hub's and the Touch's stock
  * button-map reader can load, mirroring the hub's validateGraph in
  * payload/activity/codexactivity.lua. Returns error strings; an empty
  * list means the MapList is safe to save. Device and activity references
  * are the hub's job and are not checked here. Duplicate on-screen slots
- * are rejected in activity maps only: device maps keep their existing
- * slots until the device screen editor sets their rule, and the number
- * pad (FunctionGroupType 2) is keyed separately from other soft buttons.
+ * are rejected in activity maps only (beyond any pre-existing duplicate
+ * count in `baselineConfig` when saving against an existing hub config):
+ * device maps keep their existing slots until the device screen editor
+ * sets their rule, and the number pad (FunctionGroupType 2) is keyed
+ * separately from other soft buttons.
  */
-export function validateMapList(mapList) {
+export function validateMapList(mapList, baselineConfig = null) {
   if (!mapList || !Array.isArray(mapList.ButtonMaps)) {
     return ["MapList.ButtonMaps must be an array"];
   }
+  const baselineSlots = baselineActivitySlotCounts(baselineConfig);
   const errors = [];
   for (const map of mapList.ButtonMaps) {
     if (!map || typeof map !== "object" || Array.isArray(map)) {
@@ -495,6 +531,10 @@ export function validateMapList(mapList) {
       continue;
     }
     const mapLabel = String(map.ButtonMapIdentifier ?? map["ButtonMapId-"] ?? "unknown");
+    const mapIdentifier = typeof map.ButtonMapIdentifier === "string" && map.ButtonMapIdentifier !== ""
+      ? map.ButtonMapIdentifier
+      : null;
+    const baselineMapSlots = mapIdentifier ? baselineSlots.get(mapIdentifier) : null;
     const mapType = typeof map.__type === "string" ? map.__type : "";
     const isActivityMap = mapType.includes("ActivityButtonMap");
     if (!MAP_TYPES.some((t) => mapType.includes(t))) {
@@ -534,7 +574,7 @@ export function validateMapList(mapList) {
         }
       }
     }
-    const seenSlots = new Set();
+    const seenSlots = new Map();
     for (const button of map.Buttons) {
       if (!button || typeof button !== "object" || Array.isArray(button)) {
         errors.push(`MapList map ${mapLabel} contains a non-object button`);
@@ -555,10 +595,12 @@ export function validateMapList(mapList) {
           errors.push(`MapList map ${mapLabel} soft button has an invalid MenuItem.IndexInMenu`);
         } else if (isActivityMap) {
           const slotKey = `${button.FunctionGroupType === 2 ? "pad" : "soft"}:${index}`;
-          if (seenSlots.has(slotKey)) {
+          const slotCount = (seenSlots.get(slotKey) ?? 0) + 1;
+          seenSlots.set(slotKey, slotCount);
+          const baselineCount = baselineMapSlots?.get(slotKey) ?? 0;
+          if (slotCount > 1 && (baselineCount <= 1 || slotCount > baselineCount)) {
             errors.push(`MapList map ${mapLabel} has duplicate IndexInMenu ${index} for on-screen buttons`);
           }
-          seenSlots.add(slotKey);
         }
       }
       for (const field of ACTION_FIELDS) {

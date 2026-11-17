@@ -511,4 +511,164 @@ validateGraph();
   validateGraph();
 }
 
+// --- Issue #178: Logitech 16417Device maps with missing ButtonMapId- and ButtonId 0 ---
+{
+  const logitechDeviceMap = {
+    "DeviceId-": 500,
+    "RemoteId-": 10,
+    "SurfaceId-": 30,
+    "ButtonMapSurfaceId-": 30,
+    ButtonMapIdentifier: "16417Device500",
+    __type: "DeviceButtonMap",
+    DateModified: null,
+    Sequences: null,
+    Buttons: [
+      {
+        ButtonId: 0,
+        ButtonState: 0,
+        FunctionGroupType: 0,
+        ButtonKey: "VolumeUp",
+        __type: "HardRemoteButton",
+        ButtonAction: {
+          Id: 0,
+          "DeviceId-": 500,
+          "FunctionId-": 12,
+          CommandName: "VolumeUp",
+          EventType: 1,
+          Order: 0,
+          __type: "ButtonCommandAction"
+        },
+        ButtonLongPressAction: null,
+        ButtonDoublePressAction: null
+      },
+      {
+        ButtonId: 0,
+        ButtonState: 0,
+        FunctionGroupType: 0,
+        TextOnRemote: "Audio",
+        ButtonImageKey: null,
+        ButtonImagePath: null,
+        "ImageId-": 0,
+        MenuItem: { IndexInMenu: 0, MenuName: "Device.500" },
+        __type: "SoftRemoteButton",
+        ButtonAction: {
+          Id: 0,
+          "DeviceId-": 500,
+          "FunctionId-": 13,
+          CommandName: "Audio",
+          EventType: 0,
+          Order: 0,
+          __type: "ButtonCommandAction"
+        },
+        ButtonLongPressAction: null,
+        ButtonDoublePressAction: null
+      }
+    ]
+  };
+  state.config.mapList.ButtonMaps.push(logitechDeviceMap);
+  const repairWithDeviceMap = reconcileActivityMaps();
+  assert.equal(repairWithDeviceMap.allocatedMapIds, 0, "16417Device map keeps missing ButtonMapId-");
+  assert.equal(repairWithDeviceMap.allocatedButtonIds, 0, "16417Device buttons stay ButtonId 0");
+  assert.equal(repairWithDeviceMap.correctedButtonStates, 0, "16417Device buttons stay ButtonState 0");
+  assert.equal(logitechDeviceMap["ButtonMapId-"], undefined);
+  assert.equal(logitechDeviceMap.Buttons[0].ButtonId, 0);
+  assert.equal(logitechDeviceMap.Buttons[0].ButtonState, 0);
+  validateGraph();
+
+  // Non-activity map errors identify ButtonMapIdentifier instead of "unknown".
+  logitechDeviceMap["DeviceId-"] = 999999;
+  assert.throws(
+    () => validateGraph(),
+    /Button map 16417Device500 references unavailable device 999999\./,
+    "DeviceButtonMap without ButtonMapId- reports its ButtonMapIdentifier"
+  );
+  logitechDeviceMap["DeviceId-"] = 500;
+  logitechDeviceMap.Buttons[0].ButtonAction["DeviceId-"] = 888888;
+  assert.throws(
+    () => validateGraph(),
+    /Button map 16417Device500 ButtonAction references unavailable device 888888\./,
+    "DeviceButtonMap button action error reports ButtonMapIdentifier"
+  );
+  logitechDeviceMap.Buttons[0].ButtonAction["DeviceId-"] = 500;
+  validateGraph();
+
+  // ActivityButtonMap buttons with ButtonId 0 are still rejected with ButtonMapIdentifier.
+  const survivingActivityMap = state.config.mapList.ButtonMaps.find(
+    (entry) => String(entry.__type).includes("ActivityButtonMap")
+  );
+  const probeButton = {
+    ButtonId: 0,
+    ButtonState: 1,
+    ButtonKey: "Mute",
+    __type: "HardRemoteButton",
+    ButtonAction: {
+      Id: 0,
+      "DeviceId-": 500,
+      "FunctionId-": 12,
+      CommandName: "Mute",
+      EventType: 1,
+      Order: 0,
+      __type: "ButtonCommandAction"
+    },
+    ButtonLongPressAction: null,
+    ButtonDoublePressAction: null
+  };
+  survivingActivityMap.Buttons.push(probeButton);
+  assert.throws(
+    () => validateGraph(),
+    new RegExp(`Button map ${survivingActivityMap.ButtonMapIdentifier} has a button without a positive ButtonId\\.`),
+    "ActivityButtonMap button with ButtonId 0 still fails with map identifier"
+  );
+  survivingActivityMap.Buttons.pop();
+
+  // End-to-end saveActivities() posts /api/activity-save cleanly with 16417Device ButtonId 0 maps present.
+  let postedBody = null;
+  const notices = [];
+  const saveContext = {
+    __HARMONY_ACTIVITY_TEST__: {},
+    document: {
+      getElementById: (id) => {
+        if (id === "activityNotice") {
+          return {
+            set textContent(msg) {
+              if (msg) notices.push({ msg, kind: this.className });
+            },
+            className: ""
+          };
+        }
+        return { disabled: false, textContent: "", classList: { toggle() {} } };
+      }
+    },
+    fetch: async (url, opts) => {
+      assert.equal(url, "/api/activity-save");
+      postedBody = JSON.parse(opts.body);
+      return {
+        ok: true,
+        status: 200,
+        text: async () => JSON.stringify({
+          ok: true,
+          saved: true,
+          revision: "rev-after-178",
+          message: "Saved."
+        })
+      };
+    }
+  };
+  vm.createContext(saveContext);
+  vm.runInContext(source, saveContext, { filename: "activity-ui.js" });
+  const saveApi = saveContext.__HARMONY_ACTIVITY_TEST__.api;
+  saveApi.state.config = JSON.parse(JSON.stringify(state.config));
+  saveApi.state.revision = "rev-before-178";
+  saveApi.resetIdPool();
+  await saveApi.saveActivities(false);
+  assert.ok(postedBody, "saveActivities POSTed /api/activity-save instead of aborting on 16417Device ButtonId 0");
+  const savedDevMap = postedBody.mapList.ButtonMaps.find(
+    (entry) => entry.ButtonMapIdentifier === "16417Device500"
+  );
+  assert.ok(savedDevMap, "16417Device500 survived saveActivities");
+  assert.equal(savedDevMap["ButtonMapId-"], undefined);
+  assert.equal(savedDevMap.Buttons[0].ButtonId, 0);
+  assert.equal(savedDevMap.Buttons[0].ButtonState, 0);
+}
+
 console.log("activity UI model smoke: ok");

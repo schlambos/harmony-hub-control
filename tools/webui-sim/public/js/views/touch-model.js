@@ -464,14 +464,36 @@ export function neighbourOf(draft, key, step) {
   return null;
 }
 
-/** Explicit reorder: the button and its movable neighbour swap slots. */
+/** Explicit reorder: the button and its movable neighbour swap slots.
+ *  If a pre-existing Logitech import gave both the same slot, separate them
+ *  onto the nearest free slot in the direction of the move. */
 export function moveButton(draft, key, step) {
   const other = neighbourOf(draft, key, step);
   if (!other) return draft;
   const next = copy(draft);
   const row = next.rows.find((r) => r.key === key);
   const swap = next.rows.find((r) => r.key === other.key);
-  [row.slot, swap.slot] = [swap.slot, row.slot];
+  if (row.slot === swap.slot) {
+    const used = new Set(next.rows.map((r) => r.slot));
+    const freeAfter = (start) => {
+      let slot = start + 1;
+      while (used.has(slot)) slot += 1;
+      return slot;
+    };
+    if (step > 0) {
+      row.slot = freeAfter(swap.slot);
+    } else {
+      const swapIndex = next.rows.indexOf(swap);
+      const prevSlot = swapIndex > 0 ? next.rows[swapIndex - 1].slot : -1;
+      if (swap.slot - 1 > prevSlot && !used.has(swap.slot - 1)) {
+        row.slot = swap.slot - 1;
+      } else {
+        swap.slot = freeAfter(row.slot);
+      }
+    }
+  } else {
+    [row.slot, swap.slot] = [swap.slot, row.slot];
+  }
   next.rows.sort((a, b) => a.slot - b.slot);
   return next;
 }
@@ -888,7 +910,7 @@ export function buildTouchControlsMapList(config, edits, { now = Date.now(), rem
     twin.Buttons = writeHardKeys(twin, edit.rows, alloc, edit.remote);
     twin.DateModified = harmonyDate(now);
   }
-  const errors = validateMapList(mapList);
+  const errors = validateMapList(mapList, config);
   if (errors.length) {
     throw new Error(!isScreenRemote(remote)
       ? `The new keys would not load on the hub: ${errors[0]}`
