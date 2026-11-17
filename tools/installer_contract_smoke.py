@@ -4053,7 +4053,7 @@ class PowerShellStaticContract(unittest.TestCase):
         self.assertNotIn("rm -f /data/codex/bin/hal_multiremote", self.text)
         self.assertEqual(self.ps_scalar("MultiRemotePending"), INST.MULTI_REMOTE_PENDING)
         self.assertEqual(self.ps_array("NoScreenEquads"), list(INST.NO_SCREEN_EQUADS))
-        self.assertIn('Resolve-HubIdentity\nTest-MultiRemoteOff\n', self.main)
+        self.assertIn('Resolve-HubIdentity\nTest-TwoScreen\nTest-MultiRemoteOff\n', self.main)
         command = self.text.split("function Get-MultiRemoteOffCheckCommand(", 1)[1].split("\nfunction ", 1)[0]
         python_command = INST.multi_remote_off_check_command(True)
         for fragment in ("then echo inactive; ", "then echo guard-failed; ",
@@ -4077,14 +4077,196 @@ class PowerShellStaticContract(unittest.TestCase):
         restart = self.text.split("function Restart-HubAndWait(", 1)[1].split("\nfunction ", 1)[0]
         self.assertIn("WARNING: the hub restarted but still runs the", restart)
         early = self.main.split("if ((Get-ActiveCandidates).Count -eq 0) {", 1)[1].split("\n}\n", 1)[0]
-        self.assertIn("(Test-MultiRemoteChanged) -and -not $NoApplyCloudRestart", early)
+        self.assertIn("(Test-HalSettingChanged) -and -not $NoApplyCloudRestart", early)
         self.assertIn("Restart-HubAndWait", early)
+        hal_changed = self.text.split("function Test-HalSettingChanged(", 1)[1].split("\nfunction ", 1)[0]
+        self.assertIn("Test-MultiRemoteChanged", hal_changed)
+        self.assertIn("Test-TwoScreenChanged", hal_changed)
         # Off without the restart is refused while the copy runs, before the guard.
         check = self.text.split("function Test-MultiRemoteOff(", 1)[1].split("\nfunction ", 1)[0]
         self.assertIn("$guard = (-not $PreflightOnly) -and (-not $NoApplyCloudRestart)", check)
         self.assertLess(check.index('if ($out -eq "inactive")'), check.index("if ($NoApplyCloudRestart) {"))
         self.assertLess(check.index("if ($NoApplyCloudRestart) {"), check.index('elseif ($out -eq "guard-failed")'))
         self.assertNotIn("FromHexString", self.text)  # Windows PowerShell 5.1
+
+    def test_two_screen_parity(self):
+        """[PS1 STATIC] -TwoScreen on|once|serial|serial-once|off|force-off
+        mirrors --two-screen: constants, settings map, patch builder (stock or
+        undone multi-remote hal, optional stock field for .pdr), preflight/off
+        refusals, load check before reboot, post-reboot gate check, and
+        -TurnOn/-TurnOff/-PreflightOnly safety."""
+        self.assertIn(".PARAMETER TwoScreen", self.text)
+        self.assertRegex(
+            self.text,
+            r'\[ValidateSet\("on", "once", "serial", "serial-once", "off", "force-off"\)\]\s*\[string\]\$TwoScreen',
+        )
+        self.assertIn('if ($TwoScreen -eq "force-off") { $TwoScreen = "off" }', self.text)
+        self.assertEqual(self.ps_scalar("HalRemotesDest"), INST.HAL_REMOTES_DEST)
+        self.assertEqual(self.ps_scalar("TwoScreenConf"), INST.TWO_SCREEN_CONF)
+        self.assertEqual(self.ps_scalar("HalRemotesTries"), INST.HAL_REMOTES_TRIES)
+        self.assertEqual(self.ps_scalar("HalGates"), INST.HAL_GATES)
+        self.assertEqual(self.ps_scalar("HalRemotesPatchFile"), "helpers/hal_remotes_patch.json")
+        self.assertEqual(INST.HAL_REMOTES_PATCH_FILE, INST.PAYLOAD / "helpers" / "hal_remotes_patch.json")
+
+        settings_match = re.search(r"\$TwoScreenSettings = \[ordered\]@\{(.*?)\n\}", self.text, re.S)
+        self.assertIsNotNone(settings_match)
+        ps_settings = dict(re.findall(r'"([^"]+)"\s*=\s*"([^"]+)"', settings_match.group(1)))
+        self.assertEqual(ps_settings, INST.TWO_SCREEN_SETTINGS)
+
+        doc = json.loads(INST.HAL_REMOTES_PATCH_FILE.read_text(encoding="utf-8"))
+        self.assertNotIn(doc["patched_md5"], self.text)
+        self.assertNotIn(doc["stock_md5"], self.text)
+
+        builder = self.text.split("function Get-RemotesHal(", 1)[1].split("\nfunction ", 1)[0]
+        for needle in (
+            "$patch.patched_md5",
+            "$multiPatch.patched_md5",
+            "$patch.stock_md5",
+            '$edit.PSObject.Properties["stock"]',
+            "not the hal build two-screen supports",
+            "restart the hub into the stock hal first",
+            "the two-screen hal does not match its expected md5",
+        ):
+            self.assertIn(needle, builder)
+
+        running_cmd = self.text.split("function Get-RunningHalCommand(", 1)[1].split("\nfunction ", 1)[0]
+        expected_running = (
+            INST.running_hal_command()
+            .replace(INST.HAL_PATH, "$HalPath")
+            .replace(INST.HAL_GATES, "$HalGates")
+            .replace(INST.MULTI_REMOTE_CONF, "$MultiRemoteConf")
+            .replace(INST.HAL_MULTI_DEST, "$HalMultiDest")
+            .replace("$(", "`$(")
+        )
+        for fragment in expected_running.split("; "):
+            self.assertIn(fragment, running_cmd)
+
+        load_cmd = self.text.split("function Get-HalLoadCheckCommand(", 1)[1].split("\nfunction ", 1)[0]
+        self.assertIn(
+            INST.hal_load_check_command()
+            .replace(INST.HAL_REMOTES_DEST, "$HalRemotesDest")
+            .replace("$?", "`$?")
+            .replace("$rc", "`$rc"),
+            load_cmd,
+        )
+
+        check = self.text.split("function Test-TwoScreen(", 1)[1].split("\nfunction ", 1)[0]
+        for needle in (
+            "two_screen_active=",
+            "two_screen_gates=",
+            "-MultiRemote on with -TwoScreen off refused:",
+            "-TwoScreen off refused: multi-remote is on and only the two-screen hal carries it",
+            "Remotes with a screen that are paired stay paired.",
+        ):
+            self.assertIn(needle, check)
+
+        self.assertIn(
+            '$halRead = if ($MultiRemote -eq "on" -or (Get-TwoScreenWanted) -eq "on") { Get-RemoteBytes $HalPath }',
+            self.inventory,
+        )
+        self.assertIn("if ((Get-BytesMd5 $halRead) -cne [string]$remotesPatch.patched_md5)", self.inventory)
+        self.assertIn('Add-Candidate (New-Candidate $HalRemotesDest "755" "binary" -Blob $remotesHal)', self.inventory)
+        self.assertIn(
+            'Add-Candidate (New-Candidate $TwoScreenConf "644" "config" -Text "$($TwoScreenSettings[$TwoScreen])`n")',
+            self.inventory,
+        )
+        self.assertIn('Add-Candidate (New-Candidate $HalRemotesTries "644" "config" -Text "0`n")', self.inventory)
+        self.assertIn('Add-Candidate (New-Candidate $TwoScreenConf "644" "config" -Text "0`n")', self.inventory)
+
+        load_fn = self.text.split("function Test-TwoScreenLoads(", 1)[1].split("\nfunction ", 1)[0]
+        self.assertIn('KV "two_screen_load_check=ok"', load_fn)
+        self.assertIn('KV "two_screen_load_check=failed"', load_fn)
+        self.assertIn('Invoke-Remote "echo 0 > $TwoScreenConf"', load_fn)
+
+        restart = self.text.split("function Restart-HubAndWait(", 1)[1].split("\nfunction ", 1)[0]
+        self.assertLess(restart.index("Test-TwoScreenLoads"), restart.index("reboot"))
+        self.assertIn("if ($TwoScreen) {\n        Test-TwoScreenAfterReboot", restart)
+
+        # -PreflightOnly exits before any reboot or load check.
+        self.assertLess(self.main.index("if ($PreflightOnly)"), self.main.index("Restart-HubAndWait"))
+
+        # -TurnOn verifies two-screen hal MD5 from hal_remotes_patch.json.
+        turn_on = self.text.split("function Invoke-TurnOn(", 1)[1].split("\n# ----", 1)[0]
+        self.assertIn('if ($expectedHal -eq "two-screen")', turn_on)
+        self.assertIn("hal_remotes_patch.json", turn_on)
+
+    def test_cli_flag_set_parity_with_python(self):
+        """[PS1 STATIC] every CLI option, alias, switch, and ValidateSet choice
+        list in install_webui.py has an exact 1-to-1 counterpart in
+        install_webui.ps1's param(...) block, so future flag drift is caught."""
+        import ast
+
+        tree = ast.parse(INST_SOURCE)
+        parse_fn = next(
+            node for node in tree.body if isinstance(node, ast.FunctionDef) and node.name == "parse_args"
+        )
+
+        def eval_choices(expr: ast.AST) -> list[str]:
+            if isinstance(expr, (ast.Tuple, ast.List)):
+                out: list[str] = []
+                for elt in expr.elts:
+                    if isinstance(elt, ast.Starred) and isinstance(elt.value, ast.Name):
+                        out.extend(getattr(INST, elt.value.id))
+                    else:
+                        out.append(ast.literal_eval(elt))
+                return out
+            return list(ast.literal_eval(expr))
+
+        def kebab_to_pascal(opt: str) -> str:
+            return "".join(part.capitalize() for part in opt.lstrip("-").split("-"))
+
+        py_params: dict[str, dict[str, object]] = {}
+        for node in ast.walk(parse_fn):
+            if not (
+                isinstance(node, ast.Call)
+                and isinstance(node.func, ast.Attribute)
+                and node.func.attr == "add_argument"
+            ):
+                continue
+            longs = [ast.literal_eval(arg) for arg in node.args]
+            kw = {k.arg: k.value for k in node.keywords if k.arg}
+            primary = kebab_to_pascal(longs[0])
+            aliases = [kebab_to_pascal(o) for o in longs[1:]]
+            is_switch = "action" in kw and ast.literal_eval(kw["action"]) == "store_true"
+            choices = eval_choices(kw["choices"]) if "choices" in kw else None
+            py_params[primary] = {"aliases": aliases, "switch": is_switch, "choices": choices}
+
+        param_match = re.search(r"\nparam\(\r?\n(.*?)\r?\n\)", self.text, re.S)
+        self.assertIsNotNone(param_match)
+        ps_params: dict[str, dict[str, object]] = {}
+        pending_aliases: list[str] = []
+        pending_choices: list[str] | None = None
+        for raw_line in param_match.group(1).splitlines():
+            line = raw_line.strip()
+            if not line or line.startswith("#"):
+                continue
+            alias_m = re.match(r'^\[Alias\((.+)\)\]$', line)
+            if alias_m:
+                pending_aliases.extend(re.findall(r'"([^"]+)"', alias_m.group(1)))
+                continue
+            vs_m = re.match(r'^\[ValidateSet\((.+)\)\]$', line)
+            if vs_m:
+                pending_choices = re.findall(r'"([^"]+)"', vs_m.group(1))
+                continue
+            var_m = re.match(r'^\[([A-Za-z0-9_.]+)\]\$([A-Za-z0-9_]+)', line)
+            self.assertIsNotNone(var_m, f"unparsed param line: {line}")
+            ps_type, name = var_m.group(1), var_m.group(2)
+            ps_params[name] = {
+                "aliases": pending_aliases,
+                "switch": ps_type.lower() == "switch",
+                "choices": pending_choices,
+            }
+            pending_aliases = []
+            pending_choices = None
+
+        self.assertEqual(
+            sorted(ps_params.keys()),
+            sorted(py_params.keys()),
+            f"CLI flag drift: only in Python={sorted(set(py_params) - set(ps_params))}, "
+            f"only in PowerShell={sorted(set(ps_params) - set(py_params))}",
+        )
+        for name, py_meta in sorted(py_params.items()):
+            self.assertEqual(ps_params[name], py_meta, f"parameter contract mismatch for {name}")
 
     def test_path_arrays_match_python(self):
         """[PS1 STATIC] handoff-required and upgrade-protected paths match."""
@@ -4410,7 +4592,7 @@ class PowerShellRuntimeParse(unittest.TestCase):
         )
         self.assertEqual(proc.returncode, 0, proc.stderr.decode("utf-8", "replace"))
         names = proc.stdout.decode("utf-8", "replace").strip().split(",")
-        for required in ("HubHost", "PreflightOnly", "CleanInstall", "MqttPassword"):
+        for required in ("HubHost", "PreflightOnly", "CleanInstall", "MqttPassword", "MultiRemote", "TwoScreen"):
             self.assertIn(required, names)
 
 

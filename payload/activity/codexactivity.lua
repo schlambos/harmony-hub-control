@@ -2272,6 +2272,29 @@ local function haEntityOf(entry)
   return nil
 end
 
+local function haIsV1Entry(entry, spec)
+  local commands = type(entry) == "table" and type(entry.Commands) == "table" and entry.Commands
+  if not commands or #commands == 0 then
+    return false
+  end
+  for _, command in ipairs(commands) do
+    local value
+    local params = type(command) == "table" and command.Parameters
+    for _, param in ipairs(type(params) == "table" and params or {}) do
+      if type(param) == "table" and param.Key == "{c}" then
+        value = param.Value
+        break
+      end
+    end
+    local alias = type(value) == "string" and string.match(value, "^([^:]+):.+$")
+    if not alias or (not (spec.aliasToEntity and spec.aliasToEntity[alias]) and
+        not string.match(alias, "^[a-z0-9_]+%.[a-z0-9_]+$")) then
+      return true
+    end
+  end
+  return false
+end
+
 local function copyValue(value)
   if type(value) ~= "table" then
     return value
@@ -2594,7 +2617,9 @@ local function commitHaDevices(request, family)
     -- equals an entity of the spec (v1 migration, in spec order).
     local old = owned[key]
     local migratedFrom
-    if not old then
+    if old and spec.key and haIsV1Entry(old, spec) then
+      migratedFrom = haEntityOf(old)
+    elseif not old then
       for _, item in ipairs(spec.entities) do
         if ownedByEntity[item.entity] and ownedByEntity[item.entity] ~= true then
           old = ownedByEntity[item.entity]

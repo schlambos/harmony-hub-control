@@ -575,15 +575,19 @@ local v1first = commit({ webhook = WEBHOOK, devices = { {
   entity = "media_player.living_room_tv", name = "Living Room TV",
   commands = {
     { name = "PowerOn", value = "turn_on" },
+    { name = "PowerOff", value = "turn_off" },
     { name = "DirectionUp", value = "send_command:DPAD_UP" },
   },
   power = { on = "PowerOn", off = "PowerOff" }, inputs = {},
 } } })
+check("v1 seed succeeds", v1first.ok, encodeJson(v1first))
 local v1entry
 for _, entry in ipairs(stored("DeviceList").DevicesWithFeatures) do
   if entry.Device.Manufacturer == "Home Assistant" then v1entry = entry end
 end
 local v1deviceId = v1entry.Device["Id-"]
+local v1cmdIds = {}
+for _, command in ipairs(v1entry.Commands) do v1cmdIds[command.Name] = command["Id-"] end
 local migrated = commit({ webhook = WEBHOOK, devices = { merged({
   commands = {
     { name = "PowerOn", value = "media_player.living_room_tv:turn_on" },
@@ -594,8 +598,15 @@ local migratedEntry
 for _, entry in ipairs(stored("DeviceList").DevicesWithFeatures) do
   if entry.Device.Manufacturer == "Home Assistant" then migratedEntry = entry end
 end
+local migratedCmdIds = {}
+for _, command in ipairs(migratedEntry.Commands) do migratedCmdIds[command.Name] = command["Id-"] end
 check("v1->v2 keeps the device ID",
   migrated.ok and migratedEntry.Device["Id-"] == v1deviceId, encodeJson(migrated))
+check("v1->v2 keeps command IDs",
+  migratedCmdIds.PowerOn == v1cmdIds.PowerOn and
+    migratedCmdIds.PowerOff == v1cmdIds.PowerOff and
+    migratedCmdIds.DirectionUp == v1cmdIds.DirectionUp,
+  encodeJson(migratedCmdIds))
 check("v1->v2 reports what it migrated",
   migrated.devices[1].migratedFrom == "media_player.living_room_tv", encodeJson(migrated.devices[1]))
 check("v1->v2 re-sends the same {d} after migration",
@@ -605,10 +616,22 @@ check("v1->v2 re-sends the same {d} after migration",
 local activities = stored("ActivityList")
 local secondId
 do
-  local second = commit({ webhook = WEBHOOK, devices = { merged(), {
-    entity = "remote.living_room_tv", name = "Living Room Remote",
-    commands = { { name = "Press", value = "press" } }, power = NULL, inputs = {},
-  } } })
+  local second = commit({ webhook = WEBHOOK, devices = {
+    merged({
+      entities = {
+        { alias = "media_player.living_room_tv", entity = "media_player.living_room_tv" },
+      },
+      commands = {
+        { name = "PowerOn", value = "media_player.living_room_tv:turn_on" },
+        { name = "PowerOff", value = "media_player.living_room_tv:turn_off" },
+      },
+    }),
+    {
+      entity = "remote.living_room_tv", name = "Living Room Remote",
+      commands = { { name = "Press", value = "press" } }, power = NULL, inputs = {},
+    },
+  } })
+  check("pre-absorption seed succeeds", second.ok, encodeJson(second))
   for _, device in ipairs(second.devices) do
     if device.name == "Living Room Remote" then secondId = device.deviceId end
   end
@@ -630,13 +653,15 @@ for _, entry in ipairs(stored("DeviceList").DevicesWithFeatures) do
   if tostring(entry.Device["Id-"]) == tostring(secondId) then stillThere = true end
 end
 check("the retained device is still in DeviceList", stillThere)
+local unchangedV2 = commit({ webhook = WEBHOOK, devices = { merged({
+  commands = {
+    { name = "PowerOn", value = "media_player.living_room_tv:turn_on" },
+    { name = "DirectionUp", value = "remote.living_room_tv:send_command:DPAD_UP" },
+    { name = "Press", value = "remote.living_room_tv:press" },
+  }, power = NULL }) } })
 check("an unchanged v2 set saves nothing",
-  commit({ webhook = WEBHOOK, devices = { merged({
-    commands = {
-      { name = "PowerOn", value = "media_player.living_room_tv:turn_on" },
-      { name = "DirectionUp", value = "remote.living_room_tv:send_command:DPAD_UP" },
-      { name = "Press", value = "remote.living_room_tv:press" },
-    }, power = NULL }) } }).changed == false)
+  unchangedV2.changed == false and unchangedV2.devices[1].migratedFrom == nil,
+  encodeJson(unchangedV2))
 
 print(string.format("%d/%d checks passed", count - failures, count))
 os.exit(failures == 0 and 0 or 1)

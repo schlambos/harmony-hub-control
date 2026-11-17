@@ -61,6 +61,17 @@
   Do not replace netservicestarter.lua (with -CleanInstall, also write the
   cloud blocker as off). This does not undo an existing install; use -TurnOff
   for that.
+.PARAMETER MultiRemote
+  Let the hub keep several remotes without a screen of the same model (they
+  share one button setup); 'off' restores the stock one-remote-per-model rule;
+  'force-off' does that without asking the radio first (for a radio that stopped
+  answering). Omitted: unchanged. See docs/MULTI_REMOTE.md.
+.PARAMETER TwoScreen
+  Let the hub keep and serve two remotes with a screen at once (experimental).
+  'once' runs it for the next boot only; 'serial' / 'serial-once' use the
+  fallback mode that serves one remote's message at a time; 'off' (or
+  'force-off', which is the same here: nothing is asked of the radio) restores
+  the stock hal. Omitted: unchanged. See docs/TWO_SCREEN_REMOTES.md.
 #>
 param(
     [Alias("Host")]
@@ -91,6 +102,9 @@ param(
     # -MultiRemote on|off|force-off: let the hub keep several remotes without a screen of the same model (they share one button setup); off restores the stock rule; force-off does that without asking the radio first (for a radio that stopped answering); omitted leaves it unchanged (docs/MULTI_REMOTE.md)
     [ValidateSet("on", "off", "force-off")]
     [string]$MultiRemote,
+    # -TwoScreen on|once|serial|serial-once|off|force-off: let the hub keep and serve two remotes with a screen at once (experimental); once runs it for the next boot only; serial / serial-once use the fallback mode; off / force-off restores the stock hal; omitted leaves it unchanged (docs/TWO_SCREEN_REMOTES.md)
+    [ValidateSet("on", "once", "serial", "serial-once", "off", "force-off")]
+    [string]$TwoScreen,
     # -TurnOff: turn Melodious off via /etc/melodious-off and give the hub back to Logitech's cloud
     [switch]$TurnOff,
     # -TurnOn: remove /etc/melodious-off and turn Melodious back on
@@ -200,9 +214,32 @@ $MultiRemotePending = "/var/run/codex-multi-remote-pending"
 # force-off is off without the radio check (Test-MultiRemoteOff).
 $MultiRemoteForce = $MultiRemote -eq "force-off"
 if ($MultiRemoteForce) { $MultiRemote = "off" }
+if ($TwoScreen -eq "force-off") { $TwoScreen = "off" }
 # Whether the multi-remote hal runs now; $null until checked (-MultiRemote only).
 $script:HalBound = $null
 $NoScreenEquads = @("16414", "16422", "16423")
+
+# Two remotes with a screen (docs/TWO_SCREEN_REMOTES.md). Stock hal has one HOT
+# context (the link to remotes with a screen), so it unpairs an older screen
+# remote after every pair, and two of them paired anyway share one set of
+# sequence numbers. -TwoScreen on makes a second copy of the hub's own
+# /usr/bin/hal that keeps HOT per radio slot; it carries the multi-remote
+# changes too, and rcS.local binds it instead of the multi-remote copy while
+# two_screen.conf asks for it. The copy is built here with the edits in
+# payload/helpers/hal_remotes_patch.json.
+$HalRemotesDest = "/data/codex/bin/hal_remotes"
+$TwoScreenConf = "/data/codex/two_screen.conf"
+$HalRemotesTries = "/data/codex/hal_remotes.tries"
+$HalGates = "/var/run/codex_hal_gates"
+$HalRemotesPatchFile = "helpers/hal_remotes_patch.json"
+$TwoScreenSettings = [ordered]@{
+    "on" = "1"
+    "once" = "once"
+    "serial" = "serial"
+    "serial-once" = "serial-once"
+}
+$script:RunningHal = $null
+$script:RunningHalFacts = @{}
 
 $HandoffRequiredPaths = @(
     "/etc/init.d/rcS.local",
@@ -1083,6 +1120,57 @@ function Get-PatchedHal([byte[]]$Data) {
     return ,$out
 }
 
+function Get-HalRemotesPatchDoc() {
+    $multiPatch = Get-Content -Raw -Encoding UTF8 (Join-Path $Payload $HalPatchFile) | ConvertFrom-Json
+    $remotesPatch = Get-Content -Raw -Encoding UTF8 (Join-Path $Payload $HalRemotesPatchFile) | ConvertFrom-Json
+    if ([string]$remotesPatch.stock_md5 -cne [string]$multiPatch.stock_md5) {
+        throw "$(Split-Path -Leaf $HalRemotesPatchFile) is for another hal build"
+    }
+    return $remotesPatch
+}
+
+# The two-screen hal from the hub's own /usr/bin/hal; fails closed.
+function Get-RemotesHal([byte[]]$Data) {
+    $multiPatch = Get-Content -Raw -Encoding UTF8 (Join-Path $Payload $HalPatchFile) | ConvertFrom-Json
+    $patch = Get-HalRemotesPatchDoc
+    $digest = Get-BytesMd5 $Data
+    if ($digest -eq $patch.patched_md5) { return ,$Data }  # already this build (read while bind-mounted)
+    if ($digest -eq $multiPatch.patched_md5) {
+        # The multi-remote copy is bound: take its edits back out to get the stock file.
+        $undone = [byte[]]$Data.Clone()
+        foreach ($edit in $multiPatch.edits) {
+            $offset = [Convert]::ToInt32($edit.offset.Substring(2), 16)
+            $old = ConvertFrom-Hex $edit.stock
+            $new = ConvertFrom-Hex $edit.patched
+            for ($i = 0; $i -lt $new.Length; $i++) {
+                if ($undone[$offset + $i] -ne $new[$i]) { throw ("{0}: unexpected bytes at 0x{1:x}" -f $HalPath, $offset) }
+            }
+            [Array]::Copy($old, 0, $undone, $offset, $old.Length)
+        }
+        $Data = $undone
+        $digest = Get-BytesMd5 $Data
+    }
+    if ($digest -ne $patch.stock_md5) {
+        throw "$HalPath on this hub is not the hal build two-screen supports (md5 $digest, expected $($patch.stock_md5) from firmware 4.15.600). If another copy of hal is bound over it, restart the hub into the stock hal first."
+    }
+    $out = [byte[]]$Data.Clone()
+    foreach ($edit in $patch.edits) {
+        $offset = [Convert]::ToInt32($edit.offset.Substring(2), 16)
+        $new = ConvertFrom-Hex $edit.patched
+        if ($null -ne $edit.PSObject.Properties["stock"]) {
+            $old = ConvertFrom-Hex $edit.stock
+            for ($i = 0; $i -lt $old.Length; $i++) {
+                if ($out[$offset + $i] -ne $old[$i]) { throw ("{0}: unexpected bytes at 0x{1:x}" -f $HalPath, $offset) }
+            }
+        }
+        [Array]::Copy($new, 0, $out, $offset, $new.Length)
+    }
+    if ($out.Length -ne $Data.Length -or (Get-BytesMd5 $out) -ne $patch.patched_md5) {
+        throw "the two-screen hal does not match its expected md5"
+    }
+    return ,$out
+}
+
 function Test-TcpPort([string]$TargetHost, [int]$TargetPort, [int]$TimeoutMs = 1200) {
     $client = [System.Net.Sockets.TcpClient]::new()
     try {
@@ -1316,6 +1404,72 @@ function Test-HalBound() {
     return ($out -eq "bound")
 }
 
+function Get-TwoScreenWanted() {
+    if ($TwoScreen -and $TwoScreenSettings.Contains($TwoScreen)) { return "on" }
+    return $TwoScreen
+}
+
+function Get-RunningHalCommand() {
+    return "md5sum $HalPath 2>/dev/null; echo gates=`$(cat $HalGates 2>/dev/null); " +
+        "echo multi=`$(cat $MultiRemoteConf 2>/dev/null); " +
+        "if [ -f $HalMultiDest ]; then echo multi_copy=yes; else echo multi_copy=no; fi"
+}
+
+function Get-HalLoadCheckCommand() {
+    # hal's usage text ends without a newline: put the exit status on its own line.
+    return "$HalRemotesDest -h 2>&1; rc=`$?; echo; echo rc=`$rc"
+}
+
+function Get-RunningHal() {
+    $out = Invoke-Remote (Get-RunningHalCommand) $null 60000
+    $lines = @($out -split "`r?`n")
+    $firstTokens = if ($lines.Count -gt 0 -and $lines[0].Trim()) { @($lines[0].Trim() -split "\s+") } else { @() }
+    $digest = if ($firstTokens.Count -gt 0) { $firstTokens[0] } else { "" }
+    $facts = @{}
+    foreach ($line in $lines) {
+        $eq = $line.IndexOf("=")
+        if ($eq -gt 0) {
+            $k = $line.Substring(0, $eq)
+            if (-not $k.Contains(" ")) {
+                $facts[$k] = $line.Substring($eq + 1)
+            }
+        }
+    }
+    if ($digest.Length -ne 32 -or -not $facts.ContainsKey("gates")) {
+        throw "couldn't tell which hal runs: $out"
+    }
+    return @{ Digest = $digest; Facts = $facts }
+}
+
+# -TwoScreen, or -MultiRemote on a hub that runs the two-screen hal: record
+# which hal runs ($script:RunningHal decides the reboot as much as the files
+# do), and refuse the two cases that would leave multi-remote switched on with
+# no hal copy to carry it.
+function Test-TwoScreen() {
+    if (-not ($TwoScreen -or $MultiRemote)) { return }
+    $probe = Get-RunningHal
+    $script:RunningHal = $probe.Digest
+    $script:RunningHalFacts = $probe.Facts
+    $remotesPatch = Get-HalRemotesPatchDoc
+    $active = ($script:RunningHal -ceq [string]$remotesPatch.patched_md5)
+    if ($TwoScreen) {
+        KV ("two_screen_active=" + $(if ($active) { "yes" } else { "no" }))
+        $gates = if ($script:RunningHalFacts["gates"]) { $script:RunningHalFacts["gates"] } else { "none" }
+        KV "two_screen_gates=$gates"
+    }
+    $multiAfter = if ($MultiRemote) { $MultiRemote -eq "on" } else { $script:RunningHalFacts["multi"] -eq "1" }
+    $noMultiCopy = ($script:RunningHalFacts["multi_copy"] -ne "yes")
+    if ($active -and $MultiRemote -eq "on" -and $noMultiCopy -and $TwoScreen -eq "off") {
+        throw "-MultiRemote on with -TwoScreen off refused: the multi-remote copy can only be built from the stock hal, and the two-screen hal is running. Turn two-screen off first, then run -MultiRemote on."
+    }
+    if ($TwoScreen -eq "off" -and $multiAfter -and $noMultiCopy) {
+        throw "-TwoScreen off refused: multi-remote is on and only the two-screen hal carries it ($HalMultiDest is missing), so the hub would restart into the stock hal with two remotes of one model allowed to be paired. Turn multi-remote off as well (-MultiRemote off -TwoScreen off), then turn it back on by itself."
+    }
+    if ($TwoScreen -eq "off") {
+        Info "Remotes with a screen that are paired stay paired. The stock hal serves one of them at a time, so unpair all but one in Settings -> Remotes."
+    }
+}
+
 # -MultiRemote off while the multi-remote hal runs: refuse unless the slot
 # table holds no two remotes of one model. Also records whether the copy runs
 # now ($script:HalBound), which decides the reboot as much as the files do.
@@ -1416,13 +1570,29 @@ function Build-Inventory() {
     Add-Candidate (New-Candidate "/pkg/codexactivity/manifest.json" "644" "config" -Text ('{"plugin":"codexactivity"}' + "`n") -Condition "if-missing")
     Add-Candidate (New-Candidate "/pkg/codexmqtt/manifest.json" "644" "config" -Text ('{"plugin":"codexmqtt"}' + "`n") -Condition "if-missing")
     # Multiple remotes of one model: only when asked, either way.
+    $halRead = if ($MultiRemote -eq "on" -or (Get-TwoScreenWanted) -eq "on") { Get-RemoteBytes $HalPath } else { [byte[]]@() }
     if ($MultiRemote -eq "on") {
-        $hal = Get-PatchedHal (Get-RemoteBytes $HalPath)
-        Add-Candidate (New-Candidate $HalMultiDest "755" "binary" -Blob $hal)
+        $remotesPatch = Get-HalRemotesPatchDoc
+        if ((Get-BytesMd5 $halRead) -cne [string]$remotesPatch.patched_md5) {
+            $hal = Get-PatchedHal $halRead
+            Add-Candidate (New-Candidate $HalMultiDest "755" "binary" -Blob $hal)
+        }
+        # else the two-screen hal runs and carries multi-remote; its own copy
+        # can only be built from the stock hal (Test-TwoScreen).
         Add-Candidate (New-Candidate $MultiRemoteConf "644" "config" -Text "1`n")
     } elseif ($MultiRemote -eq "off") {
-        # The copy itself goes after a successful install (Invoke-PostWiring).
+        # The copy itself goes after a successful install (rcS.local at the next boot).
         Add-Candidate (New-Candidate $MultiRemoteConf "644" "config" -Text "0`n")
+    }
+    # Two remotes with a screen: only when asked, either way.
+    if ($TwoScreen -and $TwoScreenSettings.Contains($TwoScreen)) {
+        $remotesHal = Get-RemotesHal $halRead
+        Add-Candidate (New-Candidate $HalRemotesDest "755" "binary" -Blob $remotesHal)
+        Add-Candidate (New-Candidate $TwoScreenConf "644" "config" -Text "$($TwoScreenSettings[$TwoScreen])`n")
+        Add-Candidate (New-Candidate $HalRemotesTries "644" "config" -Text "0`n")
+    } elseif ($TwoScreen -eq "off") {
+        # rcS.local deletes the copy at the next boot.
+        Add-Candidate (New-Candidate $TwoScreenConf "644" "config" -Text "0`n")
     }
     if ($CleanInstall -or (Test-MqttExplicit)) {
         Add-Candidate (New-Candidate "/data/codexmqtt/config.json" "600" "config" -Text (Build-MqttConfig) -Sensitive)
@@ -1942,6 +2112,12 @@ function Show-PreflightReport() {
     if ($MultiRemote -eq "on") {
         Info "Multiple remotes of one model: $HalMultiDest is the hub's own hal with per-slot remote threads and the one-remote-per-model rule lifted for remotes without a screen; rcS.local runs it from the next boot."
     }
+    if ($TwoScreen) { KV "two_screen=$TwoScreen" } else { KV "two_screen=unchanged" }
+    if ($TwoScreen -and $TwoScreenSettings.Contains($TwoScreen)) {
+        $remotesPatch = Get-HalRemotesPatchDoc
+        $suffix = if ($TwoScreen.EndsWith("once")) { ", for that boot only." } else { "." }
+        Info "Two remotes with a screen: $HalRemotesDest is the hub's own hal (md5 $($remotesPatch.stock_md5)) with the link to screen remotes kept per radio slot (md5 $($remotesPatch.patched_md5)); rcS.local runs it from the next boot$suffix"
+    }
     KV "candidate_count=$($Candidates.Count)"
     KV "changed_count=$((Get-ActiveCandidates).Count)"
     Info "Candidate destinations and nonsensitive expected MD5 hashes (sensitive values redacted):"
@@ -2420,16 +2596,68 @@ function Test-MultiRemoteChanged() {
     return ($files -or ($script:HalBound -ne ($MultiRemote -eq "on")))
 }
 
+function Test-TwoScreenChanged() {
+    $files = [bool](Get-ActiveCandidates | Where-Object { @($HalRemotesDest, $TwoScreenConf) -contains $_.Dest })
+    if (-not $TwoScreen -or $null -eq $script:RunningHal) { return $files }
+    $remotesPatch = Get-HalRemotesPatchDoc
+    $active = ($script:RunningHal -ceq [string]$remotesPatch.patched_md5)
+    return ($files -or ($active -ne ((Get-TwoScreenWanted) -eq "on")))
+}
+
+function Test-HalSettingChanged() {
+    return ((Test-MultiRemoteChanged) -or (Test-TwoScreenChanged))
+}
+
 function Get-WantedHal() {
+    if ((Get-TwoScreenWanted) -eq "on") { return "two-screen" }
+    if ($TwoScreen -eq "off" -and $script:RunningHalFacts["multi"] -eq "1" -and -not $MultiRemote) { return "multi-remote" }
     if ($MultiRemote -eq "on") { return "multi-remote" } else { return "stock" }
 }
 
+# Before a reboot into the two-screen hal: the copy must start on this hub.
+# If it doesn't, the setting goes back to 0 and the hub stays up.
+function Test-TwoScreenLoads() {
+    if ((Get-TwoScreenWanted) -ne "on") { return }
+    $out = Invoke-Remote (Get-HalLoadCheckCommand) $null 60000
+    $tokens = @($out -split "\s+" | Where-Object { $_ })
+    if ($out.Contains("Usage:") -and ($tokens -ccontains "rc=1")) {
+        KV "two_screen_load_check=ok"
+        return
+    }
+    KV "two_screen_load_check=failed"
+    Invoke-Remote "echo 0 > $TwoScreenConf" $null 30000 | Out-Null
+    $snippet = ($tokens -join " ")
+    if ($snippet.Length -gt 200) { $snippet = $snippet.Substring(0, 200) }
+    throw "the hub could not start $HalRemotesDest ('$snippet'); $TwoScreenConf was put back to 0 and the hub was not restarted"
+}
+
+function Test-TwoScreenAfterReboot() {
+    $want = ((Get-TwoScreenWanted) -eq "on")
+    $probe = Get-RunningHal
+    $remotesPatch = Get-HalRemotesPatchDoc
+    $active = ($probe.Digest -ceq [string]$remotesPatch.patched_md5)
+    $gates = if ($probe.Facts["gates"]) { [string]$probe.Facts["gates"] } else { "" }
+    $gatesLabel = if ($gates) { $gates } else { "none" }
+    KV ("two_screen_active=" + $(if ($active) { "yes" } else { "no" }))
+    KV "two_screen_gates=$gatesLabel"
+    $serial = if ($TwoScreen.StartsWith("serial")) { "1" } else { "0" }
+    $g0 = if ($gates.Length -ge 1) { $gates.Substring(0, 1) } else { "" }
+    $g2 = if ($gates.Length -ge 3) { $gates.Substring(2, 1) } else { "" }
+    if (($active -ne $want) -or ($want -and ($g0 -ne "1" -or $g2 -ne $serial))) {
+        $detail = if ($active) { "runs the two-screen hal with gates $gatesLabel" } else { "does not run the two-screen hal" }
+        Info "WARNING: the hub restarted but $detail; see /cache/codex-init.log on the hub"
+    }
+}
+
 function Restart-HubAndWait() {
+    Test-TwoScreenLoads
     Invoke-Remote "(/bin/sleep 2; /sbin/reboot || reboot) >/dev/null 2>&1 & echo rebooting" $null 30000 | Out-Null
     Start-Sleep -Seconds 8
     Wait-TcpPort $HubHost $Port 180 "SSH"
     Wait-TcpPort $HubHost 8080 180 "Web UI"
-    if ($MultiRemote -eq "on" -or $MultiRemote -eq "off") {
+    if ($TwoScreen) {
+        Test-TwoScreenAfterReboot
+    } elseif ($MultiRemote -eq "on" -or $MultiRemote -eq "off") {
         $bound = Test-HalBound
         KV ("multi_remote_active=" + $(if ($bound) { "yes" } else { "no" }))
         if ($bound -ne ($MultiRemote -eq "on")) {
@@ -2804,6 +3032,7 @@ Test-NotTurnedOff
 
 Step "Resolving hub id"
 Resolve-HubIdentity
+Test-TwoScreen
 Test-MultiRemoteOff
 
 Step "Building candidate inventory"
@@ -2869,13 +3098,14 @@ if ($RemoveRootToolLeftovers -and ($RootToolStages.Count -gt 0 -or (Test-RootToo
 
 if ((Get-ActiveCandidates).Count -eq 0) {
     Remove-StagingTree
-    if ((Test-MultiRemoteChanged) -and -not $NoApplyCloudRestart) {
+    if ((Test-HalSettingChanged) -and -not $NoApplyCloudRestart) {
         # The files match, but the running hal isn't the one asked for.
         Step "Restarting the hub"
         Info "The files already match; rebooting the hub so it starts the $(Get-WantedHal) hal."
         Restart-HubAndWait
         Step "Done"
-        Info "The hub already matched this payload; it was restarted to apply the multi-remote setting."
+        $settingKind = if ($TwoScreen) { "two-screen" } else { "multi-remote" }
+        Info "The hub already matched this payload; it was restarted to apply the $settingKind setting."
         exit 0
     }
     Step "Done"
@@ -2950,8 +3180,9 @@ Remove-StagingTree
 $cloudChanged = Test-CloudBlockerChanged
 $pluginsChanged = Test-PluginsChanged
 $multiRemoteChanged = Test-MultiRemoteChanged
+$twoScreenChanged = Test-TwoScreenChanged
 $usbNetChanged = (-not $NoApplyCloudRestart) -and (Test-UsbNetModulesChanged)
-if (($cloudChanged -or $pluginsChanged -or $multiRemoteChanged -or $usbNetChanged) -and -not $NoApplyCloudRestart) {
+if (($cloudChanged -or $pluginsChanged -or $twoScreenChanged -or $multiRemoteChanged -or $usbNetChanged) -and -not $NoApplyCloudRestart) {
     Step "Restarting the hub"
     if ($cloudChanged) {
         Info "Rebooting the hub so Logitech cloud services restart in blocked mode."
@@ -2985,5 +3216,16 @@ if (-not $SkipCloudSuppression) {
 if ($MultiRemote) {
     $state = if ($MultiRemote -eq "on") { "on (remotes without a screen)" } else { "off" }
     if ($multiRemoteChanged) { Info "Multiple remotes of one model: $state and applied" } else { Info "Multiple remotes of one model: $state (unchanged)" }
+}
+if ($TwoScreen) {
+    $twoLabels = @{
+        "on" = "on"
+        "once" = "on for one boot"
+        "serial" = "on, serial mode"
+        "serial-once" = "on for one boot, serial mode"
+        "off" = "off"
+    }
+    $twoState = $twoLabels[$TwoScreen]
+    if ($twoScreenChanged) { Info "Two remotes with a screen: $twoState and applied" } else { Info "Two remotes with a screen: $twoState (unchanged)" }
 }
 Info "If IR commands do not work, update /data/codex/hub_id with the correct hub id and restart codex_webui."

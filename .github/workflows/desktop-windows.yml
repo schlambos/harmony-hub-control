@@ -9,6 +9,7 @@ on:
       - desktop/**
       - tools/hub-root/**
       - install_webui.py
+      - install_webui.ps1
       - payload/helpers/**
       - tools/webui-sim/**
       - tools/package_harmony_shell.sh
@@ -21,6 +22,7 @@ on:
       - desktop/**
       - tools/hub-root/**
       - install_webui.py
+      - install_webui.ps1
       - payload/helpers/**
       - tools/webui-sim/**
       - tools/package_harmony_shell.sh
@@ -61,6 +63,18 @@ jobs:
             echo "error: these files were checked out with CRLF" >&2
             exit 1
           fi
+      - name: Parse PowerShell installers under Windows PowerShell 5.1
+        shell: powershell
+        run: |
+          foreach ($file in @("install_webui.ps1", "restore_backup.ps1")) {
+            $tokens = $null; $errors = $null
+            $full = (Resolve-Path -LiteralPath $file).Path
+            $ast = [System.Management.Automation.Language.Parser]::ParseFile($full, [ref]$tokens, [ref]$errors)
+            if ($errors.Count -gt 0) {
+              $errors | ForEach-Object { Write-Error "${file}: $($_.Message)" }
+              exit 1
+            }
+          }
       - name: Install the pinned bun
         run: |
           sh tools/ci/install_bun.sh "$HOME/.local/bin"
