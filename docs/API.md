@@ -1414,7 +1414,7 @@ Invoke-RestMethod "http://<hub-ip>:8080/api/update-status"
 
 The response carries `version` and lists each binary with `present`, `size`
 and `md5`: `codex_webui`, `codex_bthid_keyboard`, `codex_bt_pair_agent`,
-`codex_androidtv`, `codex_hal_ltcp`, `codex_hbus`, `codex_portal` and `codex_dhcpd`.
+`codex_androidtv`, `codex_usbeth`, `codex_hal_ltcp`, `codex_hbus`, `codex_portal` and `codex_dhcpd`.
 
 The hub installs software only through the installer (`install_webui.py` or
 `install_webui.ps1`, over SSH). Until 1.2.0 it also had
