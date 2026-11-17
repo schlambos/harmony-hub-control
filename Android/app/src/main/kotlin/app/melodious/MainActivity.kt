@@ -150,15 +150,7 @@ class MainActivity : ComponentActivity() {
     }
 
     private fun handleDeepLinkIntent(intent: Intent?) {
-        val uri = intent?.data ?: return
-        if (uri.scheme == "melodious" && uri.host == "hub") {
-            val segments = uri.pathSegments
-            if (segments.firstOrNull() == "poweroff") {
-                viewModel.powerOff()
-            } else if (segments.size >= 2 && segments[0] == "activity") {
-                viewModel.startActivity(segments[1])
-            }
-        }
+        dispatchHubLink(intent?.data, { viewModel.powerOff() }, { viewModel.startActivity(it) })
     }
 
     private fun requestPinWidget(onFallback: () -> Unit) {

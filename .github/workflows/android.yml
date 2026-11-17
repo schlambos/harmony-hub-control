@@ -1,0 +1,16 @@
+name: Android JVM
+on:
+  pull_request:
+    paths: ['Android/**', '.github/workflows/android.yml']
+  push:
+    branches: [main]
+permissions:
+  contents: read
+jobs:
+  jvm:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - name: Run JVM suites with runner JDK 17 and Android SDK
+        working-directory: Android
+        run: JAVA_HOME="$JAVA_HOME_17_X64" ./gradlew :core-protocol:test :core-ssh:test :app:testDebugUnitTest

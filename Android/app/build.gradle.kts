@@ -40,6 +40,8 @@ android {
         compose = true
     }
 
+    testOptions.unitTests.isIncludeAndroidResources = true
+
     packaging {
         resources {
             excludes += "/META-INF/{AL2.0,LGPL2.1}"
@@ -69,4 +71,5 @@ dependencies {
     implementation(libs.androidx.compose.material.icons.extended)
 
     testImplementation(libs.junit)
+    testImplementation("org.robolectric:robolectric:4.16.1")
 }

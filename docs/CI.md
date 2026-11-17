@@ -77,7 +77,12 @@ port 2222 with an authorized `HUB_EMU_KEY`, plus a matching release archive
 (`HUB_ZIP` and `HUB_ZIP_VERSION`). The container-side updater QA needs none
 of those.
 
-**Not in CI yet:** the Android tests (need the Android SDK), the desktop
+**Android JVM tests:** `jvm` runs for Android PRs and pushes to `main`. From
+`Android/`, use JDK 17 and the Android SDK and run `./gradlew :core-protocol:test
+:core-ssh:test :app:testDebugUnitTest`. The Fix It test checks that the app
+delegates the power/input diff to the engine with one Help request.
+
+**Not in CI yet:** Android instrumented smoke tests (future nightly), the desktop
 end-to-end tests (need Electron and a display), `hal_remotes` under Unicorn
 (needs the stock `hal`, which is not in the repository), the Android TV
 smoke tests (need a native `codex_androidtv`), and `ir_database_smoke_test`
