@@ -10,6 +10,7 @@ from . import __version__
 from .checklist import HITL_CHECKS, PromptHandler, run_hitl_check
 from .checks_core import CORE_CHECKS
 from .checks_remotes import REMOTE_CHECKS
+from .checks_features import FEATURE_CHECKS
 from .checks_usb_network import USB_AND_CROSS_CHECKS
 from .config import RunConfig
 from .discovery import discover_capabilities
@@ -31,6 +32,7 @@ ALL_AUTOMATABLE_CHECKS: tuple[CheckSpec, ...] = (
     *CORE_CHECKS,
     *REMOTE_CHECKS,
     *USB_AND_CROSS_CHECKS,
+    *FEATURE_CHECKS,
 )
 
 
@@ -79,6 +81,12 @@ def summarize_capabilities(caps: HubCapabilities) -> dict[str, Any]:
         "bt_keyboard_configured": caps.bt_keyboard_configured,
         "time_restrictions_configured": caps.time_restrictions_configured,
         "mqtt_configured": caps.mqtt_configured,
+        "bt_pair_agent_alive": caps.bt_pair_agent_alive,
+        "bt_link_key_present": caps.bt_link_key_present,
+        "hub_clock_known": caps.hub_clock_known,
+        "restrictions_activity_count": len(caps.restrictions_windows),
+        "ha_state_version": caps.ha_state_version,
+        "ha_state_stale": caps.ha_state_stale,
     }
 
 

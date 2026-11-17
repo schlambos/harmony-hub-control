@@ -147,6 +147,10 @@ if [ -s /data/codex/activity-restrictions.json ]; then echo "restrictions_file=1
 if [ -s /data/codexmqtt/config.json ]; then echo "mqtt_file=1"; else echo "mqtt_file=0"; fi
 if ps | grep '[c]odex_androidtv' >/dev/null 2>&1; then echo "androidtv_proc=1"; else echo "androidtv_proc=0"; fi
 if ps | grep '[r]f.pairing' >/dev/null 2>&1; then echo "rf_pairing_proc=1"; else echo "rf_pairing_proc=0"; fi
+if ps | grep '[c]odex_bt_pair_agent' >/dev/null 2>&1; then echo "bt_agent_proc=1"; else echo "bt_agent_proc=0"; fi
+if ps | grep '[c]odex_bthid_keyboard' >/dev/null 2>&1; then echo "bt_hid_proc=1"; else echo "bt_hid_proc=0"; fi
+bt_lk=0; for f in /var/lib/bluetooth/*/linkkeys; do if [ -s "$f" ]; then bt_lk=1; fi; done; echo "bt_linkkeys=$bt_lk"
+echo "hub_epoch=$(date +%s 2>/dev/null)"
 echo "===ATH0==="
 ifconfig ath0 2>/dev/null || true
 echo "===USBETH==="
@@ -205,6 +209,12 @@ def discover_capabilities(transport: HubTransport, masker: SecretMasker) -> HubC
         masker.register_literal(lit, "<redacted>")
     if cfg.ha_webhook_url:
         masker.register_literal(cfg.ha_webhook_url, "<ha-webhook-url>")
+    if cfg.mqtt_password:
+        masker.register_literal(cfg.mqtt_password, "<redacted>")
+    if cfg.mqtt_username:
+        masker.register_literal(cfg.mqtt_username, "<mqtt-user>")
+    if cfg.mqtt_broker_host:
+        masker.register_ip(cfg.mqtt_broker_host, "<mqtt-broker>")
 
     probe = transport.run_ssh(DISCOVERY_PROBE_SCRIPT)
     if not probe.ok:
@@ -297,6 +307,13 @@ def discover_capabilities(transport: HubTransport, masker: SecretMasker) -> HubC
     if caps.bt_target_mac:
         masker.register_mac(caps.bt_target_mac, "<mac-bt-target>")
     caps.bt_keyboard_configured = bool(caps.bt_target_mac or meta.get("bt_devices_file") == "1")
+    caps.bt_pair_agent_alive = meta.get("bt_agent_proc") == "1"
+    caps.bt_hid_daemon_alive = meta.get("bt_hid_proc") == "1"
+    caps.bt_link_key_present = meta.get("bt_linkkeys") == "1"
+    try:
+        caps.hub_epoch_seconds = float(meta.get("hub_epoch", "0") or 0)
+    except ValueError:
+        caps.hub_epoch_seconds = 0.0
     caps.time_restrictions_configured = meta.get("restrictions_file") == "1"
     caps.mqtt_configured = meta.get("mqtt_file") == "1"
     caps.androidtv_running = meta.get("androidtv_proc") == "1"
@@ -329,6 +346,11 @@ def discover_capabilities(transport: HubTransport, masker: SecretMasker) -> HubC
                     for a in activities
                     if isinstance(a, dict) and str(a.get("Id-") or a.get("Id") or "")
                 ]
+                caps.activity_names = {
+                    str(a.get("Id-") or a.get("Id") or ""): str(a.get("Name") or "")
+                    for a in activities
+                    if isinstance(a, dict) and str(a.get("Id-") or a.get("Id") or "")
+                }
             dwf = (act_cfg.get("deviceList") or {}).get("DevicesWithFeatures") or []
             if isinstance(dwf, list):
                 caps.device_count = len(dwf)
@@ -342,6 +364,37 @@ def discover_capabilities(transport: HubTransport, masker: SecretMasker) -> HubC
                     if auto_id.startswith("melodious-ha-"):
                         ha_count += 1
                 caps.ha_devices_count = ha_count
+
+        # Phase-3 feature state: restriction windows + HA device-state snapshot
+        restr_http = transport.http_request("GET", "/api/activity-restrictions")
+        if restr_http.ok:
+            try:
+                restr_json = json.loads(restr_http.body)
+            except json.JSONDecodeError:
+                restr_json = {}
+            acts = restr_json.get("activities")
+            if isinstance(acts, dict):
+                caps.restrictions_windows = {
+                    str(k): [w for w in v if isinstance(w, dict)]
+                    for k, v in acts.items()
+                    if isinstance(v, list)
+                }
+                if caps.restrictions_windows:
+                    caps.time_restrictions_configured = True
+        ha_state_http = transport.http_request("GET", "/api/ha-state")
+        if ha_state_http.ok:
+            try:
+                ha_state_json = json.loads(ha_state_http.body)
+            except json.JSONDecodeError:
+                ha_state_json = {}
+            if ha_state_json.get("ok") is True:
+                try:
+                    caps.ha_state_version = int(ha_state_json.get("version", -1))
+                except (TypeError, ValueError):
+                    caps.ha_state_version = -1
+                caps.ha_state_stale = bool(ha_state_json.get("stale"))
+                states = ha_state_json.get("states")
+                caps.ha_state_count = len(states) if isinstance(states, list) else 0
 
         if caps.androidtv_running:
             atv_http = transport.http_request("GET", "/api/androidtv/status")
@@ -380,8 +433,9 @@ def discover_capabilities(transport: HubTransport, masker: SecretMasker) -> HubC
                     tvs = enriched
     caps.paired_tvs = tvs
 
-    # Extract HA webhook host if HA devices exist
-    if caps.ha_devices_count > 0:
+    # Extract HA webhook host if HA devices exist (or one is configured explicitly,
+    # e.g. a scratch-only hub about to run ha.devices_commit_live)
+    if caps.ha_devices_count > 0 or cfg.ha_webhook_url:
         if cfg.ha_webhook_url:
             caps.ha_webhook_url = cfg.ha_webhook_url
         else:

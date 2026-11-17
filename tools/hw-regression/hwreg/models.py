@@ -137,6 +137,26 @@ class HubCapabilities:
     ha_webhook_url: str = ""
     mqtt_configured: bool = False
 
+    # Phase-3 feature capabilities (post-#138)
+    activity_names: dict[str, str] = field(default_factory=dict)
+    bt_pair_agent_alive: bool = False
+    bt_hid_daemon_alive: bool = False
+    bt_link_key_present: bool = False
+    restrictions_windows: dict[str, list[dict[str, Any]]] = field(default_factory=dict)
+    hub_epoch_seconds: float = 0.0
+    ha_state_version: int = -1
+    ha_state_stale: bool = False
+    ha_state_count: int = 0
+
+    @property
+    def hub_clock_known(self) -> bool:
+        """Hub clock is trusted only when NTP has set a plausible epoch."""
+        return self.hub_epoch_seconds >= 1577836800  # 2020-01-01T00:00:00Z
+
+    @property
+    def home_control_remote_present(self) -> bool:
+        return any(r.equad_id in {"16422", "16417"} for r in self.paired_remotes)
+
     # Discovery diagnostics
     notes: list[str] = field(default_factory=list)
 

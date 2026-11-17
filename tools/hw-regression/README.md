@@ -99,8 +99,17 @@ invariants in code (`hwreg/transport.py`, `hwreg/config.py`):
   - `--tier disruptive --allow-disruptive`: enables physical RJ-45 cable-pull
     hand-back confirmation (`hitl.usb_eth_rj45_handback`), only after verifying
     that the `ath0` Wi-Fi lifeline is up.
-  - `--allow-reboot`: reserved explicit gate for Phase 2 reboot checks; never
-    implied by any other flag.
+  - `--allow-reboot`: explicit gate for the disruptive reboot/soak definition
+    (`disruptive.reboot_and_soak`); never implied by any other flag.
+  - Phase-3 disruptive drills (`core.turn_off_on_roundtrip`,
+    `core.backup_restore_drill`, `core.recovery_ap_roundtrip`,
+    `usb_eth.wifi_off_watchdog_recovery`) are registered definitions behind
+    `--tier disruptive --allow-disruptive` only: the suite records the
+    operator procedure and never executes them automatically.
+  - Phase-3 feature probes keep new hub output on the existing SSH/HTTP
+    transport and masker; MQTT broker credentials from `config.local.json`
+    are used only for the broker CONNECT and are registered with the masker.
+    Checks skip cleanly (never fail) when the hub lacks the feature.
 - **Critical hardware rule — USB Ethernet OTG brownout:**
   **Never hot-plug or hot-unplug the micro-USB OTG Ethernet adapter on a powered
   hub** (doing so browns out the 5 V rail and reboots the hub). Always power the
@@ -175,9 +184,19 @@ buckets:
 | **Cross: Patched `hal` <-> local config sync / HOT file session** | `hitl.patched_hal_remote_sync` | HITL + `hot.stats` | `active` | **Slice 1 (Built)** |
 | **Cross: USB-Eth active <-> physical Android TV wake from deep standby** | `hitl.usb_eth_wol_physical_tv_wake` | HITL + WoL log | `active` | **Slice 1 (Built)** |
 | **Cross: USB-Eth RJ-45 unplug Wi-Fi hand-back & replug recovery** | `hitl.usb_eth_rj45_handback` | HITL | `disruptive` | **Slice 1 (Built)** |
-| **Bluetooth HID: `hci0` UP RUNNING, `codex_bt_pair_agent`, link-key & AUTH+ENCRYPT check** | `bt.adapter_and_hid_daemon` | Automatable + HITL | `safe` / `active` | **Phase 2 (Planned)** |
-| **Time Restrictions: Active window 568 refusal + fail-open on unknown clock/TZ** | `restrictions.window_and_clock_failopen` | Automatable | `safe` / `active` | **Phase 2 (Planned)** |
-| **Home Assistant: `/api/ha-state` freshness + live webhook POST round-trip** | `ha.state_and_webhook_roundtrip` | Automatable | `safe` / `active` | **Phase 2 (Planned)** |
-| **Android TV: mDNS `_androidtvremote2._tcp` discovery across USB-Eth + Wi-Fi** | `androidtv.mdns_discovery_cross_if` | Automatable | `safe` | **Phase 2 (Planned)** |
-| **Opt-in Reboot Persistence & Long-Uptime Soak** (`--allow-reboot`, RAM & counter drift) | `disruptive.reboot_and_soak` | Automatable + HITL | `disruptive` | **Phase 3 (Planned)** |
-| **USB Ethernet `WIFI_OFF=1` Watchdog & Worker-Death Recovery** (post-PR #125 merge) | `usb_eth.wifi_off_watchdog_recovery` | Automatable + HITL | `disruptive` | **Phase 3 (Planned)** |
+| **Bluetooth HID: `hci0` UP RUNNING, `codex_bt_pair_agent`, link-key & AUTH+ENCRYPT check** | `bt.adapter_and_hid_daemon` | Automatable | `safe` | **Phase 3 (Built)** |
+| **Time Restrictions: Active window 568 refusal + fail-open on unknown clock/TZ** | `restrictions.window_and_clock_failopen` | Automatable | `active` (`--allow-activity-toggle`) | **Phase 3 (Built)** |
+| **Home Assistant: `/api/ha-state` freshness + live webhook POST round-trip** | `ha.state_and_webhook_roundtrip` | Automatable | `safe` read + `active` round-trip | **Phase 3 (Built)** |
+| **Home Assistant: `CommitHaDevices` v2 dry-run + live scratch-device commit/removal** | `ha.devices_commit_live` | Automatable | `active` (`--allow-state-change`) | **Phase 3 (Built)** |
+| **MQTT: broker discovery/state topics + activity-select round-trip** (skips when MQTT off) | `mqtt.broker_roundtrip` | Automatable | `active` (`--allow-state-change`) | **Phase 3 (Built)** |
+| **Android TV: mDNS `_androidtvremote2._tcp` discovery across USB-Eth + Wi-Fi** | `androidtv.mdns_discovery_cross_if` | Automatable | `safe` | **Phase 3 (Built)** |
+| **Android TV: input profiles per method + Try switch; pairing itself is HITL** | `androidtv.pair_inputs_try` / `hitl.androidtv_pairing` | Automatable + HITL | `active` | **Phase 3 (Built)** |
+| **Remotes: Home Control buttons (16422 + 16417, +/− dimming, does-nothing rocker, legacy replace/clear #161)** | `remote.home_control_buttons` / `hitl.remote_home_control_buttons` | Automatable preconditions + HITL | `safe` / `active` | **Phase 3 (Built)** |
+| **Remotes: pair-after-activities map backfill (#149) without re-saving activities** | `remote.pair_after_activities_backfill` / `hitl.remote_pair_after_activities_backfill` | Automatable + HITL | `safe` / `active` | **Phase 3 (Built)** |
+| **Remotes: IR Learn capture→send; gesture/sequence/one-shot from a physical remote** | `hitl.remote_learn_and_gesture` | HITL + `hot.stats` | `active` | **Phase 3 (Built)** |
+| **USB Ethernet: adapter-matrix note for traffic-untested chipsets (Realtek/AX88179/CDC)** | `usb_eth.adapter_matrix` / `hitl.usb_eth_adapter_matrix` | Automatable note + HITL | `safe` / `disruptive` | **Phase 3 (Built)** |
+| **Turn-off/on round-trip** (`--turn-off` → stock spot-check → `--turn-on` → blocker/config intact) | `core.turn_off_on_roundtrip` | Definition + gating (operator-driven) | `disruptive` | **Phase 3 (Built — definition)** |
+| **Backup → change → Restore drill** | `core.backup_restore_drill` | Definition + gating (operator-driven) | `disruptive` | **Phase 3 (Built — definition)** |
+| **Recovery AP round-trip** (TDE boot → `Harmony-Recovery-*` → portal/DHCP → normal boot) | `core.recovery_ap_roundtrip` | Definition + gating (operator-driven) | `disruptive` | **Phase 3 (Built — definition)** |
+| **Opt-in Reboot Persistence & Long-Uptime Soak** (`--allow-reboot`, RAM & counter drift) | `disruptive.reboot_and_soak` | Definition + gating (operator-driven) | `disruptive` | **Phase 3 (Built — definition)** |
+| **USB Ethernet `WIFI_OFF=1` Watchdog & Worker-Death Recovery** (post-PR #125 merge) | `usb_eth.wifi_off_watchdog_recovery` | Definition + gating (operator-driven) | `disruptive` | **Phase 3 (Built — definition)** |

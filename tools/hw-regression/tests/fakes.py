@@ -187,6 +187,42 @@ class FakeHubState:
         self.hold_calls: list[dict[str, str]] = []
         self.fail_hold_stage: str = ""
 
+        # Phase-3 feature state
+        self.bt_agent_alive = False
+        self.bt_hid_alive = False
+        self.bt_hci_up_running = True
+        self.bt_linkkeys_present = False
+        self.bt_con_auth_encrypt = False
+        self.bt_connected = False
+        self.hub_epoch = 1760000000.0
+        self.restrictions: dict[str, list[dict[str, Any]]] = {}
+        self.ha_state_version = 7
+        self.ha_state_stale = False
+        self.ha_state_states: list[dict[str, Any]] = []
+        self.webhook_ok = True
+        self.webhook_posts: list[str] = []
+        self.androidtv_discover_found: list[dict[str, Any]] = []
+        self.androidtv_input_profiles: dict[str, str | None] = {}
+        self.androidtv_try_calls: list[dict[str, Any]] = []
+        self.ha_device_posts: list[dict[str, Any]] = []
+        self.mqtt_broker_down = False
+        self.mqtt_roundtrip_calls: list[dict[str, Any]] = []
+
+    def enable_bt(self) -> None:
+        self.bt_target = "00:53:00:00:dd:10"
+        self.bt_profile = "btkeyboard"
+        self.bt_devices_present = True
+        self.bt_agent_alive = True
+        self.bt_hid_alive = True
+        self.bt_linkkeys_present = True
+        self.bt_connected = True
+        self.bt_con_auth_encrypt = True
+        self.procs.append("720 root /data/codex/bin/codex_bt_pair_agent --hid-control-daemon")
+        self.procs.append("730 root /data/codex/bin/codex_bthid_keyboard")
+
+    def enable_mqtt(self) -> None:
+        self.mqtt_present = True
+
     def enable_two_screen(self, *, setting: str = "1", once_spent: bool = False) -> None:
         self.two_screen = "0" if once_spent else setting
         self.hal_bound = True
@@ -307,6 +343,32 @@ class FakeHubTransport(HubTransport):
     def sleep(self, seconds: float) -> None:
         self.sleeps.append(seconds)
 
+    def mqtt_roundtrip(self, **kwargs: Any) -> dict[str, Any]:
+        st = self.state
+        st.mqtt_roundtrip_calls.append(kwargs)
+        if st.mqtt_broker_down or not st.mqtt_present:
+            return {
+                "connected": False,
+                "discovery_topics": [],
+                "state_payloads": [],
+                "result_payloads": [],
+                "published_topic": "",
+                "error": "Connection refused (synthetic broker down)",
+            }
+        base = str(kwargs.get("base_topic") or "harmony/hub").rstrip("/")
+        prefix = str(kwargs.get("discovery_prefix") or "homeassistant")
+        state_payload = json.dumps(
+            {"activityId": st.current_activity_id, "activity": "", "deviceCount": 1, "commandCount": 2}
+        )
+        return {
+            "connected": True,
+            "discovery_topics": [f"{prefix}/select/harmony_hub_activity/config"],
+            "state_payloads": [state_payload],
+            "result_payloads": [json.dumps({"ok": True, "cmd": "startactivity", "activityId": st.current_activity_id})],
+            "published_topic": f"{base}/activity/set" if kwargs.get("activity_payload") else "",
+            "error": "",
+        }
+
     def host_arp_mac(self, target_ip: str) -> str:
         return self.state.host_arp_table.get(target_ip, "")
 
@@ -415,6 +477,10 @@ class FakeHubTransport(HubTransport):
                     f"saved_gw={st.saved_gateway}",
                     f"bt_target={st.bt_target}",
                     f"bt_profile={st.bt_profile}",
+                    f"bt_agent_proc={'1' if st.bt_agent_alive else '0'}",
+                    f"bt_hid_proc={'1' if st.bt_hid_alive else '0'}",
+                    f"bt_linkkeys={'1' if st.bt_linkkeys_present else '0'}",
+                    f"hub_epoch={st.hub_epoch}",
                     f"bt_devices_file={'1' if st.bt_devices_present else '0'}",
                     f"restrictions_file={'1' if st.restrictions_present else '0'}",
                     f"mqtt_file={'1' if st.mqtt_present else '0'}",
@@ -550,6 +616,25 @@ class FakeHubTransport(HubTransport):
         if "codex-androidtv.log" in command:
             return SshResult(0, "\n".join(st.wol_log_lines) + ("\n" if st.wol_log_lines else ""), "")
 
+        # 13b. Bluetooth adapter / connection probe
+        if "===HCI===" in command:
+            flags = "UP RUNNING" if st.bt_hci_up_running else "DOWN"
+            con = ""
+            if st.bt_connected:
+                sec = " AUTH ENCRYPT" if st.bt_con_auth_encrypt else ""
+                con = f"\tACL {st.bt_target.upper() if st.bt_target else '00:53:00:00:DD:10'} handle 1 state 1 lm MASTER{sec}\n"
+            out = (
+                "===HCI===\n"
+                f"hci0:   Type: BR/EDR  Bus: USB\n        BD Address: 00:53:00:00:AA:09  ACL MTU: 1021:8\n        {flags} PSCAN\n"
+                "===CON===\nConnections:\n" + con
+            )
+            return SshResult(0, out, "")
+
+        # 13c. Hub-originated HA webhook POST (wget)
+        if "wget -q -O -" in command and "/api/webhook/" in command:
+            st.webhook_posts.append(command)
+            return SshResult(0 if st.webhook_ok else 1, "", "")
+
         # 14. hot.stats or rf.info via codex_hal_ltcp
         if "codex_hal_ltcp" in command and "hot.stats" in command:
             return SshResult(0, json.dumps({"id": 1, "code": 200, "data": st.hot_stats}) + "\n", "")
@@ -561,6 +646,10 @@ class FakeHubTransport(HubTransport):
             if st.saved_gateway and st.saved_gateway in command and not st.gateway_ping_ok:
                 return SshResult(1, f"No response from {st.saved_gateway}\n", "")
             return SshResult(0, f"{st.saved_gateway or '192.0.2.1'} is alive!\n", "")
+
+        # 15b. Plain ifconfig (all interfaces)
+        if command.strip().startswith("ifconfig"):
+            return SshResult(0, self._render_ifconfig(only_ath0=False), "")
 
         # 16. Plain `route -n`
         if command.strip().startswith("route -n"):
@@ -686,6 +775,114 @@ class FakeHubTransport(HubTransport):
             return HttpResult(
                 status=200,
                 body=json.dumps({"ok": True, "identity": "ready", "tvs": st.androidtv_status_tvs}),
+            )
+
+        if path == "/api/bt-text-status":
+            return HttpResult(
+                status=200,
+                body=json.dumps(
+                    {
+                        "ok": True,
+                        "runtime": st.bt_hid_alive,
+                        "state": "listening" if st.bt_hid_alive else "missing",
+                        "target": st.bt_target,
+                        "sent": 3,
+                        "skipped": 0,
+                    }
+                ),
+            )
+
+        if path == "/api/activity-restrictions":
+            if method.upper() == "POST":
+                payload = json.loads((body or b"{}").decode("utf-8") or "{}")
+                aid = str(payload.get("activityId", ""))
+                windows = payload.get("windows") or []
+                if windows:
+                    st.restrictions[aid] = windows
+                    # Hub clock unknown (>=2020 epoch absent) => restrictions fail open.
+                    if st.hub_epoch >= 1577836800:
+                        st.restricted_activity_ids.add(aid)
+                else:
+                    st.restrictions.pop(aid, None)
+                    st.restricted_activity_ids.discard(aid)
+                return HttpResult(status=200, body=json.dumps({"ok": True, "activities": st.restrictions}))
+            return HttpResult(status=200, body=json.dumps({"ok": True, "activities": st.restrictions}))
+
+        if path.startswith("/api/ha-state"):
+            return HttpResult(
+                status=200,
+                body=json.dumps(
+                    {
+                        "ok": True,
+                        "code": 200,
+                        "version": st.ha_state_version,
+                        "changed": True,
+                        "stale": st.ha_state_stale,
+                        "states": st.ha_state_states,
+                    }
+                ),
+            )
+
+        if path == "/api/androidtv/discover":
+            found = st.androidtv_discover_found
+            if not found and st.androidtv_status_tvs:
+                found = [
+                    {"name": tv.get("name", ""), "host": tv.get("host", ""), "paired": tv.get("id", "")}
+                    for tv in st.androidtv_status_tvs
+                ]
+            return HttpResult(status=200, body=json.dumps({"ok": True, "searching": True, "found": found}))
+
+        if path.startswith("/api/androidtv/inputs"):
+            if method.upper() == "POST":
+                return HttpResult(status=200, body=json.dumps({"ok": True}))
+            q = urllib.parse.parse_qs(urllib.parse.urlparse(path).query)
+            dev = (q.get("device") or [""])[0]
+            return HttpResult(
+                status=200,
+                body=json.dumps({"ok": True, "device": dev, "profile": st.androidtv_input_profiles.get(dev)}),
+            )
+
+        if path == "/api/androidtv/try" and method.upper() == "POST":
+            payload = json.loads((body or b"{}").decode("utf-8") or "{}")
+            st.androidtv_try_calls.append(payload)
+            return HttpResult(status=200, body=json.dumps({"ok": True}))
+
+        if path == "/api/ha-devices" and method.upper() == "POST":
+            payload = json.loads((body or b"{}").decode("utf-8") or "{}")
+            st.ha_device_posts.append(payload)
+            devices = payload.get("devices") or []
+            if not payload.get("dryRun"):
+                # Whole-set writer: replace all melodious-ha-* devices with the posted set.
+                kept = []
+                for entry in st.devices_with_features:
+                    dev = entry.get("Device") if isinstance(entry.get("Device"), dict) else entry
+                    auto_dev = dev.get("AutoDetectedDevice") if isinstance(dev, dict) else None
+                    auto_id = str((auto_dev or {}).get("Id", "")) if isinstance(auto_dev, dict) else ""
+                    if not auto_id.startswith("melodious-ha-"):
+                        kept.append(entry)
+                for dev_spec in devices:
+                    key = str(dev_spec.get("key") or dev_spec.get("entity") or "")
+                    kept.append(
+                        {
+                            "Device": {
+                                "Id-": f"9{len(kept)}01",
+                                "Label": str(dev_spec.get("name") or key),
+                                "AutoDetectedDevice": {"Id": f"melodious-ha-{key}"},
+                            }
+                        }
+                    )
+                st.devices_with_features = kept
+            return HttpResult(
+                status=200,
+                body=json.dumps(
+                    {
+                        "ok": True,
+                        "changed": not bool(payload.get("dryRun")),
+                        "dryRun": bool(payload.get("dryRun")),
+                        "added": [str(d.get("key") or d.get("entity") or "") for d in devices],
+                        "devices": [],
+                    }
+                ),
             )
 
         if path == "/api/ir-send" and method.upper() == "POST":

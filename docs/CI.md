@@ -32,6 +32,10 @@ sh tools/ci/run_suites.sh sim 'lua-*'   # only some
 
 Every suite runs even after one fails, so one run shows every failure.
 
+The list also holds `hwreg-offline`, the hardware regression suite's offline
+unit tests (`tools/hw-regression/`); they need no hub. The live suite itself
+is a manual hardware gate — see `tools/hw-regression/README.md`.
+
 **Quarantine.** `tools/ci/quarantine.txt` lists the suites that already fail
 on `main`. CI reports them and doesn't count them. When a listed suite
 passes, CI fails until its line is deleted, so the list can't go stale. Two

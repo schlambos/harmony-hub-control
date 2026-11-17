@@ -19,5 +19,18 @@
     "device_id": "",
     "command": ""
   },
-  "ha_webhook_url": ""
+  "ha_webhook_url": "",
+  "mqtt_broker_host": "",
+  "mqtt_broker_port": 1883,
+  "mqtt_base_topic": "harmony/hub",
+  "mqtt_discovery_prefix": "homeassistant",
+  "mqtt_username": "",
+  "mqtt_password": "",
+  "test_ha_device_key": "",
+  "test_ha_command": "",
+  "test_androidtv_input": {
+    "device_id": "",
+    "method": "",
+    "value": ""
+  }
 }
