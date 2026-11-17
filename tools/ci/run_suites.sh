@@ -76,6 +76,7 @@ lua-device-screens|luajit $LUA/codexactivity-device-screens-test.lua
 lua-ha-devices|luajit $LUA/codexactivity-ha-devices-test.lua
 lua-androidtv-devices|luajit $LUA/codexactivity-androidtv-devices-test.lua
 lua-home-buttons|luajit $LUA/codexactivity-home-buttons-test.lua
+lua-remote-background|luajit $LUA/codexactivity-remote-background-test.lua
 lua-touch-controls|luajit $LUA/codexactivity-touch-controls-test.lua
 lua-validate|luajit $LUA/codexactivity-validate-test.lua tools/webui-sim/fixtures/touch-maplist.json
 lua-guards|luajit $LUA/netservicestarter-guards-test.lua
