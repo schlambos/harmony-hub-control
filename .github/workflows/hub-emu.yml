@@ -1,5 +1,6 @@
 name: Real MIPS backend
 on:
+  workflow_dispatch:
   pull_request:
   push:
     branches: [main]
@@ -15,5 +16,9 @@ jobs:
         with:
           node-version: '26'
       - run: sh tools/hub-emu/run.sh --pinned
-      - run: node tools/hub-emu/qa.mjs
       - run: node tools/hub-emu/hub-update-qa.mjs
+      # Start from a clean fixture after the updater deliberately replaces files.
+      - if: github.event_name == 'workflow_dispatch'
+        run: |
+          sh tools/hub-emu/run.sh --pinned
+          node tools/hub-emu/qa.mjs
