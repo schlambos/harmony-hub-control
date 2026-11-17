@@ -42,7 +42,7 @@ fi
 
 # Suites whose tests wait on real time and fail now and then on a busy
 # machine. One failed run is tried once more and reported as flaky.
-FLAKY="usb-eth"
+FLAKY="usb-eth-service usb-eth-cable usb-eth-guard"
 
 # name|command, run from the repository root
 SUITES="
@@ -58,7 +58,15 @@ busybox-links|python3 tools/busybox_links_smoke.py
 release|python3 -m unittest discover -s tools/releases -p 'test_*.py'
 docker-manager|python3 -m unittest discover -s docker/tests
 ha-inventory|python3 tools/test_ha_device_inventory.py
-usb-eth|sh tools/usb-eth-test/run_tests.sh
+bt-hid-smoke|sh tools/bluetooth_hid_smoke.sh
+hub-root-tests|PYTHONPATH=tools/hub-root python3 -m unittest discover -s tools/hub-root/tests
+hwreg-offline|PYTHONPATH=tools/hw-regression python3 -m unittest discover -s tools/hw-regression/tests
+catalog-callback|PYTHONPATH=. python3 tools/catalog/test_callback.py
+hal-remotes|python3 -m unittest discover -s tools/hal_remotes
+usb-eth-logic|cc -Wall -Wextra -Wno-deprecated-declarations -o $LOGS/test_usbeth_logic tools/usb-eth-test/test_usbeth_logic.c && $LOGS/test_usbeth_logic
+usb-eth-service|PYTHONPATH=tools/usb-eth-test python3 -m unittest test_service.ServiceTests
+usb-eth-cable|PYTHONPATH=tools/usb-eth-test python3 -m unittest test_service.CableTests
+usb-eth-guard|python3 tools/usb-eth-test/test_guard.py
 activity-json-semantic|sh tools/activity_json_semantic_smoke.sh
 activity-offline-guard|sh tools/activity_offline_guard.sh
 hbus-notification|cc -std=c99 -O2 -o $LOGS/codex_hbus_host payload/source/codex_hbus.c && python3 tools/hbus_notification_smoke.py $LOGS/codex_hbus_host
@@ -73,6 +81,7 @@ lua-validate|luajit $LUA/codexactivity-validate-test.lua tools/webui-sim/fixture
 lua-guards|luajit $LUA/netservicestarter-guards-test.lua
 lua-restrictions|luajit $LUA/netservicestarter-restrictions-test.lua
 lua-lan-advertise|luajit $LUA/netservicestarter-lan-advertise-test.lua
+lua-mqtt|luajit $LUA/codexmqtt-test.lua
 "
 
 quarantined() {

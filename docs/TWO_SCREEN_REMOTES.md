@@ -30,6 +30,14 @@ python3 install_webui.py --hub-host <hub> --two-screen on      # until turned of
 python3 install_webui.py --hub-host <hub> --two-screen off
 ```
 
+Or from PowerShell on Windows:
+
+```powershell
+.\install_webui.ps1 -HubHost <hub> -TwoScreen once             # the next boot only
+.\install_webui.ps1 -HubHost <hub> -TwoScreen on               # until turned off
+.\install_webui.ps1 -HubHost <hub> -TwoScreen off
+```
+
 - **`once` first.** The setting is cleared before the changed `hal` starts, so
   any restart, watchdog reset or power cycle puts the hub back on the stock
   `hal`. Use it until you have seen both remotes work.
@@ -254,7 +262,6 @@ Known limitations (Gate C):
 - Not yet exercised on the hub: a firmware sync, IR sent through a remote's
   own emitter, explicit `hot.1N` commands, file sessions, and long uptime
   (one evening so far).
-- The PowerShell installer has no `-TwoScreen` yet.
 - A pairing started with `delayunpair` still unpairs the older screen remote
   five seconds later. Nothing in the hub or the remotes sends it.
 
