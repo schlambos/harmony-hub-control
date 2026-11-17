@@ -358,7 +358,42 @@ local function validateActivityReference(activityIds, rawId, context)
   return true
 end
 
-local function validateGraph(activityList, mapList, functionList, deviceList)
+local function baselineActivitySlotCounts(oldMapList)
+  local counts = {}
+  if type(oldMapList) ~= "table" or type(oldMapList.ButtonMaps) ~= "table" then
+    return counts
+  end
+  for _, oldMap in ipairs(oldMapList.ButtonMaps) do
+    if type(oldMap) == "table" then
+      local oldType = type(oldMap.__type) == "string" and oldMap.__type or ""
+      local identifier = type(oldMap.ButtonMapIdentifier) == "string" and
+        oldMap.ButtonMapIdentifier ~= "" and oldMap.ButtonMapIdentifier or nil
+      if identifier and not counts[identifier] and
+          string.find(oldType, "ActivityButtonMap", 1, true) and
+          type(oldMap.Buttons) == "table" then
+        local mapCounts = {}
+        counts[identifier] = mapCounts
+        for _, button in ipairs(oldMap.Buttons) do
+          local buttonType = type(button) == "table" and
+            type(button.__type) == "string" and button.__type or ""
+          if string.find(buttonType, "SoftRemoteButton", 1, true) then
+            local menuItem = button.MenuItem
+            local index = type(menuItem) == "table" and menuItem ~= json.null and
+              menuItem.IndexInMenu or nil
+            if type(index) == "number" and index == math.floor(index) and index >= 0 then
+              local slotKey = (button.FunctionGroupType == 2 and "pad:" or "soft:") ..
+                tostring(index)
+              mapCounts[slotKey] = (mapCounts[slotKey] or 0) + 1
+            end
+          end
+        end
+      end
+    end
+  end
+  return counts
+end
+
+local function validateGraph(activityList, mapList, functionList, deviceList, oldMapList)
   if type(activityList) ~= "table" or type(activityList.Activities) ~= "table" then
     return nil, "ActivityList.Activities must be an array"
   end
@@ -372,6 +407,7 @@ local function validateGraph(activityList, mapList, functionList, deviceList)
   if not deviceIds then
     return nil, "DeviceList.DevicesWithFeatures must be an array"
   end
+  local baselineSlots = baselineActivitySlotCounts(oldMapList)
   local activityIds = {}
   for _, activity in ipairs(activityList.Activities) do
     if type(activity) ~= "table" then
@@ -479,6 +515,9 @@ local function validateGraph(activityList, mapList, functionList, deviceList)
         end
       end
     end
+    local mapIdentifier = type(buttonMap.ButtonMapIdentifier) == "string" and
+      buttonMap.ButtonMapIdentifier ~= "" and buttonMap.ButtonMapIdentifier or nil
+    local baselineMapSlots = mapIdentifier and baselineSlots[mapIdentifier] or nil
     local seenSlots = {}
     for _, button in ipairs(buttonMap.Buttons) do
       if type(button) ~= "table" then
@@ -510,16 +549,21 @@ local function validateGraph(activityList, mapList, functionList, deviceList)
         -- other. Device maps keep their existing slots until the device
         -- screen editor sets their rule, so only activity maps are
         -- rejected here. The number pad is keyed separately and has its
-        -- own slot space.
+        -- own slot space. Pre-existing Logitech exports occasionally carry
+        -- a duplicate slot (e.g. NumberPlus tagged FunctionGroupType 0 on
+        -- slot 9), so allow up to the count already stored in oldMapList
+        -- while still rejecting any newly introduced duplicate.
         if isActivityMap then
           local slotKey = (button.FunctionGroupType == 2 and "pad:" or "soft:") ..
             tostring(index)
-          if seenSlots[slotKey] then
+          local slotCount = (seenSlots[slotKey] or 0) + 1
+          seenSlots[slotKey] = slotCount
+          local baselineCount = baselineMapSlots and baselineMapSlots[slotKey] or 0
+          if slotCount > 1 and (baselineCount <= 1 or slotCount > baselineCount) then
             return nil, "MapList map " .. mapLabel ..
               " has duplicate IndexInMenu " .. tostring(index) ..
               " for on-screen buttons"
           end
-          seenSlots[slotKey] = true
         end
       end
       for _, field in ipairs({
@@ -638,7 +682,8 @@ local function commitActivityResources(request)
     request.activityList,
     request.mapList,
     request.functionList,
-    devices.resource
+    devices.resource,
+    oldMaps.resource
   )
   if not valid then
     return {ok = false, localOnly = true, error = validationError}
@@ -1846,7 +1891,8 @@ local function commitDeviceScreen(request)
   end
   local valid, validationError = validateGraph(
     snapshots.ActivityList.resource, mapList,
-    snapshots.FunctionList.resource, snapshots.DeviceList.resource
+    snapshots.FunctionList.resource, snapshots.DeviceList.resource,
+    oldMaps.resource
   )
   if not valid then
     return {ok = false, localOnly = true, error = validationError}
@@ -3046,7 +3092,8 @@ local function commitHaDevices(request, family)
   result.changed = devicesChanged or protocolsChanged or mapsChanged
   if mapsChanged then
     local valid, validationError = validateGraph(
-      activities.resource, mapList, functions.resource, deviceList
+      activities.resource, mapList, functions.resource, deviceList,
+      oldMaps.resource
     )
     if not valid then
       return {ok = false, localOnly = true, error = validationError}

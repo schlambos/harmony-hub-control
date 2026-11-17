@@ -555,7 +555,7 @@ export function buildHomeButtonsMapList(config, draft, { now = Date.now() } = {}
   writeEntries(config, map, draft, alloc);
   if (JSON.stringify(map) !== before) map.DateModified = harmonyDate(now);
   addGateKeys(config, mapList, remote, alloc, now);
-  const errors = validateMapList(mapList);
+  const errors = validateMapList(mapList, config);
   if (errors.length) throw new Error(`The hub would not load these buttons: ${errors[0]}`);
   return mapList;
 }

@@ -1869,18 +1869,19 @@
       if (keyboardRoleDevices.size > 0) keyboardActivityIds.add(id);
     });
     buttonMaps().forEach((map) => {
+      const mapLabel = text(map && map.ButtonMapIdentifier) || mapId(map) || "unknown";
       const activityId = text(map && map["ActivityId-"]);
       if (activityId && activityId !== "-1" && !ids.has(activityId)) {
-        throw new Error(`Button map ${mapId(map) || "unknown"} references missing activity ${activityId}.`);
+        throw new Error(`Button map ${mapLabel} references missing activity ${activityId}.`);
       }
       if (activityId && activityId !== "-1") {
         const identifier = text(map && map.ButtonMapIdentifier);
         const identifierActivity = identifier.match(/Activity(-?\d+)$/);
         if (isActivityButtonMap(map) && !identifierActivity) {
-          throw new Error(`Button map ${identifier || mapId(map) || "unknown"} must identify activity ${activityId} in its ButtonMapIdentifier.`);
+          throw new Error(`Button map ${mapLabel} must identify activity ${activityId} in its ButtonMapIdentifier.`);
         }
         if (identifierActivity && identifierActivity[1] !== activityId) {
-          throw new Error(`Button map ${mapId(map) || identifier} identifies activity ${identifierActivity[1]} but references ${activityId}.`);
+          throw new Error(`Button map ${mapLabel} identifies activity ${identifierActivity[1]} but references ${activityId}.`);
         }
         if (isKeyboardHidActivityMap(map)) {
           keyboardHidCounts.set(activityId, (keyboardHidCounts.get(activityId) || 0) + 1);
@@ -1897,7 +1898,7 @@
       }
       const deviceId = text(map && map["DeviceId-"]);
       if (deviceId && !deviceIds.has(deviceId)) {
-        throw new Error(`Button map ${mapId(map) || "unknown"} references unavailable device ${deviceId}.`);
+        throw new Error(`Button map ${mapLabel} references unavailable device ${deviceId}.`);
       }
       if (isActivityButtonMap(map) && !positiveId(map["ButtonMapId-"])) {
         throw new Error(
@@ -1923,38 +1924,40 @@
             const menuActivity = menuName.match(/^Activity\.(-?\d+)$/);
             if (menuActivity && menuActivity[1] !== activityId) {
               throw new Error(
-                `Button map ${mapId(map) || "unknown"} menu identifies activity ${menuActivity[1]} but references ${activityId}.`
+                `Button map ${mapLabel} menu identifies activity ${menuActivity[1]} but references ${activityId}.`
               );
             }
           }
           const buttonId = positiveId(button && button.ButtonId);
-          if (!buttonId) {
-            throw new Error(
-              `Button map ${mapId(map) || "unknown"} has a button without a positive ButtonId.`
-            );
+          if (isActivityButtonMap(map)) {
+            if (!buttonId) {
+              throw new Error(
+                `Button map ${mapLabel} has a button without a positive ButtonId.`
+              );
+            }
+            if (buttonIds.has(text(buttonId))) {
+              throw new Error(`Remote button ID ${buttonId} is duplicated.`);
+            }
+            buttonIds.add(text(buttonId));
           }
-          if (buttonIds.has(text(buttonId))) {
-            throw new Error(`Remote button ID ${buttonId} is duplicated.`);
-          }
-          buttonIds.add(text(buttonId));
           const buttonState = Number(button.ButtonState);
           if (buttonState !== 0 && buttonState !== 1) {
             throw new Error(
-              `Remote button ${buttonId} has ButtonState ${text(button.ButtonState) || "none"}; only 0 or 1 is valid.`
+              `Remote button ${buttonId || mapLabel} has ButtonState ${text(button.ButtonState) || "none"}; only 0 or 1 is valid.`
             );
           }
           const buttonType = text(button.__type);
           if ((buttonType.includes("HardRemoteButton") || buttonType.includes("GestureRemoteButton")) &&
               !text(button.ButtonKey).trim()) {
-            throw new Error(`Remote button ${buttonId} is missing the ButtonKey the firmware dispatches on.`);
+            throw new Error(`Remote button ${buttonId || mapLabel} is missing the ButtonKey the firmware dispatches on.`);
           }
           if (buttonType.includes("SoftRemoteButton") &&
               !Number.isSafeInteger(Number(button.MenuItem && button.MenuItem.IndexInMenu))) {
-            throw new Error(`Remote button ${buttonId} is missing its MenuItem.IndexInMenu.`);
+            throw new Error(`Remote button ${buttonId || mapLabel} is missing its MenuItem.IndexInMenu.`);
           }
           if (isActivityButtonMap(map) && !hasButtonAction(button)) {
             throw new Error(
-              `Activity button map ${text(map.ButtonMapIdentifier) || mapId(map) || "unknown"} button ${buttonId} has no press, long-press, or double-press action; the paired remote stops responding when it starts an activity whose map contains one.`
+              `Activity button map ${mapLabel} button ${buttonId} has no press, long-press, or double-press action; the paired remote stops responding when it starts an activity whose map contains one.`
             );
           }
           ACTION_FIELDS.forEach((field) => {
@@ -1963,13 +1966,13 @@
             const actionDeviceId = text(action["DeviceId-"]);
             if (actionDeviceId && !deviceIds.has(actionDeviceId)) {
               throw new Error(
-                `Button map ${mapId(map) || "unknown"} ${field} references unavailable device ${actionDeviceId}.`
+                `Button map ${mapLabel} ${field} references unavailable device ${actionDeviceId}.`
               );
             }
             const actionActivityId = text(action["ActivityId-"]);
             if (actionActivityId && actionActivityId !== "-1" && !ids.has(actionActivityId)) {
               throw new Error(
-                `Button map ${mapId(map) || "unknown"} ${field} references missing activity ${actionActivityId}.`
+                `Button map ${mapLabel} ${field} references missing activity ${actionActivityId}.`
               );
             }
           });
@@ -2341,6 +2344,7 @@
       removeActivityFromGraph,
       pruneActionlessButtons,
       validateGraph,
+      saveActivities,
       activityMapSurfaceKey,
       activityFunctionMaps
     };
