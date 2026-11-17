@@ -1260,11 +1260,7 @@ class MelodiousViewModel(application: Application) : AndroidViewModel(applicatio
         }
         showMessage("Resending power and inputs to every device…")
         viewModelScope.launch {
-            val reply = hbusClient.request(
-                "harmony.engine?helpdiscretes",
-                JsonObject(mapOf("activityId" to JsonPrimitive(activityId))),
-                timeoutMs = 30_000,
-            )
+            val reply = requestHubHelp(activityId, hbusClient::request)
             val code = reply?.get("code")?.jsonPrimitive?.content
             if (reply != null && code != null && code != "200") {
                 showMessage("Help didn't run — ${reply["msg"]?.jsonPrimitive?.content ?: "hub error $code"}", isError = true)

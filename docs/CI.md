@@ -66,7 +66,27 @@ job waited 15 minutes for a runner and was dropped.)
 and then on a busy machine, a different one each time. A failed run is tried
 once more and reported as `FLAKY`.
 
-**Not in CI yet:** the Android tests (need the Android SDK), the desktop
+**Real MIPS backend:** the `emulator` job starts the pinned `codex_webui`
+and `codex_hbus` under QEMU on its own hosted VM. Its loopback ports are
+isolated from the sim suites; it does not start the front-end proxy. To
+repeat locally, run `sh tools/hub-emu/run.sh --pinned`, then `node
+tools/hub-emu/hub-update-qa.mjs`. The full `qa.mjs` contract suite runs on
+manual dispatch only. It found [#186](https://github.com/schlambos/harmony-hub-control/issues/186):
+the pinned backend returns full pages where compact POST responses are expected,
+and the maintenance command times out. To reproduce, start a fresh `--pinned`
+container and run `node tools/hub-emu/qa.mjs`.
+The desktop `HUB_EMU_SSH` case remains manual: this image serves HTTP and
+the fixture control API only. That test needs an SSH server on loopback
+port 2222 with an authorized `HUB_EMU_KEY`, plus a matching release archive
+(`HUB_ZIP` and `HUB_ZIP_VERSION`). The container-side updater QA needs none
+of those.
+
+**Android JVM tests:** `jvm` runs for Android PRs and pushes to `main`. From
+`Android/`, use JDK 17 and the Android SDK and run `./gradlew :core-protocol:test
+:core-ssh:test :app:testDebugUnitTest`. The Fix It test checks that the app
+delegates the power/input diff to the engine with one Help request.
+
+**Not in CI yet:** Android instrumented smoke tests (future nightly), the desktop
 end-to-end tests (need Electron and a display), `hal_remotes` under Unicorn
 (needs the stock `hal`, which is not in the repository), the Android TV
 smoke tests (need a native `codex_androidtv`), and `ir_database_smoke_test`

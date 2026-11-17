@@ -17,4 +17,6 @@ dependencies {
     implementation(project(":core-protocol"))
     implementation(libs.kotlinx.coroutines.core)
     implementation(libs.jsch)
+    testImplementation(libs.junit)
+    testImplementation("org.mockito:mockito-core:5.18.0")
 }

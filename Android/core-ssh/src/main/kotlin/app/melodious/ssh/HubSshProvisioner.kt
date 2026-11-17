@@ -19,7 +19,7 @@ import java.nio.charset.StandardCharsets
  *   2. A user needs to roll back to the newest `/data/codex-backups/webui-handoff-*` backup (`restore_backup.ps1` equivalent).
  *   3. `codex_bthid_keyboard` or `codex_webui` needs to be restarted without full hub power-pull.
  */
-class HubSshProvisioner {
+class HubSshProvisioner(private val newClient: () -> JSch = { JSch() }) {
 
     data class SshCommandResult(
         val exitCode: Int,
@@ -96,7 +96,7 @@ class HubSshProvisioner {
         command: String,
     ): Result<String> = withContext(Dispatchers.IO) {
         runCatching {
-            val jsch = JSch()
+            val jsch = newClient()
             jsch.addIdentity(
                 "harmony_owner_key",
                 privateKeyPem.trim().toByteArray(StandardCharsets.UTF_8),
