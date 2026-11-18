@@ -81,7 +81,7 @@ public final class HubViewModel: ObservableObject {
     private var activePressConsumed: Bool = false
     private var holdTimerTask: Task<Void, Never>?
     private var httpHoldLoopTask: Task<Void, Never>?
-    private var activeHttpHold: (endpoint: HubEndpoint, deviceId: String, command: String, functionId: Int, activityId: String?, holdId: String)?
+    private var activeHttpHold: (endpoint: HubEndpoint, deviceId: String, command: String, functionId: Int, activityId: String?, holdId: String, pressTask: Task<Bool, Never>)?
     private var isHBusHolding: Bool = false
 
     public init(
@@ -534,6 +534,10 @@ public final class HubViewModel: ObservableObject {
             activeHttpHold = nil
             let client = restClient
             Task {
+                // Always let the initial HTTP press complete before sending release, so quick taps
+                // never cancel the in-flight press request or deliver release out of order.
+                let pressSucceeded = await hold.pressTask.value
+                guard pressSucceeded else { return }
                 try? await client.irSend(
                     endpoint: hold.endpoint,
                     deviceId: hold.deviceId,
@@ -574,23 +578,14 @@ public final class HubViewModel: ObservableObject {
     private func startHttpHoldSession(resolved: ResolvedButtonAction, activityId: String?) {
         guard let endpoint = activeEndpoint else { return }
         let holdId = HBusFrameBuilder.newHoldId()
-        let holdInfo = (
-            endpoint: endpoint,
-            deviceId: resolved.pressDeviceId,
-            command: resolved.pressCommand,
-            functionId: resolved.pressFunctionId,
-            activityId: activityId,
-            holdId: holdId
-        )
-        activeHttpHold = holdInfo
         let line = "\(resolved.buttonLabel) → \(resolved.summaryText)"
         statusLine = line
         appendSendLog(label: resolved.buttonLabel, targetSummary: resolved.summaryText, isError: false)
 
-        httpHoldLoopTask = Task { [weak self] in
-            guard let self = self else { return }
+        let client = restClient
+        let pressTask = Task<Bool, Never> { [weak self] in
             do {
-                try await self.restClient.irSend(
+                try await client.irSend(
                     endpoint: endpoint,
                     deviceId: resolved.pressDeviceId,
                     command: resolved.pressCommand,
@@ -599,12 +594,31 @@ public final class HubViewModel: ObservableObject {
                     status: "press",
                     holdId: holdId
                 )
+                return true
             } catch {
-                let msg = (error as? LocalizedError)?.errorDescription ?? error.localizedDescription
-                self.statusLine = "\(line) · \(msg)"
-                self.showBanner("Couldn't send \(resolved.pressCommand) — \(msg)", isError: true)
-                return
+                if let self = self {
+                    let msg = (error as? LocalizedError)?.errorDescription ?? error.localizedDescription
+                    self.statusLine = "\(line) · \(msg)"
+                    self.showBanner("Couldn't send \(resolved.pressCommand) — \(msg)", isError: true)
+                }
+                return false
             }
+        }
+
+        let holdInfo = (
+            endpoint: endpoint,
+            deviceId: resolved.pressDeviceId,
+            command: resolved.pressCommand,
+            functionId: resolved.pressFunctionId,
+            activityId: activityId,
+            holdId: holdId,
+            pressTask: pressTask
+        )
+        activeHttpHold = holdInfo
+
+        httpHoldLoopTask = Task { [weak self] in
+            let pressSucceeded = await pressTask.value
+            guard pressSucceeded, !Task.isCancelled, let self = self else { return }
 
             try? await Task.sleep(nanoseconds: RemoteKeyMapping.holdDelayMs * 1_000_000)
             while !Task.isCancelled {
