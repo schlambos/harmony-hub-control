@@ -35,6 +35,7 @@ def fake_apk(_path: Path) -> dict:
 def write_hub_zip(path: Path, extra: dict | None = None, bad_md5: bool = False, helpers: bool = True,
                   gpl_source: bool = True, gpl_source_omit: str = "", readme: str = README) -> None:
     files = {rel: f"content of {rel}\n".encode() for rel in release.HUB_FILES}
+    files.update({rel: b"{}" for rel in release.HUB_PATCH_INPUTS})
     if helpers:
         files.update({rel: f"helper {rel}\n".encode() for rel in release.HUB_INSTALLER_HELPERS})
     files.update(extra or {})
