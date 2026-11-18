@@ -36,8 +36,8 @@ public final class HubRestClient: Sendable {
             self.probeSession = probeSession
         } else {
             let probeConfig = URLSessionConfiguration.ephemeral
-            probeConfig.timeoutIntervalForRequest = 1.2
-            probeConfig.timeoutIntervalForResource = 1.8
+            probeConfig.timeoutIntervalForRequest = 2.5
+            probeConfig.timeoutIntervalForResource = 3.0
             probeConfig.requestCachePolicy = .reloadIgnoringLocalCacheData
             self.probeSession = URLSession(configuration: probeConfig)
         }

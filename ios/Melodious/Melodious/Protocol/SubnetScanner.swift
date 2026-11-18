@@ -122,53 +122,48 @@ public enum SubnetScanner {
         port: Int = 8080,
         extraCandidates: [HubEndpoint] = [],
         includeLoopbackSimulator: Bool = true,
-        maxConcurrency: Int = 32
+        maxConcurrency: Int = 16
     ) async -> [HubEndpoint] {
-        var allCandidates: [HubEndpoint] = []
+        var priorityCandidates: [HubEndpoint] = []
+        var subnetCandidates: [HubEndpoint] = []
         var seenIds = Set<String>()
 
-        func appendCandidate(_ ep: HubEndpoint) {
+        func appendUnique(_ ep: HubEndpoint, to list: inout [HubEndpoint]) {
             if !seenIds.contains(ep.id) {
                 seenIds.insert(ep.id)
-                allCandidates.append(ep)
+                list.append(ep)
             }
         }
 
         if includeLoopbackSimulator {
-            appendCandidate(
+            appendUnique(
                 HubEndpoint(
                     name: "Local Simulator",
                     host: "127.0.0.1",
                     webUiPort: 8787,
                     hbusPort: 8088,
                     isSimulated: true
-                )
+                ),
+                to: &priorityCandidates
             )
         }
 
         for extra in extraCandidates {
-            appendCandidate(extra)
+            appendUnique(extra, to: &priorityCandidates)
         }
 
         if let primaryIp = detectLocalIPv4Addresses().first {
             for candidate in candidates(forIPv4Address: primaryIp, port: port, includeSelf: false) {
-                appendCandidate(candidate)
+                appendUnique(candidate, to: &subnetCandidates)
             }
         }
 
-        guard !allCandidates.isEmpty else { return [] }
+        guard !priorityCandidates.isEmpty || !subnetCandidates.isEmpty else { return [] }
 
-        let batchSize = max(1, maxConcurrency)
         var discovered: [HubEndpoint] = []
 
-        var index = 0
-        while index < allCandidates.count {
-            if Task.isCancelled { break }
-            let end = min(index + batchSize, allCandidates.count)
-            let slice = Array(allCandidates[index..<end])
-            index = end
-
-            let batchResults = await withTaskGroup(of: HubEndpoint?.self, returning: [HubEndpoint].self) { group in
+        func probeBatch(_ slice: [HubEndpoint]) async -> [HubEndpoint] {
+            await withTaskGroup(of: HubEndpoint?.self, returning: [HubEndpoint].self) { group in
                 for candidate in slice {
                     group.addTask {
                         await restClient.probeEndpoint(candidate)
@@ -182,7 +177,22 @@ public enum SubnetScanner {
                 }
                 return found
             }
-            discovered.append(contentsOf: batchResults)
+        }
+
+        // Probe loopback simulator and saved hubs first in a small uncontended batch so
+        // CFNetwork's connection-setup queue isn't starved by unreachable LAN hosts.
+        if !priorityCandidates.isEmpty && !Task.isCancelled {
+            discovered.append(contentsOf: await probeBatch(priorityCandidates))
+        }
+
+        let batchSize = max(1, maxConcurrency)
+        var index = 0
+        while index < subnetCandidates.count {
+            if Task.isCancelled { break }
+            let end = min(index + batchSize, subnetCandidates.count)
+            let slice = Array(subnetCandidates[index..<end])
+            index = end
+            discovered.append(contentsOf: await probeBatch(slice))
         }
 
         return discovered.sorted { a, b in
