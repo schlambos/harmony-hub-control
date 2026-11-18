@@ -632,7 +632,10 @@ export function humanizeLabel(raw) {
 }
 
 /* On-screen (touch screen) buttons that send one command, in menu order.
-   Sequences are skipped: the web does not run them yet. */
+   Sequences are skipped: the web does not run them yet.
+   FunctionGroupType 2 entries are the remote's 123 number pad; an ordinary
+   FunctionGroupType 0 on-screen button (even one whose press sends a digit
+   command for hold/Quick Access, #190) stays an on-screen button. */
 function touchButtons(config, activityId) {
   const id = String(activityId);
   const out = [];
@@ -645,14 +648,20 @@ function touchButtons(config, activityId) {
       if (button.ButtonAction?.__type !== "ButtonCommandAction") continue;
       const action = actionOf(button.ButtonAction);
       if (!action) continue;
-      const dedupe = `${action.deviceId}:${action.command}`;
+      const hold = actionOf(button.ButtonLongPressAction);
+      const cmd = action.command.trim();
+      const isPadDigit = /^\d$/.test(cmd) && button.FunctionGroupType !== 0;
+      const dedupe = isPadDigit
+        ? `pad:${action.deviceId}:${action.command}`
+        : `soft:${action.deviceId}:${action.command}:${hold?.deviceId ?? ""}:${hold?.command ?? ""}`;
       if (seen.has(dedupe)) continue;
       seen.add(dedupe);
       out.push({
         label: humanizeLabel(String(button.TextOnRemote || action.command).trim()),
         action,
+        hold,
         order: Number(button.MenuItem?.IndexInMenu ?? Number.MAX_SAFE_INTEGER),
-        digit: /^\d$/.test(action.command.trim()) ? action.command.trim() : null,
+        digit: isPadDigit ? cmd : null,
       });
     }
   }

@@ -155,4 +155,65 @@ class TouchControlsParityTest {
         assertEquals("PowerOn", longCommand(out.getValue("101")))
         assertEquals(null, longCommand(out.getValue("102")))
     }
+
+    @Test
+    fun `ordinary FGT0 on-screen digit button supports Standard hold-repeat and Separate Hold for LG Quick Access without touching FGT2 pad (#190)`() {
+        val root = Json.parseToJsonElement(
+            """
+            {"revision":"r","activityList":{"Activities":[{"Id-":5,"Name":"Watch TV","Roles":[]}]},"functionList":{"FunctionMaps":[]},
+             "deviceList":{"DevicesWithFeatures":[{"Device":{"Id-":9,"Name":"LG TV"},"Commands":[{"Name":"1"},{"Name":"2"},{"Name":"App Netflix"}]}]},
+             "mapList":{"ButtonMaps":[{"ButtonMapId-":1,"ActivityId-":5,"ButtonMapIdentifier":"16417Activity5","SurfaceId-":1,"ButtonMapSurfaceId-":1,"RemoteId-":1,"__type":"ActivityButtonMap","Sequences":[],"Buttons":[
+               {"__type":"SoftRemoteButton","FunctionGroupType":2,"ButtonId":200,"TextOnRemote":"1","MenuItem":{"IndexInMenu":0},"ButtonAction":{"__type":"ButtonCommandAction","DeviceId-":9,"CommandName":"1","FunctionId-":0,"EventType":0}},
+               {"__type":"SoftRemoteButton","FunctionGroupType":0,"ButtonId":100,"TextOnRemote":"Home","MenuItem":{"IndexInMenu":0},"ButtonAction":{"__type":"ButtonCommandAction","DeviceId-":9,"CommandName":"Home","FunctionId-":0,"EventType":0}}
+             ]}]}}
+            """.trimIndent()
+        ).jsonObject
+        val snapshot = ActivityGraphBuilder.parseConfigSnapshot(root)
+        val read = TouchScreenGraph.read(snapshot, "5")
+        // FGT2 number pad is excluded from editable rows.
+        assertEquals(listOf("Home"), read.buttons.map { it.label })
+
+        val quick1 = app.melodious.protocol.graph.SoftButtonDraft(
+            label = "Quick 1",
+            action = app.melodious.protocol.graph.SoftButtonAction.Command(app.melodious.protocol.graph.SequenceStep.Command("9", "1")),
+            pressMode = "custom",
+            longPress = app.melodious.protocol.graph.SequenceStep.Command("9", "App Netflix"),
+        )
+        val hold2 = app.melodious.protocol.graph.SoftButtonDraft(
+            label = "Digit 2 Hold",
+            action = app.melodious.protocol.graph.SoftButtonAction.Command(app.melodious.protocol.graph.SequenceStep.Command("9", "2")),
+            pressMode = "standard",
+        )
+        val built = TouchScreenGraph.build(snapshot, read.copy(buttons = read.buttons + listOf(quick1, hold2)))
+        val touch = built.mapList["ButtonMaps"]!!.jsonArray.map { it.jsonObject }.single()
+        val buttons = touch["Buttons"]!!.jsonArray.map { it.jsonObject }
+
+        // FGT2 number pad at slot 0 is preserved untouched with no ButtonLongPressAction.
+        val fgt2 = buttons.single { (it["FunctionGroupType"] as? kotlinx.serialization.json.JsonPrimitive)?.content == "2" }
+        assertEquals(0, slot(fgt2))
+        assertEquals(null, longCommand(fgt2))
+
+        // Quick 1 is FGT0 at slot 1 with short="1" (EventType 0) and long="App Netflix" (EventType 2).
+        val savedQuick1 = buttons.single { it["TextOnRemote"]?.jsonPrimitive?.content == "Quick 1" }
+        assertEquals("0", savedQuick1["FunctionGroupType"]!!.jsonPrimitive.content)
+        assertEquals(1, slot(savedQuick1))
+        assertEquals("1", savedQuick1["ButtonAction"]!!.jsonObject["CommandName"]!!.jsonPrimitive.content)
+        assertEquals("App Netflix", longCommand(savedQuick1))
+        assertEquals(2, savedQuick1["ButtonLongPressAction"]!!.jsonObject["EventType"]!!.jsonPrimitive.content.toInt())
+
+        // Digit 2 Hold is FGT0 at slot 2 with short="2" and null long press (hold repeats).
+        val savedHold2 = buttons.single { it["TextOnRemote"]?.jsonPrimitive?.content == "Digit 2 Hold" }
+        assertEquals("0", savedHold2["FunctionGroupType"]!!.jsonPrimitive.content)
+        assertEquals(2, slot(savedHold2))
+        assertEquals("2", savedHold2["ButtonAction"]!!.jsonObject["CommandName"]!!.jsonPrimitive.content)
+        assertEquals(null, longCommand(savedHold2))
+
+        // resolveActivitySoftButtons keeps the FGT0 digit buttons visible (digit == null) while FGT2 stays digit == 1.
+        val resolved = ActivityGraphBuilder.resolveActivitySoftButtons(
+            ActivityGraphBuilder.parseConfigSnapshot(JsonObject(root.toMutableMap().apply { put("mapList", built.mapList) })),
+            "5",
+        )
+        val extras = resolved.filter { it.digit == null }
+        assertEquals(listOf("Home", "Quick 1", "Digit 2 Hold"), extras.map { it.label })
+    }
 }

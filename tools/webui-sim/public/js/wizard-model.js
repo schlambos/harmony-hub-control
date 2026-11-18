@@ -671,6 +671,7 @@ function cloneEmptySurfaceMap(template, activityId, alloc, config = null) {
   delete map.ButtonMapId;
   delete map["Id-"];
   delete map.Id;
+  delete map["DeviceId-"];
   map["ButtonMapId-"] = alloc.mapId();
   map["ActivityId-"] = Number(activityId);
   map.ButtonMapIdentifier = rewriteIdentifierForActivity(map.ButtonMapIdentifier, activityId);
@@ -679,7 +680,7 @@ function cloneEmptySurfaceMap(template, activityId, alloc, config = null) {
   if (Object.prototype.hasOwnProperty.call(map, "DateModified")) {
     map.DateModified = harmonyDate();
   }
-  map.__type = map.__type || "ActivityButtonMap";
+  map.__type = "ActivityButtonMap";
   if (config) {
     const match = String(map.ButtonMapIdentifier ?? "").match(/^(.+?)Activity-?\d+$/);
     const surf = surfaceTemplate(config, match ? match[1] : "16414");
@@ -928,11 +929,49 @@ function touchSoftButton({ group, slot, label, deviceId, command, activityId, bu
   };
 }
 
+/* Member device priority for seeding the Touch number pad when the wizard
+   draft itself has no Number0-9 mapping (for example, a movie activity whose
+   player has no digit commands while the display TV does). Follows the same
+   role chain as preferredDeviceForButtonKey, then any remaining activity
+   members in draft order. If no member device has digit commands, seeding
+   nothing remains correct. */
+const PAD_ROLE_ORDER = [
+  "ChannelChangingActivityRole",
+  "PlayGameActivityRole",
+  "PlayMovieActivityRole",
+  "PlayMediaActivityRole",
+  "KeyboardTextEntryActivityRole",
+  "DisplayActivityRole",
+];
+
+const PAD_ALIASES_BY_KEY = new Map(
+  REMOTE_BUTTONS
+    .map((b) => [BUTTON_KEY_BY_LABEL[b.label], b.aliases])
+    .filter(([key]) => /^Number\d$/.test(key)),
+);
+
+function padMemberDeviceIds(roles) {
+  const roleOrder = Array.isArray(roles) ? roles : [];
+  const ordered = [];
+  for (const roleType of PAD_ROLE_ORDER) {
+    for (const r of roleOrder) {
+      if (r?.deviceId && String(r.roleType ?? "").includes(roleType)) {
+        ordered.push(String(r.deviceId));
+      }
+    }
+  }
+  for (const r of roleOrder) {
+    if (r?.deviceId) ordered.push(String(r.deviceId));
+  }
+  return [...new Set(ordered)];
+}
+
 /* A brand-new activity's on-screen buttons on the Touch, seeded from the
-   wizard's own mapping the way Logitech's setup did: the number pad (from
-   the wizard's Number0-9) and the first member command the wizard's keys
-   have no key for (Home). Existing activities are never reseeded; what an
-   owner edited, or left empty, stays. */
+   wizard's own mapping (or member devices' digit commands in role priority
+   order when the draft has no Number0-9 mappings) the way Logitech's setup
+   did: the number pad and the first member command the wizard's keys have
+   no key for (Home). Existing activities are never reseeded; what an owner
+   edited, or left empty, stays. */
 function seedTouchOnScreenButtons({ buttonMaps, activityId, draft, config, alloc }) {
   const targets = buttonMaps.filter((m) => String(m?.ButtonMapIdentifier ?? "") === `16417Activity${activityId}`);
   for (const target of targets) {
@@ -943,28 +982,50 @@ function seedTouchOnScreenButtons({ buttonMaps, activityId, draft, config, alloc
 function seedOneTouchScreen({ target, activityId, draft, config, alloc }) {
   if (!target || !Array.isArray(target.Buttons)) return;
   if (target.Buttons.some((b) => b?.__type === "SoftRemoteButton")) return;
+  const roleOrder = draft.roles ?? [];
+  const entryById = new Map(
+    (config?.deviceList?.DevicesWithFeatures ?? [])
+      .map((entry) => [String(entry?.Device?.["Id-"] ?? ""), entry]),
+  );
+  const commandsById = new Map(
+    [...entryById.entries()].map(([id, entry]) => [
+      id,
+      (entry?.Commands ?? []).map((c) => ({
+        name: String(c?.Name ?? c?.name ?? ""),
+        functionId: c?.["FunctionId-"] ?? c?.functionId ?? 0,
+      })),
+    ]),
+  );
+  const padMembers = padMemberDeviceIds(roleOrder);
   const soft = [];
   for (const [key, label, slot] of TOUCH_PAD_SLOTS) {
-    const mapping = draft.buttons?.[key];
-    if (!mapping?.command) continue;
+    let deviceId = draft.buttons?.[key]?.deviceId;
+    let command = draft.buttons?.[key]?.command;
+    if (!command?.name) {
+      const aliases = PAD_ALIASES_BY_KEY.get(key);
+      for (const id of padMembers) {
+        const matched = matchCommand(commandsById.get(id), aliases);
+        if (matched?.name) {
+          deviceId = id;
+          command = matched;
+          break;
+        }
+      }
+    }
+    if (!deviceId || !command?.name) continue;
     soft.push(touchSoftButton({
       group: 2, slot, label,
-      deviceId: mapping.deviceId,
-      command: { name: mapping.command.name, functionId: mapping.command.functionId },
+      deviceId,
+      command: { name: command.name, functionId: command.functionId },
       activityId, buttonId: alloc.id(),
     }));
   }
-  const roleOrder = draft.roles ?? [];
   const members = [...new Set(
     [
       ...roleOrder.filter((r) => /^Play/.test(String(r?.roleType ?? ""))),
       ...roleOrder,
     ].map((r) => String(r?.deviceId)).filter(Boolean),
   )];
-  const entryById = new Map(
-    (config?.deviceList?.DevicesWithFeatures ?? [])
-      .map((entry) => [String(entry?.Device?.["Id-"] ?? ""), entry]),
-  );
   for (const id of members) {
     const home = (entryById.get(id)?.Commands ?? [])
       .find((command) => String(command?.Name ?? "").toLowerCase() === "home");
@@ -1100,16 +1161,20 @@ export function buildActivityGraph({ config, draft, editId, remotes = [] }) {
   mapList.ButtonMaps = mergedMaps;
   /* The engine drops every press from a remote that has no map for the
      running activity, and the surface copy above misses a Companion's map
-     when it shares the Smart Control's surface ids (seen on a hub in #79).
-     So each Companion the hub has maps for gets one, modelled on another
-     of its activity maps, and the mirror below fills it. A paired Companion
-     the hub has no map for yet (a fresh hub) starts from the wizard's map. */
+     when it shares the Smart Control's surface ids (seen on a hub in #79)
+     or a Touch/Elite's map when the hub has no prior 16417Activity template
+     to clone (only 16417Device/16417Root maps or a paired 16417 remote, #191).
+     So each screen or Companion remote the hub has maps for gets one,
+     modelled on another of its maps, and the mirror below fills it. A paired
+     remote the hub has no map for yet (a fresh hub) starts from the wizard's
+     map. */
   const paired = new Set((Array.isArray(remotes) ? remotes : []).map(String));
-  for (const prefix of COMPANION_REMOTES) {
+  for (const prefix of ["16417", ...COMPANION_REMOTES]) {
     const id = `${prefix}Activity${activityId}`;
     if (mergedMaps.some((m) => String(m?.ButtonMapIdentifier ?? "") === id)) continue;
     const sibling = mergedMaps.find((m) => String(m?.ButtonMapIdentifier ?? "").startsWith(`${prefix}Activity`))
-      ?? (paired.has(prefix) ? wizardMap : null);
+      ?? mergedMaps.find((m) => String(m?.ButtonMapIdentifier ?? "").startsWith(prefix))
+      ?? (COMPANION_REMOTES.includes(prefix) && paired.has(prefix) ? wizardMap : null);
     if (!sibling) continue;
     const made = cloneEmptySurfaceMap(sibling, activityId, alloc, config);
     made.ButtonMapIdentifier = id;

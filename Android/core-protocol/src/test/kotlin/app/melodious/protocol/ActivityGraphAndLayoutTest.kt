@@ -607,4 +607,83 @@ class ActivityGraphAndLayoutTest {
                 .none { it["__type"]?.jsonPrimitive?.content == "SoftRemoteButton" },
         )
     }
+
+    @Test
+    fun `a new activity seeds the Touch number pad from member device commands when draft maps no digits (#191 A and C)`() {
+        val digits = (0..9).joinToString(",") { """{ "Name": "$it", "FunctionId-": 0 }""" }
+        val root = Json.parseToJsonElement(
+            """
+            {
+              "revision": "rev-1",
+              "activityList": { "Activities": [] },
+              "mapList": { "ButtonMaps": [
+                { "ButtonMapId-": 46597140, "DeviceId-": 39000101, "__type": "DeviceButtonMap",
+                  "ButtonMapIdentifier": "16417Device39000101", "SurfaceId-": 14551427,
+                  "ButtonMapSurfaceId-": 14551427, "RemoteId-": 15390924, "Buttons": [] }
+              ] },
+              "functionList": { "FunctionMaps": [] },
+              "deviceList": { "DevicesWithFeatures": [
+                { "Device": { "Id-": 39000101, "Name": "LG webOS TV (HA)", "DeviceTypeDisplayName": "Home Appliance", "Transport": 64 },
+                  "Commands": [ { "Name": "PowerOn" }, { "Name": "PowerOff" }, { "Name": "Home" }, { "Name": "App Netflix" }, $digits ] },
+                { "Device": { "Id-": 81897247, "Name": "AVR", "DeviceTypeDisplayName": "Amplifier" },
+                  "Commands": [ { "Name": "VolumeUp" }, { "Name": "VolumeDown" }, { "Name": "Mute" } ] },
+                { "Device": { "Id-": 39000102, "Name": "Streamer", "DeviceTypeDisplayName": "Media Player" },
+                  "Commands": [ { "Name": "Play" }, { "Name": "Pause" }, { "Name": "Select" } ] }
+              ] }
+            }
+            """.trimIndent()
+        ).jsonObject
+        val snapshot = ActivityGraphBuilder.parseConfigSnapshot(root)
+        val roles = listOf(
+            WizardRoleDraft(roleType = "DisplayActivityRole", deviceId = "39000101"),
+            WizardRoleDraft(roleType = "VolumeActivityRole", deviceId = "81897247"),
+            WizardRoleDraft(roleType = "PlayMovieActivityRole", deviceId = "39000102"),
+        )
+        val defaults = ActivityGraphBuilder.deriveDefaultButtons(roles, snapshot.devices)
+        assertFalse("Number1" in defaults)
+        val draft = ActivityWizardDraft(name = "Watch Movie", type = 2, roles = roles, buttons = defaults)
+        val built = ActivityGraphBuilder.buildActivityGraph(snapshot, draft)
+        val touch = (built.mapList["ButtonMaps"] as JsonArray).map { it.jsonObject }
+            .first { it["ButtonMapIdentifier"]?.jsonPrimitive?.content == "16417Activity${built.activityId}" }
+        assertEquals("14551427", touch["SurfaceId-"]?.jsonPrimitive?.content)
+        val pad = touch["Buttons"]!!.jsonArray.map { it.jsonObject }
+            .filter { it["__type"]?.jsonPrimitive?.content == "SoftRemoteButton" && it["FunctionGroupType"]?.jsonPrimitive?.int == 2 }
+        assertEquals(10, pad.size)
+        assertTrue(pad.all { it["ButtonAction"]!!.jsonObject["DeviceId-"]!!.jsonPrimitive.int == 39000101 })
+    }
+
+    @Test
+    fun `seeds nothing when no member device has digit commands or Home`() {
+        val root = Json.parseToJsonElement(
+            """
+            {
+              "revision": "rev-1",
+              "activityList": { "Activities": [] },
+              "mapList": { "ButtonMaps": [
+                { "ButtonMapId-": 52944100, "ActivityId-": 100, "__type": "ActivityButtonMap",
+                  "ButtonMapIdentifier": "16417Activity100", "SurfaceId-": 14551427,
+                  "ButtonMapSurfaceId-": 14551427, "RemoteId-": 15390924, "Buttons": [] }
+              ] },
+              "functionList": { "FunctionMaps": [] },
+              "deviceList": { "DevicesWithFeatures": [
+                { "Device": { "Id-": 81897247, "Name": "AVR", "DeviceTypeDisplayName": "Amplifier" },
+                  "Commands": [ { "Name": "VolumeUp" }, { "Name": "VolumeDown" }, { "Name": "Mute" } ] }
+              ] }
+            }
+            """.trimIndent()
+        ).jsonObject
+        val snapshot = ActivityGraphBuilder.parseConfigSnapshot(root)
+        val draft = ActivityWizardDraft(
+            name = "Amp Only",
+            roles = listOf(WizardRoleDraft(roleType = "VolumeActivityRole", deviceId = "81897247")),
+            buttons = mapOf("VolumeUp" to WizardButtonMapping(deviceId = "81897247", commandName = "VolumeUp")),
+        )
+        val built = ActivityGraphBuilder.buildActivityGraph(snapshot, draft)
+        val touch = (built.mapList["ButtonMaps"] as JsonArray).map { it.jsonObject }
+            .first { it["ButtonMapIdentifier"]?.jsonPrimitive?.content == "16417Activity${built.activityId}" }
+        assertTrue(
+            touch["Buttons"]!!.jsonArray.map { it.jsonObject }
+                .none { it["__type"]?.jsonPrimitive?.content == "SoftRemoteButton" },
+        )
+    }
 }

@@ -73,6 +73,7 @@ import app.melodious.protocol.graph.SequenceStep
 import app.melodious.protocol.graph.SoftButtonAction
 import app.melodious.protocol.graph.SoftButtonDraft
 import app.melodious.protocol.graph.TouchScreenDraft
+import app.melodious.protocol.graph.TouchScreenGraph
 import app.melodious.protocol.model.HubDevice
 import app.melodious.ui.components.ConfirmDialog
 import app.melodious.ui.theme.MelodiousColors
@@ -135,7 +136,7 @@ fun TouchScreenEditor(state: MelodiousUiState, viewModel: MelodiousViewModel) {
                 itemsIndexed(draft.buttons, key = { i, b -> "b$i-${b.buttonId}-${b.label}" }) { i, button ->
                     ReorderRow(
                         title = button.label,
-                        subtitle = describe(button.action, draft, state),
+                        subtitle = describe(button, draft, state),
                         canMoveUp = i > 0,
                         canMoveDown = i < draft.buttons.lastIndex,
                         onMove = { delta -> viewModel.updateTouchDraft(draft.copy(buttons = draft.buttons.move(i, delta))) },
@@ -232,8 +233,15 @@ private fun <T> List<T>.move(index: Int, delta: Int): List<T> {
     return toMutableList().apply { add(target, removeAt(index)) }
 }
 
-private fun describe(action: SoftButtonAction, draft: TouchScreenDraft, state: MelodiousUiState): String = when (action) {
-    is SoftButtonAction.Command -> "${state.device(action.step.deviceId)?.name ?: "Device"} · ${action.step.command}"
+private fun describe(button: SoftButtonDraft, draft: TouchScreenDraft, state: MelodiousUiState): String = when (val action = button.action) {
+    is SoftButtonAction.Command -> {
+        val base = "${state.device(action.step.deviceId)?.name ?: "Device"} · ${action.step.command}"
+        when (TouchScreenGraph.pressModeOf(button)) {
+            "oneShot" -> "$base · One-shot"
+            "custom" -> TouchScreenGraph.longPressOf(button)?.let { "$base · Hold: ${it.command}" } ?: base
+            else -> base
+        }
+    }
     is SoftButtonAction.RunSequence -> "Runs “${draft.sequences.firstOrNull { it.key == action.sequenceKey }?.name ?: "missing sequence"}”"
 }
 
@@ -314,8 +322,17 @@ private fun ButtonSheet(
     var label by rememberSaveable { mutableStateOf(initial?.label.orEmpty()) }
     var useSequence by rememberSaveable { mutableStateOf(initial?.action is SoftButtonAction.RunSequence) }
     var command by remember { mutableStateOf((initial?.action as? SoftButtonAction.Command)?.step) }
+    var pressMode by rememberSaveable {
+        mutableStateOf(initial?.let(TouchScreenGraph::pressModeOf) ?: command?.let { app.melodious.protocol.graph.ActivityGraphBuilder.recommendedPressMode(it.command) })
+    }
+    var longCommand by remember {
+        mutableStateOf(initial?.let(TouchScreenGraph::longPressOf)?.takeIf { initial.let(TouchScreenGraph::pressModeOf) == "custom" })
+    }
+    var pickingHold by rememberSaveable { mutableStateOf(false) }
     var sequenceKey by rememberSaveable { mutableStateOf((initial?.action as? SoftButtonAction.RunSequence)?.sequenceKey) }
     val action: SoftButtonAction? = if (useSequence) sequenceKey?.let { SoftButtonAction.RunSequence(it) } else command?.let { SoftButtonAction.Command(it) }
+    val effectiveMode = if (useSequence) null else pressMode ?: command?.let { app.melodious.protocol.graph.ActivityGraphBuilder.recommendedPressMode(it.command) }
+    val canSave = action != null && label.isNotBlank() && (useSequence || effectiveMode != "custom" || longCommand != null)
 
     ModalBottomSheet(
         onDismissRequest = onDismiss,
@@ -339,7 +356,7 @@ private fun ButtonSheet(
             )
             Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                 FilterChip(selected = !useSequence, onClick = { useSequence = false }, label = { Text("Send a command") }, modifier = Modifier.heightIn(min = 40.dp))
-                FilterChip(selected = useSequence, onClick = { useSequence = true }, label = { Text("Run a sequence") }, modifier = Modifier.heightIn(min = 40.dp))
+                FilterChip(selected = useSequence, onClick = { useSequence = true; pickingHold = false }, label = { Text("Run a sequence") }, modifier = Modifier.heightIn(min = 40.dp))
             }
             if (useSequence) {
                 if (sequences.isEmpty()) {
@@ -354,14 +371,76 @@ private fun ButtonSheet(
                     }
                 }
             } else {
-                CommandPicker(devices, selected = command, modifier = Modifier.weight(1f)) { picked ->
-                    command = picked
-                    if (label.isBlank()) label = app.melodious.protocol.graph.ActivityGraphBuilder.humanizeLabel(picked.command).take(MAX_LABEL)
+                if (command != null) {
+                    Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                        listOf("standard" to "Standard", "oneShot" to "One-shot", "custom" to "Separate Hold").forEach { (mode, modeLabel) ->
+                            FilterChip(
+                                selected = effectiveMode == mode,
+                                onClick = {
+                                    pressMode = mode
+                                    if (mode != "custom") {
+                                        longCommand = null
+                                        pickingHold = false
+                                    } else {
+                                        pickingHold = true
+                                    }
+                                },
+                                label = { Text(modeLabel) },
+                                modifier = Modifier.heightIn(min = 36.dp),
+                            )
+                        }
+                    }
+                    if (effectiveMode == "custom") {
+                        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                            FilterChip(
+                                selected = !pickingHold,
+                                onClick = { pickingHold = false },
+                                label = { Text("Press: ${command?.command.orEmpty()}") },
+                                modifier = Modifier.heightIn(min = 36.dp),
+                            )
+                            FilterChip(
+                                selected = pickingHold,
+                                onClick = { pickingHold = true },
+                                label = { Text(longCommand?.let { "Hold: ${it.command}" } ?: "Pick Hold command") },
+                                modifier = Modifier.heightIn(min = 36.dp),
+                            )
+                        }
+                    }
+                }
+                if (effectiveMode == "custom" && pickingHold) {
+                    CommandPicker(devices, selected = longCommand, modifier = Modifier.weight(1f)) { picked ->
+                        longCommand = picked
+                        pressMode = "custom"
+                    }
+                } else {
+                    CommandPicker(devices, selected = command, modifier = Modifier.weight(1f)) { picked ->
+                        command = picked
+                        if (effectiveMode != "custom") {
+                            pressMode = app.melodious.protocol.graph.ActivityGraphBuilder.recommendedPressMode(picked.command)
+                        }
+                        if (label.isBlank()) label = app.melodious.protocol.graph.ActivityGraphBuilder.humanizeLabel(picked.command).take(MAX_LABEL)
+                    }
                 }
             }
             Button(
-                onClick = { action?.let { onSave((initial ?: SoftButtonDraft(label, it)).copy(label = label.trim(), action = it)) } },
-                enabled = action != null && label.isNotBlank(),
+                onClick = {
+                    action?.let { act ->
+                        val resolvedLong = when (effectiveMode) {
+                            "oneShot" -> command
+                            "custom" -> longCommand
+                            else -> null
+                        }
+                        onSave(
+                            (initial ?: SoftButtonDraft(label, act)).copy(
+                                label = label.trim(),
+                                action = act,
+                                pressMode = effectiveMode,
+                                longPress = resolvedLong,
+                            )
+                        )
+                    }
+                },
+                enabled = canSave,
                 modifier = Modifier.fillMaxWidth().heightIn(min = 52.dp).padding(bottom = 12.dp),
             ) { Text("Done") }
         }

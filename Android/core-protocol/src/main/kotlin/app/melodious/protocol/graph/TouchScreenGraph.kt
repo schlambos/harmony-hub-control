@@ -26,12 +26,17 @@ sealed interface SoftButtonAction {
 /**
  * An editable on-screen button. [buttonId] and [original] are set for buttons that already exist
  * on the hub, so unknown fields (images, double-press, Logitech-only keys) survive a save.
+ * [pressMode] ('standard' | 'oneShot' | 'custom') and [longPress] allow configuring hold
+ * semantics on ordinary on-screen buttons (FunctionGroupType 0, #190); when null, P11 defaults
+ * and any existing long-press on [original] apply.
  */
 data class SoftButtonDraft(
     val label: String,
     val action: SoftButtonAction,
     val buttonId: Int? = null,
     val original: JsonObject? = null,
+    val pressMode: String? = null,
+    val longPress: SequenceStep.Command? = null,
 )
 
 /** [key] identifies the sequence inside the editor; existing sequences use their SequenceId. */
@@ -201,7 +206,11 @@ object TouchScreenGraph {
             } else {
                 freeSlot()
             }
-            val long = longPressFor(button.original, actionJson)
+            val long = if (button.pressMode != null || button.longPress != null) {
+                explicitLongPressFor(button, actionJson)
+            } else {
+                longPressFor(button.original, actionJson)
+            }
             JsonObject(
                 base.toMutableMap().apply {
                     put("ButtonId", JsonPrimitive(button.buttonId ?: alloc.allocateId()))
@@ -244,6 +253,62 @@ object TouchScreenGraph {
             a.str("DeviceId-") == b.str("DeviceId-") &&
             a.str("CommandName") == b.str("CommandName") &&
             ((a["FunctionId-"] as? JsonPrimitive)?.intOrNull ?: 0) == ((b["FunctionId-"] as? JsonPrimitive)?.intOrNull ?: 0)
+
+    fun pressModeOf(button: SoftButtonDraft): String {
+        val cmd = (button.action as? SoftButtonAction.Command)?.step ?: return "standard"
+        val oldAction = (button.original?.get("ButtonAction") as? JsonObject)?.let(::commandStep)
+        val oldLongObj = button.original?.get("ButtonLongPressAction") as? JsonObject
+        val oldLong = oldLongObj?.let(::commandStep)
+        if (button.pressMode != null) {
+            return when (button.pressMode) {
+                "standard" -> "standard"
+                "oneShot" -> "oneShot"
+                "custom" -> {
+                    val lp = button.longPress ?: oldLong
+                    if (lp != null && lp == cmd) "oneShot"
+                    else if (lp != null || oldLongObj != null) "custom"
+                    else "oneShot"
+                }
+                else -> "standard"
+            }
+        }
+        if (button.longPress != null) {
+            return if (button.longPress == cmd) "oneShot" else "custom"
+        }
+        if (oldLong != null && (oldAction == null || oldLong != oldAction)) {
+            return if (oldLong == cmd) "oneShot" else "custom"
+        }
+        if (oldLongObj != null && oldLong == null) return "custom"
+        if (oldAction != null && oldAction == cmd) {
+            return if (oldLong != null) "oneShot" else "standard"
+        }
+        return ActivityGraphBuilder.recommendedPressMode(cmd.command)
+    }
+
+    fun longPressOf(button: SoftButtonDraft): SequenceStep.Command? {
+        val cmd = (button.action as? SoftButtonAction.Command)?.step ?: return null
+        val oldLong = (button.original?.get("ButtonLongPressAction") as? JsonObject)?.let(::commandStep)
+        return when (pressModeOf(button)) {
+            "standard" -> null
+            "oneShot" -> cmd
+            "custom" -> button.longPress ?: oldLong
+            else -> null
+        }
+    }
+
+    private fun explicitLongPressFor(button: SoftButtonDraft, actionJson: JsonObject): JsonElement? {
+        if (button.action !is SoftButtonAction.Command) {
+            return if (button.original == null) null else JsonNull
+        }
+        return when (pressModeOf(button)) {
+            "standard" -> if (button.original == null) null else JsonNull
+            "oneShot" -> JsonObject(actionJson.toMutableMap().apply { put("EventType", JsonPrimitive(2)) })
+            "custom" -> longPressOf(button)?.let { lp ->
+                JsonObject(stepJson(lp, 0).toMutableMap().apply { put("EventType", JsonPrimitive(2)) })
+            }
+            else -> if (button.original == null) null else JsonNull
+        }
+    }
 
     /**
      * P11 press modes, as the web editor sets them. A row whose command is

@@ -582,19 +582,38 @@ export function createTouchScreenView(section) {
             const tag = member ? "" : isHaDevice(d) ? " · HA" : " · extra";
             return `<button type="button" class="chip" data-pick-device="${escapeHtml(d.id)}" aria-pressed="${d.id === deviceId}">${escapeHtml(d.name)}${tag}</button>`;
           }).join("");
-          $('[data-sheet="done"]').disabled = !label.trim() || !(pick || row);
+          // Separate Hold needs a distinct hold command before the button can be saved.
+          $('[data-sheet="done"]').disabled = !label.trim() || !(pick || row) || (pressMode === "custom" && !longPick);
+          drawLong();
+        }
+
+        /* The hold picker is built once and only its chips/list redraw, so
+           typing in its search field keeps focus and its text. */
+        function drawLong() {
           const longBox = $("[data-pick-long]");
-          if (pressMode === "custom" && pick) {
-            longBox.style.display = "";
-            const ldev = devices.find((d) => d.id === longDeviceId);
+          if (pressMode !== "custom" || !pick) {
+            longBox.style.display = "none";
+            return;
+          }
+          longBox.style.display = "";
+          if (!longBox.querySelector("[data-long-devices]")) {
             longBox.innerHTML = `<p class="wiz-hint">Hold action (fires when held ≥600ms):</p>
-              <div class="pick-chips">${devices.map((d) => `<button type="button" class="chip" data-long-device="${escapeHtml(d.id)}" aria-pressed="${d.id === longDeviceId}">${escapeHtml(d.name)}</button>`).join("")}</div>
-              <label class="search-field">${icon("search", { size: 22 })}<input type="search" data-long-search placeholder="Search hold commands" autocomplete="off"></label>
-              <div data-long-list>${(ldev?.commands ?? []).filter((c) => !longQuery || c.name.toLowerCase().includes(longQuery.toLowerCase())).map((c) => {
-                const on = longPick?.deviceId === longDeviceId && longPick?.command === c.name;
-                return `<button type="button" class="pick-row${on ? " is-current" : ""}" data-long-command="${escapeHtml(c.name)}"><span>${escapeHtml(c.name)}</span></button>`;
-              }).join("") || `<p class="list-note">No commands.</p>`}</div>`;
-          } else longBox.style.display = "none";
+              <div class="pick-chips" role="group" aria-label="Hold device" data-long-devices></div>
+              <label class="search-field">${icon("search", { size: 22 })}<input type="search" data-long-search placeholder="Search hold commands" aria-label="Search hold commands" autocomplete="off" value="${escapeHtml(longQuery)}"></label>
+              <div data-long-list></div>`;
+          }
+          const ids = roleIds();
+          $("[data-long-devices]").innerHTML = devices.map((d) => {
+            const member = ids.includes(String(d.id));
+            const tag = member ? "" : isHaDevice(d) ? " · HA" : " · extra";
+            return `<button type="button" class="chip" data-long-device="${escapeHtml(d.id)}" aria-pressed="${d.id === longDeviceId}">${escapeHtml(d.name)}${tag}</button>`;
+          }).join("");
+          const ldev = devices.find((d) => d.id === longDeviceId);
+          const lq = longQuery.trim().toLowerCase();
+          $("[data-long-list]").innerHTML = (ldev?.commands ?? []).filter((c) => !lq || c.name.toLowerCase().includes(lq)).map((c) => {
+            const on = longPick?.deviceId === longDeviceId && longPick?.command === c.name;
+            return `<button type="button" class="pick-row${on ? " is-current" : ""}" data-long-command="${escapeHtml(c.name)}"><span>${escapeHtml(c.name)}</span></button>`;
+          }).join("") || `<p class="list-note">No commands.</p>`;
         }
 
         function drawList() {
@@ -654,6 +673,12 @@ export function createTouchScreenView(section) {
             pressMode = modeBtn.dataset.mode;
             if (pressMode === "oneShot" && pick) longPick = { kind: "command", deviceId: pick.deviceId, command: pick.command, functionId: pick.functionId };
             if (pressMode === "standard") longPick = null;
+            if (pressMode === "custom") {
+              if (longPick && pick && String(longPick.deviceId) === String(pick.deviceId) && String(longPick.command) === String(pick.command)) {
+                longPick = null;
+              }
+              if (!longPick) longDeviceId = deviceId;
+            }
             drawTop();
             drawList();
             return;

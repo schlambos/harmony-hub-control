@@ -263,11 +263,12 @@ describe("issue #86 failure 3 — deleting all activities then creating a new on
     for (const m of api.state.config.mapList.ButtonMaps.filter(
       (entry) => String(entry["ActivityId-"]) === String(g2.activityId),
     )) {
+      const expectedSurface = String(m.ButtonMapIdentifier ?? "").startsWith("16417") ? 14551427 : 13151460;
       assert.equal(m["RemoteId-"], 12345678, `${m.ButtonMapIdentifier} RemoteId-`);
-      assert.equal(m["SurfaceId-"], 13151460, `${m.ButtonMapIdentifier} SurfaceId-`);
+      assert.equal(m["SurfaceId-"], expectedSurface, `${m.ButtonMapIdentifier} SurfaceId-`);
       assert.equal(
         m["ButtonMapSurfaceId-"],
-        13151460,
+        expectedSurface,
         `${m.ButtonMapIdentifier} ButtonMapSurfaceId-`,
       );
     }
