@@ -169,6 +169,8 @@ def ordered_assets(series: str, version: str) -> list[str]:
     out += [names["mac"]["dmg"]["arm64"], names["mac"]["dmg"]["x64"]]
     out += [names["mac"]["zip"]["arm64"], names["mac"]["zip"]["x64"]]
     out += [names["win"]["setup"]["x64"], names["win"]["zip"]["x64"]]
+    if series == "hub" and tuple(map(int, version.split("."))) >= (2, 5, 0):
+        out.append(f"melodious-ios-{version}.ipa")
     return out
 
 

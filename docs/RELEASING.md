@@ -3,6 +3,7 @@
 A release is a GitHub release `v<version>` ("Melodious <major.minor>") with:
 - the hub zip;
 - the Android APK;
+- the unsigned iOS IPA for full releases starting with 2.5.0;
 - the four macOS files;
 - the two Windows files (experimental, unsigned);
 - BusyBox's upstream source tarball, `busybox-<version>.tar.bz2` (hub releases);
@@ -24,6 +25,7 @@ key, so losing that key means users uninstall and reinstall.
 1. **Build the assets** into one folder:
    - `melodious-hub-<v>.zip`;
    - the owner signs the APK with `apksigner` → `melodious-<v>.apk`;
+   - build `melodious-ios-<v>.ipa` with `./ios/build-ipa.sh` once the iOS app is on the release commit. Inspect the extracted executable with `vtool -show-build` for platform iOS (2), verify it is unsigned and check there is no `embedded.mobileprovision`. Leave personal signing to the owner. The IPA belongs in `SHA256SUMS.txt`; a missing IPA blocks the full release;
    - `Melodious-<v>-{arm64,x64}.{dmg,zip}`;
    - `Melodious-<v>-win-x64-setup.exe` and `Melodious-<v>-win-x64.zip`, from
      the `melodious-windows-x64` artifact of the `Desktop (Windows)` workflow

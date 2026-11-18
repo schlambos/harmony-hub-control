@@ -94,6 +94,11 @@ class ReleaseToolTest(unittest.TestCase):
         self.assertIn("matches the assets", report[-1])
         self.assertEqual(manifest["commit"], COMMIT)
         self.assertEqual(manifest["android"]["versionCode"], 42)
+        ipa = f"melodious-ios-{VERSION}.ipa"
+        self.assertNotIn(ipa, release.ordered_assets("desktop", VERSION))
+        self.assertNotIn("melodious-ios-2.0.0.ipa", release.ordered_assets("hub", "2.0.0"))
+        (self.dir / ipa).write_bytes(b"altered")
+        self.assertRejected("SHA-256|checksum|mismatch")
         tiers = {f["path"]: f["tier"] for f in manifest["hub"]["files"]}
         self.assertEqual(tiers["payload/bin/codex_webui"], 1)
         self.assertEqual(tiers["payload/activity/codexactivity.lua"], 2)
