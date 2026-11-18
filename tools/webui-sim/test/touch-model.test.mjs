@@ -389,4 +389,52 @@ describe("touchSavePayload", () => {
     delete cfg.functionList;
     assert.throws(() => touchSavePayload(cfg, draft), /didn't load completely/);
   });
+
+  it("allows an ordinary FGT0 on-screen button for a digit with Standard hold-repeat or Separate Hold for LG Quick Access without disturbing FGT2 pad slots (#190)", () => {
+    const cfg = config();
+    let draft = readTouchScreen(cfg, SCREEN);
+    // Reproduction D: FGT2 number-pad digits are never included in editable rows.
+    assert.ok(draft.kept.numberPad > 0);
+    assert.ok(draft.rows.every((r) => !/^[0-9]$/.test(r.label)));
+
+    // Add an ordinary FGT0 on-screen button for digit 1 with Separate Hold (e.g. App Netflix)
+    // and another for digit 2 with Standard hold-repeat (continuous IR hold).
+    draft = addButton(draft, {
+      label: "Quick 1",
+      deviceId: "74521691",
+      command: "1",
+      functionId: 21,
+      pressMode: "custom",
+      longPress: { deviceId: "74521691", command: "InputHdmi1", functionId: 50 },
+    });
+    draft = addButton(draft, {
+      label: "Digit 2 Hold",
+      deviceId: "74521691",
+      command: "2",
+      functionId: 22,
+      pressMode: "standard",
+    });
+
+    const mapList = buildTouchMapList(cfg, draft, { now: NOW });
+    assert.deepEqual(validateMapList(mapList), []);
+    const savedMap = mapList.ButtonMaps.find((m) => m.ButtonMapIdentifier === `16417Activity${SCREEN}`);
+    const fgt2 = savedMap.Buttons.filter((b) => b.__type === "SoftRemoteButton" && b.FunctionGroupType === 2);
+    assert.equal(fgt2.length, draft.kept.numberPad, "FGT2 number pad is untouched");
+    assert.ok(fgt2.every((b) => b.ButtonLongPressAction === null), "FGT2 pad buttons never carry ButtonLongPressAction");
+
+    const quick1 = savedMap.Buttons.find((b) => b.__type === "SoftRemoteButton" && b.TextOnRemote === "Quick 1");
+    assert.ok(quick1);
+    assert.equal(quick1.FunctionGroupType, 0);
+    assert.equal(quick1.ButtonAction.CommandName, "1");
+    assert.equal(quick1.ButtonAction.EventType, 0);
+    assert.equal(quick1.ButtonLongPressAction.CommandName, "InputHdmi1");
+    assert.equal(quick1.ButtonLongPressAction.EventType, 2);
+
+    const digit2 = savedMap.Buttons.find((b) => b.__type === "SoftRemoteButton" && b.TextOnRemote === "Digit 2 Hold");
+    assert.ok(digit2);
+    assert.equal(digit2.FunctionGroupType, 0);
+    assert.equal(digit2.ButtonAction.CommandName, "2");
+    assert.equal(digit2.ButtonAction.EventType, 0);
+    assert.equal(digit2.ButtonLongPressAction, null);
+  });
 });

@@ -77,6 +77,42 @@ describe("softButtons", () => {
     const aspect = softButtons(config, SHIELD).find((b) => b.label === "Aspect");
     assert.deepEqual(aspect.action, { deviceId: "74521691", command: "Aspect", functionId: 36 });
   });
+
+  it("keeps an ordinary FGT0 on-screen digit button visible instead of swallowing it into the FGT2 number pad (#190)", () => {
+    const clone = structuredClone(config);
+    const map = clone.mapList.ButtonMaps.find((m) => m.ButtonMapIdentifier === `16417Activity${SHIELD}`);
+    map.Buttons.push({
+      __type: "SoftRemoteButton",
+      FunctionGroupType: 0,
+      ButtonId: 1999999001,
+      ButtonState: 1,
+      TextOnRemote: "Quick 1",
+      MenuItem: { IndexInMenu: 17, MenuName: `Activity.${SHIELD}` },
+      ButtonAction: {
+        __type: "ButtonCommandAction",
+        "DeviceId-": 66690268,
+        CommandName: "1",
+        "FunctionId-": 20,
+        EventType: 0,
+        Order: 0,
+        Id: 0,
+      },
+      ButtonLongPressAction: {
+        __type: "ButtonCommandAction",
+        "DeviceId-": 74521691,
+        CommandName: "InputHdmi1",
+        "FunctionId-": 50,
+        EventType: 2,
+        Order: 0,
+        Id: 0,
+      },
+      ButtonDoublePressAction: null,
+      ButtonImageKey: null,
+      ButtonImagePath: null,
+      "ImageId-": 0,
+    });
+    assert.deepEqual(softButtons(clone, SHIELD).map((b) => b.label), ["Home", "Aspect", "Sleep", "Quick 1"]);
+  });
 });
 
 describe("deviceKeys", () => {

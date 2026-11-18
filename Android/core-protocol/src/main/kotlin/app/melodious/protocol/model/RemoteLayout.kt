@@ -170,9 +170,15 @@ object RemoteLayout {
         return false
     }
 
-    /** `ir_find_remote_command`: first device command whose name matches any alias. */
-    fun matchCommand(commands: List<DeviceCommand>, aliases: String): DeviceCommand? =
-        commands.firstOrNull { aliasMatch(commandKey(it.name), aliases) }
+    /**
+     * `ir_find_remote_command`: first device command whose name matches any alias,
+     * preferring an exact alias match over a substring match (same as remote-layout.js).
+     */
+    fun matchCommand(commands: List<DeviceCommand>, aliases: String): DeviceCommand? {
+        val exact = aliases.split("|").map(::commandKey).filter { it.isNotEmpty() }.toSet()
+        return commands.firstOrNull { commandKey(it.name) in exact }
+            ?: commands.firstOrNull { aliasMatch(commandKey(it.name), aliases) }
+    }
 
     /**
      * Resolve what the skin Power key should do (`control-power.js`).

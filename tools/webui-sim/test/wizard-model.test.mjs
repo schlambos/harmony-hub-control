@@ -8,6 +8,7 @@ import {
   cloneJsonResource,
   composeKeyboardHidMap,
   createAllocator,
+  deriveDefaultButtons,
   draftButtonsFromMap,
   inputOptions,
   isKeyboardHidActivityMap,
@@ -270,8 +271,21 @@ describe("buildActivityGraph — map ownership", () => {
     assert.ok(secondSurface, "hub-wide second remote surface is cloned for the new activity");
     assert.deepEqual(
       secondSurface.Buttons.map((b) => [b.__type, b.ButtonKey, b.ButtonAction?.CommandName]),
-      [["HardRemoteButton", "Play", "Play"], ["SoftRemoteButton", undefined, "Home"]],
-      "the Touch surface gets the wizard's hard buttons and the seeded Home button",
+      [
+        ["HardRemoteButton", "Play", "Play"],
+        ["SoftRemoteButton", undefined, "1"],
+        ["SoftRemoteButton", undefined, "2"],
+        ["SoftRemoteButton", undefined, "3"],
+        ["SoftRemoteButton", undefined, "4"],
+        ["SoftRemoteButton", undefined, "5"],
+        ["SoftRemoteButton", undefined, "6"],
+        ["SoftRemoteButton", undefined, "7"],
+        ["SoftRemoteButton", undefined, "8"],
+        ["SoftRemoteButton", undefined, "9"],
+        ["SoftRemoteButton", undefined, "0"],
+        ["SoftRemoteButton", undefined, "Home"],
+      ],
+      "the Touch surface gets the wizard's hard buttons, the seeded number pad, and the seeded Home button",
     );
 
     /* Other activities keep every map they had. */
@@ -865,7 +879,7 @@ describe("wizard Touch on-screen seeding", () => {
     assertUniqueIdentities(graph.mapList.ButtonMaps);
   });
 
-  it("seeds nothing when the draft maps no digits and no member has Home", () => {
+  it("seeds nothing when the draft maps no digits and no member has digits or Home", () => {
     const draft = seededDraft();
     for (const key of Object.keys(draft.buttons)) {
       if (/^Number\d$/.test(key)) delete draft.buttons[key];
@@ -874,6 +888,98 @@ describe("wizard Touch on-screen seeding", () => {
     const graph = buildActivityGraph({ config: FIXTURE, draft, editId: null });
     const touch = touchMap(graph.mapList.ButtonMaps, graph.activityId);
     assert.deepEqual(soft(touch), []);
+  });
+
+  it("seeds the number pad from member device digit commands when the draft has no Number mappings (#191 A/C)", () => {
+    // Reproduction C: LG webOS TV (HA merged device, DisplayActivityRole, has digits 0-9) +
+    // AVR (VolumeActivityRole, no digits) + streaming player (PlayMovieActivityRole, no digits).
+    // deriveDefaultButtons checks the player first for Number0-9 and leaves them unmapped;
+    // seedTouchOnScreenButtons must still derive the pad digits from the display TV.
+    const config = structuredClone(FIXTURE);
+    config.deviceList.DevicesWithFeatures.push(
+      {
+        Device: {
+          "Id-": 39000101,
+          Name: "LG webOS TV (HA)",
+          Manufacturer: "Home Assistant",
+          Model: "Home Assistant device",
+          DeviceType: 44,
+          DeviceTypeDisplayName: "Home Appliance",
+          Transport: 64,
+        },
+        Commands: [
+          "PowerOn", "PowerOff", "VolumeUp", "VolumeDown", "Mute",
+          "DirectionUp", "DirectionDown", "DirectionLeft", "DirectionRight", "Select",
+          "Back", "Menu", "Home", "Guide", "Info", "Exit",
+          "0", "1", "2", "3", "4", "5", "6", "7", "8", "9",
+          "Input HDMI 1", "Input HDMI 2", "App Netflix",
+        ].map((Name) => ({ Name, "FunctionId-": 0 })),
+      },
+      {
+        Device: {
+          "Id-": 39000102,
+          Name: "Streaming Box",
+          Manufacturer: "Apple",
+          Model: "Apple TV",
+          DeviceType: 16,
+          DeviceTypeDisplayName: "Media Player",
+          Transport: 1,
+        },
+        Commands: ["DirectionUp", "DirectionDown", "DirectionLeft", "DirectionRight", "Select", "Menu", "Home", "Play", "Pause"]
+          .map((Name, i) => ({ Name, "FunctionId-": 10 + i })),
+      },
+    );
+    const roles = [
+      { deviceId: "39000101", roleType: "DisplayActivityRole", input: "HDMI 2", powerDelay: 2500 },
+      { deviceId: "81897247", roleType: "VolumeActivityRole", input: "", powerDelay: 1500 },
+      { deviceId: "39000102", roleType: "PlayMovieActivityRole", input: "", powerDelay: 1000 },
+    ];
+    const devicesForDefaults = config.deviceList.DevicesWithFeatures.map((e) => ({
+      id: String(e.Device["Id-"]),
+      commands: (e.Commands ?? []).map((c) => ({ name: c.Name, functionId: c["FunctionId-"] ?? 0 })),
+    }));
+    const buttons = deriveDefaultButtons(roles, devicesForDefaults);
+    assert.equal(buttons.Number1, undefined, "deriveDefaultButtons leaves Number keys unmapped when the player has no digits");
+
+    const graph = buildActivityGraph({
+      config,
+      draft: { name: "Watch Movie", type: 2, roles, buttons },
+      editId: null,
+    });
+    const touch = touchMap(graph.mapList.ButtonMaps, graph.activityId);
+    assert.ok(touch, "the Touch surface is created");
+    const pad = soft(touch).filter((b) => b.FunctionGroupType === 2);
+    assert.deepEqual(
+      pad.map((b) => [b.MenuItem.IndexInMenu, b.TextOnRemote, b.ButtonAction.CommandName, b.ButtonAction["DeviceId-"]]),
+      [
+        [0, "1", "1", 39000101], [1, "2", "2", 39000101], [2, "3", "3", 39000101],
+        [3, "4", "4", 39000101], [4, "5", "5", 39000101], [5, "6", "6", 39000101],
+        [6, "7", "7", 39000101], [7, "8", "8", 39000101], [8, "9", "9", 39000101],
+        [10, "0", "0", 39000101],
+      ],
+      "the number pad seeds from the display TV's digit commands even though draft.buttons had no Number0-9",
+    );
+    assertNoActionlessActivityButtons([touch]);
+    assertUniqueIdentities(graph.mapList.ButtonMaps);
+  });
+
+  it("creates the 16417Activity map and seeds the number pad even without a prior 16417Activity template (#191 B)", () => {
+    const config = structuredClone(FIXTURE);
+    // Delete all prior 16417Activity maps, leaving only 16417Device maps (e.g. all activities deleted).
+    config.mapList.ButtonMaps = config.mapList.ButtonMaps.filter(
+      (m) => !/^16417Activity/.test(m.ButtonMapIdentifier),
+    );
+    assert.ok(config.mapList.ButtonMaps.some((m) => /^16417Device/.test(m.ButtonMapIdentifier)));
+    const graph = buildActivityGraph({ config, draft: seededDraft(), editId: null });
+    const touch = touchMap(graph.mapList.ButtonMaps, graph.activityId);
+    assert.ok(touch, "16417Activity map is created from the remaining 16417 device surface");
+    assert.equal(touch.__type, "ActivityButtonMap");
+    assert.equal(touch["DeviceId-"], undefined);
+    assert.equal(touch["SurfaceId-"], 14551427);
+    const pad = soft(touch).filter((b) => b.FunctionGroupType === 2);
+    assert.equal(pad.length, 10, "all 10 number-pad digits are seeded");
+    assertNoActionlessActivityButtons([touch]);
+    assertUniqueIdentities(graph.mapList.ButtonMaps);
   });
 
   it("an existing activity is never reseeded", () => {

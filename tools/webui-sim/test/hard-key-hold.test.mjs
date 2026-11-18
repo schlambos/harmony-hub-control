@@ -165,5 +165,6 @@ describe("running activity button shortcuts (#75)", () => {
     assert.match(source, /data-h-long-search/);
     assert.match(source, /data-h-long-command/);
     assert.match(source, /data-h="done"[\s\S]*?\.disabled = !pick \|\| \(pressMode === "custom" && !longPick\)/);
+    assert.match(source, /data-sheet="done"[\s\S]*?\.disabled = !label\.trim\(\) \|\| !\(pick \|\| row\) \|\| \(pressMode === "custom" && !longPick\)/);
   });
 });

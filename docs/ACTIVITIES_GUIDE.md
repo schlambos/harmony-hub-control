@@ -257,10 +257,29 @@ gain a touchscreen by adding these buttons.
 
 Buttons can also run sequences: several commands with waits between them.
 Start with one command, then add a sequence only when you need it.
-Choose **One-shot** for toggles and **Standard** for repeatable steps.
+Choose **One-shot** for toggles, **Standard** for repeatable steps, or
+**Separate Hold** for a distinct hold action.
 On Android, open **On-screen buttons & sequences**, use **Add button** or
 **New sequence**, and **Save**. It edits screen buttons/sequences, not
 the web editor's Gestures tab.
+
+**Number pad and long-press digits (such as LG webOS Quick Access):**
+New activities automatically seed the remote's `123` number-pad screen
+whenever any activity device has digit commands (`0`–`9`), even if a
+streaming player without digits handles the main navigation keys. Because
+the physical remote's `123` number-pad firmware sends single-tap `fire`
+events only (never `press`/`hold`), holding a key on the `123` pad cannot
+trigger a long-press. To hold a digit or trigger an LG Quick Access
+shortcut (`1`–`9`) in Web, Desktop (Windows, Linux, macOS) or Android, add
+an ordinary on-screen button instead:
+- **Home Assistant (`ha-melodious`) or IR with a direct app/input command:**
+  choose the digit (`1`–`9`) as the press command, select **Separate Hold**,
+  and pick the target command (such as `App Netflix` or `Input HDMI 2`) as
+  the hold command. A short tap sends the digit; holding ≥ 600 ms launches
+  the app or input.
+- **IR-controlled TV detecting a held digit directly:** choose the TV's
+  digit command (`1`–`9`) with **Standard** press behavior so holding the
+  on-screen button transmits a continuous IR hold to the TV.
 
 ### Swipes and taps on the physical remote
 

@@ -362,6 +362,11 @@ object ActivityGraphBuilder {
                 val deviceId = action["DeviceId-"]?.jsonPrimitive?.contentOrNull ?: return@mapNotNull null
                 val command = action["CommandName"]?.jsonPrimitive?.contentOrNull?.takeIf { it.isNotBlank() } ?: return@mapNotNull null
                 val label = btn["TextOnRemote"]?.jsonPrimitive?.contentOrNull?.takeIf { it.isNotBlank() } ?: command
+                val fgt = (btn["FunctionGroupType"] as? JsonPrimitive)?.intOrNull
+                val holdAction = btn["ButtonLongPressAction"] as? JsonObject
+                val holdDevId = holdAction?.get("DeviceId-")?.jsonPrimitive?.contentOrNull
+                val holdCmd = holdAction?.get("CommandName")?.jsonPrimitive?.contentOrNull?.takeIf { it.isNotBlank() }
+                val holdFnId = holdAction?.get("FunctionId-")?.jsonPrimitive?.intOrNull ?: 0
                 SoftButton(
                     label = humanizeLabel(label),
                     deviceId = deviceId,
@@ -369,9 +374,17 @@ object ActivityGraphBuilder {
                     command = command,
                     functionId = action["FunctionId-"]?.jsonPrimitive?.intOrNull ?: 0,
                     order = (btn["MenuItem"] as? JsonObject)?.get("IndexInMenu")?.jsonPrimitive?.intOrNull ?: Int.MAX_VALUE,
+                    functionGroupType = fgt,
+                    holdDeviceId = holdDevId,
+                    holdCommand = holdCmd,
+                    holdFunctionId = holdFnId,
                 )
             }
-            .distinctBy { if (it.steps.isEmpty()) it.deviceId to it.command else it.label to it.order.toString() }
+            .distinctBy {
+                if (it.steps.isNotEmpty()) "seq:${it.label}:${it.order}"
+                else if (it.digit != null) "pad:${it.deviceId}:${it.command}"
+                else "soft:${it.deviceId}:${it.command}:${it.holdDeviceId.orEmpty()}:${it.holdCommand.orEmpty()}"
+            }
             .sortedBy { it.order }
     }
 
@@ -533,6 +546,25 @@ object ActivityGraphBuilder {
         return out
     }
 
+    private fun hasSurface(map: JsonObject): Boolean =
+        listOf("SurfaceId-", "SurfaceId", "ButtonMapSurfaceId-", "ButtonMapSurfaceId")
+            .any { map[it] != null && map[it] !is JsonNull }
+
+    private fun surfaceTemplate(maps: List<JsonObject>, prefix: String = "16414"): JsonObject? {
+        fun id(m: JsonObject): String = m.text("ButtonMapIdentifier").orEmpty()
+        fun pick(predicate: (JsonObject) -> Boolean): JsonObject? = maps.firstOrNull { hasSurface(it) && predicate(it) }
+        return (if (prefix.isNotEmpty()) {
+            pick { it.text("__type") == "ActivityButtonMap" && id(it).startsWith("${prefix}Activity") }
+                ?: pick { id(it) == "${prefix}Root" }
+                ?: pick { id(it).startsWith(prefix) }
+        } else null)
+            ?: pick { it.text("__type") == "ActivityButtonMap" }
+            ?: pick { id(it).endsWith("Root") }
+            ?: pick { true }
+            ?: maps.firstOrNull { it.text("__type") == "ActivityButtonMap" && id(it).startsWith("${prefix}Activity") }
+            ?: maps.firstOrNull { it.text("__type") == "ActivityButtonMap" }
+    }
+
     /**
      * The Touch answers its hard buttons from its own 16417Activity map, never the 16414 one;
      * Logitech's maps carry the same hard buttons on both. Mirrors wizard-model.js
@@ -556,19 +588,22 @@ object ActivityGraphBuilder {
             val sibling = maps.firstOrNull { it.text("ButtonMapIdentifier")?.startsWith("16417Activity") == true }
                 ?: maps.firstOrNull { it.text("ButtonMapIdentifier")?.startsWith("16417") == true }
                 ?: return maps
+            val surf = surfaceTemplate(maps, "16417") ?: sibling
+            fun surfField(key: String): JsonElement =
+                sibling[key]?.takeIf { it !is JsonNull } ?: surf[key] ?: JsonNull
             result.add(
                 JsonObject(
                     mapOf(
                         "ButtonMapId-" to JsonPrimitive(alloc.allocateMapId()),
                         "ActivityId-" to JsonPrimitive(activityId),
                         "Buttons" to JsonArray(emptyList()),
-                        "ButtonMapSurfaceId-" to (sibling["ButtonMapSurfaceId-"] ?: JsonNull),
+                        "ButtonMapSurfaceId-" to surfField("ButtonMapSurfaceId-"),
                         "__type" to JsonPrimitive("ActivityButtonMap"),
-                        "RemoteId-" to (sibling["RemoteId-"] ?: JsonNull),
+                        "RemoteId-" to surfField("RemoteId-"),
                         "ButtonMapIdentifier" to JsonPrimitive(identifier),
                         "DateModified" to JsonPrimitive(now),
                         "Sequences" to JsonArray(emptyList()),
-                        "SurfaceId-" to (sibling["SurfaceId-"] ?: JsonNull),
+                        "SurfaceId-" to surfField("SurfaceId-"),
                     )
                 )
             )
@@ -668,10 +703,48 @@ object ActivityGraphBuilder {
     )
 
     /**
+     * Member device priority for seeding the Touch number pad when the wizard draft itself has
+     * no Number0-9 mapping (for example, a movie activity whose player has no digit commands
+     * while the display TV does). Follows the same role chain as preferredDeviceForButtonKey,
+     * then any remaining activity members in draft order. If no member device has digit commands,
+     * seeding nothing remains correct.
+     */
+    private val PAD_ROLE_ORDER = listOf(
+        "ChannelChangingActivityRole",
+        "PlayGameActivityRole",
+        "PlayMovieActivityRole",
+        "PlayMediaActivityRole",
+        "KeyboardTextEntryActivityRole",
+        "DisplayActivityRole",
+    )
+
+    private val PAD_ALIASES_BY_KEY: Map<String, String> =
+        RemoteLayout.REMOTE_BUTTONS
+            .mapNotNull { b -> b.canonicalButtonKey?.let { key -> key to b.aliases } }
+            .filter { (key, _) -> key.matches(Regex("^Number\\d$")) }
+            .toMap()
+
+    private fun padMemberDeviceIds(roles: List<WizardRoleDraft>): List<String> {
+        val ordered = mutableListOf<String>()
+        for (roleType in PAD_ROLE_ORDER) {
+            for (r in roles) {
+                if (r.deviceId.isNotBlank() && r.roleType.contains(roleType)) {
+                    ordered.add(r.deviceId)
+                }
+            }
+        }
+        for (r in roles) {
+            if (r.deviceId.isNotBlank()) ordered.add(r.deviceId)
+        }
+        return ordered.distinct()
+    }
+
+    /**
      * A brand-new activity's on-screen buttons on the Touch, seeded from the wizard's own
-     * mapping the way Logitech's setup did: the number pad (from the draft's Number0-9) and
-     * the first member command the wizard's keys have no key for (Home). Mirrors
-     * wizard-model.js seedTouchOnScreenButtons; existing activities are never reseeded.
+     * mapping (or member devices' digit commands in role priority order when the draft has no
+     * Number0-9 mappings) the way Logitech's setup did: the number pad and the first member
+     * command the wizard's keys have no key for (Home). Mirrors wizard-model.js
+     * seedTouchOnScreenButtons; existing activities are never reseeded.
      */
     private fun seedTouchOnScreenButtons(
         maps: List<JsonObject>,
@@ -692,19 +765,45 @@ object ActivityGraphBuilder {
                 )
             }
         }
+        val parsedCommands: Map<String, List<DeviceCommand>> = deviceCommands.mapValues { (_, cmds) ->
+            cmds.mapNotNull { cObj ->
+                val cName = cObj.text("Name") ?: return@mapNotNull null
+                DeviceCommand(
+                    name = cName,
+                    functionId = cObj["FunctionId-"]?.jsonPrimitive?.intOrNull ?: 0,
+                    keyCode = cObj.text("KeyCode").orEmpty(),
+                )
+            }
+        }
+        val padMembers = padMemberDeviceIds(draft.roles)
         return maps.map { map ->
             if (map.text("ButtonMapIdentifier") != "16417Activity$activityId") return@map map
             val buttons = (map["Buttons"] as? JsonArray).orEmpty()
             if (buttons.any { (it as? JsonObject)?.text("__type") == "SoftRemoteButton" }) return@map map
             val seeded = mutableListOf<JsonElement>()
             for ((key, pad) in TOUCH_PAD_SLOTS) {
-                val mapping = draft.buttons[key] ?: continue
-                if (mapping.commandName.isBlank()) continue
+                val mapping = draft.buttons[key]?.takeIf { it.commandName.isNotBlank() }
+                var deviceId = mapping?.deviceId
+                var commandName = mapping?.commandName
+                var functionId = mapping?.functionId ?: 0
+                if (commandName.isNullOrBlank()) {
+                    val aliases = PAD_ALIASES_BY_KEY[key].orEmpty()
+                    for (id in padMembers) {
+                        val matched = RemoteLayout.matchCommand(parsedCommands[id].orEmpty(), aliases)
+                        if (matched != null && matched.name.isNotBlank()) {
+                            deviceId = id
+                            commandName = matched.name
+                            functionId = matched.functionId
+                            break
+                        }
+                    }
+                }
+                if (deviceId.isNullOrBlank() || commandName.isNullOrBlank()) continue
                 seeded.add(
                     touchSoftButton(
                         group = 2, slot = pad.second, label = pad.first,
-                        deviceId = mapping.deviceId, commandName = mapping.commandName,
-                        functionId = mapping.functionId, activityId = activityId,
+                        deviceId = deviceId, commandName = commandName,
+                        functionId = functionId, activityId = activityId,
                         buttonId = alloc.allocateId(),
                     )
                 )

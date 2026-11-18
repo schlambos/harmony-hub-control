@@ -139,9 +139,14 @@ data class SoftButton(
     val order: Int = 0,
     /** Non-empty when the button runs a sequence; the command fields are then blank. */
     val steps: List<app.melodious.protocol.graph.SequenceStep> = emptyList(),
+    /** FunctionGroupType from the map (2 = remote 123 number pad; 0 = ordinary on-screen row; null = untyped). */
+    val functionGroupType: Int? = null,
+    val holdDeviceId: String? = null,
+    val holdCommand: String? = null,
+    val holdFunctionId: Int = 0,
 ) {
-    /** Single digit keys, which belong on the number pad rather than in the button list. */
-    val digit: Int? get() = if (steps.isNotEmpty()) null else command.trim().takeIf { it.length == 1 }?.toIntOrNull()
+    /** Single digit keys on the number pad (FunctionGroupType 2, or untyped bare digits), excluded from the soft-button list. */
+    val digit: Int? get() = if (steps.isNotEmpty() || functionGroupType == 0) null else command.trim().takeIf { it.length == 1 }?.toIntOrNull()
 }
 
 /**
