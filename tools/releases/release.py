@@ -72,6 +72,7 @@ HUB_INVENTORY_FILES = {"payload/bin/MANIFEST.txt", "payload/bin/FILES"}
 # Run by the installers from the hub's RAM staging folder; never installed,
 # so no app update ships them.
 HUB_INSTALLER_HELPERS = {"payload/helpers/codex_flash_free"}
+HUB_PATCH_INPUTS = {"payload/helpers/hal_multiremote_patch.json", "payload/helpers/hal_remotes_patch.json"}
 # GPL-2.0 BusyBox ships as payload/bin/busybox-extra, so the hub zip must
 # carry its licence and the corresponding source this repository holds: the
 # build scripts, and one third_party/busybox-<version>/ folder with LICENSE,
@@ -169,6 +170,8 @@ def ordered_assets(series: str, version: str) -> list[str]:
     out += [names["mac"]["dmg"]["arm64"], names["mac"]["dmg"]["x64"]]
     out += [names["mac"]["zip"]["arm64"], names["mac"]["zip"]["x64"]]
     out += [names["win"]["setup"]["x64"], names["win"]["zip"]["x64"]]
+    if series == "hub" and tuple(map(int, version.split("."))) >= (2, 5, 0):
+        out.append(f"melodious-ios-{version}.ipa")
     return out
 
 
@@ -193,7 +196,7 @@ def hub_zip_files(zip_path: Path, version: str) -> tuple[list[dict], str]:
                 continue
             data = z.read(info)
             contents[rel] = data
-            if rel in HUB_INVENTORY_FILES or rel in HUB_INSTALLER_HELPERS:
+            if rel in HUB_INVENTORY_FILES or rel in HUB_INSTALLER_HELPERS or rel in HUB_PATCH_INPUTS:
                 continue
             if rel not in HUB_FILES:
                 raise ReleaseError(
@@ -206,6 +209,8 @@ def hub_zip_files(zip_path: Path, version: str) -> tuple[list[dict], str]:
                 "size": len(data), "sha256": sha256_bytes(data),
             })
     missing = sorted(set(HUB_FILES) - seen) + sorted(HUB_INSTALLER_HELPERS - set(contents))
+    if tuple(map(int, version.split("."))) >= (2, 5, 0):
+        missing.extend(sorted(HUB_PATCH_INPUTS - contents.keys()))
     if missing:
         raise ReleaseError(f"{zip_path.name}: missing payload files {', '.join(missing)}")
     missing = sorted(HUB_GPL_SOURCE - set(contents))

@@ -35,6 +35,7 @@ def fake_apk(_path: Path) -> dict:
 def write_hub_zip(path: Path, extra: dict | None = None, bad_md5: bool = False, helpers: bool = True,
                   gpl_source: bool = True, gpl_source_omit: str = "", readme: str = README) -> None:
     files = {rel: f"content of {rel}\n".encode() for rel in release.HUB_FILES}
+    files.update({rel: b"{}" for rel in release.HUB_PATCH_INPUTS})
     if helpers:
         files.update({rel: f"helper {rel}\n".encode() for rel in release.HUB_INSTALLER_HELPERS})
     files.update(extra or {})
@@ -94,6 +95,11 @@ class ReleaseToolTest(unittest.TestCase):
         self.assertIn("matches the assets", report[-1])
         self.assertEqual(manifest["commit"], COMMIT)
         self.assertEqual(manifest["android"]["versionCode"], 42)
+        ipa = f"melodious-ios-{VERSION}.ipa"
+        self.assertNotIn(ipa, release.ordered_assets("desktop", VERSION))
+        self.assertNotIn("melodious-ios-2.0.0.ipa", release.ordered_assets("hub", "2.0.0"))
+        (self.dir / ipa).write_bytes(b"altered")
+        self.assertRejected("SHA-256|checksum|mismatch")
         tiers = {f["path"]: f["tier"] for f in manifest["hub"]["files"]}
         self.assertEqual(tiers["payload/bin/codex_webui"], 1)
         self.assertEqual(tiers["payload/activity/codexactivity.lua"], 2)
