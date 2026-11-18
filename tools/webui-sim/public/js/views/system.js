@@ -397,7 +397,13 @@ export function createSystemView(section) {
         el("dl", { className: "setup-kv", children: [firmware.row, uptime.row, memory.row, authMode.row, hubId.row] }),
         el("p", { className: "setup-field-hint", text: "The Hub ID lives at /data/codex/hub_id on the device and is never served over HTTP." }),
         el("details", { children: [el("summary", { text: "System information" }), els.sysPre] }),
-        el("details", { children: [el("summary", { text: "Logs" }), els.logPre] }),
+        el("details", {
+          children: [
+            el("summary", { text: "Logs" }),
+            el("p", { className: "setup-field-hint", text: "Hub syslog timestamps are always in UTC." }),
+            els.logPre,
+          ],
+        }),
       ],
     ),
   );
