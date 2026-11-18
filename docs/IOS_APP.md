@@ -4,24 +4,26 @@ Melodious includes an **experimental, native Swift/SwiftUI client for iPhone and
 
 It ships with the **2.5.0** release as an **unsigned `.ipa` (`melodious-ios-2.5.0.ipa`) for sideloading** with AltStore or SideStore, or you can build and install it directly onto your iPad or iPhone from a Mac using Xcode free provisioning. It is not on the App Store or TestFlight.
 
+> **Preview note:** The images below are SwiftUI **layout renders at device sizes** (iPad 1194×834 and iPhone 393×852) rendered on macOS against `tools/webui-sim`. They are not iOS Simulator captures and will be replaced by real iOS Simulator captures once the app is built with Xcode.
+
 <table>
 <tr>
-<td align="center"><img src="screenshots/ios/ipad-remote.png" alt="Melodious on iPad — split view remote" width="520"><br><sub>iPad split view: hub &amp; activities sidebar, remote keypad, and More keys panel</sub></td>
-<td align="center"><img src="screenshots/ios/iphone-remote.png" alt="Melodious on iPhone — compact remote" width="180"><br><sub>iPhone compact tab layout</sub></td>
+<td align="center"><img src="screenshots/ios/ipad-remote.png" alt="Melodious iPad layout render — split view remote" width="520"><br><sub>iPad layout render (1194×834): hub &amp; activities sidebar, remote keypad, and More keys panel</sub></td>
+<td align="center"><img src="screenshots/ios/iphone-remote.png" alt="Melodious iPhone layout render — compact remote" width="180"><br><sub>iPhone layout render (393×852): compact tab layout</sub></td>
 </tr>
 </table>
 
 <details>
-<summary>More iPad and iPhone screenshots</summary>
+<summary>More iPad and iPhone layout renders</summary>
 
 <table>
 <tr>
-<td align="center"><img src="screenshots/ios/ipad-activities.png" alt="iPad Activities view" width="440"><br><sub>iPad: Activities</sub></td>
-<td align="center"><img src="screenshots/ios/ipad-devices.png" alt="iPad Devices view" width="440"><br><sub>iPad: Device commands</sub></td>
+<td align="center"><img src="screenshots/ios/ipad-activities.png" alt="iPad Activities layout render" width="440"><br><sub>iPad layout render: Activities</sub></td>
+<td align="center"><img src="screenshots/ios/ipad-devices.png" alt="iPad Devices layout render" width="440"><br><sub>iPad layout render: Device commands</sub></td>
 </tr>
 <tr>
-<td align="center"><img src="screenshots/ios/iphone-activities.png" alt="iPhone Activities view" width="180"><br><sub>iPhone: Activities</sub></td>
-<td align="center"><img src="screenshots/ios/iphone-devices.png" alt="iPhone Devices view" width="180"><br><sub>iPhone: Devices</sub></td>
+<td align="center"><img src="screenshots/ios/iphone-activities.png" alt="iPhone Activities layout render" width="180"><br><sub>iPhone layout render: Activities</sub></td>
+<td align="center"><img src="screenshots/ios/iphone-devices.png" alt="iPhone Devices layout render" width="180"><br><sub>iPhone layout render: Devices</sub></td>
 </tr>
 </table>
 
@@ -122,17 +124,17 @@ If you have a Mac with Xcode, you can build, sign with a free Apple ID, and inst
 
 ### Build the unsigned release IPA
 
-From a clone of the repository on a Mac with Xcode:
+Building `melodious-ios-2.5.0.ipa` requires a Mac with a full installation of Xcode (Command Line Tools alone do not include the iOS SDK and `./ios/build-ipa.sh` will refuse to build without Xcode):
 
 ```bash
 ./ios/build-ipa.sh
 ```
 
-This runs `xcodebuild` (`-configuration Release -destination "generic/platform=iOS"` with code signing disabled), packages `Payload/Melodious.app` into `ios/melodious-ios-2.5.0.ipa`, and verifies with `unzip -l` that the archive contains `Payload/Melodious.app/Melodious` and `Payload/Melodious.app/Info.plist` with no `_CodeSignature` and no `embedded.mobileprovision`.
+This runs `xcodebuild` (`-configuration Release -destination "generic/platform=iOS"` with code signing disabled), packages `Payload/Melodious.app` into `ios/melodious-ios-2.5.0.ipa`, and verifies with `unzip -l` and `otool` that the archive contains an iOS (`LC_BUILD_VERSION` platform 2) `Payload/Melodious.app/Melodious` executable and `Payload/Melodious.app/Info.plist` with no `_CodeSignature` and no `embedded.mobileprovision`.
 
 ### Run the unit tests and simulator against `tools/webui-sim`
 
-To run the XCTest unit test suite (hub URL parsing, `/24` subnet candidate generation, `/api/version` + `/api/activity-config` + state-digest JSON fixture parsing, remote key → HBus press/hold/release frame sequences, and saved-hub persistence) on an iPad simulator:
+On a Mac with Xcode installed, you can run the XCTest unit test suite (hub URL parsing, `/24` subnet candidate generation, `/api/version` + `/api/activity-config` + state-digest JSON fixture parsing, remote key → HBus press/hold/release frame sequences, and saved-hub persistence) on an iPad simulator:
 
 ```bash
 xcodebuild test \
@@ -141,7 +143,7 @@ xcodebuild test \
   -destination 'platform=iOS Simulator,name=iPad Pro 11-inch (M4)'
 ```
 
-To test the app in the iPad or iPhone simulator against the local mock hub without touching a real Harmony Hub:
+To run the app in the iPad or iPhone simulator against the local mock hub without touching a real Harmony Hub:
 
 ```bash
 node tools/webui-sim/server.mjs
