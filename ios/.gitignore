@@ -1,0 +1,10 @@
+# Xcode and SwiftPM build artifacts
+.build/
+build/
+DerivedData/
+Melodious/.build/
+Melodious/DerivedData/
+Melodious/Melodious.xcodeproj/xcuserdata/
+Melodious/Melodious.xcodeproj/project.xcworkspace/xcuserdata/
+*.ipa
+*.xcarchive
