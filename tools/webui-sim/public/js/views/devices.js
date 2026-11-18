@@ -9,7 +9,7 @@
    command's ⋮ edits or deletes it. The remote sends straight to the device,
    outside any activity. */
 
-import { forgetTv, getAndroidTvStatus, getConfig, postHubForm, saveActivity, saveAndroidTvDevices, saveDeviceScreen } from "../api.js";
+import { forgetTv, getAndroidTvStatus, getConfig, postHubForm, saveActivity, saveAndroidTvDevices, saveDeviceScreen, saveSwitch2Devices } from "../api.js";
 import * as hub from "../state.js";
 import {
   confirmDialog,
@@ -32,6 +32,8 @@ import { changeNote, hubChange, openCommandSheet, openDeviceSheet, openLearnShee
 import { createDeviceSweep } from "./device-sweep.js";
 import { createIrLab, labNote } from "./ir-lab.js";
 import { androidTvDeviceSet, androidTvIdOf, isAndroidTvDevice, strandedTvs, tvStatusText } from "./androidtv-model.js";
+import { controllerTypeLabel, isSwitch2Device, switch2ConfigOf, switch2DeviceSet, switch2IdOf } from "./switch2-model.js";
+import { openSwitch2Sheet } from "./switch2-sheet.js";
 import { tvInputsHint } from "./androidtv-inputs-model.js";
 import { LIMITS, deviceUsage, touchScreenState, withoutDeviceMaps } from "./ir-model.js";
 import { describeHaDeviceState, describeTheaterLink, deviceIconName, deviceKeys, isHaCommandRedundant } from "./remote-model.js";
@@ -116,8 +118,8 @@ export function createDevicesView(section) {
               d.model || d.manufacturer,
               `${d.commands.length} command${d.commands.length === 1 ? "" : "s"}`,
             ].filter(Boolean).join(" · ");
-        const badgeCls = d.isAndroidTv ? " badge-network" : d.isHa ? " badge-ha" : d.isBluetooth ? " badge-bluetooth" : "";
-        const badgeLabel = d.isAndroidTv ? "Network" : d.isHa ? "Home Assistant" : d.isBluetooth ? "Bluetooth" : "IR";
+        const badgeCls = d.isAndroidTv ? " badge-network" : d.isSwitch2 ? " badge-bluetooth" : d.isHa ? " badge-ha" : d.isBluetooth ? " badge-bluetooth" : "";
+        const badgeLabel = d.isAndroidTv ? "Network" : d.isSwitch2 ? "BLE Wake" : d.isHa ? "Home Assistant" : d.isBluetooth ? "Bluetooth" : "IR";
         const badge = `<span class="badge${badgeCls}">${badgeLabel}</span>`;
         return listRow({
           title: d.name,
@@ -241,9 +243,9 @@ export function createDevicesView(section) {
   function commandRows() {
     const q = commandQuery.trim().toLowerCase();
     const haInfo = describeHaDeviceState(device, hub.state.haState) ?? describeTheaterLink(device, hub.state.haState);
-    // A network TV's commands are the writer's fixed set: no per-command
-    // Edit or Delete (those go through the IR endpoints).
-    const editable = !isAndroidTvDevice(device);
+    // Network TV and Switch 2 wake commands are owned by their writers: no
+    // per-command Edit or Delete (those go through the IR endpoints).
+    const editable = !isAndroidTvDevice(device) && !isSwitch2Device(device);
     const list = device.commands
       .map((c, i) => ({ c, i }))
       .filter(({ c }) => !q || c.name.toLowerCase().includes(q));
@@ -301,7 +303,21 @@ export function createDevicesView(section) {
       </div>`;
     const haStrip = haStateStripMarkup([device], hub.state.haState, { single: true });
     const androidtv = isAndroidTvDevice(device);
-    const androidTvLine = androidtv ? `<p class="list-note androidtv-status" data-androidtv-status>Network TV · checking the connection…</p>` : "";
+    const switch2 = isSwitch2Device(device);
+    const s2cfg = switch2 ? switch2ConfigOf(device) : null;
+    const androidTvLine = androidtv
+      ? `<p class="list-note androidtv-status" data-androidtv-status>Network TV · checking the connection…</p>`
+      : switch2
+        ? `<p class="list-note s2-status">Switch 2 wake · ${escapeHtml(controllerTypeLabel(s2cfg?.pid))} · Wake only (2 s BLE beacon). Power Off is a no-op — sleep is handled by TV HDMI-CEC standby or the console itself.</p>`
+        : "";
+    const cmdTools = androidtv
+      ? `<p class="list-note">A network TV's commands come with it; the hub sends them over the network.</p>`
+      : switch2
+        ? `<p class="list-note">Tap <strong>Wake</strong> below to send the 2-second Bluetooth wake burst. Power Off is a no-op — sleep is handled by TV HDMI-CEC standby or the console itself.</p>`
+        : `<div class="cmd-tools">
+            <button type="button" class="btn btn-outlined" data-act="learn" aria-haspopup="dialog">${icon("settings_remote_outlined", { size: 18 })}Learn a button</button>
+            <button type="button" class="btn btn-outlined" data-act="import" aria-haspopup="dialog">${icon("content_paste_outlined", { size: 18 })}Import codes</button>
+          </div>`;
     const body = tab === "remote"
       ? `<div class="remote">
           <div class="remote-main">
@@ -318,10 +334,7 @@ export function createDevicesView(section) {
           <p class="remote-status" id="deviceStatus" role="status" aria-live="polite"></p>
           ${androidTvLine}
           ${tabs}
-          ${androidtv ? `<p class="list-note">A network TV's commands come with it; the hub sends them over the network.</p>` : `<div class="cmd-tools">
-            <button type="button" class="btn btn-outlined" data-act="learn" aria-haspopup="dialog">${icon("settings_remote_outlined", { size: 18 })}Learn a button</button>
-            <button type="button" class="btn btn-outlined" data-act="import" aria-haspopup="dialog">${icon("content_paste_outlined", { size: 18 })}Import codes</button>
-          </div>`}
+          ${cmdTools}
           ${labNote(device)}
           <label class="search-field">${icon("search", { size: 22 })}<input type="search" id="commandSearch" value="${escapeHtml(commandQuery)}" placeholder="Search ${device.commands.length} commands" aria-label="Search ${device.commands.length} commands"></label>
           <div class="cmd-head">
@@ -518,6 +531,8 @@ export function createDevicesView(section) {
           // The writer owns network TVs: save the set without it. Unpairing
           // comes after, outside this rollback: the device is gone by then.
           await saveAndroidTvDevices(androidTvDeviceSet(config, { remove: androidTvIdOf(d) }));
+        } else if (isSwitch2Device(d)) {
+          await saveSwitch2Devices(switch2DeviceSet(config, { remove: switch2IdOf(d) }));
         } else {
           await postHubForm("/ir/delete-device", { deviceId: d.id });
         }
@@ -619,7 +634,9 @@ export function createDevicesView(section) {
         { id: "delete", label: "Delete device", icon: "delete_outlined", destructive: true },
       ],
       onSelect: (choice) => {
-        if (choice === "edit") track(openDeviceSheet({ device: d }), "[data-act='device-menu']");
+        if (choice === "edit") {
+          track(isSwitch2Device(d) ? openSwitch2Sheet({ device: d }) : openDeviceSheet({ device: d }), "[data-act='device-menu']");
+        }
         else if (choice === "screen-make") saveTouchScreen(d, false);
         else if (choice === "screen-remove") saveTouchScreen(d, true);
         else if (choice === "delete") deleteDevice(d);
@@ -686,7 +703,7 @@ export function createDevicesView(section) {
     }
     const menuBtn = event.target.closest("[data-cmd-menu]");
     if (menuBtn) {
-      if (isAndroidTvDevice(device)) return;
+      if (isAndroidTvDevice(device) || isSwitch2Device(device)) return;
       const c = device.commands[Number(menuBtn.dataset.cmdMenu)];
       if (c) openCommandMenu(menuBtn, c);
       return;

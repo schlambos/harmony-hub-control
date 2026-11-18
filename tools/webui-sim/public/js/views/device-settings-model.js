@@ -229,7 +229,7 @@ function validateInputs(inputs, has, errors) {
   }
 }
 
-export function validateDeviceSettings(settings, names) {
+export function validateDeviceSettings(settings, names, { wakeOnly = false } = {}) {
   const errors = [];
   const has = new Set(names.map((n) => n.toLowerCase()));
   const range = (label, value, [low, high]) => {
@@ -247,9 +247,12 @@ export function validateDeviceSettings(settings, names) {
   }
   if (!(power.type in TYPE_ID)) errors.push("Choose how the device is powered.");
   if (power.type === "discrete") {
-    if (!has.has(String(power.on ?? "").toLowerCase()) || !has.has(String(power.off ?? "").toLowerCase())) {
+    const hasOn = has.has(String(power.on ?? "").toLowerCase());
+    const offEmpty = !String(power.off ?? "").trim();
+    const hasOff = has.has(String(power.off ?? "").toLowerCase());
+    if (!hasOn || (!hasOff && !(wakeOnly && offEmpty))) {
       errors.push("Choose an On and an Off command that the device has.");
-    } else if (String(power.on).toLowerCase() === String(power.off).toLowerCase()) {
+    } else if (!offEmpty && String(power.on).toLowerCase() === String(power.off).toLowerCase()) {
       errors.push("On and Off are the same command; choose one power button instead.");
     }
   }
@@ -274,7 +277,7 @@ export function deviceSettingsRequest(deviceId, settings) {
       power: {
         type: power.type,
         on: power.type === "discrete" ? power.on : null,
-        off: power.type === "discrete" ? power.off : null,
+        off: power.type === "discrete" ? (power.off || null) : null,
         toggle: power.type === "toggle" ? power.toggle : null,
         delayMs: power.delayMs,
         alwaysOn: Boolean(power.alwaysOn),

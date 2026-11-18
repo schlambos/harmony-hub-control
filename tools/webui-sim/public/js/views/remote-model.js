@@ -21,6 +21,7 @@ export const ONE_SHOT_COMMANDS = Object.freeze([
   "Run",
   "Activate",
   "Press",
+  "Wake",
 ]);
 
 const ONE_SHOT_KEYS = new Set(ONE_SHOT_COMMANDS.map((c) => commandKey(c)));
@@ -67,8 +68,10 @@ function normCmd(name) {
  *  HA detection: Transport 64, or Home Assistant manufacturer/protocol. */
 export function isHaDevice(device) {
   if (!device) return false;
-  // Network Android/Google TVs are IP devices too, but not Home Assistant's.
-  if (String((device.entry ?? device)?.Device?.AutoDetectedDevice?.Id ?? "").startsWith("melodious-androidtv-")) return false;
+  // Network Android/Google TVs and Switch 2 wake devices are IP devices too,
+  // but not Home Assistant's.
+  const autoId = String((device.entry ?? device)?.Device?.AutoDetectedDevice?.Id ?? "");
+  if (autoId.startsWith("melodious-androidtv-") || autoId.startsWith("melodious-switch2-")) return false;
   if (device.isHa === true) return true;
   const transport = Number(device.transport ?? device.Transport ?? device.entry?.Device?.Transport ?? 1);
   if (transport === 64) return true;
@@ -277,7 +280,9 @@ export function deviceDomainLabel(device) {
   const name = String(device?.name ?? "").toLowerCase();
   const commands = (device?.commands ?? []).map((c) => String(c?.name ?? c).toLowerCase());
   const has = (...names) => names.some((n) => commands.includes(n));
-  if (String(device?.entry?.Device?.AutoDetectedDevice?.Id ?? "").startsWith("melodious-androidtv-")) return "Network TV";
+  const autoId = String(device?.entry?.Device?.AutoDetectedDevice?.Id ?? "");
+  if (autoId.startsWith("melodious-androidtv-")) return "Network TV";
+  if (autoId.startsWith("melodious-switch2-")) return "Switch 2 Wake";
   if (has("brightnessup", "brightnessdown") || name.includes("light")) return "Light";
   if (has("play", "pause", "playpause") || has("volumeup")) {
     if (commands.includes("run") || commands.includes("activate")) return "Scene / Script";

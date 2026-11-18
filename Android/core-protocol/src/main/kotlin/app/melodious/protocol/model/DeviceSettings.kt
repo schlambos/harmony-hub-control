@@ -112,7 +112,7 @@ object DeviceSettingsModel {
     }
 
     /** Human-readable problems; empty when the hub will accept the settings. */
-    fun validate(settings: DeviceSettings, names: List<String>): List<String> {
+    fun validate(settings: DeviceSettings, names: List<String>, wakeOnly: Boolean = false): List<String> {
         val errors = mutableListOf<String>()
         val has = names.map { it.lowercase() }.toSet()
         fun range(label: String, value: Int, limits: IntRange) {
@@ -123,11 +123,16 @@ object DeviceSettingsModel {
         range("Repeats", settings.repeats, REPEATS)
         if (settings.powerOnDelayMs !in POWER_ON_DELAY_MS) errors += "Power-on delay must be from 0 to 60 seconds."
         when (settings.powerType) {
-            PowerType.DISCRETE -> when {
-                settings.powerOn.lowercase() !in has || settings.powerOff.lowercase() !in has ->
-                    errors += "Choose an On and an Off command that the device has."
-                settings.powerOn.equals(settings.powerOff, ignoreCase = true) ->
-                    errors += "On and Off are the same command; choose one power button instead."
+            PowerType.DISCRETE -> {
+                val hasOn = settings.powerOn.lowercase() in has
+                val offBlank = settings.powerOff.isBlank()
+                val hasOff = settings.powerOff.lowercase() in has
+                when {
+                    !hasOn || (!hasOff && !(wakeOnly && offBlank)) ->
+                        errors += "Choose an On and an Off command that the device has."
+                    !offBlank && settings.powerOn.equals(settings.powerOff, ignoreCase = true) ->
+                        errors += "On and Off are the same command; choose one power button instead."
+                }
             }
             PowerType.TOGGLE -> if (settings.powerToggle.lowercase() !in has) errors += "Choose the device's power command."
             PowerType.NONE -> Unit
@@ -148,7 +153,7 @@ object DeviceSettingsModel {
                         mapOf(
                             "type" to JsonPrimitive(s.powerType.wire),
                             "on" to if (s.powerType == PowerType.DISCRETE) JsonPrimitive(s.powerOn) else JsonNull,
-                            "off" to if (s.powerType == PowerType.DISCRETE) JsonPrimitive(s.powerOff) else JsonNull,
+                            "off" to if (s.powerType == PowerType.DISCRETE && s.powerOff.isNotBlank()) JsonPrimitive(s.powerOff) else JsonNull,
                             "toggle" to if (s.powerType == PowerType.TOGGLE) JsonPrimitive(s.powerToggle) else JsonNull,
                             "delayMs" to JsonPrimitive(s.powerOnDelayMs),
                             "alwaysOn" to JsonPrimitive(s.alwaysOn),

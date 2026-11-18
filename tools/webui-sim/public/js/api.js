@@ -263,6 +263,11 @@ export function saveAndroidTvDevices({ devices, dryRun = false }) {
   return request("/api/androidtv/devices", { method: "POST", body: { devices, dryRun } });
 }
 
+/** The hub's whole set of Nintendo Switch 2 wake devices (codexactivity CommitSwitch2Devices). */
+export function saveSwitch2Devices({ devices, dryRun = false }) {
+  return request("/api/switch2/devices", { method: "POST", body: { devices, dryRun } });
+}
+
 export function getSimEvents() {
   return request(["/api", "sim", "events"].join("/"));
 }

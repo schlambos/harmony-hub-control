@@ -22,6 +22,15 @@ import { LIMITS, isSafeLabel } from "./public/js/views/ir-model.js";
 import { MAX_ACTIVITIES, isRestrictableId, normalizeWindows, restrictedAt } from "./public/js/views/restrictions-model.js";
 import { validateStatic } from "./public/js/views/ethernet-model.js";
 import { MAX_SLOTS, parseProfile, slotCommand, slotOf } from "./public/js/views/androidtv-inputs-model.js";
+import {
+  buildSwitch2WakePayload,
+  isSwitch2Entry,
+  normalizeMac as normalizeSwitch2Mac,
+  normalizePid as normalizeSwitch2Pid,
+  switch2ConfigOf,
+  switch2IdOf,
+  switch2NameProblem,
+} from "./public/js/views/switch2-model.js";
 
 const SIM_DIR = path.dirname(fileURLToPath(import.meta.url));
 const PUBLIC_DIR = path.join(SIM_DIR, "public");
@@ -317,7 +326,9 @@ function handleDeviceSettings(res, params) {
     sendError(res, 422, `DeviceList has no device ${deviceId}`);
     return;
   }
-  const errors = validateDeviceSettings(settings, commandNames(devices[index]));
+  const errors = validateDeviceSettings(settings, commandNames(devices[index]), {
+    wakeOnly: isSwitch2Entry(devices[index]),
+  });
   if (settings.inputs && typeof settings.inputs === "object") {
     const kept = settings.inputs.type === "none"
       ? []
@@ -370,8 +381,40 @@ function handleActivityRun(res, params) {
     });
     return;
   }
+  const previousActivityId = String(state.currentActivityId);
   state.currentActivityId = activityId;
   logEvent({ kind: "activity-run", activityId });
+  // Simulate activity power-on sequencing firing Switch 2 wake bursts.
+  if (activityId !== "-1" && activityId !== previousActivityId) {
+    const act = (state.activityList?.Activities ?? []).find((a) => String(a?.["Id-"]) === activityId);
+    const orderedRoles = [...(act?.Roles ?? [])].sort((a, b) => Number(a?.PowerOnOrder ?? 1) - Number(b?.PowerOnOrder ?? 1));
+    const seen = new Set();
+    for (const role of orderedRoles) {
+      const devId = String(role?.["DeviceId-"] ?? "");
+      if (!devId || seen.has(devId)) continue;
+      seen.add(devId);
+      const entry = deviceEntries().find((e) => String(e?.Device?.["Id-"]) === devId);
+      if (entry && isSwitch2Entry(entry)) {
+        const cfg = switch2ConfigOf(entry);
+        const pf = (entry.DeviceFeatures ?? []).find((f) => String(f?.__type ?? "").includes("PowerFeature"));
+        const hasWake = Number(pf?.PowerTypeId) === 1 && Array.isArray(pf?.PowerOnActions) && pf.PowerOnActions.length > 0;
+        if (hasWake && cfg.switch2Mac && cfg.controllerMac && cfg.pid) {
+          const payload = buildSwitch2WakePayload(cfg.switch2Mac, cfg.pid);
+          logEvent({
+            type: "switch2-wake",
+            source: "activity-start",
+            activityId,
+            deviceId: devId,
+            entity: cfg.entity,
+            switch2Mac: cfg.switch2Mac,
+            controllerMac: cfg.controllerMac,
+            pid: cfg.pid,
+            payloadHex: Buffer.from(payload).toString("hex").toUpperCase(),
+          });
+        }
+      }
+    }
+  }
   sendJson(res, 200, {
     ok: true,
     activityId,
@@ -1304,6 +1347,180 @@ function handleAndroidTvDevices(res, params) {
   sendJson(res, 200, result);
 }
 
+function handleSwitch2Devices(res, params) {
+  const devices = Array.isArray(params.devices) ? params.devices : null;
+  if (!devices) {
+    sendError(res, 400, "body must be one JSON object with a devices list");
+    return;
+  }
+  const entries = deviceEntries();
+  const owned = new Map(entries.filter(isSwitch2Entry).map((e) => [switch2IdOf(e), e]));
+  const others = entries.filter((e) => !isSwitch2Entry(e));
+  const seenIds = new Set();
+  const seenNames = new Set();
+  const normalized = [];
+  for (const d of devices) {
+    const entity = String(d?.entity ?? "");
+    if (!/^switch2[0-9a-f]+$/.test(entity)) {
+      sendJson(res, 422, { ok: false, localOnly: true, error: "device needs a Switch 2 wake id such as switch21a2b3c4d" });
+      return;
+    }
+    if (seenIds.has(entity)) {
+      sendJson(res, 422, { ok: false, localOnly: true, error: `${entity} is listed twice` });
+      return;
+    }
+    seenIds.add(entity);
+    const nameErr = switch2NameProblem(d?.name);
+    if (nameErr) {
+      sendJson(res, 422, { ok: false, localOnly: true, error: nameErr });
+      return;
+    }
+    const name = String(d.name).trim();
+    if (seenNames.has(name.toLowerCase())) {
+      sendJson(res, 422, { ok: false, localOnly: true, error: `two devices are named ${name}` });
+      return;
+    }
+    if (others.some((e) => String(e.Device?.Name ?? "").toLowerCase() === name.toLowerCase())) {
+      sendJson(res, 422, { ok: false, localOnly: true, error: `another device is already named ${name}` });
+      return;
+    }
+    seenNames.add(name.toLowerCase());
+    const s2 = normalizeSwitch2Mac(d?.switch2Mac, "Switch 2 Bluetooth MAC");
+    if (s2.error) {
+      sendJson(res, 422, { ok: false, localOnly: true, error: s2.error });
+      return;
+    }
+    const ctrl = normalizeSwitch2Mac(d?.controllerMac, "Bonded controller MAC");
+    if (ctrl.error) {
+      sendJson(res, 422, { ok: false, localOnly: true, error: ctrl.error });
+      return;
+    }
+    if (s2.mac === ctrl.mac) {
+      sendJson(res, 422, { ok: false, localOnly: true, error: "controllerMac must be a bonded controller's MAC, not the Switch 2's own MAC" });
+      return;
+    }
+    const pid = normalizeSwitch2Pid(d?.pid);
+    if (pid.error) {
+      sendJson(res, 422, { ok: false, localOnly: true, error: pid.error });
+      return;
+    }
+    normalized.push({ entity, name, switch2Mac: s2.mac, controllerMac: ctrl.mac, pid: pid.pid });
+  }
+  for (const [token, entry] of owned) {
+    if (!seenIds.has(token)) {
+      const devId = String(entry.Device["Id-"]);
+      const usedInActivity = (state.activityList?.Activities ?? []).some((a) =>
+        (a.Roles ?? []).some((r) => String(r?.["DeviceId-"]) === devId),
+      );
+      if (usedInActivity) {
+        sendJson(res, 422, { ok: false, localOnly: true, error: `${entry.Device.Name} is still used by ActivityList; remove it from its activities and buttons first` });
+        return;
+      }
+    }
+  }
+  const result = { ok: true, localOnly: true, added: [], updated: [], removed: [], unchanged: [], devices: [] };
+  const kept = [...others];
+  for (const d of normalized) {
+    let entry = owned.get(d.entity);
+    const tokens = {
+      Parameters: [
+        { Key: "{d}", Value: d.entity },
+        { Key: "{s2mac}", Value: d.switch2Mac },
+        { Key: "{cmac}", Value: d.controllerMac },
+        { Key: "{pid}", Value: d.pid },
+      ],
+    };
+    if (!entry) {
+      const id = nextId([...entries, ...kept].map((e) => e.Device?.["Id-"]), 39000000);
+      entry = {
+        Device: {
+          "Id-": id, Name: d.name, Manufacturer: "Nintendo", Model: "Switch 2",
+          DeviceTypeDisplayName: "GameConsole", DeviceType: 23, Transport: 64, Icon: 23,
+          Tokens: tokens,
+          AutoDetectedDevice: { Id: `melodious-switch2-${id}` },
+        },
+        Commands: [{
+          Name: "Wake", "Id-": id * 100 + 1, TransportType: 64, KeyCode: "", Raw: null,
+          Parameters: [{ Key: "{c}", Value: "Wake" }], IsLearned: false,
+        }],
+        DeviceFeatures: [{
+          __type: "PowerFeature",
+          "DeviceId-": id,
+          Id: 0,
+          State: 1,
+          PowerTypeId: 1,
+          PowerOnActions: [{ __type: "IRPressAction", IRCommandName: "Wake", Order: 0, Duration: null, ActionId: 0 }],
+          PowerOffActions: [],
+          PowerToggleActions: [],
+          PowerOnDelay: 0,
+          DefaultPowerOnDelay: 0,
+          IsPowerAlwaysOn: false,
+          IsPoweredOnBetweenActivities: false,
+        }],
+      };
+      result.added.push(d.name);
+    } else {
+      entry.Device.Name = d.name;
+      entry.Device.Tokens = tokens;
+      result.updated.push(d.name);
+    }
+    kept.push(entry);
+    result.devices.push({ entity: d.entity, deviceId: String(entry.Device["Id-"]), name: d.name });
+  }
+  for (const [token, entry] of owned) {
+    if (!seenIds.has(token)) result.removed.push(entry.Device.Name);
+  }
+  if (!params.dryRun) {
+    state.deviceList.DevicesWithFeatures = kept;
+    state.revision = newRevision();
+  }
+  result.changed = result.added.length > 0 || result.updated.length > 0 || result.removed.length > 0;
+  logEvent({ type: "switch2-devices", ...result });
+  sendJson(res, 200, result);
+}
+
+function handleSwitch2Cmd(res, params) {
+  const command = String(params.command ?? "");
+  if (!/^(wake|poweron)$/i.test(command)) {
+    sendJson(res, 400, { ok: false, error: "unsupported Switch 2 command; only Wake is supported" });
+    return;
+  }
+  const s2 = normalizeSwitch2Mac(params.switch2Mac, "Switch 2 Bluetooth MAC");
+  if (s2.error) {
+    sendJson(res, 400, { ok: false, error: s2.error });
+    return;
+  }
+  const ctrl = normalizeSwitch2Mac(params.controllerMac, "Bonded controller MAC");
+  if (ctrl.error) {
+    sendJson(res, 400, { ok: false, error: ctrl.error });
+    return;
+  }
+  if (s2.mac === ctrl.mac) {
+    sendJson(res, 400, { ok: false, error: "bonded controller MAC must differ from Switch 2 MAC" });
+    return;
+  }
+  const pid = normalizeSwitch2Pid(params.pid);
+  if (pid.error) {
+    sendJson(res, 400, { ok: false, error: pid.error });
+    return;
+  }
+  const payload = buildSwitch2WakePayload(s2.mac, pid.pid);
+  const payloadHex = Buffer.from(payload).toString("hex").toUpperCase();
+  const controllerMacReversedHex = Buffer.from([...ctrl.bytes].reverse()).toString("hex").toUpperCase();
+  logEvent({
+    type: "switch2-wake",
+    source: "cmd",
+    device: String(params.device ?? ""),
+    command,
+    switch2Mac: s2.mac,
+    controllerMac: ctrl.mac,
+    controllerMacReversedHex,
+    pid: pid.pid,
+    payloadHex,
+  });
+  sendJson(res, 200, { ok: true, payloadHex });
+}
+
 // DevicesWithFeatures as the array the hub appends to.
 function deviceEntries() {
   if (!Array.isArray(state.deviceList.DevicesWithFeatures)) state.deviceList.DevicesWithFeatures = [];
@@ -2187,6 +2404,12 @@ async function handleApi(req, res, pathname, url) {
     case "POST /api/androidtv/devices":
       handleAndroidTvDevices(res, params);
       return;
+    case "POST /api/switch2/devices":
+      handleSwitch2Devices(res, params);
+      return;
+    case "POST /api/switch2/cmd":
+      handleSwitch2Cmd(res, params);
+      return;
     case "GET /api/remotes":
       sendJson(res, 200, simPairing
         ? { ok: true, pairing: true }
@@ -2344,7 +2567,7 @@ async function handleApi(req, res, pathname, url) {
         features: [
           "activity-save", "activity-sync", "catalog-import", "device-commands",
           "androidtv-devices", "androidtv-inputs", "device-screen", "device-settings", "ha-devices", "ha-devices-v2",
-          "ha-state", "irdb-import", "remote-background", "remote-pair"
+          "ha-state", "irdb-import", "remote-background", "remote-pair", "switch2-wake"
         ]
       });
       return;

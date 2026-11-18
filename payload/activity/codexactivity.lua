@@ -974,6 +974,8 @@ local function powerFeatureOf(entry)
   return feature
 end
 
+local SWITCH2_DEVICE_TAG = "melodious-switch2-"
+
 -- Check one device's power and timing settings against its own commands.
 local function deviceSettingsFrom(entry, settings)
   if type(settings) ~= "table" or type(settings.power) ~= "table" then
@@ -1009,12 +1011,20 @@ local function deviceSettingsFrom(entry, settings)
   out.alwaysOn = power.alwaysOn
   out.onBetweenActivities = power.onBetweenActivities
   if out.typeId == 1 then
+    local device = type(entry) == "table" and entry.Device or nil
+    local detected = type(device) == "table" and device.AutoDetectedDevice or nil
+    local isSwitch2 = type(detected) == "table" and type(detected.Id) == "string" and
+      string.sub(detected.Id, 1, #SWITCH2_DEVICE_TAG) == SWITCH2_DEVICE_TAG
     out.on = storedCommandName(entry, power.on)
-    out.off = storedCommandName(entry, power.off)
-    if not out.on or not out.off then
+    if isSwitch2 and (power.off == nil or power.off == json.null or power.off == "") then
+      out.off = nil
+    else
+      out.off = storedCommandName(entry, power.off)
+    end
+    if not out.on or (not isSwitch2 and not out.off) then
       return nil, "separate power needs an On and an Off command that the device has"
     end
-    if out.on == out.off then
+    if out.off and out.on == out.off then
       return nil, "On and Off are the same command; choose one power button instead"
     end
   elseif out.typeId == 2 then
@@ -1399,6 +1409,7 @@ local ONE_SHOT_COMMANDS = {
   run = true,
   activate = true,
   press = true,
+  wake = true,
 }
 
 local function isOneShotCommand(name)
@@ -2225,6 +2236,63 @@ local ANDROIDTV_FAMILY = {
   power = {on = "PowerOn", off = "PowerOff"}
 }
 
+-- Nintendo Switch 2 wake-only devices (Option C BLE beacon). Follows the same
+-- TransportType 64 local-HTTP pattern as Android TV: Power On sends Wake to
+-- codex_webui on 127.0.0.1:8080, which fires the 2-second BLE wake burst over
+-- hci0 with Own_Address_Type = 0x01 (random address = bonded controller MAC).
+-- Power Off is a documented no-op (empty PowerOffActions).
+local SWITCH2_COMMAND_NAMES = {"Wake"}
+local SWITCH2_FAMILY = {
+  label = "Nintendo Switch 2", tag = SWITCH2_DEVICE_TAG, protocolName = "Melodious Switch 2 Wake",
+  defaultManufacturer = "Nintendo", defaultModel = "Switch 2",
+  deviceType = 23, typeName = "GameConsole", icon = 23,
+  idPattern = "^switch2[0-9a-f]+$", idHint = "a Switch 2 wake id such as switch21a2b3c4d",
+  webhook = "http://127.0.0.1:8080/api/switch2/cmd",
+  protocolBody = '{"device":"{d}","command":"{c}","switch2Mac":"{s2mac}","controllerMac":"{cmac}","pid":"{pid}"}',
+  protocolTimeout = "6",
+  commandNames = SWITCH2_COMMAND_NAMES, inputs = {}, switch2 = true,
+  power = {on = "Wake", off = nil}
+}
+
+-- Strict 6-byte Bluetooth MAC validator -> canonical "AA:BB:CC:DD:EE:FF".
+-- Accepts colon-separated, dash-separated, or 12 bare hex digits; rejects
+-- non-hex, mixed separators, all-00 and all-FF.
+local function switch2MacFrom(value)
+  if type(value) ~= "string" then
+    return nil
+  end
+  local trimmed = string.match(value, "^%s*(.-)%s*$")
+  local a, b, c, d, e, f = string.match(trimmed, "^(%x%x):(%x%x):(%x%x):(%x%x):(%x%x):(%x%x)$")
+  if not a then
+    a, b, c, d, e, f = string.match(trimmed, "^(%x%x)%-(%x%x)%-(%x%x)%-(%x%x)%-(%x%x)%-(%x%x)$")
+  end
+  if not a then
+    a, b, c, d, e, f = string.match(trimmed, "^(%x%x)(%x%x)(%x%x)(%x%x)(%x%x)(%x%x)$")
+  end
+  if not a then
+    return nil
+  end
+  local norm = string.upper(a .. ":" .. b .. ":" .. c .. ":" .. d .. ":" .. e .. ":" .. f)
+  if norm == "00:00:00:00:00:00" or norm == "FF:FF:FF:FF:FF:FF" then
+    return nil
+  end
+  return norm
+end
+
+-- Strict 2-byte controller PID in BLE wire order (e.g. "66 20", "6620", "66:20",
+-- "66-20") -> canonical 4-char uppercase hex ("6620").
+local function switch2PidFrom(value)
+  if type(value) ~= "string" then
+    return nil
+  end
+  local trimmed = string.match(value, "^%s*(.-)%s*$")
+  local lo, hi = string.match(trimmed, "^(%x%x)[%s:%-]?(%x%x)$")
+  if not lo then
+    return nil
+  end
+  return string.upper(lo .. hi)
+end
+
 -- The engine clears capodDeviceList[uid] after every answered IP command,
 -- and a device without AutoDetectedDevice.Id has no uid: that throws and
 -- kills the IP command task until the hub reboots. The tag is never a real
@@ -2418,6 +2486,23 @@ local function haDeviceSpecFrom(raw, index, family)
     return nil, label .. ": manufacturer must be 1-64 characters without quotes or backslashes"
   end
   if family.commandNames then
+    if family.switch2 then
+      spec.switch2Mac = switch2MacFrom(raw.switch2Mac)
+      if not spec.switch2Mac then
+        return nil, label .. ": switch2Mac must be a valid 6-byte Bluetooth MAC address (e.g. AA:BB:CC:11:22:33)"
+      end
+      spec.controllerMac = switch2MacFrom(raw.controllerMac)
+      if not spec.controllerMac then
+        return nil, label .. ": controllerMac must be a valid 6-byte Bluetooth MAC address (e.g. 12:34:56:78:9A:BC)"
+      end
+      if spec.switch2Mac == spec.controllerMac then
+        return nil, label .. ": controllerMac must be a bonded controller's MAC, not the Switch 2's own MAC"
+      end
+      spec.pid = switch2PidFrom(raw.pid)
+      if not spec.pid then
+        return nil, label .. ": pid must be 2 hex bytes in wire order (e.g. 66 20, 67 20, or 69 20)"
+      end
+    end
     -- A fixed command set: each command's value is its own name.
     for i, name in ipairs(family.commandNames) do
       spec.commands[i] = {name = name, value = name}
@@ -2730,7 +2815,18 @@ local function haDeviceEntry(spec, old, deviceId, protocolId, nextId, now, famil
   device.Manufacturer = spec.manufacturer
   device.ParentDeviceManufacturer = spec.manufacturer
   device.Transport = 64
-  device.Tokens = {Parameters = {{Key = "{d}", Value = spec.key or spec.entity}}}
+  if family.switch2 then
+    device.Tokens = {
+      Parameters = {
+        {Key = "{d}", Value = spec.key or spec.entity},
+        {Key = "{s2mac}", Value = spec.switch2Mac},
+        {Key = "{cmac}", Value = spec.controllerMac},
+        {Key = "{pid}", Value = spec.pid}
+      }
+    }
+  else
+    device.Tokens = {Parameters = {{Key = "{d}", Value = spec.key or spec.entity}}}
+  end
   device.AutoDetectedDevice = {Id = family.tag .. deviceId}
   local previous = {}
   for _, command in ipairs(type(entry.Commands) == "table" and entry.Commands or {}) do
@@ -2781,17 +2877,18 @@ local function haDeviceEntry(spec, old, deviceId, protocolId, nextId, now, famil
 end
 
 local function haProtocol(protocolId, webhook, family)
+  family = family or HA_FAMILY
   return {
     Attributes = {}, IsPadded = false, IsFullSequence = false, Rating = json.null,
     NumberOfLinkedLanguage = 0, Status = json.null, IsPublic = false, HoldDelay = json.null,
-    PressMinimumRepeats = 0, SendingType = 0, Name = (family or HA_FAMILY).protocolName,
+    PressMinimumRepeats = 0, SendingType = 0, Name = family.protocolName,
     ControlSection = {
       Url = webhook,
       Method = "POST",
       -- The engine JSON-decodes Header after filling placeholders.
       Header = '{"Content-Type":"application/json"}',
-      Body = '{"device":"{d}","command":"{c}"}',
-      Timeout = "2"
+      Body = family.protocolBody or '{"device":"{d}","command":"{c}"}',
+      Timeout = family.protocolTimeout or "2"
     },
     Flags = {},
     -- Loaded as an IR protocol: the engine divides by the carrier and walks
@@ -3179,6 +3276,8 @@ local function processRequest(raw)
     response = commitHaDevices(request, HA_FAMILY)
   elseif request.op == "CommitAndroidTvDevices" then
     response = commitHaDevices(request, ANDROIDTV_FAMILY)
+  elseif request.op == "CommitSwitch2Devices" then
+    response = commitHaDevices(request, SWITCH2_FAMILY)
   elseif request.op == "CommitDeviceScreen" then
     response = commitDeviceScreen(request)
   elseif request.op == "CommitRemoteBackground" then

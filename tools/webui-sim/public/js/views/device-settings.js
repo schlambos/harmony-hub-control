@@ -32,6 +32,7 @@ import {
   validateDeviceSettings,
 } from "./device-settings-model.js";
 import { androidTvDeviceSet, androidTvIdOf, isAndroidTvEntry } from "./androidtv-model.js";
+import { isSwitch2Entry } from "./switch2-model.js";
 import {
   CUSTOM_LINKS,
   MENU_GAP_LIMITS,
@@ -136,6 +137,7 @@ export function createDeviceSettings({ root, track }) {
      Its inputs are edited here and saved to the network TV writer and
      codex_androidtv instead of with the device settings. */
   let tv = null;
+  let switch2 = false;
 
   /* -- the draft ---------------------------------------------------------------- */
 
@@ -245,7 +247,7 @@ export function createDeviceSettings({ root, track }) {
     }
     const inputsChanged = inputsKey() !== initialInputsKey;
     const settings = settingsOf(inputsChanged);
-    const problems = validateDeviceSettings(settings, names);
+    const problems = validateDeviceSettings(settings, names, { wakeOnly: switch2 });
     if (settings.inputs) {
       const kept = settings.inputs.type === "none" ? [] : settings.inputs.list.map((r) => r.name);
       for (const use of inputsInUse(config, deviceId, kept)) {
@@ -363,8 +365,9 @@ export function createDeviceSettings({ root, track }) {
     return `<div class="page ds">
         ${hasPower ? "" : `<p class="ds-note">This device has no power settings yet. The choices below are suggestions from its command names; save to apply them.</p>`}
         ${sectionLabel("Power")}
+        ${switch2 ? `<p class="ds-note">Nintendo Switch 2 wake device: Power On sends <strong>Wake</strong> (2-second BLE beacon). <strong>Power Off is a no-op</strong> — sleep is handled by TV HDMI-CEC standby or the console itself.</p>` : ""}
         ${radioGroup("power", "Power", POWER_TYPES, p.type)}
-        ${p.type === "discrete" ? `<div class="m-list">${pickRow("on", p.on)}${pickRow("off", p.off)}</div>` : ""}
+        ${p.type === "discrete" ? `<div class="m-list">${pickRow("on", p.on)}${switch2 && !p.off ? "" : pickRow("off", p.off)}</div>` : ""}
         ${p.type === "toggle" ? `<div class="m-list">${pickRow("toggle", p.toggle)}</div>` : ""}
         ${p.type === "none" ? "" : `${sectionLabel("Turning on")}
           <div class="m-list">
@@ -431,6 +434,7 @@ export function createDeviceSettings({ root, track }) {
     names = commandNames(entry);
     draft = draftFrom(entry);
     tv = null;
+    switch2 = isSwitch2Entry(entry);
     if (isAndroidTvEntry(entry)) {
       // Assigned only once this page is still the one shown: a slow load
       // from a page already left mustn't become the next device's TV.
