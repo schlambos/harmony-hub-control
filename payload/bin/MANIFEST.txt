@@ -18,5 +18,5 @@
 164cd9f51711a3965a2b0b949d827332  codex_hbus
 ae43e73bdd9ca1054bfd277d1627438a  codex_portal
 bd1ec83e8ea73befe10ba132025d1452  codex_usbeth
-c239e4f3f96b0dc03326416598072ed4  codex_webui
+792477417cffb13bd5b9ca047b4cb6d1  codex_webui
 ceabc15471be6f67f1e13fccd20a9508  dropbearmulti
