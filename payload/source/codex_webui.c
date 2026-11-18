@@ -8222,13 +8222,21 @@ static void bluetooth_panel(FILE *f) {
     fprintf(f, "</section>");
 }
 
+/* Filter local service syslog lines for Settings -> System -> Logs.
+ * connect.statedigest?get polls carry id "codex-..." and answer HTTP-style
+ * 304 (Not Modified) whenever stateVersion has not changed; without excluding
+ * them, 3 lines per poll drown out real codex/mqtt events in the 25-line tail. */
+#define SYSTEM_SYSLOG_FILTER \
+    "logread 2>/dev/null | grep -i 'codex\\|mqtt' 2>/dev/null | " \
+    "grep -v -F 'cmd: connect.statedigest?get' 2>/dev/null"
+
 static void system_panel(FILE *f) {
     char info[8192], logs[8192];
     int cloud_blocked = load_cloud_blocker();
     struct webui_auth_config auth;
     load_webui_auth(&auth);
     run_cmd("echo '--- uname ---'; uname -a; echo; echo '--- memory ---'; cat /proc/meminfo; echo; echo '--- mounts ---'; mount; echo; echo '--- processes ---'; ps", info, sizeof(info));
-    run_cmd("echo '--- startup log ---'; cat /cache/codex-init.log 2>/dev/null; echo; echo '--- recovery log ---'; cat /cache/codex-recovery.log 2>/dev/null; echo; echo '--- local service syslog ---'; logread 2>/dev/null | grep -i 'codex\\|mqtt' 2>/dev/null", logs, sizeof(logs));
+    run_cmd("echo '--- startup log ---'; cat /cache/codex-init.log 2>/dev/null; echo; echo '--- recovery log ---'; cat /cache/codex-recovery.log 2>/dev/null; echo; echo '--- local service syslog ---'; " SYSTEM_SYSLOG_FILTER, logs, sizeof(logs));
     fprintf(f, "<section id='view-system' data-view='system' class='section'><div class='section-head'><div><h2>System</h2><div class='section-lead'>Check device information, read logs, or reboot when a saved change needs it.</div></div></div>");
     fprintf(f, "<div class='grid'><details><summary>System information</summary><pre>");
     html(f, info);
@@ -10885,7 +10893,7 @@ static void render_system_status_json(int fd) {
         "if [ -f /cache/codex-recovery.log ]; then echo '--- recovery log (newest lines) ---'; "
         SYSTEM_LOG_TAIL " /cache/codex-recovery.log; echo; fi; "
         "echo '--- local service syslog (newest lines) ---'; "
-        "logread 2>/dev/null | grep -i 'codex\\|mqtt' 2>/dev/null | " SYSTEM_LOG_TAIL,
+        SYSTEM_SYSLOG_FILTER " | " SYSTEM_LOG_TAIL,
         logs, sizeof(logs));
     chomp(uname_text);
     chomp(memory);

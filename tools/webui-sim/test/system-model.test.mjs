@@ -336,3 +336,83 @@ describe("timezoneSummary", () => {
     assert.match(timezoneSummary(null), /schedules and sunrise\/sunset/);
   });
 });
+
+import fs from "node:fs";
+import os from "node:os";
+import path from "node:path";
+import { execFileSync } from "node:child_process";
+import { fileURLToPath } from "node:url";
+
+const REPO_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../../..");
+
+function extractCStringMacro(src, name) {
+  const re = new RegExp(`#define\\s+${name}\\s*\\\\?\\n?((?:\\s*"(?:[^"\\\\]|\\\\.)*"\\s*\\\\?\\n?)+)`);
+  const match = src.match(re);
+  if (!match) return null;
+  const parts = [];
+  for (const m of match[1].matchAll(/"((?:[^"\\]|\\.)*)"/g)) {
+    parts.push(m[1].replace(/\\\\/g, "\\").replace(/\\"/g, '"'));
+  }
+  return parts.join("");
+}
+
+describe("system status syslog filter (#194)", () => {
+  it("drops noisy connect.statedigest?get 304 poll lines while keeping real codex/mqtt logs", () => {
+    const cSrc = fs.readFileSync(path.join(REPO_ROOT, "payload/source/codex_webui.c"), "utf8");
+    const tailCmd = extractCStringMacro(cSrc, "SYSTEM_LOG_TAIL");
+    assert.ok(tailCmd, "SYSTEM_LOG_TAIL macro exists");
+
+    // Extract the syslog pipeline from render_system_status_json.
+    const fnMatch = cSrc.match(/static void render_system_status_json[\s\S]*?^}/m);
+    assert.ok(fnMatch, "render_system_status_json exists");
+    const syslogMacro = extractCStringMacro(cSrc, "SYSTEM_SYSLOG_FILTER");
+    let pipeline;
+    if (syslogMacro) {
+      assert.ok(fnMatch[0].includes("SYSTEM_SYSLOG_FILTER"), "render_system_status_json uses SYSTEM_SYSLOG_FILTER");
+      pipeline = `${syslogMacro} | ${tailCmd}`;
+    } else {
+      const m = fnMatch[0].match(/"(logread[^"]+)"\s*SYSTEM_LOG_TAIL/);
+      assert.ok(m, "found logread pipeline in render_system_status_json");
+      pipeline = m[1].replace(/\\\\/g, "\\") + tailCmd;
+    }
+
+    const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "melodious-194-"));
+    try {
+      const sampleLines = [
+        "Nov 18 15:18:01.000 pimentoblue user.notice luaworks[247]: codexactivity: committed ActivityList",
+        "Nov 18 15:18:05.000 pimentoblue user.notice luaworks[247]: codexmqtt: connected to broker 192.168.1.10",
+        "Nov 18 15:18:10.000 pimentoblue user.notice luaworks[247]: cs.c.engine [2300]: processMessage(res): [ transport: websocket ] [ id: codex-1795015090-1-1 ] [ cmd: harmony.engine?startactivity ] [ errorCode: 200 ] [ errorString: OK ]",
+      ];
+      for (let i = 0; i < 12; i++) {
+        sampleLines.push(
+          `Nov 18 15:20:${String(10 + i).padStart(2, "0")}.360 pimentoblue user.notice luaworks[247]: cs.c.engine [${2300 + i}]: processMessage(req): [ transport: websocket ] [ id: codex-1795015244-272185-${i} ] [ cmd: connect.statedigest?get ]`,
+          `Nov 18 15:20:${String(10 + i).padStart(2, "0")}.363 pimentoblue user.notice luaworks[247]: cs.c.engine [${2300 + i}]: processMessage(res): [ transport: websocket ] [ id: codex-1795015244-272185-${i} ] [ cmd: connect.statedigest?get ] [ errorCode: 304 ] [ errorString: OK ]`,
+          `Nov 18 15:20:${String(10 + i).padStart(2, "0")}.365 pimentoblue user.notice luaworks[247]: cs.c.websocketconnection [${2300 + i}]: sendResponse: [ clientId: 002a209c ] [ size: 91 ] [ id: codex-1795015244-272185-${i} ] [ code: 304 ] [ cmd: connect.statedigest?get ]`,
+        );
+      }
+      const logFile = path.join(tmpDir, "syslog.txt");
+      fs.writeFileSync(logFile, sampleLines.join("\n") + "\n");
+      const stub = path.join(tmpDir, "logread");
+      fs.writeFileSync(stub, `#!/bin/sh\ncat "${logFile}"\n`, { mode: 0o755 });
+
+      const out = execFileSync("/bin/sh", ["-c", pipeline], {
+        env: { ...process.env, PATH: `${tmpDir}:${process.env.PATH}` },
+        encoding: "utf8",
+      });
+      assert.doesNotMatch(out, /connect\.statedigest\?get/, "304 state-digest poll noise must be filtered out");
+      assert.match(out, /codexactivity: committed ActivityList/);
+      assert.match(out, /codexmqtt: connected to broker/);
+      assert.match(out, /harmony\.engine\?startactivity/);
+    } finally {
+      fs.rmSync(tmpDir, { recursive: true, force: true });
+    }
+  });
+
+  it("notes in the System view Logs section that hub syslog timestamps are UTC", () => {
+    const viewSrc = fs.readFileSync(
+      path.join(REPO_ROOT, "tools/webui-sim/public/js/views/system.js"),
+      "utf8",
+    );
+    assert.match(viewSrc, /syslog timestamps are.*UTC/i);
+  });
+});
