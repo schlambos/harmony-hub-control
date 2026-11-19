@@ -289,10 +289,13 @@ def main() -> int:
 
         # PowerOn with MAC succeeds via WoL and reconnects once TV comes back
         assert call(daemon_port, "/cmd", {"device": tv_id, "command": "PowerOn"})["ok"]
+        # An activity sends its input right after PowerOn: held, sent once on.
+        assert call(daemon_port, "/cmd", {"device": tv_id, "command": "Input HDMI 2"})["ok"]
         m = fake.mark()
         set_mode("accept")
         wait_tv(daemon_port, tv_id, connected=True, pointer=True)
         fake.wait_for("registered", since=m, reused=True)
+        fake.wait_for("switch_input", since=m, inputId="HDMI_2")
 
         # 8b. Quick Start+ standby (seen on an OLED65C4): the TV keeps the
         # session open after PowerOff. Commands must fail clearly, PowerOn must
@@ -314,10 +317,14 @@ def main() -> int:
         assert call(daemon_port, "/cmd", {"device": tv_id, "command": "PowerOn"})["ok"]
         tv = call(daemon_port, "/status")["tvs"][0]
         assert tv["cmdsSent"] == before["cmdsSent"] + 2, (before, tv)  # PowerOff + WoL, not a no-op
+        assert call(daemon_port, "/cmd", {"device": tv_id, "command": "App Netflix"})["ok"]  # held
+        time.sleep(0.3)
+        assert not any(e.get("event") == "launch_app" for e in fake.events[m:]), "sent before the TV woke"
         set_mode("wake")
         fake.wait_for("woke", since=m)
         tv = wait_tv(daemon_port, tv_id, connected=True, pointer=True)
         assert not tv["standby"] and tv["connects"] == before["connects"], (before, tv)
+        fake.wait_for("launch_app", since=m, appId="netflix")
         assert call(daemon_port, "/cmd", {"device": tv_id, "command": "VolumeUp"})["ok"]
         fake.wait_for("volume", since=m, action="up")
 

@@ -56,6 +56,7 @@
 #define MAX_TVS 8
 #define MAX_INPUTS 16
 #define MAX_APPS 64
+#define MAX_PENDING 8
 #define TV_ID_PREFIX "webos"
 #define TV_ID_MAX 24
 #define CLIENT_KEY_MAX 128
@@ -1175,6 +1176,11 @@ struct tv {
 	 * socket alone can't tell on from off; the power-state subscription can. */
 	int standby;
 
+	/* Commands that arrived while Wake-on-LAN was waking the TV (an activity
+	 * sends its input right after PowerOn); sent once the TV reports on. */
+	char pending[MAX_PENDING][64];
+	int npending;
+
 	unsigned seq;
 	char req_vol[24], req_inputs[24], req_apps[24], req_ptr[24], req_pwr[24], req_off[24];
 
@@ -1470,6 +1476,20 @@ static void tv_parse_apps(struct tv *t, const char *payload, const char *pend) {
 	DBG("TV %s: discovered %d app(s)", t->id, t->napps);
 }
 
+static int tv_execute_cmd(struct tv *t, const char *cmd, char *err, size_t errlen);
+
+/* Send the commands held while the TV woke, in order. */
+static void tv_flush_pending(struct tv *t) {
+	int n = t->npending;
+	t->npending = 0;
+	for (int i = 0; i < n; i++) {
+		char err[160] = "";
+		if (tv_execute_cmd(t, t->pending[i], err, sizeof err) < 0)
+			logmsg("TV %s: held %s failed after waking: %s", t->id, t->pending[i], err);
+	}
+	if (n) logmsg("TV %s: sent %d held command(s) after waking", t->id, n);
+}
+
 /* getPowerState: "Active", "Screen Off" and "Screen Saver" are on; "Active
  * Standby", "Suspend" and "Power Off" (or a pending request for one) are off. */
 static void tv_parse_power(struct tv *t, const char *payload, const char *pend) {
@@ -1482,7 +1502,10 @@ static void tv_parse_power(struct tv *t, const char *payload, const char *pend) 
 	if (off != t->standby) logmsg("TV %s: power state %s%s%s", t->id, state,
 	                              processing[0] ? ", " : "", processing);
 	t->standby = off;
-	if (!off) t->waking_until = 0;
+	if (!off) {
+		t->waking_until = 0;
+		tv_flush_pending(t);
+	}
 }
 
 static void tv_ws_up(void *owner) {
@@ -1518,7 +1541,8 @@ static void tv_ws_text(void *owner, const char *text, size_t len) {
 		t->registered = 1;
 		t->standby = 0;
 		t->backoff = 1000;
-		t->waking_until = 0;
+		/* waking_until stays set: a TV can register while still "Suspend";
+		 * the power state ends the wake (tv_parse_power). */
 		t->last_err[0] = 0;
 		if (t->proto == PROTO_AUTO) t->prefer_ws = t->c->use_tls ? 0 : 1;
 		tv_next_req(t, "pwr", t->req_pwr);
@@ -1536,6 +1560,10 @@ static void tv_ws_text(void *owner, const char *text, size_t len) {
 			ws_close(t->c, t->last_err);
 			t->registered = 0;
 			t->next_attempt = now_ms() + 30000;
+		} else if (!strcmp(id, t->req_pwr)) {
+			/* No power-state service (older webOS): registered means on. */
+			t->waking_until = 0;
+			tv_flush_pending(t);
 		} else if (t->req_off[0] && !strcmp(id, t->req_off)) {
 			logmsg("TV %s: PowerOff refused (%s)", t->id, err[0] ? err : "error");
 			t->standby = 0;
@@ -1889,6 +1917,18 @@ static int tv_execute_cmd(struct tv *t, const char *cmd, char *err, size_t errle
 	if (!t->client_key[0]) {
 		snprintf(err, errlen, "TV %s is not paired yet. Pair it first.", t->name);
 		return -1;
+	}
+	if (t->waking_until > now_ms() && (!t->registered || !t->c || t->c->fd < 0 || t->standby)) {
+		if (!strcasecmp(cmd, "PowerOff")) {
+			t->npending = 0; /* off before it woke: nothing left to send */
+		} else if (t->npending < MAX_PENDING) {
+			snprintf(t->pending[t->npending++], sizeof t->pending[0], "%s", cmd);
+			DBG("TV %s: holding %s until it wakes", t->id, cmd);
+			return 0;
+		} else {
+			snprintf(err, errlen, "TV %s is still waking up.", t->name);
+			return -1;
+		}
 	}
 	if (!t->registered || !t->c || t->c->fd < 0) {
 		/* Trigger a reconnect soon, but do NOT pretend the command succeeded. */
@@ -2491,6 +2531,9 @@ int main(int argc, char **argv) {
 			if (t->waking_until && (!t->registered || t->standby) && t->mac[0]) {
 				if (now >= t->waking_until) {
 					t->waking_until = 0;
+					if (t->npending)
+						logmsg("TV %s: dropped %d held command(s): it did not wake", t->id, t->npending);
+					t->npending = 0;
 				} else if (now - t->last_wol >= WOL_REPEAT_MS) {
 					send_wol(t->mac);
 					t->last_wol = now;
