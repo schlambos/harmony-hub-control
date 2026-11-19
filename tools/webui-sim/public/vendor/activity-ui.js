@@ -479,6 +479,34 @@
       roleDeviceId(activity, "DisplayActivityRole");
   }
 
+  function isSequenceAction(action) {
+    return text(action && action.__type).includes("ButtonSequenceAction");
+  }
+
+  function findSequence(map, sequenceId) {
+    const list = map && Array.isArray(map.Sequences) ? map.Sequences : [];
+    return list.find((sequence) =>
+      sequence && sequence.SequenceId != null && sameId(sequence.SequenceId, sequenceId)
+    ) || null;
+  }
+
+  function resolvesInMap(map, action) {
+    return !isSequenceAction(action) || !!findSequence(map, action.SequenceId);
+  }
+
+  // Sequences are per map: the stock engine looks a ButtonSequenceAction up in
+  // its own map's Sequences only and drops the button when it isn't there, and
+  // the Hub refuses to save the map (#201). An action copied into another map
+  // takes its sequence along. Returns false when the source has none to give.
+  function carrySequence(sourceMap, targetMap, action) {
+    if (resolvesInMap(targetMap, action)) return true;
+    const sequence = findSequence(sourceMap, action.SequenceId);
+    if (!sequence) return false;
+    if (!Array.isArray(targetMap.Sequences)) targetMap.Sequences = [];
+    targetMap.Sequences.push(clone(sequence));
+    return true;
+  }
+
   function findMappedButton(maps, targetMap, targetButton, field) {
     const identity = buttonIdentity(targetButton);
     if (!identity) return null;
@@ -491,11 +519,56 @@
         buttonIdentity(button) === identity &&
         button &&
         button[field] &&
-        typeof button[field] === "object"
+        typeof button[field] === "object" &&
+        resolvesInMap(map, button[field])
       );
-      if (match) return match[field];
+      if (match) return { action: match[field], map };
     }
     return null;
+  }
+
+  // A sequence press whose sequence isn't in its own map (or a sibling map of
+  // the same activity or device to copy it from) does nothing on the Hub, but
+  // blocks every save. Such data comes from outside the editor, so clear it
+  // and say which button lost it rather than leave the user unable to save.
+  function repairDanglingSequenceActions() {
+    const cleared = [];
+    let carried = 0;
+    buttonMaps().forEach((map) => {
+      if (!map || !Array.isArray(map.Buttons)) return;
+      const activityId = text(map["ActivityId-"]);
+      const deviceId = text(map["DeviceId-"]);
+      const siblings = buttonMaps().filter((candidate) =>
+        candidate !== map && candidate && (
+          (activityId && sameId(candidate["ActivityId-"], activityId)) ||
+          (deviceId && sameId(candidate["DeviceId-"], deviceId))
+        )
+      );
+      let mapChanged = false;
+      map.Buttons.forEach((button) => {
+        ACTION_FIELDS.forEach((field) => {
+          const action = button && button[field];
+          if (!action || typeof action !== "object" || resolvesInMap(map, action)) return;
+          const source = siblings.find((candidate) => findSequence(candidate, action.SequenceId));
+          if (source && carrySequence(source, map, action)) {
+            carried += 1;
+          } else {
+            cleared.push({
+              map: text(map.ButtonMapIdentifier || map["ButtonMapId-"] || "unknown"),
+              button: buttonIdentity(button) || text(button && button.ButtonId),
+              field,
+              sequenceId: text(action.SequenceId)
+            });
+            button[field] = null;
+          }
+          mapChanged = true;
+        });
+      });
+      if (mapChanged && Object.prototype.hasOwnProperty.call(map, "DateModified")) {
+        map.DateModified = harmonyDate();
+      }
+    });
+    return { cleared, carried };
   }
 
   function backfillActivityButtonMaps(activity) {
@@ -511,12 +584,14 @@
         const sourceDeviceMaps = deviceId ? deviceButtonMaps(deviceId) : [];
         ACTION_FIELDS.forEach((field) => {
           if (button[field] && typeof button[field] === "object") return;
-          const action =
+          const found =
             findMappedButton(siblingMaps, map, button, field) ||
             findMappedButton(sourceDeviceMaps, map, button, field);
-          if (!action) return;
-          button[field] = clone(action);
-          resetActionIdentities(button[field]);
+          if (!found) return;
+          const action = clone(found.action);
+          resetActionIdentities(action);
+          if (!carrySequence(found.map, map, action)) return;
+          button[field] = action;
           changes += 1;
         });
       });
@@ -817,7 +892,9 @@
         allocatedMapIds: 0,
         allocatedButtonIds: 0,
         correctedButtonStates: 0,
-        prunedActionlessButtons: 0
+        prunedActionlessButtons: 0,
+        clearedSequenceActions: [],
+        carriedSequences: 0
       };
     }
     const ids = new Set(activities().map((activity) => objectId(activity)).filter(Boolean));
@@ -907,6 +984,7 @@
       createdKeyboardHidMaps.push(map);
     });
 
+    const sequenceRepair = repairDanglingSequenceActions();
     const prunedActionlessButtons = pruneActionlessActivityButtons();
     const identityRepair = repairActivityMapIdentities();
 
@@ -947,6 +1025,8 @@
         createdKeyboardHidMaps.length > 0 ||
         removedKeyboardHidMaps.length > 0 ||
         prunedActionlessButtons > 0 ||
+        sequenceRepair.cleared.length > 0 ||
+        sequenceRepair.carried > 0 ||
         identityRepair.repairedMaps > 0,
       removed,
       created,
@@ -962,7 +1042,9 @@
       allocatedMapIds: identityRepair.allocatedMapIds,
       allocatedButtonIds: identityRepair.allocatedButtonIds,
       correctedButtonStates: identityRepair.correctedButtonStates,
-      prunedActionlessButtons
+      prunedActionlessButtons,
+      clearedSequenceActions: sequenceRepair.cleared,
+      carriedSequences: sequenceRepair.carried
     };
   }
 
@@ -1116,8 +1198,14 @@
         const allocatedButtonIds = repair.allocatedButtonIds;
         const correctedButtonStates = repair.correctedButtonStates;
         const prunedActionlessButtons = repair.prunedActionlessButtons;
+        const clearedSequences = repair.clearedSequenceActions.map((entry) =>
+          `${entry.button || "a button"} on ${entry.map} (sequence ${entry.sequenceId})`
+        );
+        const clearedSequenceNote = clearedSequences.length
+          ? ` Cleared ${clearedSequences.length} press${clearedSequences.length === 1 ? "" : "es"} that ran a sequence the Hub doesn't have, so the button did nothing: ${clearedSequences.join(", ")}.`
+          : "";
         markNotice(
-          `Recovered an inconsistent Harmony graph: removed ${removed} stale button map${removed === 1 ? "" : "s"}, cleared ${clearedActions} stale activity shortcut${clearedActions === 1 ? "" : "s"}, corrected ${repairedIdentifiers} remote menu identifier${repairedIdentifiers === 1 ? "" : "s"}, added ${createdKeyboardRoles} Bluetooth keyboard role${createdKeyboardRoles === 1 ? "" : "s"}, routed ${routedButtonActions} missing remote action${routedButtonActions === 1 ? "" : "s"}, created ${createdKeyboardHidMaps} keyboard HID map${createdKeyboardHidMaps === 1 ? "" : "s"}, removed ${removedKeyboardHidMaps} stale keyboard HID map${removedKeyboardHidMaps === 1 ? "" : "s"}, created ${created} missing remote-surface map${created === 1 ? "" : "s"}, removed ${removedFunctions} stale control map${removedFunctions === 1 ? "" : "s"}, created ${createdFunctions} missing activity control map${createdFunctions === 1 ? "" : "s"}, issued ${allocatedMapIds} activity button map ID${allocatedMapIds === 1 ? "" : "s"} and ${allocatedButtonIds} physical button ID${allocatedButtonIds === 1 ? "" : "s"}, enabled ${correctedButtonStates} remote button${correctedButtonStates === 1 ? "" : "s"}, and dropped ${prunedActionlessButtons} action-less activity button${prunedActionlessButtons === 1 ? "" : "s"} that would leave the paired remote unresponsive. Review and save this repair.`,
+          `Recovered an inconsistent Harmony graph: removed ${removed} stale button map${removed === 1 ? "" : "s"}, cleared ${clearedActions} stale activity shortcut${clearedActions === 1 ? "" : "s"}, corrected ${repairedIdentifiers} remote menu identifier${repairedIdentifiers === 1 ? "" : "s"}, added ${createdKeyboardRoles} Bluetooth keyboard role${createdKeyboardRoles === 1 ? "" : "s"}, routed ${routedButtonActions} missing remote action${routedButtonActions === 1 ? "" : "s"}, created ${createdKeyboardHidMaps} keyboard HID map${createdKeyboardHidMaps === 1 ? "" : "s"}, removed ${removedKeyboardHidMaps} stale keyboard HID map${removedKeyboardHidMaps === 1 ? "" : "s"}, created ${created} missing remote-surface map${created === 1 ? "" : "s"}, removed ${removedFunctions} stale control map${removedFunctions === 1 ? "" : "s"}, created ${createdFunctions} missing activity control map${createdFunctions === 1 ? "" : "s"}, issued ${allocatedMapIds} activity button map ID${allocatedMapIds === 1 ? "" : "s"} and ${allocatedButtonIds} physical button ID${allocatedButtonIds === 1 ? "" : "s"}, enabled ${correctedButtonStates} remote button${correctedButtonStates === 1 ? "" : "s"}, and dropped ${prunedActionlessButtons} action-less activity button${prunedActionlessButtons === 1 ? "" : "s"} that would leave the paired remote unresponsive.${clearedSequenceNote} Review and save this repair.`,
           "warn"
         );
       } else if (options.afterSave) {
@@ -1509,7 +1597,7 @@
   // P06 #1: a hard-key edit on 16414 must reach the Touch's own 16417 map.
   // The Touch answers hard keys from 16417 only. Mirror the edited key,
   // preserving the Touch button's ButtonId and key spelling (Dvr→DVR).
-  function mirrorHardKeyToTouch(activityId, buttonKey, sourceButton) {
+  function mirrorHardKeyToTouch(activityId, buttonKey, sourceButton, sourceMap) {
     const touchKey = touchHardKey(buttonKey);
     if (!touchKey) return;
     const touchMap = activityMaps(activityId).find((m) =>
@@ -1526,10 +1614,17 @@
       }
       return;
     }
+    // A sequence press keeps working on the Touch only if its sequence comes along.
+    const mirrored = (field) => {
+      const action = sourceButton[field];
+      if (!action) return null;
+      const copy = clone(action);
+      return carrySequence(sourceMap, touchMap, copy) ? copy : null;
+    };
     if (existing) {
-      existing.ButtonAction = sourceButton.ButtonAction ? clone(sourceButton.ButtonAction) : null;
-      existing.ButtonLongPressAction = sourceButton.ButtonLongPressAction ? clone(sourceButton.ButtonLongPressAction) : null;
-      existing.ButtonDoublePressAction = sourceButton.ButtonDoublePressAction ? clone(sourceButton.ButtonDoublePressAction) : null;
+      existing.ButtonAction = mirrored("ButtonAction");
+      existing.ButtonLongPressAction = mirrored("ButtonLongPressAction");
+      existing.ButtonDoublePressAction = mirrored("ButtonDoublePressAction");
       existing.FunctionGroupType = 0;
       existing.ButtonKey = touchKey;
       existing.ButtonState = 1;
@@ -1537,12 +1632,12 @@
       touchMap.Buttons.push({
         ButtonId: newButtonId(),
         __type: "HardRemoteButton",
-        ButtonAction: sourceButton.ButtonAction ? clone(sourceButton.ButtonAction) : null,
-        ButtonDoublePressAction: sourceButton.ButtonDoublePressAction ? clone(sourceButton.ButtonDoublePressAction) : null,
+        ButtonAction: mirrored("ButtonAction"),
+        ButtonDoublePressAction: mirrored("ButtonDoublePressAction"),
         FunctionGroupType: 0,
         ButtonState: 1,
         ButtonKey: touchKey,
-        ButtonLongPressAction: sourceButton.ButtonLongPressAction ? clone(sourceButton.ButtonLongPressAction) : null,
+        ButtonLongPressAction: mirrored("ButtonLongPressAction"),
       });
     }
     if (Object.prototype.hasOwnProperty.call(touchMap, "DateModified")) touchMap.DateModified = harmonyDate();
@@ -1575,7 +1670,7 @@
     // P06 #1: mirror 16414 hard-key edits to the Touch map.
     if (text(map && map.ButtonMapIdentifier).startsWith("16414Activity")
         && text(button.__type).includes("HardRemoteButton")) {
-      mirrorHardKeyToTouch(objectId(activity), text(button.ButtonKey), button);
+      mirrorHardKeyToTouch(objectId(activity), text(button.ButtonKey), button, map);
     }
     touch(activity);
   }
@@ -1638,6 +1733,8 @@
     normalizeActivityMapIdentifiers(map, newActivityId);
     if (Object.prototype.hasOwnProperty.call(map, "DateModified")) map.DateModified = harmonyDate();
     if (keepActions) {
+      // The copy keeps its sequence presses, so it keeps their sequences too.
+      if (Array.isArray(sourceMap.Sequences)) map.Sequences = clone(sourceMap.Sequences);
       if (isActivityButtonMap(map)) pruneActionlessButtons(map);
     } else if (Array.isArray(map.Buttons)) {
       // The skeleton stays so backfillActivityButtonMaps can route actions into it;
