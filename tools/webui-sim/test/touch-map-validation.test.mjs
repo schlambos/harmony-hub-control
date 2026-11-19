@@ -137,7 +137,7 @@ describe("netservicestarter.lua Touch Sync guards (LuaJIT)", () => {
       cwd: new URL("../../../", import.meta.url).pathname,
       encoding: "utf8",
     });
-    assert.match(out, /48\/48 checks passed/);
+    assert.match(out, /55\/55 checks passed/);
   });
 });
 

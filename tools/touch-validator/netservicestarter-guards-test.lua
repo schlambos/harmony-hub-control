@@ -581,5 +581,137 @@ check("melodious-off: remoteId untouched and nothing seeded",
   #boot.prefSaves == 0 and #boot.resSaves == 0 and boot.pref.remoteId == "20264150",
   encode(boot.prefSaves))
 
+-- Firmware 4.11.6 (#176): its session module has no getIp/setIp, system has
+-- no uniqueId, tasks.crashlog.apihandler.usagelog doesn't exist and the HAL
+-- HTTP task is httpserverconnector.lua. Each case reloads the script with
+-- either those stubs (stock = false) or 4.15.600's (stock = true) and
+-- records the tasks it loads. With network = true a Wi-Fi newaddr and
+-- deladdr go through the netlink loop before it is stopped.
+local HAL_4156 = "tasks/connectserver/transport/halhttpserverconnector.lua"
+local HAL_4116 = "tasks/connectserver/transport/httpserverconnector.lua"
+local function runFirmwareCase(opts)
+  local caseFiles = { ["/data/codex/cloud_blocker.conf"] = "1" }
+  if opts.stock then caseFiles["/opt/luaworks/" .. HAL_4156] = "-- stock" end
+  local loaded, usageCalls = {}, {}
+  local session, usageLog = {}, nil
+  local stockFns = {}
+  if opts.stock then
+    stockFns.getIp = function() return nil end
+    stockFns.setIp = function() end
+    stockFns.uniqueId = function() return "uuid-stock" end
+    session.getIp, session.setIp = stockFns.getIp, stockFns.setIp
+    usageLog = setmetatable({
+      setUniqueId = function(kind, id) usageCalls[#usageCalls + 1] = "setUniqueId " .. kind end,
+    }, { __index = function() return noop end })
+  end
+  local events = {
+    { family = "inet", label = "ath0", msgtype = "newaddr", address = "192.0.2.10" },
+    { family = "inet", label = "ath0", msgtype = "deladdr", address = "192.0.2.10" },
+  }
+  for _, mod in ipairs({
+    "system", "socket.http", "socket", "tasks.connectserver.core.engine",
+    "tasks.mfg.core.mfgdata", "tasks.harmonywebservices.core.preferencemanager",
+    "tasks.harmonywebservices.core.resourcemanager",
+    "tasks.harmonywebservices.core.session", "tasks.crashlog.apihandler.usagelog",
+    "tasks.connectserver.transport.cloudapi", "tasks.connectserver.transport.pubnubwrapper",
+    "tasks.connectserver.transport.packagemgr",
+  }) do
+    package.loaded[mod] = nil
+    package.preload[mod] = nil
+  end
+  local systemModule
+  package.preload["system"] = function()
+    local s = setmetatable({}, { __index = function(_, key)
+      if key == "uniqueId" then return nil end -- 4.11.6: absent
+      return noop
+    end })
+    rawset(s, "io", {
+      open = function(path)
+        local body = caseFiles[path]
+        if not body then return nil end
+        return { read = function() return body end, close = noop }
+      end,
+    })
+    rawset(s, "getFirmwareVersion", function() return opts.stock and "4.15.600" or "4.11.6" end)
+    rawset(s, "uuid", function() return "12345678-1234-4234-a234-1234567890ab" end)
+    rawset(s, "isMessageRegistered", function() return true end)
+    rawset(s, "loadTask", function(path) loaded[#loaded + 1] = path return path end)
+    if stockFns.uniqueId then rawset(s, "uniqueId", stockFns.uniqueId) end
+    rawset(s, "netlinkOpen", function()
+      local next = 0
+      return {
+        receive = function()
+          next = next + 1
+          if events[next] then return { events[next] } end
+          error("STOP_NETLINK_LOOP")
+        end,
+        close = noop,
+      }
+    end)
+    systemModule = s
+    return s
+  end
+  package.preload["tasks.harmonywebservices.core.session"] = function() return session end
+  if usageLog then
+    package.preload["tasks.crashlog.apihandler.usagelog"] = function() return usageLog end
+  end
+  package.preload["tasks.harmonywebservices.core.preferencemanager"] =
+    function() return { remoteId = 20264150, save = noop } end
+  package.preload["tasks.harmonywebservices.core.resourcemanager"] = function()
+    return {
+      getResource = function() return "200", '"etag"', { id = "stored" } end,
+      getHubEtag = noop, isAnySyncInProgress = function() return false end, saveResource = noop,
+    }
+  end
+  package.preload["tasks.mfg.core.mfgdata"] = function() return { hasNetwork = opts.network or false } end
+  package.preload["tasks.connectserver.core.engine"] = function() return { registerMessage = noop } end
+  package.preload["socket.http"] = function() return { request = noop } end
+  package.preload["socket"] = function() return anything() end
+
+  local ok, err = pcall(assert(loadfile(repoRoot .. "/payload/scripts/netservicestarter.lua")))
+  if opts.network and not ok and tostring(err):find("STOP_NETLINK_LOOP", 1, true) then
+    ok, err = true, nil
+  end
+  local function hasTask(path)
+    for _, p in ipairs(loaded) do if p == path then return true end end
+    return false
+  end
+  return {
+    ok = ok, err = err, session = session, system = systemModule, stockFns = stockFns,
+    hasTask = hasTask, loaded = loaded, usageCalls = usageCalls,
+  }
+end
+
+local fw = runFirmwareCase({})
+check("4.11.6 compat: the script loads with 4.11.6's modules", fw.ok, fw.err)
+local ipRoundTrip = false
+if type(fw.session.getIp) == "function" and type(fw.session.setIp) == "function" then
+  fw.session.setIp("192.0.2.10")
+  local set = fw.session.getIp()
+  fw.session.setIp(nil)
+  ipRoundTrip = set == "192.0.2.10" and fw.session.getIp() == nil
+end
+check("4.11.6 compat: session.getIp returns what session.setIp was given, and nil after setIp(nil)",
+  ipRoundTrip)
+local idA = fw.system and type(fw.system.uniqueId) == "function" and fw.system.uniqueId()
+local idB = fw.system and type(fw.system.uniqueId) == "function" and fw.system.uniqueId()
+check("4.11.6 compat: system.uniqueId returns a different non-empty string each call",
+  type(idA) == "string" and idA ~= "" and type(idB) == "string" and idA ~= idB,
+  tostring(idA) .. " " .. tostring(idB))
+check("4.11.6 compat: the HAL task loads from httpserverconnector.lua",
+  fw.hasTask(HAL_4116) and not fw.hasTask(HAL_4156), table.concat(fw.loaded, ","))
+
+fw = runFirmwareCase({ network = true })
+check("4.11.6 compat: a Wi-Fi newaddr and deladdr go through without the usagelog module",
+  fw.ok and fw.hasTask(HAL_4116) and fw.session.getIp() == nil, fw.err)
+
+fw = runFirmwareCase({ stock = true, network = true })
+check("4.15.600: session.getIp/setIp, system.uniqueId and the stock usagelog are left as they are",
+  fw.ok and fw.session.getIp == fw.stockFns.getIp and fw.session.setIp == fw.stockFns.setIp and
+  fw.system.uniqueId == fw.stockFns.uniqueId and #fw.usageCalls == 1 and
+  fw.usageCalls[1] == "setUniqueId wifi", tostring(fw.err) .. " " .. table.concat(fw.usageCalls, ","))
+check("4.15.600: the HAL task still loads from halhttpserverconnector.lua",
+  fw.hasTask(HAL_4156) and not fw.hasTask(HAL_4116), table.concat(fw.loaded, ","))
+
 print(string.format("%d/%d checks passed", count - failures, count))
 os.exit(failures == 0 and 0 or 1)

@@ -11,6 +11,16 @@ local nativeSyncHandler = require("tasks.setup.apihandler.sync")
 local prefMgr = require("tasks.harmonywebservices.core.preferencemanager")
 local resMgr = require("tasks.harmonywebservices.core.resourcemanager")
 local session = require("tasks.harmonywebservices.core.session")
+-- 4.11.6 compat (#176): stock session has no getIp/setIp. Track the
+-- address setIp is given so getIp callers (lanAdvertSync) still see the
+-- LAN address instead of always nil.
+local sessionIpFallback
+if type(session.getIp) ~= "function" then
+  session.getIp = function() return sessionIpFallback end
+end
+if type(session.setIp) ~= "function" then
+  session.setIp = function(ip) sessionIpFallback = ip end
+end
 local string = require("string")
 local system = require("system")
 local table = require("table")
@@ -18,9 +28,37 @@ local math = require("math")
 local os = require("os")
 local socket = require("socket")
 
+-- 4.11.6 compat (#176): no system.uniqueId there.
+if type(system.uniqueId) ~= "function" then
+  local uniqueCounter = 0
+  system.uniqueId = function()
+    uniqueCounter = uniqueCounter + 1
+    return string.format("hub-%d-%d", os.time(), uniqueCounter)
+  end
+end
+
+-- 4.11.6 compat (#176): no tasks.crashlog.apihandler.usagelog there.
+local function codexUsageLog()
+  local ok, mod = pcall(require, "tasks.crashlog.apihandler.usagelog")
+  if ok and type(mod) == "table" then return mod end
+  return {
+    postAnalyticEvent = function() end,
+    postDebugEvent = function() end,
+    setUniqueId = function() end,
+    getUniqueId = function() return nil end,
+  }
+end
+
 -- luaworks tasks run sandboxed without the io global; stock code opens files
 -- through system.io (the real io, reached via package.seeall).
 local io = system.io
+
+-- 4.11.6 compat (#176): the HAL HTTP task is httpserverconnector.lua there.
+local HAL_HTTP_TASK = "tasks/connectserver/transport/halhttpserverconnector.lua"
+do
+  local f = io and io.open and io.open("/opt/luaworks/" .. HAL_HTTP_TASK, "r")
+  if f then f:close() else HAL_HTTP_TASK = "tasks/connectserver/transport/httpserverconnector.lua" end
+end
 
 MSG_NETSERVICE_NEW_ADDRESS = "cs.netservicestarter_new_address"
 
@@ -1514,7 +1552,7 @@ local function maybeStartCloudTasks()
 end
 
 local function logWifiEvent(name, id)
-  local usageLog = require("tasks.crashlog.apihandler.usagelog")
+  local usageLog = codexUsageLog()
   local t = {
     category = "hub connectivity",
     name = name
@@ -1539,7 +1577,7 @@ local function handleEvent(event)
     end
 
     local uuid = system.uniqueId()
-    local usageLog = require("tasks.crashlog.apihandler.usagelog")
+    local usageLog = codexUsageLog()
     usageLog.setUniqueId("wifi", uuid)
     logWifiEvent("connect wifi", uuid)
 
@@ -1557,7 +1595,7 @@ local function handleEvent(event)
     end
     if not halConnect then
       log.notice("starting HAL task")
-      halConnect = system.loadTask("tasks/connectserver/transport/halhttpserverconnector.lua")
+      halConnect = system.loadTask(HAL_HTTP_TASK)
     end
     if not hbusHttpServerConnect then
       log.notice("starting HBUS over HTTP server task")
@@ -1587,7 +1625,7 @@ local function handleEvent(event)
       end
       session.setIp(nil)
       pcall(lanAdvertSync)
-      local usageLog = require("tasks.crashlog.apihandler.usagelog")
+      local usageLog = codexUsageLog()
       logWifiEvent("disconnect wifi", usageLog.getUniqueId("wifi"))
     end
   end
@@ -1667,7 +1705,7 @@ if mfgData.hasNetwork == true then
   netlink:close()
 else
   log.notice("starting HAL task")
-  halConnect = system.loadTask("tasks/connectserver/transport/halhttpserverconnector.lua")
+  halConnect = system.loadTask(HAL_HTTP_TASK)
   log.notice("starting HBUS over HTTP server task")
   hbusHttpServerConnect = system.loadTask("tasks/connectserver/transport/hbushttpserverconnector.lua")
   log.notice("starting LTCP Server task")
