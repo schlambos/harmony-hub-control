@@ -56,6 +56,7 @@
 #define MAX_TVS 8
 #define MAX_INPUTS 16
 #define MAX_APPS 64
+#define MAX_PENDING 8
 #define TV_ID_PREFIX "webos"
 #define TV_ID_MAX 24
 #define CLIENT_KEY_MAX 128
@@ -65,6 +66,8 @@
 #define LOG_CAP (64 * 1024)
 #define WS_RX_INIT 16384
 #define WS_RX_MAX (128 * 1024)
+/* Receive buffer cap: one maximal frame plus the partial frame/TLS record after it. */
+#define WS_RX_BUF_MAX (WS_RX_MAX * 2)
 #define WS_TX_MAX 16384
 #define WS_PING_MS 20000
 #define WS_QUIET_MS 50000
@@ -550,6 +553,7 @@ struct ws_conn {
 	unsigned char *frag;
 	size_t fragn, fragcap;
 	int frag_op;
+	uint64_t skip; /* bytes still to discard from an oversized frame */
 	char error[128];
 };
 
@@ -563,6 +567,7 @@ static void ws_close(struct ws_conn *c, const char *why) {
 	c->connecting = c->transport_up = c->ws_up = 0;
 	c->txn = c->rxn = c->fragn = 0;
 	c->frag_op = 0;
+	c->skip = 0;
 	free(c->rx); c->rx = NULL; c->rxcap = 0;
 	free(c->frag); c->frag = NULL; c->fragcap = 0;
 	snprintf(c->error, sizeof c->error, "%s", why ? why : "");
@@ -631,6 +636,7 @@ static int ws_open(struct ws_conn *c, const char *host, int port, const char *pa
 	if (!c->rx) { close(fd); ws_close(c, "out of memory"); return -1; }
 	c->rxcap = WS_RX_INIT;
 	c->rxn = 0;
+	c->skip = 0;
 	c->fd = fd;
 	c->use_tls = use_tls;
 	c->connecting = 1;
@@ -683,7 +689,7 @@ static int ws_rx_ensure(struct ws_conn *c, size_t extra) {
 	if (c->rxn + extra <= c->rxcap) return 0;
 	size_t ncap = c->rxcap ? c->rxcap * 2 : WS_RX_INIT;
 	while (ncap < c->rxn + extra) ncap *= 2;
-	if (ncap > WS_RX_MAX) return -1;
+	if (ncap > WS_RX_BUF_MAX) return -1;
 	unsigned char *nb = realloc(c->rx, ncap);
 	if (!nb) return -1;
 	c->rx = nb;
@@ -740,6 +746,13 @@ static int ws_process_rx(struct ws_conn *c, ws_up_cb on_up, ws_text_cb on_text, 
 
 	/* Parse complete RFC 6455 frames. */
 	for (;;) {
+		if (c->skip) {
+			size_t drop = (uint64_t)c->rxn < c->skip ? c->rxn : (size_t)c->skip;
+			memmove(c->rx, c->rx + drop, c->rxn - drop);
+			c->rxn -= drop;
+			c->skip -= drop;
+			if (c->skip) return 0;
+		}
 		if (c->rxn < 2) return 0;
 		unsigned char b0 = c->rx[0], b1 = c->rx[1];
 		int fin = (b0 & 0x80) != 0;
@@ -758,7 +771,15 @@ static int ws_process_rx(struct ws_conn *c, ws_up_cb on_up, ws_text_cb on_text, 
 			hlen = 10;
 		}
 		if (masked) hlen += 4;
-		if (plen > WS_RX_MAX) { ws_close(c, "oversized WebSocket frame"); return -1; }
+		if (plen > WS_RX_MAX) {
+			/* Too big to buffer: discard it as it streams in and keep the
+			 * session (one large reply must not cause a reconnect loop). A
+			 * fragmented message it belongs to is dropped as a whole. */
+			logmsg("dropped an oversized WebSocket frame (%llu bytes)", (unsigned long long)plen);
+			if (opcode == 0x0 || (opcode == 0x1 && !fin)) { c->fragn = 0; c->frag_op = 0; }
+			c->skip = (uint64_t)hlen + plen;
+			continue;
+		}
 		if (c->rxn < hlen + (size_t)plen) return 0;
 
 		unsigned char *payload = malloc((size_t)plen + 1);
@@ -791,9 +812,12 @@ static int ws_process_rx(struct ws_conn *c, ws_up_cb on_up, ws_text_cb on_text, 
 				if (opcode == 0x1) { c->fragn = 0; c->frag_op = 0x1; }
 				if (c->frag_op == 0x1) {
 					if (c->fragn + (size_t)plen + 1 > WS_RX_MAX) {
+						/* Drop the whole message; later fragments are ignored. */
+						logmsg("dropped an oversized fragmented WebSocket message");
 						free(payload);
-						ws_close(c, "oversized fragmented frame");
-						return -1;
+						c->fragn = 0;
+						c->frag_op = 0;
+						continue;
 					}
 					if (c->fragn + (size_t)plen + 1 > c->fragcap) {
 						size_t nc = c->fragcap ? c->fragcap * 2 : 16384;
@@ -1078,20 +1102,25 @@ static int ssap_send_register(struct ws_conn *c, const char *req_id, const char 
 	return ws_send_text(c, buf, (size_t)n);
 }
 
-static int ssap_send_request(struct ws_conn *c, const char *req_id, const char *uri, const char *payload_json) {
+static int ssap_send(struct ws_conn *c, const char *type, const char *req_id, const char *uri,
+                     const char *payload_json) {
 	char buf[1024];
 	int n;
 	if (payload_json && payload_json[0]) {
 		n = snprintf(buf, sizeof buf,
-		             "{\"id\":\"%s\",\"type\":\"request\",\"uri\":\"%s\",\"payload\":%s}",
-		             req_id, uri, payload_json);
+		             "{\"id\":\"%s\",\"type\":\"%s\",\"uri\":\"%s\",\"payload\":%s}",
+		             req_id, type, uri, payload_json);
 	} else {
 		n = snprintf(buf, sizeof buf,
-		             "{\"id\":\"%s\",\"type\":\"request\",\"uri\":\"%s\"}",
-		             req_id, uri);
+		             "{\"id\":\"%s\",\"type\":\"%s\",\"uri\":\"%s\"}",
+		             req_id, type, uri);
 	}
 	if (n <= 0 || (size_t)n >= sizeof buf) return -1;
 	return ws_send_text(c, buf, (size_t)n);
+}
+
+static int ssap_send_request(struct ws_conn *c, const char *req_id, const char *uri, const char *payload_json) {
+	return ssap_send(c, "request", req_id, uri, payload_json);
 }
 
 /* ================================================================== TV state & persistence */
@@ -1143,8 +1172,17 @@ struct tv {
 	struct webos_app apps[MAX_APPS];
 	int napps;
 
+	/* Newer TVs keep the session open in standby (Quick Start+), so the
+	 * socket alone can't tell on from off; the power-state subscription can. */
+	int standby;
+
+	/* Commands that arrived while Wake-on-LAN was waking the TV (an activity
+	 * sends its input right after PowerOn); sent once the TV reports on. */
+	char pending[MAX_PENDING][64];
+	int npending;
+
 	unsigned seq;
-	char req_vol[24], req_inputs[24], req_apps[24], req_ptr[24];
+	char req_vol[24], req_inputs[24], req_apps[24], req_ptr[24], req_pwr[24], req_off[24];
 
 	long long next_attempt, last_wol, waking_until;
 	int backoff;
@@ -1326,7 +1364,9 @@ static void tv_request_metadata(struct tv *t) {
 	tv_next_req(t, "inp", t->req_inputs);
 	ssap_send_request(t->c, t->req_inputs, "ssap://tv/getExternalInputList", NULL);
 	tv_next_req(t, "app", t->req_apps);
-	ssap_send_request(t->c, t->req_apps, "ssap://com.webos.applicationManager/listApps", NULL);
+	/* Launch points are the home-screen apps (~28 KB on webOS 24); listApps
+	 * also returns every hidden system app and outgrows WS_RX_MAX (170 KB). */
+	ssap_send_request(t->c, t->req_apps, "ssap://com.webos.applicationManager/listLaunchPoints", NULL);
 	if (!t->ptr || t->ptr->fd < 0) {
 		tv_next_req(t, "ptr", t->req_ptr);
 		ssap_send_request(t->c, t->req_ptr, "ssap://com.webos.service.networkinput/getPointerInputSocket", NULL);
@@ -1436,6 +1476,38 @@ static void tv_parse_apps(struct tv *t, const char *payload, const char *pend) {
 	DBG("TV %s: discovered %d app(s)", t->id, t->napps);
 }
 
+static int tv_execute_cmd(struct tv *t, const char *cmd, char *err, size_t errlen);
+
+/* Send the commands held while the TV woke, in order. */
+static void tv_flush_pending(struct tv *t) {
+	int n = t->npending;
+	t->npending = 0;
+	for (int i = 0; i < n; i++) {
+		char err[160] = "";
+		if (tv_execute_cmd(t, t->pending[i], err, sizeof err) < 0)
+			logmsg("TV %s: held %s failed after waking: %s", t->id, t->pending[i], err);
+	}
+	if (n) logmsg("TV %s: sent %d held command(s) after waking", t->id, n);
+}
+
+/* getPowerState: "Active", "Screen Off" and "Screen Saver" are on; "Active
+ * Standby", "Suspend" and "Power Off" (or a pending request for one) are off. */
+static void tv_parse_power(struct tv *t, const char *payload, const char *pend) {
+	char state[48] = "", processing[64] = "";
+	if (j_obj_str(payload, pend, "state", state, sizeof state) < 0 || !state[0]) return;
+	j_obj_str(payload, pend, "processing", processing, sizeof processing);
+	int off = !strcmp(state, "Active Standby") || !strcmp(state, "Suspend") ||
+	          !strcmp(state, "Power Off") || strstr(processing, "Power Off") ||
+	          strstr(processing, "Suspend") || strstr(processing, "Active Standby");
+	if (off != t->standby) logmsg("TV %s: power state %s%s%s", t->id, state,
+	                              processing[0] ? ", " : "", processing);
+	t->standby = off;
+	if (!off) {
+		t->waking_until = 0;
+		tv_flush_pending(t);
+	}
+}
+
 static void tv_ws_up(void *owner) {
 	struct tv *t = owner;
 	DBG("TV %s: WebSocket up (%s), sending register", t->id, t->c->use_tls ? "wss" : "ws");
@@ -1467,10 +1539,14 @@ static void tv_ws_text(void *owner, const char *text, size_t len) {
 			       t->c->use_tls ? "wss" : "ws");
 		}
 		t->registered = 1;
+		t->standby = 0;
 		t->backoff = 1000;
-		t->waking_until = 0;
+		/* waking_until stays set: a TV can register while still "Suspend";
+		 * the power state ends the wake (tv_parse_power). */
 		t->last_err[0] = 0;
 		if (t->proto == PROTO_AUTO) t->prefer_ws = t->c->use_tls ? 0 : 1;
+		tv_next_req(t, "pwr", t->req_pwr);
+		ssap_send(t->c, "subscribe", t->req_pwr, "ssap://com.webos.service.tvpower/power/getPowerState", NULL);
 		tv_request_metadata(t);
 		return;
 	}
@@ -1484,6 +1560,13 @@ static void tv_ws_text(void *owner, const char *text, size_t len) {
 			ws_close(t->c, t->last_err);
 			t->registered = 0;
 			t->next_attempt = now_ms() + 30000;
+		} else if (!strcmp(id, t->req_pwr)) {
+			/* No power-state service (older webOS): registered means on. */
+			t->waking_until = 0;
+			tv_flush_pending(t);
+		} else if (t->req_off[0] && !strcmp(id, t->req_off)) {
+			logmsg("TV %s: PowerOff refused (%s)", t->id, err[0] ? err : "error");
+			t->standby = 0;
 		} else {
 			DBG("TV %s: SSAP error on %s: %s", t->id, id, err);
 		}
@@ -1491,7 +1574,9 @@ static void tv_ws_text(void *owner, const char *text, size_t len) {
 	}
 
 	if (!strcmp(type, "response") && payload) {
-		if (!strcmp(id, t->req_vol)) {
+		if (!strcmp(id, t->req_pwr)) {
+			tv_parse_power(t, payload, pend);
+		} else if (!strcmp(id, t->req_vol)) {
 			const char *vse = NULL;
 			const char *vs = j_obj_find(payload, pend, "volumeStatus", &vse);
 			int v = -1, m = -1;
@@ -1795,8 +1880,8 @@ static int tv_execute_cmd(struct tv *t, const char *cmd, char *err, size_t errle
 
 	/* PowerOn: Wake-on-LAN only (no fake SSAP PowerOn). */
 	if (!strcasecmp(cmd, "PowerOn")) {
-		if (t->registered && t->c && t->c->fd >= 0) {
-			DBG("TV %s: PowerOn while already connected", t->id);
+		if (t->registered && t->c && t->c->fd >= 0 && !t->standby) {
+			DBG("TV %s: PowerOn while already on", t->id);
 			return 0;
 		}
 		if (!t->mac[0]) {
@@ -1813,8 +1898,8 @@ static int tv_execute_cmd(struct tv *t, const char *cmd, char *err, size_t errle
 		return 0;
 	}
 
-	/* PowerToggle when disconnected: wake via WoL if MAC is configured. */
-	if (!strcasecmp(cmd, "PowerToggle") && (!t->registered || !t->c || t->c->fd < 0)) {
+	/* PowerToggle when disconnected or in standby: wake via WoL if MAC is configured. */
+	if (!strcasecmp(cmd, "PowerToggle") && (!t->registered || !t->c || t->c->fd < 0 || t->standby)) {
 		if (!t->mac[0]) {
 			snprintf(err, errlen, "TV %s is not connected and has no MAC address for Wake-on-LAN.", t->name);
 			return -1;
@@ -1833,11 +1918,28 @@ static int tv_execute_cmd(struct tv *t, const char *cmd, char *err, size_t errle
 		snprintf(err, errlen, "TV %s is not paired yet. Pair it first.", t->name);
 		return -1;
 	}
+	if (t->waking_until > now_ms() && (!t->registered || !t->c || t->c->fd < 0 || t->standby)) {
+		if (!strcasecmp(cmd, "PowerOff")) {
+			t->npending = 0; /* off before it woke: nothing left to send */
+		} else if (t->npending < MAX_PENDING) {
+			snprintf(t->pending[t->npending++], sizeof t->pending[0], "%s", cmd);
+			DBG("TV %s: holding %s until it wakes", t->id, cmd);
+			return 0;
+		} else {
+			snprintf(err, errlen, "TV %s is still waking up.", t->name);
+			return -1;
+		}
+	}
 	if (!t->registered || !t->c || t->c->fd < 0) {
 		/* Trigger a reconnect soon, but do NOT pretend the command succeeded. */
 		long long now = now_ms();
 		if (t->next_attempt > now + 1000) { t->backoff = 1000; t->next_attempt = now; }
 		snprintf(err, errlen, "TV %s is not connected (unreachable or turned off).", t->name);
+		return -1;
+	}
+	if (t->standby) {
+		if (!strcasecmp(cmd, "PowerOff")) return 0; /* already off */
+		snprintf(err, errlen, "TV %s is off (standby). Power On wakes it.", t->name);
 		return -1;
 	}
 
@@ -1849,6 +1951,9 @@ static int tv_execute_cmd(struct tv *t, const char *cmd, char *err, size_t errle
 			snprintf(err, errlen, "Failed to queue PowerOff.");
 			return -1;
 		}
+		/* Assume off until the power-state subscription says otherwise. */
+		snprintf(t->req_off, sizeof t->req_off, "%s", req_id);
+		t->standby = 1;
 		t->cmds++;
 		return 0;
 	}
@@ -1860,6 +1965,8 @@ static int tv_execute_cmd(struct tv *t, const char *cmd, char *err, size_t errle
 			snprintf(err, errlen, "Failed to queue PowerOff.");
 			return -1;
 		}
+		snprintf(t->req_off, sizeof t->req_off, "%s", req_id);
+		t->standby = 1;
 		t->cmds++;
 		return 0;
 	}
@@ -2043,16 +2150,18 @@ static void http_reply(int fd, const char *body) {
 static void sb_tv(struct sbuf *s, const struct tv *t) {
 	sb(s, "{\"id\":\"%s\",\"name\":", t->id);
 	sb_str(s, t->name);
+	/* A TV in standby keeps its session but is reported as not connected. */
 	sb(s, ",\"host\":\"%s\",\"mac\":\"%s\",\"proto\":\"%s\",\"paired\":%s,\"connected\":%s,"
-	      "\"pointerReady\":%s,\"volume\":%d,\"muted\":%s,\"activeInput\":",
+	      "\"standby\":%s,\"pointerReady\":%s,\"volume\":%d,\"muted\":%s,\"activeInput\":",
 	   t->host, t->mac, PROTO_NAMES[t->proto],
 	   t->client_key[0] ? "true" : "false",
-	   t->registered ? "true" : "false",
+	   t->registered && !t->standby ? "true" : "false",
+	   t->registered && t->standby ? "true" : "false",
 	   t->ptr_ready ? "true" : "false",
 	   t->volume, t->muted ? "true" : "false");
 	sb_str(s, t->active_input);
 	sb(s, ",\"cmdsSent\":%lu,\"connects\":%lu,\"error\":", t->cmds, t->connects);
-	sb_str(s, t->registered ? "" : t->last_err);
+	sb_str(s, !t->registered ? t->last_err : t->standby ? "TV is in standby" : "");
 	sb(s, ",\"inputs\":[");
 	for (int i = 0; i < t->ninputs; i++) {
 		sb(s, "%s{\"id\":", i ? "," : "");
@@ -2419,9 +2528,12 @@ int main(int argc, char **argv) {
 			if (!t->used) continue;
 
 			/* Repeat WoL while waking an unreachable TV. */
-			if (t->waking_until && !t->registered && t->mac[0]) {
+			if (t->waking_until && (!t->registered || t->standby) && t->mac[0]) {
 				if (now >= t->waking_until) {
 					t->waking_until = 0;
+					if (t->npending)
+						logmsg("TV %s: dropped %d held command(s): it did not wake", t->id, t->npending);
+					t->npending = 0;
 				} else if (now - t->last_wol >= WOL_REPEAT_MS) {
 					send_wol(t->mac);
 					t->last_wol = now;

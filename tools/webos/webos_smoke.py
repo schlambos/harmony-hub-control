@@ -217,6 +217,16 @@ def main() -> int:
         tv = wait_tv(daemon_port, tv_id, connected=True, pointer=True)
         assert tv["paired"] is True and tv["mac"] == "AA:BB:CC:11:22:33"
 
+        # 5b. Apps come from listLaunchPoints; listApps (170 KB on a real
+        # webOS 24 TV, past the 128 KB frame cap) is never asked for, and the
+        # session stays up instead of reconnecting in a loop.
+        fake.wait_for("list_launch_points")
+        time.sleep(1.5)
+        tv = call(daemon_port, "/status")["tvs"][0]
+        assert tv["connected"] and tv["connects"] == 1, tv
+        assert sorted(a["title"] for a in tv["apps"]) == ["Disney+", "Netflix", "Plex", "Prime Video", "YouTube"], tv["apps"]
+        assert not any(e.get("event") == "list_apps" for e in fake.events), "daemon asked for listApps"
+
         # 6. Full baseline command set
         m = fake.mark()
         assert call(daemon_port, "/cmd", {"device": tv_id, "command": "VolumeUp"})["ok"]
@@ -274,14 +284,49 @@ def main() -> int:
         # Unreachable TV MUST fail non-PowerOn commands (no silent success!)
         for cmd in ("VolumeUp", "Input HDMI 1", "App Netflix", "DirectionUp", "PowerOff"):
             r = call(daemon_port, "/cmd", {"device": tv_id, "command": cmd})
-            assert not r["ok"] and "not connected" in r["error"].lower(), f"{cmd} unexpectedly succeeded: {r}"
+            assert not r["ok"] and ("not connected" in r["error"].lower() or "standby" in r["error"].lower()), \
+                f"{cmd} unexpectedly succeeded: {r}"
 
         # PowerOn with MAC succeeds via WoL and reconnects once TV comes back
         assert call(daemon_port, "/cmd", {"device": tv_id, "command": "PowerOn"})["ok"]
+        # An activity sends its input right after PowerOn: held, sent once on.
+        assert call(daemon_port, "/cmd", {"device": tv_id, "command": "Input HDMI 2"})["ok"]
         m = fake.mark()
         set_mode("accept")
         wait_tv(daemon_port, tv_id, connected=True, pointer=True)
         fake.wait_for("registered", since=m, reused=True)
+        fake.wait_for("switch_input", since=m, inputId="HDMI_2")
+
+        # 8b. Quick Start+ standby (seen on an OLED65C4): the TV keeps the
+        # session open after PowerOff. Commands must fail clearly, PowerOn must
+        # still send Wake-on-LAN, and the same session resumes once it wakes.
+        fake.wait_for("subscribe_power", since=m)
+        set_mode("quickstart")
+        before = call(daemon_port, "/status")["tvs"][0]
+        assert call(daemon_port, "/cmd", {"device": tv_id, "command": "PowerOff"})["ok"]
+        fake.wait_for("turn_off", since=m, standby=True)
+        tv = call(daemon_port, "/status")["tvs"][0]
+        assert not tv["connected"] and tv["standby"] and "standby" in tv["error"], tv
+        m = fake.mark()
+        r = call(daemon_port, "/cmd", {"device": tv_id, "command": "VolumeUp"})
+        assert not r["ok"] and "standby" in r["error"], r
+        r = call(daemon_port, "/cmd", {"device": tv_id, "command": "DirectionUp"})
+        assert not r["ok"] and "standby" in r["error"], r
+        time.sleep(0.3)
+        assert not any(e.get("event") in ("volume", "pointer_button") for e in fake.events[m:]), fake.events[m:]
+        assert call(daemon_port, "/cmd", {"device": tv_id, "command": "PowerOn"})["ok"]
+        tv = call(daemon_port, "/status")["tvs"][0]
+        assert tv["cmdsSent"] == before["cmdsSent"] + 2, (before, tv)  # PowerOff + WoL, not a no-op
+        assert call(daemon_port, "/cmd", {"device": tv_id, "command": "App Netflix"})["ok"]  # held
+        time.sleep(0.3)
+        assert not any(e.get("event") == "launch_app" for e in fake.events[m:]), "sent before the TV woke"
+        set_mode("wake")
+        fake.wait_for("woke", since=m)
+        tv = wait_tv(daemon_port, tv_id, connected=True, pointer=True)
+        assert not tv["standby"] and tv["connects"] == before["connects"], (before, tv)
+        fake.wait_for("launch_app", since=m, appId="netflix")
+        assert call(daemon_port, "/cmd", {"device": tv_id, "command": "VolumeUp"})["ok"]
+        fake.wait_for("volume", since=m, action="up")
 
         # 9. Daemon restart persistence: saved client-key reconnects without prompt
         daemon.terminate()
@@ -301,6 +346,24 @@ def main() -> int:
         assert call(daemon_port, "/cmd", {"device": tv_id, "command": "VolumeUp"})["ok"]
         ptr_err = call(daemon_port, "/cmd", {"device": tv_id, "command": "DirectionUp"})
         assert not ptr_err["ok"] and "pointer" in ptr_err["error"].lower(), ptr_err
+
+        # 10b. An oversized frame from the TV is dropped; the session survives
+        set_mode("oversized")
+        daemon.terminate()
+        daemon.wait(timeout=3)
+        m = fake.mark()
+        daemon = start_daemon()
+        wait_tv(daemon_port, tv_id, connected=True, pointer=True)
+        fake.wait_for("oversized_push", since=m)
+        time.sleep(1.5)
+        tv = call(daemon_port, "/status")["tvs"][0]
+        assert tv["connected"] and tv["connects"] == 1, tv
+        m = fake.mark()
+        assert call(daemon_port, "/cmd", {"device": tv_id, "command": "VolumeUp"})["ok"]
+        fake.wait_for("volume", since=m, action="up")
+        with open(log_path, "r", encoding="utf-8") as f:
+            assert "dropped an oversized WebSocket frame" in f.read()
+        set_mode("accept")
 
         # 11. Security check: client-key NEVER in any API response or log
         api_text = (
