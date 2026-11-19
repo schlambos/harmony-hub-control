@@ -505,15 +505,32 @@ maps.ButtonMaps[4].Buttons[2] = { __type = "HardRemoteButton", ButtonId = 187802
 hub.files.MapList.text = encodeJson(maps)
 savesBefore = #hub.saves
 local inUse = ha({})
-check("a device an activity button uses is still kept",
-  inUse.ok == false and inUse.error:find("still used by MapList", 1, true) and #hub.saves == savesBefore,
-  inUse.error)
-maps.ButtonMaps[4].Buttons[2] = nil
+check("a device an activity button uses is retained with its screen intact",
+  inUse.ok == true and inUse.changed == false and #inUse.retained == 1 and
+    inUse.retained[1].name == "Kitchen" and
+    table.concat(inUse.retained[1].usedBy, ",") == "MapList" and
+    screenOf(lampId) ~= nil and #hub.saves == savesBefore,
+  encodeJson(inUse))
+local withNew = ha({ {
+  entity = "script.movie",
+  name = "Movie",
+  commands = { { name = "Run", value = "turn_on" } },
+} })
+local movieId = withNew.devices and withNew.devices[1] and withNew.devices[1].deviceId
+check("adding another device while Kitchen is retained builds the new screen and keeps Kitchen's",
+  withNew.ok == true and withNew.changed == true and withNew.added[1] == "Movie" and
+    #withNew.retained == 1 and withNew.retained[1].name == "Kitchen" and
+    screenOf(lampId) ~= nil and movieId ~= nil and screenOf(movieId) ~= nil,
+  encodeJson(withNew))
+maps = stored("MapList")
+for _, m in ipairs(maps.ButtonMaps) do
+  if m.__type == "ActivityButtonMap" then m.Buttons[2] = nil end
+end
 hub.files.MapList.text = encodeJson(maps)
 
 local cleared = ha({})
-check("removing a device removes its screen",
-  cleared.ok and cleared.removed[1] == "Kitchen" and screenOf(lampId) == nil and
+check("removing devices removes their screens",
+  cleared.ok and #cleared.removed == 2 and screenOf(lampId) == nil and screenOf(movieId) == nil and
     #stored("MapList").ButtonMaps == 3 and hub.messages[#hub.messages] == "DeviceList,ProtocolList,MapList",
   cleared.error or encodeJson(cleared))
 

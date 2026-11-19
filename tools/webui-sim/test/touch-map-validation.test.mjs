@@ -96,7 +96,7 @@ describe("codexactivity.lua validateGraph (LuaJIT)", () => {
       cwd: new URL("../../../", import.meta.url).pathname,
       encoding: "utf8",
     });
-    assert.match(out, /34\/34 checks passed/);
+    assert.match(out, /35\/35 checks passed/);
   });
 
   it("owns the hub's Bluetooth keyboard devices apart from the Home Assistant ones", (t) => {
