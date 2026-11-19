@@ -119,7 +119,10 @@ Hub-owned files or creating a cloud queue entry, and answers `setup.sync*`
 locally. A separate egress guard removes the WAN default route while
 preserving LAN and multicast routes. This prevents firmware conflict
 reconciliation from downloading an older Logitech ActivityList, MapList
-and FunctionList over the local edits.
+and FunctionList over the local edits. Without a default route the stock
+`netmonitor` can't find the gateway to ping, so the guard also does its
+job: on Wi-Fi, once the saved gateway has answered a ping, five missed
+pings in a row make it run `wpa_cli reassociate`.
 
 If any resource write, read-back, engine reload or digest update fails, the
 plugin restores all three previous resources and their metadata. The web

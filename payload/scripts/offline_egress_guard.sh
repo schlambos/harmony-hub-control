@@ -17,6 +17,9 @@ USBETH_SERVICE=${GUARD_USBETH_SERVICE:-/data/codex/usb_eth_service.sh}
 # restarts, and usb_eth_service.sh won't turn Wi-Fi off without the watchdog.
 CAPS_FILE=${GUARD_CAPS_FILE:-/var/run/codex-offline-egress.caps}
 LOG=${GUARD_LOG:-/cache/codex-init.log}
+# wifi_link_watchdog's state ("answered misses due", due in seconds of uptime).
+LINK_STATE=${GUARD_LINK_STATE:-/var/run/codex-wifi-link}
+UPTIME=${GUARD_UPTIME:-/proc/uptime}
 
 # While the default route is removed, the private (RFC 1918) ranges stay
 # routed through the saved gateway, so hosts on other private subnets (for
@@ -199,6 +202,49 @@ wifi_watchdog() {
   echo "$(date) codex offline egress guard reconnected Wi-Fi (the USB Ethernet monitor had stopped)" >> "$LOG"
 }
 
+# The stock /usr/bin/netmonitor keeps Wi-Fi working when the access point
+# stops passing traffic while wpa_supplicant still reports the link up
+# (wpa_state COMPLETED): every 30 s it pings the gateway and, once that has
+# answered, runs "wpa_cli reassociate" after 5 misses in a row. It finds the
+# gateway in the default route, which this guard removes while the blocker
+# is on, so it never pings and that recovery never runs (#202). This is the
+# same check against the saved gateway, for as long as the blocker keeps the
+# default route away and Wi-Fi carries local traffic. A gateway that has
+# never answered (one that ignores ping) never triggers it, as with
+# netmonitor. Not associated at all, wpa_supplicant reconnects by itself.
+# A miss is retried on the next tick, as netmonitor retries at once; ping
+# gives up after 5 s, so a pass with the gateway gone takes that long.
+wifi_link_watchdog() {
+  if ! blocker_enabled || [ "$LAN" != ath0 ] || [ -f "$USBETH_WIFI_OFF" ]; then
+    rm -f "$LINK_STATE"
+    return 0
+  fi
+  now=$(sed -n '1s/[. ].*//p' "$UPTIME" 2>/dev/null)
+  case "$now" in *[!0-9]*|"") return 0 ;; esac
+  set -- $(sed -n '1p' "$LINK_STATE" 2>/dev/null)
+  answered=${1:-0} misses=${2:-0} due=${3:-0}
+  case "$answered$misses$due" in *[!0-9]*) answered=0 misses=0 due=0 ;; esac
+  [ "$now" -ge "$due" ] || return 0
+  load_saved_gateway || return 0
+  due=$((now + 30))
+  if [ "$(wpa_cli -i ath0 status 2>/dev/null | sed -n 's/^wpa_state=//p')" != COMPLETED ]; then
+    misses=0
+  elif ping "$SAVED_GATEWAY" 2>/dev/null | grep "is alive" >/dev/null; then
+    answered=1 misses=0
+  elif [ "$answered" = 1 ]; then
+    misses=$((misses + 1))
+    if [ "$misses" -ge 5 ]; then
+      misses=0
+      if wpa_cli -i ath0 reassociate >/dev/null 2>&1; then
+        echo "$(date) codex offline egress guard reassociated Wi-Fi (gateway $SAVED_GATEWAY stopped answering)" >> "$LOG"
+      fi
+    else
+      due=$now
+    fi
+  fi
+  echo "$answered $misses $due" > "$LINK_STATE"
+}
+
 enforce_once() {
   wifi_watchdog
   LAN=$(lan_dev)
@@ -227,6 +273,13 @@ enforce_once() {
     clear_private_routes "$SAVED_GATEWAY"
   fi
 }
+
+# tick: one pass of the monitor loop, for tools/usb-eth-test/test_guard.py.
+if [ "$1" = "tick" ]; then
+  enforce_once
+  wifi_link_watchdog
+  exit 0
+fi
 
 if [ "$1" != "monitor" ]; then
   enforce_once
@@ -262,5 +315,6 @@ while true; do
     echo $$ > "$PID_FILE"
   fi
   enforce_once
+  wifi_link_watchdog
   sleep 2
 done
