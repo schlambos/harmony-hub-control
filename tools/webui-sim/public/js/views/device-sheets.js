@@ -13,6 +13,7 @@ import { escapeHtml, icon, iconTile, listRow, openSheet, snackbar, spinner } fro
 import { LIMITS, analyzeCapture, deviceTypeOptions, isSafeLabel, normalizeSignal } from "./ir-model.js";
 import { openAndroidTvSheet } from "./androidtv-sheet.js";
 import { openSwitch2Sheet } from "./switch2-sheet.js";
+import { openWebOsSheet } from "./webos-sheet.js";
 
 /* -- the hub's /ir/* forms --------------------------------------------------- */
 
@@ -119,6 +120,12 @@ export function openDeviceSheet({ device = null, onDone } = {}) {
             chevron: true,
             attrs: 'data-act="androidtv"',
           })}${listRow({
+            title: "LG webOS TV on the network",
+            subtitle: "Direct LAN control (SSAP + Wake-on-LAN), no Home Assistant",
+            leading: iconTile("tv", { size: 40 }),
+            chevron: true,
+            attrs: 'data-act="webos"',
+          })}${listRow({
             title: "Nintendo Switch 2 (Bluetooth wake)",
             subtitle: "Wake only via 2-second BLE beacon; Power Off is a no-op",
             leading: iconTile("sports_esports", { size: 40 }),
@@ -157,6 +164,11 @@ export function openDeviceSheet({ device = null, onDone } = {}) {
         if (event.target.closest("[data-act='androidtv']")) {
           close();
           openAndroidTvSheet({ onDone });
+          return;
+        }
+        if (event.target.closest("[data-act='webos']")) {
+          close();
+          openWebOsSheet({ onDone });
           return;
         }
         if (event.target.closest("[data-act='switch2']")) {

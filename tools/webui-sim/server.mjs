@@ -31,6 +31,14 @@ import {
   switch2IdOf,
   switch2NameProblem,
 } from "./public/js/views/switch2-model.js";
+import {
+  isWebOsEntry,
+  makeWebOsId,
+  normalizeWebOsHost,
+  normalizeWebOsMac,
+  webOsIdOf,
+  webOsNameProblem,
+} from "./public/js/views/webos-model.js";
 
 const SIM_DIR = path.dirname(fileURLToPath(import.meta.url));
 const PUBLIC_DIR = path.join(SIM_DIR, "public");
@@ -1521,6 +1529,340 @@ function handleSwitch2Cmd(res, params) {
   sendJson(res, 200, { ok: true, payloadHex });
 }
 
+/* Native LG webOS TV simulator (mirrors codex_webos + CommitWebOsDevices). */
+const WEBOS_BASE_COMMANDS = [
+  "PowerOff", "PowerToggle",
+  "VolumeUp", "VolumeDown", "Mute",
+  "Play", "Pause", "PlayPause", "Stop",
+  "Back",
+  "DirectionUp", "DirectionDown", "DirectionLeft", "DirectionRight", "Select",
+  "Menu", "Home", "Guide", "Info", "Exit",
+  "ChannelUp", "ChannelDown",
+  "Red", "Green", "Yellow", "Blue",
+  "0", "1", "2", "3", "4", "5", "6", "7", "8", "9",
+  "Dash", "Record",
+  "Input HDMI 1", "Input HDMI 2", "Input HDMI 3", "Input HDMI 4",
+];
+const WEBOS_DEFAULT_INPUTS = [
+  { id: "HDMI_1", label: "HDMI 1" },
+  { id: "HDMI_2", label: "HDMI 2" },
+  { id: "HDMI_3", label: "HDMI 3" },
+  { id: "HDMI_4", label: "HDMI 4" },
+];
+const WEBOS_DEFAULT_APPS = [
+  { id: "netflix", title: "Netflix", command: "App Netflix" },
+  { id: "youtube.leanback.v4", title: "YouTube", command: "App YouTube" },
+  { id: "cdp-30", title: "Plex", command: "App Plex" },
+  { id: "amazon", title: "Prime Video", command: "App Prime Video" },
+];
+const simWebOs = {
+  tvs: new Map(), // id -> { id, name, host, mac, proto, paired, connected, pointerReady, volume, muted, activeInput, inputs, apps, _key }
+  pair: { state: "idle", tvId: "", host: "", name: "", error: "" },
+  nextPairMode: "accept", // accept | deny
+};
+
+function simWebOsPublicTv(tv) {
+  // Never expose _key in any API response.
+  return {
+    id: tv.id,
+    name: tv.name,
+    host: tv.host,
+    mac: tv.mac,
+    proto: tv.proto || "auto",
+    paired: Boolean(tv.paired),
+    connected: Boolean(tv.connected),
+    pointerReady: Boolean(tv.pointerReady),
+    volume: tv.volume,
+    muted: Boolean(tv.muted),
+    activeInput: tv.activeInput || "",
+    inputs: tv.inputs || [],
+    apps: tv.apps || [],
+    error: tv.connected ? "" : (tv.error || "TV is off or unreachable"),
+  };
+}
+
+function handleWebOsSave(res, params) {
+  const id = String(params.id ?? "").trim() || makeWebOsId(simWebOs.tvs.keys());
+  if (!/^webos[0-9a-f]{8,16}$/.test(id)) {
+    sendJson(res, 200, { ok: false, error: "Invalid webOS TV id." });
+    return;
+  }
+  const host = normalizeWebOsHost(params.host);
+  if (!host) {
+    sendJson(res, 200, { ok: false, error: "Enter the TV's IPv4 address, such as 192.168.1.40." });
+    return;
+  }
+  const macRes = normalizeWebOsMac(params.mac ?? "");
+  if (macRes.error) {
+    sendJson(res, 200, { ok: false, error: macRes.error });
+    return;
+  }
+  const name = String(params.name ?? "").trim() || "LG webOS TV";
+  const prev = simWebOs.tvs.get(id);
+  const tv = prev ? { ...prev, name, host, mac: macRes.mac } : {
+    id,
+    name,
+    host,
+    mac: macRes.mac,
+    proto: "auto",
+    paired: false,
+    connected: false,
+    pointerReady: false,
+    volume: 25,
+    muted: false,
+    activeInput: "HDMI_1",
+    inputs: [],
+    apps: [],
+    _key: "",
+  };
+  simWebOs.tvs.set(id, tv);
+  sendJson(res, 200, { ok: true, tv: simWebOsPublicTv(tv) });
+}
+
+function handleWebOsPairStart(res, params) {
+  const id = String(params.id ?? "").trim();
+  const prev = id ? simWebOs.tvs.get(id) : null;
+  const host = normalizeWebOsHost(params.host || prev?.host || "");
+  if (!host) {
+    sendJson(res, 200, { ok: false, error: "Enter the TV's IPv4 address, such as 192.168.1.40." });
+    return;
+  }
+  const macRes = normalizeWebOsMac(params.mac ?? prev?.mac ?? "");
+  if (macRes.error) {
+    sendJson(res, 200, { ok: false, error: macRes.error });
+    return;
+  }
+  const tvId = prev ? prev.id : (id && /^webos[0-9a-f]{8,16}$/.test(id) ? id : makeWebOsId(simWebOs.tvs.keys()));
+  const name = String(params.name || prev?.name || "LG webOS TV").trim();
+  const deny = params.simulateDeny === true || simWebOs.nextPairMode === "deny";
+  if (deny) {
+    simWebOs.pair = {
+      state: "denied",
+      tvId,
+      host,
+      name,
+      paired: false,
+      error: "Pairing was declined on the TV. Try again and choose Accept on the TV.",
+    };
+  } else {
+    const tv = prev ? { ...prev, name, host, mac: macRes.mac } : {
+      id: tvId,
+      name,
+      host,
+      mac: macRes.mac,
+      proto: "auto",
+      volume: 25,
+      muted: false,
+      activeInput: "HDMI_1",
+    };
+    tv.paired = true;
+    tv.connected = true;
+    tv.pointerReady = true;
+    tv.inputs = WEBOS_DEFAULT_INPUTS.map((i) => ({ ...i }));
+    tv.apps = WEBOS_DEFAULT_APPS.map((a) => ({ ...a }));
+    tv._key = `sim-ephemeral-${tvId}`;
+    simWebOs.tvs.set(tvId, tv);
+    simWebOs.pair = { state: "paired", tvId, host, name, paired: true, error: "" };
+  }
+  sendJson(res, 200, { ok: true, state: "prompt", tvId, host, name, paired: Boolean(simWebOs.tvs.get(tvId)?.paired), error: "" });
+}
+
+function handleWebOsRefresh(res, params) {
+  const id = String(params.id ?? "").trim();
+  const tv = simWebOs.tvs.get(id);
+  if (!tv) { sendJson(res, 200, { ok: false, error: "No such webOS TV." }); return; }
+  if (!tv.connected) { sendJson(res, 200, { ok: false, error: "The TV is not connected. Turn it on first." }); return; }
+  tv.inputs = WEBOS_DEFAULT_INPUTS.map((i) => ({ ...i }));
+  tv.apps = WEBOS_DEFAULT_APPS.map((a) => ({ ...a }));
+  sendJson(res, 200, { ok: true, tv: simWebOsPublicTv(tv) });
+}
+
+function handleWebOsCmd(res, params) {
+  const id = String(params.device ?? "").trim();
+  const command = String(params.command ?? "").trim();
+  const tv = simWebOs.tvs.get(id);
+  if (!tv) { sendJson(res, 200, { ok: false, error: "Unknown webOS TV." }); return; }
+  if (/^poweron$/i.test(command)) {
+    if (!tv.mac) {
+      sendJson(res, 200, { ok: false, error: `No MAC address configured for Wake-on-LAN on ${tv.name}.` });
+      return;
+    }
+    tv.connected = true;
+    logEvent({ type: "webos-cmd", device: id, command: "PowerOn", action: "wol" });
+    sendJson(res, 200, { ok: true });
+    return;
+  }
+  if (!tv.paired) {
+    sendJson(res, 200, { ok: false, error: `TV ${tv.name} is not paired yet.` });
+    return;
+  }
+  if (!tv.connected) {
+    sendJson(res, 200, { ok: false, error: `TV ${tv.name} is not connected (unreachable or turned off).` });
+    return;
+  }
+  if (/^poweroff$/i.test(command)) tv.connected = false;
+  if (/^volumeup$/i.test(command)) tv.volume = Math.min(100, tv.volume + 1);
+  if (/^volumedown$/i.test(command)) tv.volume = Math.max(0, tv.volume - 1);
+  if (/^mute$/i.test(command)) tv.muted = !tv.muted;
+  logEvent({ type: "webos-cmd", device: id, command });
+  sendJson(res, 200, { ok: true });
+}
+
+function handleWebOsDevices(res, params) {
+  const list = Array.isArray(params.devices) ? params.devices : null;
+  if (!list) {
+    sendJson(res, 400, { ok: false, error: "devices must be an array" });
+    return;
+  }
+  const entries = deviceEntries();
+  const owned = new Map(entries.filter(isWebOsEntry).map((e) => [webOsIdOf(e), e]));
+  const others = entries.filter((e) => !isWebOsEntry(e));
+  const otherNames = new Set(others.map((e) => String(e.Device?.Name ?? "").toLowerCase()));
+  const seenIds = new Set();
+  const seenNames = new Set();
+  const normalized = [];
+  for (const d of list) {
+    if ("clientKey" in (d || {}) || "client_key" in (d || {}) || "client-key" in (d || {})) {
+      sendJson(res, 422, { ok: false, localOnly: true, error: "client-key must never be stored in hub device config" });
+      return;
+    }
+    const entity = String(d?.entity ?? "");
+    if (!/^webos[0-9a-f]+$/.test(entity)) {
+      sendJson(res, 422, { ok: false, localOnly: true, error: "device needs a webOS TV id such as webos1a2b3c4d" });
+      return;
+    }
+    if (seenIds.has(entity)) {
+      sendJson(res, 422, { ok: false, localOnly: true, error: `${entity} is listed twice` });
+      return;
+    }
+    seenIds.add(entity);
+    const nameErr = webOsNameProblem(d?.name);
+    if (nameErr) {
+      sendJson(res, 422, { ok: false, localOnly: true, error: nameErr });
+      return;
+    }
+    const name = String(d.name).trim();
+    if (seenNames.has(name.toLowerCase()) || otherNames.has(name.toLowerCase())) {
+      sendJson(res, 422, { ok: false, localOnly: true, error: `another device is already named ${name}` });
+      return;
+    }
+    seenNames.add(name.toLowerCase());
+    const host = normalizeWebOsHost(d?.host);
+    if (!host) {
+      sendJson(res, 422, { ok: false, localOnly: true, error: `${entity}: host must be a valid IPv4 address` });
+      return;
+    }
+    const macRes = normalizeWebOsMac(d?.mac ?? "");
+    if (macRes.error) {
+      sendJson(res, 422, { ok: false, localOnly: true, error: `${entity}: ${macRes.error}` });
+      return;
+    }
+    normalized.push({
+      entity,
+      name,
+      host,
+      mac: macRes.mac,
+      paired: Boolean(d?.paired),
+      inputs: Array.isArray(d?.inputs) ? d.inputs : null,
+      apps: Array.isArray(d?.apps) ? d.apps : null,
+    });
+  }
+  const result = { ok: true, localOnly: true, added: [], updated: [], removed: [], unchanged: [], devices: [] };
+  const kept = [...others];
+  for (const d of normalized) {
+    let entry = owned.get(d.entity);
+    const id = entry ? entry.Device["Id-"] : nextId([...entries, ...kept].map((e) => e.Device?.["Id-"]), 39000000);
+    const cmdNames = d.mac ? ["PowerOn", ...WEBOS_BASE_COMMANDS] : [...WEBOS_BASE_COMMANDS];
+    const inputs = d.inputs ?? (entry
+      ? (entry.DeviceFeatures?.find((f) => f.__type === "InputFeature")?.Inputs ?? []).map((inp) => ({
+          name: inp.InputName,
+          command: inp.Actions?.[0]?.IRCommandName,
+        })).filter((x) => x.name && x.command)
+      : [
+          { name: "HDMI 1", command: "Input HDMI 1" },
+          { name: "HDMI 2", command: "Input HDMI 2" },
+          { name: "HDMI 3", command: "Input HDMI 3" },
+          { name: "HDMI 4", command: "Input HDMI 4" },
+        ]);
+    const prevApps = entry
+      ? (entry.Commands ?? []).filter((c) => String(c.Name ?? "").startsWith("App ")).map((c) => ({
+          name: c.Name,
+          value: c.Parameters?.find((p) => p.Key === "{c}")?.Value || c.Name,
+        }))
+      : [];
+    const apps = d.apps
+      ? d.apps.map((a) => ({ name: a.name, value: a.id ? `app:${a.id}` : a.name }))
+      : prevApps;
+    const cmds = cmdNames.map((n, i) => ({
+      Name: n, "Id-": id * 100 + i + 1, TransportType: 64, KeyCode: "", Raw: null,
+      Parameters: [{ Key: "{c}", Value: n }], IsLearned: false,
+    }));
+    const have = new Set(cmdNames.map((n) => n.toLowerCase()));
+    for (const a of apps) {
+      if (!have.has(a.name.toLowerCase())) {
+        cmds.push({
+          Name: a.name, "Id-": id * 100 + cmds.length + 1, TransportType: 64, KeyCode: "", Raw: null,
+          Parameters: [{ Key: "{c}", Value: a.value }], IsLearned: false,
+        });
+        have.add(a.name.toLowerCase());
+      }
+    }
+    const powerFeature = d.mac
+      ? {
+          __type: "PowerFeature", "DeviceId-": id, Id: 0, State: 1, PowerTypeId: 1,
+          PowerOnActions: [{ __type: "IRPressAction", IRCommandName: "PowerOn", Order: 0, Duration: null, ActionId: 0 }],
+          PowerOffActions: [{ __type: "IRPressAction", IRCommandName: "PowerOff", Order: 0, Duration: null, ActionId: 0 }],
+          PowerToggleActions: [],
+          PowerOnDelay: 0, DefaultPowerOnDelay: 0, IsPowerAlwaysOn: false, IsPoweredOnBetweenActivities: false,
+        }
+      : {
+          __type: "PowerFeature", "DeviceId-": id, Id: 0, State: 1, PowerTypeId: 2,
+          PowerOnActions: [], PowerOffActions: [],
+          PowerToggleActions: [{ __type: "IRPressAction", IRCommandName: "PowerToggle", Order: 0, Duration: null, ActionId: 0 }],
+          PowerOnDelay: 0, DefaultPowerOnDelay: 0, IsPowerAlwaysOn: false, IsPoweredOnBetweenActivities: false,
+        };
+    const inputFeature = {
+      __type: "InputFeature", "DeviceId-": id, Id: 0, State: 1, InputType: inputs.length ? 1 : 0, InputDelay: 0,
+      Inputs: inputs.map((inp, idx) => ({
+        InputName: inp.name, InputOrder: idx,
+        Actions: [{ __type: "IRPressAction", IRCommandName: inp.command, Order: 0, Duration: null, ActionId: 0 }],
+      })),
+    };
+    const tokens = {
+      Parameters: [
+        { Key: "{d}", Value: d.entity },
+        { Key: "{host}", Value: d.host },
+        { Key: "{mac}", Value: d.mac },
+        { Key: "{keySlot}", Value: d.paired ? "set" : "unset" },
+      ],
+    };
+    const nextEntry = {
+      Device: {
+        "Id-": id, Name: d.name, Manufacturer: "LG", Model: "webOS TV",
+        DeviceTypeDisplayName: "Television", DeviceType: 1, Transport: 64, Icon: 1,
+        Tokens: tokens,
+        AutoDetectedDevice: { Id: `melodious-webos-${id}` },
+      },
+      Commands: cmds,
+      DeviceFeatures: [powerFeature, inputFeature],
+    };
+    if (!entry) result.added.push(d.name);
+    else result.updated.push(d.name);
+    kept.push(nextEntry);
+    result.devices.push({ entity: d.entity, deviceId: String(id), name: d.name });
+  }
+  for (const [token, entry] of owned) {
+    if (!seenIds.has(token)) result.removed.push(entry.Device.Name);
+  }
+  if (!params.dryRun) {
+    state.deviceList.DevicesWithFeatures = kept;
+    state.revision = newRevision();
+  }
+  result.changed = result.added.length > 0 || result.updated.length > 0 || result.removed.length > 0;
+  logEvent({ type: "webos-devices", ...result });
+  sendJson(res, 200, result);
+}
+
 // DevicesWithFeatures as the array the hub appends to.
 function deviceEntries() {
   if (!Array.isArray(state.deviceList.DevicesWithFeatures)) state.deviceList.DevicesWithFeatures = [];
@@ -2409,6 +2751,35 @@ async function handleApi(req, res, pathname, url) {
       return;
     case "POST /api/switch2/cmd":
       handleSwitch2Cmd(res, params);
+      return;
+    case "POST /api/webos/devices":
+      handleWebOsDevices(res, params);
+      return;
+    case "GET /api/webos/status":
+      sendJson(res, 200, { ok: true, version: "1.0.0", tvs: [...simWebOs.tvs.values()].map(simWebOsPublicTv) });
+      return;
+    case "POST /api/webos/save":
+      handleWebOsSave(res, params);
+      return;
+    case "POST /api/webos/pair-start":
+      handleWebOsPairStart(res, params);
+      return;
+    case "GET /api/webos/pair-status":
+      sendJson(res, 200, { ok: true, ...simWebOs.pair });
+      return;
+    case "POST /api/webos/pair-cancel":
+      simWebOs.pair = { state: "idle", tvId: "", host: "", name: "", paired: false, error: "" };
+      sendJson(res, 200, { ok: true, ...simWebOs.pair });
+      return;
+    case "POST /api/webos/refresh":
+      handleWebOsRefresh(res, params);
+      return;
+    case "POST /api/webos/forget":
+      simWebOs.tvs.delete(String(params.id ?? ""));
+      sendJson(res, 200, { ok: true });
+      return;
+    case "POST /api/webos/cmd":
+      handleWebOsCmd(res, params);
       return;
     case "GET /api/remotes":
       sendJson(res, 200, simPairing

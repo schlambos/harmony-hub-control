@@ -42,6 +42,7 @@ object DeviceTouchScreens {
         val detected = (device?.get("AutoDetectedDevice") as? JsonObject)?.text("Id")
         if (detected?.startsWith("melodious-ha-") == true ||
             detected?.startsWith("melodious-androidtv-") == true ||
+            detected?.startsWith("melodious-webos-") == true ||
             detected?.startsWith("melodious-switch2-") == true) return DeviceTouchScreen.MANAGED
         if (screen != null) return DeviceTouchScreen.MADE
         val hasTouch = maps.any {

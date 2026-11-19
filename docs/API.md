@@ -486,6 +486,26 @@ Network TV devices carry `AutoDetectedDevice.Id` `melodious-androidtv-<deviceId>
 and the `{d}` token of their TV id. When one runs, the engine posts
 `{"device":"<tv id>","command":"<Name>"}` to `http://127.0.0.1:8095/cmd`.
 
+### LG webOS TVs (native)
+
+Native LG webOS TVs follow the same pattern via `codex_webos` (`127.0.0.1:8096`).
+See [WEBOS_TV.md](WEBOS_TV.md). Non-loopback mutating routes require Web UI auth
+and same-origin JSON (`Origin`/`Host` + `application/json`). Pairing
+`client-key`s stay in `/data/codex/webos/tvs.tsv` (`0600`) and are masked as
+`paired: true|false` in all replies.
+
+| Method | Path | Body | Answer |
+| --- | --- | --- | --- |
+| GET | `/api/webos/status` | | `tvs`: each `id`, `name`, `host`, `mac`, `proto`, `paired`, `connected`, `pointerReady`, `volume`, `muted`, `activeInput`, `inputs`, `apps`, `error` |
+| POST | `/api/webos/save` | `{"id":"webos1a2b3c4d","name":"Living Room LG","host":"192.168.1.40","mac":"AA:BB:CC:11:22:33"}` | Creates/updates TV config in `codex_webos` without wiping its pairing key |
+| POST | `/api/webos/pair-start` | `{"id":"webos1a2b3c4d","host":"192.168.1.40","name":"Living Room LG","mac":"..."}` | Starts SSAP `register` pairing (`wss:3001`, fallback `ws:3000`); TV shows Accept/Deny prompt |
+| GET | `/api/webos/pair-status` | | `state`: `idle`, `connecting`, `prompt`, `paired`, `denied`, `failed` (+ `tvId`, `paired`, `error`) |
+| POST | `/api/webos/pair-cancel` | `{}` | Cancels an in-flight pairing |
+| POST | `/api/webos/refresh` | `{"id":"webos1a2b3c4d"}` | Re-queries `getExternalInputList`, `listApps`, and `getVolume` on a connected TV |
+| POST | `/api/webos/forget` | `{"id":"webos1a2b3c4d"}` | Removes a TV and erases its stored `client-key` |
+| POST | `/api/webos/cmd` | `{"device":"webos1a2b3c4d","command":"VolumeUp"}` | Sends a command (loopback allowed without Web UI auth; non-loopback requires auth + same-origin JSON) |
+| POST | `/api/webos/devices` | `{"devices":[{"entity":"webos1a2b3c4d","name":"Living Room LG","host":"192.168.1.40","mac":"AA:BB:CC:11:22:33","paired":true}],"dryRun":false}` | Replaces the hub's native LG webOS TV device set (`CommitWebOsDevices`); refuses plaintext `clientKey`/`client-key` |
+
 ## Touch device screens
 
 On the Harmony Touch, Devices then a device opens that device's screen.

@@ -12,6 +12,8 @@ knows whether the TV is on, so PowerOn and PowerOff never toggle it the wrong
 way.
 
 Nothing goes through Google or Logitech, and the cloud blocker stays on.
+For LG webOS TVs controlled directly over your LAN (without Home Assistant),
+see [WEBOS_TV.md](WEBOS_TV.md).
 
 ## Requirements
 

@@ -367,12 +367,14 @@ export function devices() {
       typeLabel: device.DeviceTypeDisplayName || device.DeviceType || "",
       transport,
       // Transport 32 is Bluetooth HID; 64 is IP (Home Assistant, a network TV
-      // driven by codex_androidtv, or a Switch 2 BLE wake device); else IR.
+      // driven by codex_androidtv or codex_webos, or a Switch 2 BLE wake device); else IR.
       isBluetooth: transport === 32,
       isAndroidTv: String(device.AutoDetectedDevice?.Id ?? "").startsWith("melodious-androidtv-"),
       isSwitch2: String(device.AutoDetectedDevice?.Id ?? "").startsWith("melodious-switch2-"),
+      isWebOs: String(device.AutoDetectedDevice?.Id ?? "").startsWith("melodious-webos-"),
       isHa: !String(device.AutoDetectedDevice?.Id ?? "").startsWith("melodious-androidtv-") &&
         !String(device.AutoDetectedDevice?.Id ?? "").startsWith("melodious-switch2-") &&
+        !String(device.AutoDetectedDevice?.Id ?? "").startsWith("melodious-webos-") &&
         (transport === 64 || String(device.Manufacturer ?? "").toLowerCase().includes("home assistant")),
       haKey: haDeviceKey(entry),
       entry,

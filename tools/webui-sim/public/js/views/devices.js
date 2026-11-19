@@ -9,7 +9,7 @@
    command's ⋮ edits or deletes it. The remote sends straight to the device,
    outside any activity. */
 
-import { forgetTv, getAndroidTvStatus, getConfig, postHubForm, saveActivity, saveAndroidTvDevices, saveDeviceScreen, saveSwitch2Devices } from "../api.js";
+import { forgetTv, forgetWebOsTv, getAndroidTvStatus, getConfig, getWebOsStatus, postHubForm, refreshWebOsTv, saveActivity, saveAndroidTvDevices, saveDeviceScreen, saveSwitch2Devices, saveWebOsDevices } from "../api.js";
 import * as hub from "../state.js";
 import {
   confirmDialog,
@@ -34,6 +34,8 @@ import { createIrLab, labNote } from "./ir-lab.js";
 import { androidTvDeviceSet, androidTvIdOf, isAndroidTvDevice, strandedTvs, tvStatusText } from "./androidtv-model.js";
 import { controllerTypeLabel, isSwitch2Device, switch2ConfigOf, switch2DeviceSet, switch2IdOf } from "./switch2-model.js";
 import { openSwitch2Sheet } from "./switch2-sheet.js";
+import { isWebOsDevice, webOsAppsFromTv, webOsConfigOf, webOsDeviceSet, webOsIdOf, webOsInputsFromTv, webOsStatusText } from "./webos-model.js";
+import { openWebOsSheet } from "./webos-sheet.js";
 import { tvInputsHint } from "./androidtv-inputs-model.js";
 import { LIMITS, deviceUsage, touchScreenState, withoutDeviceMaps } from "./ir-model.js";
 import { describeHaDeviceState, describeTheaterLink, deviceIconName, deviceKeys, isHaCommandRedundant } from "./remote-model.js";
@@ -118,8 +120,8 @@ export function createDevicesView(section) {
               d.model || d.manufacturer,
               `${d.commands.length} command${d.commands.length === 1 ? "" : "s"}`,
             ].filter(Boolean).join(" · ");
-        const badgeCls = d.isAndroidTv ? " badge-network" : d.isSwitch2 ? " badge-bluetooth" : d.isHa ? " badge-ha" : d.isBluetooth ? " badge-bluetooth" : "";
-        const badgeLabel = d.isAndroidTv ? "Network" : d.isSwitch2 ? "BLE Wake" : d.isHa ? "Home Assistant" : d.isBluetooth ? "Bluetooth" : "IR";
+        const badgeCls = d.isAndroidTv || d.isWebOs ? " badge-network" : d.isSwitch2 ? " badge-bluetooth" : d.isHa ? " badge-ha" : d.isBluetooth ? " badge-bluetooth" : "";
+        const badgeLabel = d.isAndroidTv ? "Network" : d.isWebOs ? "LG webOS" : d.isSwitch2 ? "BLE Wake" : d.isHa ? "Home Assistant" : d.isBluetooth ? "Bluetooth" : "IR";
         const badge = `<span class="badge${badgeCls}">${badgeLabel}</span>`;
         return listRow({
           title: d.name,
@@ -245,7 +247,7 @@ export function createDevicesView(section) {
     const haInfo = describeHaDeviceState(device, hub.state.haState) ?? describeTheaterLink(device, hub.state.haState);
     // Network TV and Switch 2 wake commands are owned by their writers: no
     // per-command Edit or Delete (those go through the IR endpoints).
-    const editable = !isAndroidTvDevice(device) && !isSwitch2Device(device);
+    const editable = !isAndroidTvDevice(device) && !isSwitch2Device(device) && !isWebOsDevice(device);
     const list = device.commands
       .map((c, i) => ({ c, i }))
       .filter(({ c }) => !q || c.name.toLowerCase().includes(q));
@@ -303,21 +305,27 @@ export function createDevicesView(section) {
       </div>`;
     const haStrip = haStateStripMarkup([device], hub.state.haState, { single: true });
     const androidtv = isAndroidTvDevice(device);
+    const webos = isWebOsDevice(device);
     const switch2 = isSwitch2Device(device);
     const s2cfg = switch2 ? switch2ConfigOf(device) : null;
+    const webosCfg = webos ? webOsConfigOf(device) : null;
     const androidTvLine = androidtv
       ? `<p class="list-note androidtv-status" data-androidtv-status>Network TV · checking the connection…</p>`
-      : switch2
-        ? `<p class="list-note s2-status">Switch 2 wake · ${escapeHtml(controllerTypeLabel(s2cfg?.pid))} · Wake only (2 s BLE beacon). Power Off is a no-op — sleep is handled by TV HDMI-CEC standby or the console itself.</p>`
-        : "";
+      : webos
+        ? `<div class="webos-status-bar"><p class="list-note androidtv-status" data-webos-status>LG webOS · ${escapeHtml(webOsStatusText(null, webosCfg))}</p><div class="webos-status-actions"><button type="button" class="btn btn-outlined" data-act="webos-edit">${webosCfg?.paired ? "Pair / Edit" : "Pair with TV"}</button><button type="button" class="btn btn-text" data-act="webos-refresh">Refresh inputs &amp; apps</button></div></div>`
+        : switch2
+          ? `<p class="list-note s2-status">Switch 2 wake · ${escapeHtml(controllerTypeLabel(s2cfg?.pid))} · Wake only (2 s BLE beacon). Power Off is a no-op — sleep is handled by TV HDMI-CEC standby or the console itself.</p>`
+          : "";
     const cmdTools = androidtv
       ? `<p class="list-note">A network TV's commands come with it; the hub sends them over the network.</p>`
-      : switch2
-        ? `<p class="list-note">Tap <strong>Wake</strong> below to send the 2-second Bluetooth wake burst. Power Off is a no-op — sleep is handled by TV HDMI-CEC standby or the console itself.</p>`
-        : `<div class="cmd-tools">
-            <button type="button" class="btn btn-outlined" data-act="learn" aria-haspopup="dialog">${icon("settings_remote_outlined", { size: 18 })}Learn a button</button>
-            <button type="button" class="btn btn-outlined" data-act="import" aria-haspopup="dialog">${icon("content_paste_outlined", { size: 18 })}Import codes</button>
-          </div>`;
+      : webos
+        ? `<p class="list-note">Commands are sent directly to your LG webOS TV over the LAN (Power On uses Wake-on-LAN when a MAC is configured).</p>`
+        : switch2
+          ? `<p class="list-note">Tap <strong>Wake</strong> below to send the 2-second Bluetooth wake burst. Power Off is a no-op — sleep is handled by TV HDMI-CEC standby or the console itself.</p>`
+          : `<div class="cmd-tools">
+              <button type="button" class="btn btn-outlined" data-act="learn" aria-haspopup="dialog">${icon("settings_remote_outlined", { size: 18 })}Learn a button</button>
+              <button type="button" class="btn btn-outlined" data-act="import" aria-haspopup="dialog">${icon("content_paste_outlined", { size: 18 })}Import codes</button>
+            </div>`;
     const body = tab === "remote"
       ? `<div class="remote">
           <div class="remote-main">
@@ -345,6 +353,7 @@ export function createDevicesView(section) {
         </div>`;
     root.innerHTML = body;
     if (androidtv) showAndroidTvStatus(device);
+    else if (webos) showWebOsStatus(device);
     else stopAndroidTvStatus();
     const side = root.querySelector(".remote-side");
     if (side) wireMoreKeys(side, { source: panelSource, send: sendAction, keyEvents: false });
@@ -387,6 +396,62 @@ export function createDevicesView(section) {
       tvStatusTimer = setTimeout(tick, TV_STATUS_REFRESH_MS);
     };
     tick();
+  }
+
+  function showWebOsStatus(d) {
+    stopAndroidTvStatus();
+    const run = tvStatusRun;
+    const line = root.querySelector("[data-webos-status]");
+    const cfg = webOsConfigOf(d);
+    const live = () => run === tvStatusRun && line?.isConnected && !section.hidden;
+    const tick = async () => {
+      if (!live()) return;
+      if (!document.hidden) {
+        let text;
+        try {
+          const st = await getWebOsStatus();
+          const found = (st.tvs ?? []).find((tv) => tv.id === webOsIdOf(d));
+          text = webOsStatusText(found, cfg);
+        } catch (error) {
+          text = error.message || "The hub's LG webOS TV service didn't answer.";
+        }
+        if (!live()) return;
+        const next = `LG webOS · ${text}`;
+        if (line.textContent !== next) line.textContent = next;
+      }
+      tvStatusTimer = setTimeout(tick, TV_STATUS_REFRESH_MS);
+    };
+    tick();
+  }
+
+  async function refreshWebOsDevice(d) {
+    const id = webOsIdOf(d);
+    if (!id) return;
+    snackbar(`Refreshing inputs and apps from ${d.name}…`);
+    try {
+      const res = await refreshWebOsTv({ id });
+      if (!res?.ok) throw new Error(res?.error || "Could not refresh from the TV.");
+      const tv = res.tv;
+      const cfg = webOsConfigOf(d);
+      const inputs = webOsInputsFromTv(tv);
+      const apps = webOsAppsFromTv(tv);
+      const config = await getConfig();
+      await saveWebOsDevices(webOsDeviceSet(config, {
+        add: {
+          entity: id,
+          name: cfg.name,
+          host: tv?.host || cfg.host,
+          mac: tv?.mac || cfg.mac,
+          paired: Boolean(tv?.paired ?? cfg.paired),
+          ...(inputs.length ? { inputs } : {}),
+          ...(apps.length ? { apps } : {}),
+        },
+      }));
+      await hub.refreshConfig();
+      snackbar(`Updated ${d.name} (${inputs.length} HDMI input${inputs.length === 1 ? "" : "s"}, ${apps.length} app${apps.length === 1 ? "" : "s"})`);
+    } catch (error) {
+      snackbar(error.message || "Could not refresh inputs and apps.", { error: true });
+    }
   }
 
   /* What a page shows of the setup: a redraw only when it changes, so a
@@ -532,6 +597,8 @@ export function createDevicesView(section) {
           // The writer owns network TVs: save the set without it. Unpairing
           // comes after, outside this rollback: the device is gone by then.
           await saveAndroidTvDevices(androidTvDeviceSet(config, { remove: androidTvIdOf(d) }));
+        } else if (isWebOsDevice(d)) {
+          await saveWebOsDevices(webOsDeviceSet(config, { remove: webOsIdOf(d) }));
         } else if (isSwitch2Device(d)) {
           await saveSwitch2Devices(switch2DeviceSet(config, { remove: switch2IdOf(d) }));
         } else {
@@ -556,7 +623,9 @@ export function createDevicesView(section) {
       }
       const unpairError = isAndroidTvDevice(d)
         ? await forgetTv({ id: androidTvIdOf(d) }).then(() => null, (error) => error)
-        : null;
+        : isWebOsDevice(d)
+          ? await forgetWebOsTv({ id: webOsIdOf(d) }).then(() => null, (error) => error)
+          : null;
       if (unpairError) {
         // Half done: say so, and leave the device list's Unpair to finish it.
         snackbar(`Deleted ${d.name}, but the hub couldn't unpair the TV (${unpairError.message || "no answer"}). Unpair it from Devices.`, { error: true });
@@ -636,7 +705,14 @@ export function createDevicesView(section) {
       ],
       onSelect: (choice) => {
         if (choice === "edit") {
-          track(isSwitch2Device(d) ? openSwitch2Sheet({ device: d }) : openDeviceSheet({ device: d }), "[data-act='device-menu']");
+          track(
+            isSwitch2Device(d)
+              ? openSwitch2Sheet({ device: d })
+              : isWebOsDevice(d)
+                ? openWebOsSheet({ device: d })
+                : openDeviceSheet({ device: d }),
+            "[data-act='device-menu']",
+          );
         }
         else if (choice === "screen-make") saveTouchScreen(d, false);
         else if (choice === "screen-remove") saveTouchScreen(d, true);
@@ -704,7 +780,7 @@ export function createDevicesView(section) {
     }
     const menuBtn = event.target.closest("[data-cmd-menu]");
     if (menuBtn) {
-      if (isAndroidTvDevice(device) || isSwitch2Device(device)) return;
+      if (isAndroidTvDevice(device) || isSwitch2Device(device) || isWebOsDevice(device)) return;
       const c = device.commands[Number(menuBtn.dataset.cmdMenu)];
       if (c) openCommandMenu(menuBtn, c);
       return;
@@ -719,6 +795,8 @@ export function createDevicesView(section) {
     if (act === "more") openMoreKeys();
     else if (act === "learn") track(openLearnSheet({ device }), "[data-act='learn']");
     else if (act === "import") track(openImportSheet({ device }), "[data-act='import']");
+    else if (act === "webos-edit") track(openWebOsSheet({ device }), "[data-act='webos-edit']");
+    else if (act === "webos-refresh") refreshWebOsDevice(device);
   });
 
   root.addEventListener("input", (event) => {
