@@ -397,7 +397,7 @@ python3 -m unittest discover -s docker/tests      # the Docker manager
 for t in barrier device-screens ha-devices androidtv-devices bt-devices touch-controls; do
   luajit tools/touch-validator/codexactivity-$t-test.lua
 done                                              # the hub's writer: barrier, screens, Home Assistant, network TVs, Bluetooth keyboards, press modes
-sh tools/bluetooth_hid_smoke.sh                   # Bluetooth HID guards, incl. the pair agent's SDP edits (fake sdpd)
+sh tools/bluetooth_hid_smoke.sh                   # Bluetooth HID guards (authenticated links, local pairing, GET_REPORT, keyboard self-test)
 python3 tools/bt_harmony_webui_smoke.py           # Consumer key reports and the Bluetooth Harmony device set (codex_webui, host build)
 python3 tools/androidtv/androidtv_smoke.py --codex-androidtv build/output/codex_androidtv-native   # codex_androidtv against a fake TV
 sh tools/androidtv/wol_test.sh                    # codex_androidtv's Wake-on-LAN, with fake interfaces (needs BearSSL)
