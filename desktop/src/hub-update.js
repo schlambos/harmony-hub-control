@@ -57,6 +57,29 @@ const HUB_FILES = {
   "payload/scripts/rcS.local": ["/etc/init.d/rcS.local", "755", 1],
   "payload/scripts/netservicestarter.lua": ["/opt/luaworks/tasks/connectserver/netservicestarter.lua", "644", 1],
 };
+// Core runtime files present in every Melodious hub release (v1.3+). Newer
+// feature files in HUB_FILES (Android TV, webOS, USB Ethernet, busybox-extra)
+// are installed whenever present in a zip, while older valid zips remain usable
+// for fresh installs, repairs, and downgrades.
+const CORE_HUB_FILES = new Set([
+  "payload/bin/codex_webui",
+  "payload/bin/codex_hbus",
+  "payload/bin/codex_hal_ltcp",
+  "payload/bin/codex_bthid_keyboard",
+  "payload/bin/codex_bt_pair_agent",
+  "payload/activity/codexactivity.lua",
+  "payload/mqtt/codexmqtt.lua",
+  "payload/bin/codex_portal",
+  "payload/bin/codex_dhcpd",
+  "payload/bin/dropbearmulti",
+  "payload/scripts/dropbear",
+  "payload/scripts/dropbearkey",
+  "payload/scripts/init.sh",
+  "payload/scripts/offline_egress_guard.sh",
+  "payload/scripts/recovery_ap.sh",
+  "payload/scripts/rcS.local",
+  "payload/scripts/netservicestarter.lua",
+]);
 const HUB_INVENTORY_FILES = new Set(["payload/bin/MANIFEST.txt", "payload/bin/FILES"]);
 // Run by the installers from the hub's RAM staging folder; never installed
 // and not used here. Must match HUB_INSTALLER_HELPERS in tools/releases/release.py.
@@ -157,7 +180,8 @@ async function unpackHubZip(zipPath, version) {
         throw new HubUpdateError(`The hub zip has ${rel}, which this app doesn't know how to install. Update this app first.`);
       }
     }
-    const missing = Object.keys(HUB_FILES).filter((rel) => !contents[rel]);
+    const missing = [...CORE_HUB_FILES].filter((rel) => !contents[rel]);
+    if (!contents["payload/bin/MANIFEST.txt"]) missing.push("payload/bin/MANIFEST.txt");
     if (missing.length) throw new HubUpdateError(`The hub zip is missing ${missing.join(", ")}.`);
     const manifest = contents["payload/bin/MANIFEST.txt"]?.toString("utf8") ?? "";
     for (const line of manifest.split(/\r?\n/)) {
@@ -168,10 +192,12 @@ async function unpackHubZip(zipPath, version) {
     }
     return {
       version,
-      files: Object.keys(HUB_FILES).map((rel) => {
-        const [dest, mode, reboot] = HUB_FILES[rel];
-        return { rel, dest, mode, reboot, body: contents[rel], md5: md5(contents[rel]), name: rel.replace(/\//g, "_") };
-      }),
+      files: Object.keys(HUB_FILES)
+        .filter((rel) => Boolean(contents[rel]))
+        .map((rel) => {
+          const [dest, mode, reboot] = HUB_FILES[rel];
+          return { rel, dest, mode, reboot, body: contents[rel], md5: md5(contents[rel]), name: rel.replace(/\//g, "_") };
+        }),
     };
   } finally {
     fs.rmSync(dir, { recursive: true, force: true });

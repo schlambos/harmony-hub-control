@@ -1170,6 +1170,62 @@ class PythonInstallerMutating(unittest.TestCase):
         self.assertNotIn(other, rm_rf_targets)
         self.assertEqual(set(rm_rf_targets), set(old[:2]) | {self.hub.stage})
 
+    def test_older_payload_without_optional_feature_files_installs_cleanly(self):
+        """[PYTHON BEHAVIORAL] install_webui.py succeeds against an older v2.1.0-shaped
+        staged payload (no webos_service.sh, usb_eth_service.sh, input-presets.json,
+        or modules/usb-net/*), and post_install_wiring only chmods installed scripts."""
+        with tempfile.TemporaryDirectory() as td:
+            old_payload = Path(td) / "payload"
+            # Copy only the v2.1.0 subset of payload files.
+            v210_bins = [
+                "codex_webui", "codex_hbus", "codex_hal_ltcp",
+                "codex_bthid_keyboard", "codex_bt_pair_agent", "codex_androidtv",
+                "codex_portal", "codex_dhcpd", "dropbearmulti",
+            ]
+            (old_payload / "bin").mkdir(parents=True)
+            manifest_lines = []
+            for name in v210_bins:
+                src = INST.PAYLOAD / "bin" / name
+                dst = old_payload / "bin" / name
+                shutil.copy2(src, dst)
+                manifest_lines.append(f"{md5_bytes(dst.read_bytes())}  {name}")
+            (old_payload / "bin" / "MANIFEST.txt").write_text("\n".join(manifest_lines) + "\n", encoding="utf-8")
+            for rel in (
+                "activity/codexactivity.lua",
+                "mqtt/codexmqtt.lua",
+                "scripts/dropbear",
+                "scripts/dropbearkey",
+                "scripts/init.sh",
+                "scripts/offline_egress_guard.sh",
+                "scripts/recovery_ap.sh",
+                "scripts/androidtv_service.sh",
+                "scripts/rcS.local",
+                "scripts/netservicestarter.lua",
+                "helpers/codex_flash_free",
+            ):
+                src = INST.PAYLOAD / rel
+                dst = old_payload / rel
+                dst.parent.mkdir(parents=True, exist_ok=True)
+                shutil.copy2(src, dst)
+
+            wiring_cmds: list[str] = []
+            orig_dispatch = self.hub.dispatch
+
+            def capture_wiring(cmd, stdin_data=b""):
+                if "ln -sf dropbearmulti" in cmd:
+                    wiring_cmds.append(cmd)
+                return orig_dispatch(cmd, stdin_data)
+
+            with mock.patch.object(INST, "PAYLOAD", old_payload), \
+                 mock.patch.object(self.hub, "dispatch", side_effect=capture_wiring):
+                code, stdout, stderr = self.harness.run(self.harness.base_argv("--clean-install", "--mqtt-disabled"))
+            self.assertEqual(code, 0, stderr or stdout)
+            self.assertEqual(kv_value(stdout, "verdict"), "ALLOWED")
+            self.assertEqual(len(wiring_cmds), 1)
+            self.assertNotIn("/data/codex/webos_service.sh", wiring_cmds[0])
+            self.assertNotIn("/data/codex/usb_eth_service.sh", wiring_cmds[0])
+            self.assertIn("/data/codex/androidtv_service.sh", wiring_cmds[0])
+
     def test_reboot_only_when_cloud_blocker_or_plugins_change(self):
         """[PYTHON BEHAVIORAL] without --no-apply-cloud-restart the hub reboots
         only if netservicestarter.lua, cloud_blocker.conf or an engine plugin

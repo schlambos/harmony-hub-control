@@ -2048,3 +2048,83 @@ test("detectHostKeyChanged, clearKnownHost, installFreshHub, and wizard:install-
   });
   assert.deepEqual(forwarded, [false, true]);
 });
+
+test("installFreshHub unpacks and stages an older v2.1.0 hub zip without newer optional payload files", { skip: !["darwin", "win32", "linux"].includes(process.platform) }, async () => {
+  const zipDir = fs.mkdtempSync(path.join(os.tmpdir(), "melodious-v210-wiz-"));
+  const tmpRootDir = fs.mkdtempSync(path.join(os.tmpdir(), "melodious-v210-stage-"));
+  try {
+    const v210RelPaths = [
+      "payload/bin/codex_webui",
+      "payload/bin/codex_hbus",
+      "payload/bin/codex_hal_ltcp",
+      "payload/bin/codex_bthid_keyboard",
+      "payload/bin/codex_bt_pair_agent",
+      "payload/bin/codex_androidtv",
+      "payload/bin/codex_portal",
+      "payload/bin/codex_dhcpd",
+      "payload/bin/dropbearmulti",
+      "payload/activity/codexactivity.lua",
+      "payload/mqtt/codexmqtt.lua",
+      "payload/scripts/dropbear",
+      "payload/scripts/dropbearkey",
+      "payload/scripts/init.sh",
+      "payload/scripts/offline_egress_guard.sh",
+      "payload/scripts/recovery_ap.sh",
+      "payload/scripts/androidtv_service.sh",
+      "payload/scripts/rcS.local",
+      "payload/scripts/netservicestarter.lua",
+    ];
+    const top = path.join(zipDir, "melodious-hub-2.1.0");
+    let manifest = "";
+    for (const rel of v210RelPaths) {
+      const body = Buffer.from(`${rel} 2.1.0\n`);
+      fs.mkdirSync(path.dirname(path.join(top, rel)), { recursive: true });
+      fs.writeFileSync(path.join(top, rel), body);
+      if (rel.startsWith("payload/bin/")) {
+        manifest += `${crypto.createHash("md5").update(body).digest("hex")}  ${path.posix.basename(rel)}\n`;
+      }
+    }
+    fs.writeFileSync(path.join(top, "payload/bin/MANIFEST.txt"), manifest);
+    const zipPath = path.join(zipDir, "melodious-hub-2.1.0.zip");
+    if (process.platform === "win32") {
+      execFileSync(unzipCommand(zipPath, zipDir)[0], ["-a", "-c", "-f", zipPath, "-C", zipDir, "melodious-hub-2.1.0"]);
+    } else if (process.platform === "linux") {
+      execFileSync("python3", ["-m", "zipfile", "-c", zipPath, top]);
+    } else {
+      execFileSync("/usr/bin/ditto", ["-c", "-k", "--keepParent", top, zipPath]);
+    }
+
+    let stagedManifestLines = [];
+    const res = await installFreshHub({
+      source: "local",
+      hubZipPath: zipPath,
+      host: "192.168.0.235",
+      hubId: 20266857,
+      preflightOnly: true,
+      spawnImpl: (_py, _args, opts) => {
+        stagedManifestLines = fs
+          .readFileSync(path.join(opts.cwd, "payload", "bin", "MANIFEST.txt"), "utf8")
+          .trim()
+          .split("\n");
+        const child = new EventEmitter();
+        child.stdin = { on() {}, end() {} };
+        child.stdout = new EventEmitter();
+        child.stderr = new EventEmitter();
+        child.kill = () => {};
+        setImmediate(() => {
+          child.stdout.emit("data", Buffer.from("verdict=ALLOWED\n"));
+          child.emit("close", 0);
+        });
+        return child;
+      },
+      tmpRootDir,
+    });
+    assert.equal(res.ok, true, res.error || "expected older v2.1.0 hub zip to unpack and stage");
+    assert.equal(res.version, "2.1.0");
+    assert.equal(stagedManifestLines.length, 9);
+    assert.deepEqual(fs.readdirSync(tmpRootDir), []);
+  } finally {
+    fs.rmSync(zipDir, { recursive: true, force: true });
+    fs.rmSync(tmpRootDir, { recursive: true, force: true });
+  }
+});

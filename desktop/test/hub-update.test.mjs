@@ -406,3 +406,61 @@ test("updates hub-emu over SSH, then finds nothing left to do", { skip: !process
     server.close();
   }
 });
+
+test("accepts an older release hub zip (e.g. 2.1.0) missing newer optional files, while still refusing missing core files", { skip: !mac && !win && !linux }, async () => {
+  const dir = tmp();
+  try {
+    // Exact 19-file v2.1.0 payload set (pre-webOS, pre-USB-Ethernet, pre-busybox-extra, pre-input-presets).
+    const v210RelPaths = [
+      "payload/bin/codex_webui",
+      "payload/bin/codex_hbus",
+      "payload/bin/codex_hal_ltcp",
+      "payload/bin/codex_bthid_keyboard",
+      "payload/bin/codex_bt_pair_agent",
+      "payload/bin/codex_androidtv",
+      "payload/bin/codex_portal",
+      "payload/bin/codex_dhcpd",
+      "payload/bin/dropbearmulti",
+      "payload/activity/codexactivity.lua",
+      "payload/mqtt/codexmqtt.lua",
+      "payload/scripts/dropbear",
+      "payload/scripts/dropbearkey",
+      "payload/scripts/init.sh",
+      "payload/scripts/offline_egress_guard.sh",
+      "payload/scripts/recovery_ap.sh",
+      "payload/scripts/androidtv_service.sh",
+      "payload/scripts/rcS.local",
+      "payload/scripts/netservicestarter.lua",
+    ];
+    const buildZipWithSubset = (version, relPaths) => {
+      const top = path.join(dir, `melodious-hub-${version}`);
+      let manifest = "";
+      for (const rel of relPaths) {
+        const body = Buffer.from(`${rel} ${version}\n`);
+        fs.mkdirSync(path.dirname(path.join(top, rel)), { recursive: true });
+        fs.writeFileSync(path.join(top, rel), body);
+        if (rel.startsWith("payload/bin/")) manifest += `${md5(body)}  ${path.basename(rel)}\n`;
+      }
+      fs.mkdirSync(path.join(top, "payload/bin"), { recursive: true });
+      fs.writeFileSync(path.join(top, "payload/bin/MANIFEST.txt"), manifest);
+      const zip = path.join(dir, `melodious-hub-${version}.zip`);
+      if (win) execFileSync(unzipCommand(zip, dir)[0], ["-a", "-c", "-f", zip, "-C", dir, path.basename(top)]);
+      else if (linux) execFileSync("python3", ["-m", "zipfile", "-c", zip, top]);
+      else execFileSync("/usr/bin/ditto", ["-c", "-k", "--keepParent", top, zip]);
+      return zip;
+    };
+
+    const zip210 = buildZipWithSubset("2.1.0", v210RelPaths);
+    const local = await readLocalHubZip(zip210);
+    assert.equal(local.version, "2.1.0");
+    assert.deepEqual(local.files.map((f) => f.rel).sort(), [...v210RelPaths].sort());
+    const fromRelease = await readHubPayload(zip210, "2.1.0");
+    assert.equal(fromRelease.length, v210RelPaths.length);
+
+    // Still rejects zips missing a core required file (e.g. codex_webui or init.sh).
+    const missingCore = buildZipWithSubset("2.1.1", v210RelPaths.filter((p) => p !== "payload/scripts/init.sh"));
+    await assert.rejects(readLocalHubZip(missingCore), /missing payload\/scripts\/init\.sh/);
+  } finally {
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});

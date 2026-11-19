@@ -1606,43 +1606,27 @@ class Installer:
                 Candidate(
                     "/data/codex/recovery_ap.sh", "755", "runtime", local=PAYLOAD / "scripts" / "recovery_ap.sh"
                 ),
-                Candidate(
-                    "/data/codex/androidtv_service.sh", "755", "runtime", local=PAYLOAD / "scripts" / "androidtv_service.sh"
-                ),
-                Candidate(
-                    "/data/codex/webos_service.sh", "755", "runtime", local=PAYLOAD / "scripts" / "webos_service.sh"
-                ),
-                Candidate(
-                    "/data/codex/androidtv-input-presets.json", "644", "runtime",
-                    local=PAYLOAD / "androidtv" / "input-presets.json",
-                ),
-                Candidate(
-                    "/data/codex/usb_eth_service.sh", "755", "runtime", local=PAYLOAD / "scripts" / "usb_eth_service.sh"
-                ),
-                Candidate(
-                    "/data/codex/modules/usb-net/r8152.ko", "644", "runtime", local=PAYLOAD / "modules" / "usb-net" / "r8152.ko"
-                ),
-                Candidate(
-                    "/data/codex/modules/usb-net/usbnet.ko", "644", "runtime", local=PAYLOAD / "modules" / "usb-net" / "usbnet.ko"
-                ),
-                Candidate(
-                    "/data/codex/modules/usb-net/asix.ko", "644", "runtime", local=PAYLOAD / "modules" / "usb-net" / "asix.ko"
-                ),
-                Candidate(
-                    "/data/codex/modules/usb-net/cdc_ether.ko", "644", "runtime", local=PAYLOAD / "modules" / "usb-net" / "cdc_ether.ko"
-                ),
-                Candidate(
-                    "/data/codex/modules/usb-net/cdc_ncm.ko", "644", "runtime", local=PAYLOAD / "modules" / "usb-net" / "cdc_ncm.ko"
-                ),
-                Candidate(
-                    "/data/codex/modules/usb-net/ax88179_178a.ko", "644", "runtime", local=PAYLOAD / "modules" / "usb-net" / "ax88179_178a.ko"
-                ),
-                Candidate(
-                    "/data/codex/modules/usb-net/README.md", "644", "runtime", local=PAYLOAD / "modules" / "usb-net" / "README.md"
-                ),
-                Candidate("/etc/init.d/rcS.local", "755", "runtime", local=PAYLOAD / "scripts" / "rcS.local"),
             ]
         )
+        # Optional feature files added after v1.3/v2.1: install whenever present
+        # in the payload (always present in full checkouts and 2.5+ zips; omitted
+        # when the desktop wizard stages an older verified release zip).
+        for dest, mode, local in (
+            ("/data/codex/androidtv_service.sh", "755", PAYLOAD / "scripts" / "androidtv_service.sh"),
+            ("/data/codex/webos_service.sh", "755", PAYLOAD / "scripts" / "webos_service.sh"),
+            ("/data/codex/androidtv-input-presets.json", "644", PAYLOAD / "androidtv" / "input-presets.json"),
+            ("/data/codex/usb_eth_service.sh", "755", PAYLOAD / "scripts" / "usb_eth_service.sh"),
+            ("/data/codex/modules/usb-net/r8152.ko", "644", PAYLOAD / "modules" / "usb-net" / "r8152.ko"),
+            ("/data/codex/modules/usb-net/usbnet.ko", "644", PAYLOAD / "modules" / "usb-net" / "usbnet.ko"),
+            ("/data/codex/modules/usb-net/asix.ko", "644", PAYLOAD / "modules" / "usb-net" / "asix.ko"),
+            ("/data/codex/modules/usb-net/cdc_ether.ko", "644", PAYLOAD / "modules" / "usb-net" / "cdc_ether.ko"),
+            ("/data/codex/modules/usb-net/cdc_ncm.ko", "644", PAYLOAD / "modules" / "usb-net" / "cdc_ncm.ko"),
+            ("/data/codex/modules/usb-net/ax88179_178a.ko", "644", PAYLOAD / "modules" / "usb-net" / "ax88179_178a.ko"),
+            ("/data/codex/modules/usb-net/README.md", "644", PAYLOAD / "modules" / "usb-net" / "README.md"),
+        ):
+            if local.is_file():
+                candidates.append(Candidate(dest, mode, "runtime", local=local))
+        candidates.append(Candidate("/etc/init.d/rcS.local", "755", "runtime", local=PAYLOAD / "scripts" / "rcS.local"))
         if not self.args.skip_cloud_suppression:
             candidates.append(
                 Candidate(
@@ -2520,12 +2504,18 @@ class Installer:
         step("Post-install wiring")
         bin_names = bin_manifest_names()
         bin_chmod = " ".join(f"/data/codex/bin/{n}" for n in bin_names)
+        optional_scripts = " ".join(
+            f"/data/codex/{name}"
+            for name in ("androidtv_service.sh", "webos_service.sh", "usb_eth_service.sh")
+            if (PAYLOAD / "scripts" / name).is_file()
+        )
+        opt_part = f" {optional_scripts}" if optional_scripts else ""
         post = (
             "mkdir -p /data/codex/bin /data/codex/modules/usb-net /etc/dropbear /home/root/.ssh /data/codexmqtt /pkg/codexactivity /pkg/codexmqtt; "
             "ln -sf dropbearmulti /data/codex/bin/dropbear; "
             "ln -sf dropbearmulti /data/codex/bin/dropbearkey; "
             f"chmod 755 {bin_chmod} /data/codex/init.sh /data/codex/offline_egress_guard.sh "
-            "/data/codex/recovery_ap.sh /data/codex/androidtv_service.sh /data/codex/webos_service.sh /data/codex/usb_eth_service.sh /usr/sbin/dropbear "
+            f"/data/codex/recovery_ap.sh{opt_part} /usr/sbin/dropbear "
             "/usr/sbin/dropbearkey /etc/init.d/rcS.local; "
             "chmod 644 /data/codex/modules/usb-net/r8152.ko /data/codex/modules/usb-net/usbnet.ko /data/codex/modules/usb-net/asix.ko /data/codex/modules/usb-net/cdc_ether.ko /data/codex/modules/usb-net/cdc_ncm.ko /data/codex/modules/usb-net/ax88179_178a.ko /data/codex/modules/usb-net/README.md 2>/dev/null || true; "
             "chmod 600 /data/codexmqtt/config.json 2>/dev/null || true; "
