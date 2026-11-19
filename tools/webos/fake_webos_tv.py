@@ -298,6 +298,8 @@ class FakeWebOSTV:
         self.active_input = "HDMI_1"
         self.foreground_app = "com.webos.app.hdmi1"
         self.power_on = True
+        self._power_subs: dict[socket.socket, str] = {}
+        self._send_lock = threading.Lock()
         self._active_socks: set[socket.socket] = set()
         self._stop = threading.Event()
         self._cert_dir: str | None = None
@@ -345,7 +347,18 @@ class FakeWebOSTV:
                 pass
 
     def _send_json(self, sock: socket.socket, obj: dict) -> bool:
-        return ws_send_text(sock, json.dumps(obj, separators=(",", ":")))
+        with self._send_lock:
+            return ws_send_text(sock, json.dumps(obj, separators=(",", ":")))
+
+    def _power_payload(self) -> dict:
+        return {"returnValue": True, "subscribed": True,
+                "state": "Active" if self.power_on else "Active Standby"}
+
+    def _push_power(self) -> None:
+        with self._lock:
+            subs = list(self._power_subs.items())
+        for sock, rid in subs:
+            self._send_json(sock, {"type": "response", "id": rid, "payload": self._power_payload()})
 
     def _handle_pointer(self, sock: socket.socket, scheme: str) -> None:
         log("pointer_connected", scheme=scheme)
@@ -406,6 +419,13 @@ class FakeWebOSTV:
 
         if uri == "ssap://system/turnOff":
             self.power_on = False
+            if self.current_mode() == "quickstart":
+                # Quick Start+: standby keeps this session open (and answering)
+                # but refuses new connections until woken.
+                log("turn_off", standby=True)
+                ok()
+                self._push_power()
+                return True
             log("turn_off")
             ok()
             time.sleep(0.03)
@@ -517,8 +537,11 @@ class FakeWebOSTV:
     def _handle_client(self, raw_sock: socket.socket, scheme: str, local_port: int) -> None:
         sock: socket.socket = raw_sock
         try:
-            if self.current_mode() == "offline":
+            mode = self.current_mode()
+            if mode == "offline" or (mode == "quickstart" and not self.power_on):
                 return
+            if mode != "quickstart":
+                self.power_on = True  # reachable again means it was turned back on
             if scheme == "wss":
                 assert self._ssl_ctx is not None
                 raw_sock.settimeout(5.0)
@@ -623,6 +646,14 @@ class FakeWebOSTV:
                                 "payload": {"client-key": self._client_key},
                             },
                         )
+                elif mtype == "subscribe" and registered:
+                    if msg.get("uri") == "ssap://com.webos.service.tvpower/power/getPowerState":
+                        with self._lock:
+                            self._power_subs[sock] = req_id
+                        log("subscribe_power")
+                        self._send_json(sock, {"type": "response", "id": req_id, "payload": self._power_payload()})
+                    else:
+                        self._send_json(sock, {"type": "response", "id": req_id, "payload": {"returnValue": True}})
                 elif mtype == "request":
                     if not registered:
                         self._send_json(
@@ -641,6 +672,8 @@ class FakeWebOSTV:
             pass
         finally:
             self._untrack(sock)
+            with self._lock:
+                self._power_subs.pop(sock, None)
             try:
                 sock.close()
             except OSError:
@@ -704,7 +737,13 @@ class FakeWebOSTV:
                 threads.append(t)
 
             while not self._stop.is_set():
-                time.sleep(0.2)
+                time.sleep(0.05)
+                # Stands in for Wake-on-LAN, which the fake can't receive.
+                if not self.power_on and self.current_mode() == "wake":
+                    self.power_on = True
+                    self.set_mode("accept")
+                    log("woke")
+                    self._push_power()
         except KeyboardInterrupt:
             pass
         finally:
@@ -724,7 +763,7 @@ def main() -> int:
     ap.add_argument("--host", default="127.0.0.1")
     ap.add_argument("--ws-port", type=int, default=3000, help="ws port (0=ephemeral, -1=disabled)")
     ap.add_argument("--wss-port", type=int, default=3001, help="wss port (0=ephemeral, -1=disabled)")
-    ap.add_argument("--mode-file", default=None, help="file containing mode: accept|deny|offline|drop|no-pointer|oversized")
+    ap.add_argument("--mode-file", default=None, help="file containing mode: accept|deny|offline|drop|no-pointer|oversized|quickstart|wake")
     ap.add_argument("--prompt-delay", type=float, default=0.05)
     args = ap.parse_args()
 

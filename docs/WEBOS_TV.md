@@ -63,7 +63,11 @@ HA-bridged LG devices feel identical in activities:
 - **Navigation & remote keys (via pointer-input socket):** `DirectionUp`, `DirectionDown`, `DirectionLeft`, `DirectionRight`, `Select`, `Back`, `Home`, `Exit`, `Menu`, `Guide`, `Info`, `ChannelUp`, `ChannelDown`, `Red`, `Green`, `Yellow`, `Blue`, `0`–`9`, `Dash`, `Record`
 
 When the TV is unreachable or turned off, non-power commands fail immediately with
-a clear error rather than succeeding silently. Once the TV wakes or comes back on
+a clear error rather than succeeding silently. Newer TVs with Quick Start+ keep
+the network session open in standby, so `codex_webos` subscribes to the TV's
+power state (`com.webos.service.tvpower/power/getPowerState`) and treats
+`Active Standby`, `Suspend` and `Power Off` as off: commands fail with "off
+(standby)" and `PowerOn` still sends Wake-on-LAN. Once the TV wakes or comes back on
 the LAN, `codex_webos` reconnects automatically using the stored `client-key`.
 
 ## Native vs Home Assistant webOS bridge

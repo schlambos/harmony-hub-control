@@ -284,7 +284,8 @@ def main() -> int:
         # Unreachable TV MUST fail non-PowerOn commands (no silent success!)
         for cmd in ("VolumeUp", "Input HDMI 1", "App Netflix", "DirectionUp", "PowerOff"):
             r = call(daemon_port, "/cmd", {"device": tv_id, "command": cmd})
-            assert not r["ok"] and "not connected" in r["error"].lower(), f"{cmd} unexpectedly succeeded: {r}"
+            assert not r["ok"] and ("not connected" in r["error"].lower() or "standby" in r["error"].lower()), \
+                f"{cmd} unexpectedly succeeded: {r}"
 
         # PowerOn with MAC succeeds via WoL and reconnects once TV comes back
         assert call(daemon_port, "/cmd", {"device": tv_id, "command": "PowerOn"})["ok"]
@@ -292,6 +293,33 @@ def main() -> int:
         set_mode("accept")
         wait_tv(daemon_port, tv_id, connected=True, pointer=True)
         fake.wait_for("registered", since=m, reused=True)
+
+        # 8b. Quick Start+ standby (seen on an OLED65C4): the TV keeps the
+        # session open after PowerOff. Commands must fail clearly, PowerOn must
+        # still send Wake-on-LAN, and the same session resumes once it wakes.
+        fake.wait_for("subscribe_power", since=m)
+        set_mode("quickstart")
+        before = call(daemon_port, "/status")["tvs"][0]
+        assert call(daemon_port, "/cmd", {"device": tv_id, "command": "PowerOff"})["ok"]
+        fake.wait_for("turn_off", since=m, standby=True)
+        tv = call(daemon_port, "/status")["tvs"][0]
+        assert not tv["connected"] and tv["standby"] and "standby" in tv["error"], tv
+        m = fake.mark()
+        r = call(daemon_port, "/cmd", {"device": tv_id, "command": "VolumeUp"})
+        assert not r["ok"] and "standby" in r["error"], r
+        r = call(daemon_port, "/cmd", {"device": tv_id, "command": "DirectionUp"})
+        assert not r["ok"] and "standby" in r["error"], r
+        time.sleep(0.3)
+        assert not any(e.get("event") in ("volume", "pointer_button") for e in fake.events[m:]), fake.events[m:]
+        assert call(daemon_port, "/cmd", {"device": tv_id, "command": "PowerOn"})["ok"]
+        tv = call(daemon_port, "/status")["tvs"][0]
+        assert tv["cmdsSent"] == before["cmdsSent"] + 2, (before, tv)  # PowerOff + WoL, not a no-op
+        set_mode("wake")
+        fake.wait_for("woke", since=m)
+        tv = wait_tv(daemon_port, tv_id, connected=True, pointer=True)
+        assert not tv["standby"] and tv["connects"] == before["connects"], (before, tv)
+        assert call(daemon_port, "/cmd", {"device": tv_id, "command": "VolumeUp"})["ok"]
+        fake.wait_for("volume", since=m, action="up")
 
         # 9. Daemon restart persistence: saved client-key reconnects without prompt
         daemon.terminate()

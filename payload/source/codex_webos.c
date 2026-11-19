@@ -1101,20 +1101,25 @@ static int ssap_send_register(struct ws_conn *c, const char *req_id, const char 
 	return ws_send_text(c, buf, (size_t)n);
 }
 
-static int ssap_send_request(struct ws_conn *c, const char *req_id, const char *uri, const char *payload_json) {
+static int ssap_send(struct ws_conn *c, const char *type, const char *req_id, const char *uri,
+                     const char *payload_json) {
 	char buf[1024];
 	int n;
 	if (payload_json && payload_json[0]) {
 		n = snprintf(buf, sizeof buf,
-		             "{\"id\":\"%s\",\"type\":\"request\",\"uri\":\"%s\",\"payload\":%s}",
-		             req_id, uri, payload_json);
+		             "{\"id\":\"%s\",\"type\":\"%s\",\"uri\":\"%s\",\"payload\":%s}",
+		             req_id, type, uri, payload_json);
 	} else {
 		n = snprintf(buf, sizeof buf,
-		             "{\"id\":\"%s\",\"type\":\"request\",\"uri\":\"%s\"}",
-		             req_id, uri);
+		             "{\"id\":\"%s\",\"type\":\"%s\",\"uri\":\"%s\"}",
+		             req_id, type, uri);
 	}
 	if (n <= 0 || (size_t)n >= sizeof buf) return -1;
 	return ws_send_text(c, buf, (size_t)n);
+}
+
+static int ssap_send_request(struct ws_conn *c, const char *req_id, const char *uri, const char *payload_json) {
+	return ssap_send(c, "request", req_id, uri, payload_json);
 }
 
 /* ================================================================== TV state & persistence */
@@ -1166,8 +1171,12 @@ struct tv {
 	struct webos_app apps[MAX_APPS];
 	int napps;
 
+	/* Newer TVs keep the session open in standby (Quick Start+), so the
+	 * socket alone can't tell on from off; the power-state subscription can. */
+	int standby;
+
 	unsigned seq;
-	char req_vol[24], req_inputs[24], req_apps[24], req_ptr[24];
+	char req_vol[24], req_inputs[24], req_apps[24], req_ptr[24], req_pwr[24], req_off[24];
 
 	long long next_attempt, last_wol, waking_until;
 	int backoff;
@@ -1461,6 +1470,21 @@ static void tv_parse_apps(struct tv *t, const char *payload, const char *pend) {
 	DBG("TV %s: discovered %d app(s)", t->id, t->napps);
 }
 
+/* getPowerState: "Active", "Screen Off" and "Screen Saver" are on; "Active
+ * Standby", "Suspend" and "Power Off" (or a pending request for one) are off. */
+static void tv_parse_power(struct tv *t, const char *payload, const char *pend) {
+	char state[48] = "", processing[64] = "";
+	if (j_obj_str(payload, pend, "state", state, sizeof state) < 0 || !state[0]) return;
+	j_obj_str(payload, pend, "processing", processing, sizeof processing);
+	int off = !strcmp(state, "Active Standby") || !strcmp(state, "Suspend") ||
+	          !strcmp(state, "Power Off") || strstr(processing, "Power Off") ||
+	          strstr(processing, "Suspend") || strstr(processing, "Active Standby");
+	if (off != t->standby) logmsg("TV %s: power state %s%s%s", t->id, state,
+	                              processing[0] ? ", " : "", processing);
+	t->standby = off;
+	if (!off) t->waking_until = 0;
+}
+
 static void tv_ws_up(void *owner) {
 	struct tv *t = owner;
 	DBG("TV %s: WebSocket up (%s), sending register", t->id, t->c->use_tls ? "wss" : "ws");
@@ -1492,10 +1516,13 @@ static void tv_ws_text(void *owner, const char *text, size_t len) {
 			       t->c->use_tls ? "wss" : "ws");
 		}
 		t->registered = 1;
+		t->standby = 0;
 		t->backoff = 1000;
 		t->waking_until = 0;
 		t->last_err[0] = 0;
 		if (t->proto == PROTO_AUTO) t->prefer_ws = t->c->use_tls ? 0 : 1;
+		tv_next_req(t, "pwr", t->req_pwr);
+		ssap_send(t->c, "subscribe", t->req_pwr, "ssap://com.webos.service.tvpower/power/getPowerState", NULL);
 		tv_request_metadata(t);
 		return;
 	}
@@ -1509,6 +1536,9 @@ static void tv_ws_text(void *owner, const char *text, size_t len) {
 			ws_close(t->c, t->last_err);
 			t->registered = 0;
 			t->next_attempt = now_ms() + 30000;
+		} else if (t->req_off[0] && !strcmp(id, t->req_off)) {
+			logmsg("TV %s: PowerOff refused (%s)", t->id, err[0] ? err : "error");
+			t->standby = 0;
 		} else {
 			DBG("TV %s: SSAP error on %s: %s", t->id, id, err);
 		}
@@ -1516,7 +1546,9 @@ static void tv_ws_text(void *owner, const char *text, size_t len) {
 	}
 
 	if (!strcmp(type, "response") && payload) {
-		if (!strcmp(id, t->req_vol)) {
+		if (!strcmp(id, t->req_pwr)) {
+			tv_parse_power(t, payload, pend);
+		} else if (!strcmp(id, t->req_vol)) {
 			const char *vse = NULL;
 			const char *vs = j_obj_find(payload, pend, "volumeStatus", &vse);
 			int v = -1, m = -1;
@@ -1820,8 +1852,8 @@ static int tv_execute_cmd(struct tv *t, const char *cmd, char *err, size_t errle
 
 	/* PowerOn: Wake-on-LAN only (no fake SSAP PowerOn). */
 	if (!strcasecmp(cmd, "PowerOn")) {
-		if (t->registered && t->c && t->c->fd >= 0) {
-			DBG("TV %s: PowerOn while already connected", t->id);
+		if (t->registered && t->c && t->c->fd >= 0 && !t->standby) {
+			DBG("TV %s: PowerOn while already on", t->id);
 			return 0;
 		}
 		if (!t->mac[0]) {
@@ -1838,8 +1870,8 @@ static int tv_execute_cmd(struct tv *t, const char *cmd, char *err, size_t errle
 		return 0;
 	}
 
-	/* PowerToggle when disconnected: wake via WoL if MAC is configured. */
-	if (!strcasecmp(cmd, "PowerToggle") && (!t->registered || !t->c || t->c->fd < 0)) {
+	/* PowerToggle when disconnected or in standby: wake via WoL if MAC is configured. */
+	if (!strcasecmp(cmd, "PowerToggle") && (!t->registered || !t->c || t->c->fd < 0 || t->standby)) {
 		if (!t->mac[0]) {
 			snprintf(err, errlen, "TV %s is not connected and has no MAC address for Wake-on-LAN.", t->name);
 			return -1;
@@ -1865,6 +1897,11 @@ static int tv_execute_cmd(struct tv *t, const char *cmd, char *err, size_t errle
 		snprintf(err, errlen, "TV %s is not connected (unreachable or turned off).", t->name);
 		return -1;
 	}
+	if (t->standby) {
+		if (!strcasecmp(cmd, "PowerOff")) return 0; /* already off */
+		snprintf(err, errlen, "TV %s is off (standby). Power On wakes it.", t->name);
+		return -1;
+	}
 
 	char req_id[24];
 	tv_next_req(t, "cmd", req_id);
@@ -1874,6 +1911,9 @@ static int tv_execute_cmd(struct tv *t, const char *cmd, char *err, size_t errle
 			snprintf(err, errlen, "Failed to queue PowerOff.");
 			return -1;
 		}
+		/* Assume off until the power-state subscription says otherwise. */
+		snprintf(t->req_off, sizeof t->req_off, "%s", req_id);
+		t->standby = 1;
 		t->cmds++;
 		return 0;
 	}
@@ -1885,6 +1925,8 @@ static int tv_execute_cmd(struct tv *t, const char *cmd, char *err, size_t errle
 			snprintf(err, errlen, "Failed to queue PowerOff.");
 			return -1;
 		}
+		snprintf(t->req_off, sizeof t->req_off, "%s", req_id);
+		t->standby = 1;
 		t->cmds++;
 		return 0;
 	}
@@ -2068,16 +2110,18 @@ static void http_reply(int fd, const char *body) {
 static void sb_tv(struct sbuf *s, const struct tv *t) {
 	sb(s, "{\"id\":\"%s\",\"name\":", t->id);
 	sb_str(s, t->name);
+	/* A TV in standby keeps its session but is reported as not connected. */
 	sb(s, ",\"host\":\"%s\",\"mac\":\"%s\",\"proto\":\"%s\",\"paired\":%s,\"connected\":%s,"
-	      "\"pointerReady\":%s,\"volume\":%d,\"muted\":%s,\"activeInput\":",
+	      "\"standby\":%s,\"pointerReady\":%s,\"volume\":%d,\"muted\":%s,\"activeInput\":",
 	   t->host, t->mac, PROTO_NAMES[t->proto],
 	   t->client_key[0] ? "true" : "false",
-	   t->registered ? "true" : "false",
+	   t->registered && !t->standby ? "true" : "false",
+	   t->registered && t->standby ? "true" : "false",
 	   t->ptr_ready ? "true" : "false",
 	   t->volume, t->muted ? "true" : "false");
 	sb_str(s, t->active_input);
 	sb(s, ",\"cmdsSent\":%lu,\"connects\":%lu,\"error\":", t->cmds, t->connects);
-	sb_str(s, t->registered ? "" : t->last_err);
+	sb_str(s, !t->registered ? t->last_err : t->standby ? "TV is in standby" : "");
 	sb(s, ",\"inputs\":[");
 	for (int i = 0; i < t->ninputs; i++) {
 		sb(s, "%s{\"id\":", i ? "," : "");
@@ -2444,7 +2488,7 @@ int main(int argc, char **argv) {
 			if (!t->used) continue;
 
 			/* Repeat WoL while waking an unreachable TV. */
-			if (t->waking_until && !t->registered && t->mac[0]) {
+			if (t->waking_until && (!t->registered || t->standby) && t->mac[0]) {
 				if (now >= t->waking_until) {
 					t->waking_until = 0;
 				} else if (now - t->last_wol >= WOL_REPEAT_MS) {
