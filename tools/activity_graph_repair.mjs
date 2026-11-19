@@ -573,6 +573,29 @@ function preferredButtonDeviceId(activity, identity) {
     roleDeviceId(activity, "DisplayActivityRole");
 }
 
+function findSequence(map, sequenceId) {
+  return (Array.isArray(map?.Sequences) ? map.Sequences : []).find((sequence) =>
+    sequence?.SequenceId != null && idText(sequence.SequenceId) === idText(sequenceId)
+  ) || null;
+}
+
+function resolvesInMap(map, action) {
+  return !String(action?.__type || "").includes("ButtonSequenceAction") ||
+    !!findSequence(map, action.SequenceId);
+}
+
+// Sequences are per map: the stock engine looks a ButtonSequenceAction up in
+// its own map's Sequences only, and the hub refuses a map whose press names a
+// sequence it doesn't carry (#201). A routed press takes its sequence along.
+function carrySequence(sourceMap, targetMap, action) {
+  if (resolvesInMap(targetMap, action)) return true;
+  const sequence = findSequence(sourceMap, action.SequenceId);
+  if (!sequence) return false;
+  if (!Array.isArray(targetMap.Sequences)) targetMap.Sequences = [];
+  targetMap.Sequences.push(clone(sequence));
+  return true;
+}
+
 function findMappedButton(maps, targetMap, targetButton, field) {
   const identity = buttonIdentity(targetButton);
   if (!identity) return null;
@@ -584,9 +607,10 @@ function findMappedButton(maps, targetMap, targetButton, field) {
     const match = (map?.Buttons || []).find((button) =>
       buttonIdentity(button) === identity &&
       button?.[field] &&
-      typeof button[field] === "object"
+      typeof button[field] === "object" &&
+      resolvesInMap(map, button[field])
     );
-    if (match) return match[field];
+    if (match) return { action: match[field], map };
   }
   return null;
 }
@@ -613,12 +637,14 @@ function backfillActivityButtonMaps(mapList, activity) {
         : [];
       for (const field of ACTION_FIELDS) {
         if (button?.[field] && typeof button[field] === "object") continue;
-        const action =
+        const found =
           findMappedButton(siblingMaps, map, button, field) ||
           findMappedButton(deviceMaps, map, button, field);
-        if (!action) continue;
-        button[field] = clone(action);
-        resetActionIdentity(button[field]);
+        if (!found) continue;
+        const action = clone(found.action);
+        resetActionIdentity(action);
+        if (!carrySequence(found.map, map, action)) continue;
+        button[field] = action;
         changes += 1;
         mapChanges += 1;
       }
