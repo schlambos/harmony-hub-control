@@ -5,6 +5,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
+import { resolveSkinPowerAction } from "../public/js/views/control-power.js";
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));
 const SIM_DIR = path.join(HERE, "..");
@@ -121,6 +122,18 @@ describe("Switch 2 wake simulator end-to-end", () => {
     assert.equal(pf.PowerTypeId, 1);
     assert.equal(pf.PowerOnActions[0].IRCommandName, "Wake");
     assert.deepEqual(pf.PowerOffActions, []);
+
+    // Device-page header power button resolves Wake from PowerFeature.PowerOnActions
+    const headerPower = resolveSkinPowerAction({
+      mode: "devices",
+      currentActivityId: "-1",
+      selectedDeviceId: deviceId,
+      deviceCommands: entry.Commands.map((c) => ({ name: c.Name, functionId: c["FunctionId-"] ?? 0 })),
+      deviceEntry: entry,
+    });
+    assert.equal(headerPower.kind, "device-power");
+    assert.equal(headerPower.deviceId, deviceId);
+    assert.equal(headerPower.command, "Wake");
 
     // Edit in place preserves DeviceId
     const edit = await reqJson(sim.base, "/api/switch2/devices", {
@@ -429,6 +442,210 @@ int main(void) {
         expectedBurst[1],
         expectedBurst[4], // advertise-off MUST execute in cleanup!
       ]);
+    } finally {
+      fs.rmSync(tmpDir, { recursive: true, force: true });
+    }
+  });
+
+  it("completes full 5-step PoC wake burst with main()'s WNOHANG SIGCHLD reaper installed", () => {
+    const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "codex-switch2-sigchld-test-"));
+    const mockHcitool = path.join(tmpDir, "mock-hcitool.sh");
+    const logFile = path.join(tmpDir, "hci.log");
+    const failFile = path.join(tmpDir, "fail-ocf");
+    const lockFile = path.join(tmpDir, "switch2.lock");
+    const harnessC = path.join(tmpDir, "sigchld_harness.c");
+    const harnessBin = path.join(tmpDir, "sigchld_harness");
+
+    fs.writeFileSync(
+      mockHcitool,
+      `#!/bin/sh
+LOG="${logFile}"
+FAIL="${failFile}"
+echo "CALL $*" >> "$LOG"
+OCF="$5"
+if [ -f "$FAIL" ]; then
+  SPEC=$(cat "$FAIL")
+  case "$SPEC" in
+    "exit:$OCF")
+      echo "simulated hcitool failure on $OCF" >&2
+      exit 1
+      ;;
+    "hci:$OCF:"*)
+      CODE=\${SPEC#hci:$OCF:}
+      echo "< HCI Command: ogf 0x08, ocf $OCF"
+      echo "> HCI Event: 0x0e plen 4"
+      echo "  01 0A 20 $CODE"
+      exit 0
+      ;;
+  esac
+fi
+echo "< HCI Command: ogf 0x08, ocf $OCF"
+echo "> HCI Event: 0x0e plen 4"
+echo "  01 05 20 00"
+exit 0
+`,
+      { mode: 0o755 },
+    );
+
+    const expectedBurst = [
+      "CALL -i hci0 cmd 0x08 0x0005 0x5B 0xCA 0x1F 0xA6 0x89 0xBC",
+      "CALL -i hci0 cmd 0x08 0x0006 0x20 0x00 0x40 0x00 0x00 0x01 0x00 0x00 0x00 0x00 0x00 0x00 0x00 0x07 0x00",
+      "CALL -i hci0 cmd 0x08 0x0008 0x1F 0x02 0x01 0x06 0x1B 0xFF 0x53 0x05 0x01 0x00 0x03 0x7E 0x05 0x66 0x20 0x00 0x01 0x81 0xFD 0x42 0xF0 0x83 0x6B 0xD8 0x0F 0x00 0x00 0x00 0x00 0x00 0x00 0x00",
+      "CALL -i hci0 cmd 0x08 0x000A 0x01",
+      "CALL -i hci0 cmd 0x08 0x000A 0x00",
+    ];
+
+    fs.writeFileSync(
+      harnessC,
+      `
+#define SWITCH2_HCITOOL_PATH "${mockHcitool.replace(/\\/g, "\\\\")}"
+#define SWITCH2_LOCK_FILE "${lockFile.replace(/\\/g, "\\\\")}"
+#define SWITCH2_BURST_MS 20
+#define CODEX_WEBUI_NO_MAIN 1
+#include "codex_webui.c"
+
+static int verify_sigchld_handler(void) {
+    struct sigaction cur;
+    if (sigaction(SIGCHLD, NULL, &cur) != 0) return -1;
+    return cur.sa_handler == handle_sigchld ? 0 : -1;
+}
+
+static void write_text(const char *p, const char *s) {
+    FILE *f = fopen(p, "w");
+    if (!f) _exit(3);
+    fputs(s, f);
+    fclose(f);
+}
+
+int main(void) {
+    struct sigaction sa;
+    unsigned char s2[6] = {0xD8, 0x6B, 0x83, 0xF0, 0x42, 0xFD};
+    unsigned char ctrl[6] = {0xBC, 0x89, 0xA6, 0x1F, 0xCA, 0x5B};
+    unsigned char pid[2] = {0x66, 0x20};
+    char err[512];
+    char out[512];
+    int hci_st = -1;
+    char *argv_rand[] = {
+        "hcitool", "-i", "hci0", "cmd", "0x08", "0x0005",
+        "0x5B", "0xCA", "0x1F", "0xA6", "0x89", "0xBC", NULL
+    };
+
+    /* Install main()'s exact WNOHANG SIGCHLD reaper (codex_webui.c main()). */
+    memset(&sa, 0, sizeof(sa));
+    sa.sa_handler = handle_sigchld;
+    sigemptyset(&sa.sa_mask);
+    sa.sa_flags = SA_RESTART;
+    if (sigaction(SIGCHLD, &sa, NULL) != 0) return 10;
+
+    /* 1. Direct switch2_run_hcitool() must not lose child to SIGCHLD reaper. */
+    if (switch2_run_hcitool(argv_rand, out, sizeof(out), &hci_st) != 0) {
+        fprintf(stderr, "step 1 failed: hci_st=%d out=%s\\n", hci_st, out);
+        return 11;
+    }
+    if (hci_st != 0) return 12;
+    if (verify_sigchld_handler() != 0) return 13;
+
+    /* 2. Full 5-step PoC wake burst completes and reaches Advertise Enable(On). */
+    write_text("${logFile.replace(/\\/g, "\\\\")}", "");
+    if (switch2_execute_wake_burst(s2, ctrl, pid, err, sizeof(err)) != 0) {
+        fprintf(stderr, "step 2 failed: %s\\n", err);
+        return 20;
+    }
+    if (verify_sigchld_handler() != 0) return 21;
+
+    /* 3. Mid-sequence failure on LE_Set_Advertising_Data still runs advertise-off
+          and restores SIGCHLD disposition. */
+    write_text("${logFile.replace(/\\/g, "\\\\")}.midfail", "");
+    write_text("${failFile.replace(/\\/g, "\\\\")}", "exit:0x0008");
+    /* Redirect log checks via separate section marker */
+    write_text("${logFile.replace(/\\/g, "\\\\")}", "");
+    if (switch2_execute_wake_burst(s2, ctrl, pid, err, sizeof(err)) == 0) {
+        fprintf(stderr, "step 3 unexpectedly succeeded\\n");
+        return 30;
+    }
+    if (!strstr(err, "LE_Set_Advertising_Data")) {
+        fprintf(stderr, "step 3 unexpected err: %s\\n", err);
+        return 31;
+    }
+    if (verify_sigchld_handler() != 0) return 32;
+    /* Copy log before next step */
+    {
+        FILE *in = fopen("${logFile.replace(/\\/g, "\\\\")}", "r");
+        FILE *copy = fopen("${logFile.replace(/\\/g, "\\\\")}.midfail", "w");
+        int ch;
+        if (!in || !copy) return 33;
+        while ((ch = fgetc(in)) != EOF) fputc(ch, copy);
+        fclose(in);
+        fclose(copy);
+    }
+
+    /* 4. HCI Command Complete non-zero status on step 4 reports 0x12 and still runs advertise-off. */
+    write_text("${failFile.replace(/\\/g, "\\\\")}", "hci:0x000A:12");
+    write_text("${logFile.replace(/\\/g, "\\\\")}", "");
+    if (switch2_execute_wake_burst(s2, ctrl, pid, err, sizeof(err)) == 0) {
+        fprintf(stderr, "step 4 unexpectedly succeeded\\n");
+        return 40;
+    }
+    if (!strstr(err, "LE_Set_Advertise_Enable(on) rejected (HCI status 0x12)")) {
+        fprintf(stderr, "step 4 unexpected err: %s\\n", err);
+        return 41;
+    }
+    if (verify_sigchld_handler() != 0) return 42;
+    {
+        FILE *in = fopen("${logFile.replace(/\\/g, "\\\\")}", "r");
+        FILE *copy = fopen("${logFile.replace(/\\/g, "\\\\")}.hcifail", "w");
+        int ch;
+        if (!in || !copy) return 43;
+        while ((ch = fgetc(in)) != EOF) fputc(ch, copy);
+        fclose(in);
+        fclose(copy);
+    }
+
+    /* 5. Re-run clean full 5-step burst to leave exact 5-line happy log in logFile. */
+    unlink("${failFile.replace(/\\/g, "\\\\")}");
+    write_text("${logFile.replace(/\\/g, "\\\\")}", "");
+    if (switch2_execute_wake_burst(s2, ctrl, pid, err, sizeof(err)) != 0) {
+        fprintf(stderr, "step 5 failed: %s\\n", err);
+        return 50;
+    }
+    if (verify_sigchld_handler() != 0) return 51;
+
+    return 0;
+}
+`,
+    );
+
+    try {
+      execFileSync(
+        process.env.CC || "cc",
+        ["-O2", "-I", path.join(ROOT, "payload/source"), harnessC, "-o", harnessBin],
+        { stdio: "pipe" },
+      );
+      execFileSync(harnessBin, [], { stdio: "pipe" });
+
+      // Happy path: all 5 PoC steps ran in exact order, including exact 31-byte payload and Advertise Enable(On)
+      const happyLines = fs.readFileSync(logFile, "utf8").trim().split("\n");
+      assert.deepEqual(
+        happyLines,
+        expectedBurst,
+        "full 5-step PoC sequence must complete under WNOHANG SIGCHLD reaper",
+      );
+
+      // Mid-sequence failure on step 3 (LE_Set_Advertising_Data): steps 1-3 + advertise-off cleanup (step 5), no step 4
+      const midFailLines = fs.readFileSync(`${logFile}.midfail`, "utf8").trim().split("\n");
+      assert.deepEqual(
+        midFailLines,
+        [expectedBurst[0], expectedBurst[1], expectedBurst[2], expectedBurst[4]],
+        "advertise-off must still run on mid-sequence failure under WNOHANG SIGCHLD reaper",
+      );
+
+      // HCI status 0x12 error on step 4 (LE_Set_Advertise_Enable on): steps 1-4 + advertise-off cleanup (step 5)
+      const hciFailLines = fs.readFileSync(`${logFile}.hcifail`, "utf8").trim().split("\n");
+      assert.deepEqual(
+        hciFailLines,
+        expectedBurst,
+        "advertise-off must still run after HCI status error on step 4 under WNOHANG SIGCHLD reaper",
+      );
     } finally {
       fs.rmSync(tmpDir, { recursive: true, force: true });
     }

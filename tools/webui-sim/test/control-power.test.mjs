@@ -68,6 +68,56 @@ describe("resolveSkinPowerAction", () => {
     assert.equal(action.kind, "inert");
     assert.equal(action.reason, "no-power-command");
   });
+
+  it("falls back to PowerFeature.PowerOnActions for wake-only devices", () => {
+    const action = resolveSkinPowerAction({
+      mode: "devices",
+      currentActivityId: "-1",
+      selectedDeviceId: "39000010",
+      deviceCommands: [{ name: "Wake", functionId: 0 }],
+      deviceEntry: {
+        DeviceFeatures: [
+          {
+            __type: "PowerFeature",
+            PowerTypeId: 1,
+            PowerOnActions: [{ __type: "IRPressAction", IRCommandName: "Wake" }],
+            PowerOffActions: [],
+            PowerToggleActions: [],
+          },
+        ],
+      },
+    });
+    assert.deepEqual(action, {
+      kind: "device-power",
+      deviceId: "39000010",
+      command: "Wake",
+      functionId: 0,
+    });
+  });
+
+  it("ignores PowerFeature actions when PowerTypeId marks no power commands", () => {
+    for (const PowerTypeId of [0, 3]) {
+      const action = resolveSkinPowerAction({
+        mode: "devices",
+        currentActivityId: "-1",
+        selectedDeviceId: "39000010",
+        deviceCommands: [{ name: "Wake", functionId: 0 }],
+        deviceEntry: {
+          DeviceFeatures: [
+            {
+              __type: "PowerFeature",
+              PowerTypeId,
+              PowerOnActions: [{ __type: "IRPressAction", IRCommandName: "Wake" }],
+              PowerOffActions: [],
+              PowerToggleActions: [],
+            },
+          ],
+        },
+      });
+      assert.equal(action.kind, "inert");
+      assert.equal(action.reason, "no-power-command");
+    }
+  });
 });
 
 describe("offStateSendNote", () => {

@@ -195,8 +195,14 @@ describe("Switch 2 device model integration", () => {
       mode: "devices",
       selectedDeviceId: "39000010",
       deviceCommands: [{ name: "Wake", functionId: 0 }],
+      deviceEntry: entry,
     });
-    assert.equal(skinPower.kind, "inert");
+    assert.deepEqual(skinPower, {
+      kind: "device-power",
+      deviceId: "39000010",
+      command: "Wake",
+      functionId: 0,
+    });
 
     const fixes = fixItDevices(
       { "Id-": 500, Name: "Play Switch 2", Roles: [{ "DeviceId-": 39000010, __type: "PlayGameActivityRole", PowerOnOrder: 1 }] },

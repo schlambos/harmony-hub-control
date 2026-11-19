@@ -3586,9 +3586,12 @@ static int switch2_parse_hci_cc_status(const char *text) {
    Returns 0 only when the child exits 0 and any reported HCI Command Complete
    status is 0x00. */
 static int switch2_run_hcitool(char *const argv[], char *out, size_t outlen, int *hci_status) {
+    struct sigaction old_chld, default_chld;
+    int restore_chld = 0;
     int pipefd[2];
     pid_t pid;
     int status = 0;
+    int rc = -1;
     size_t used = 0;
     ssize_t n;
     if (out && outlen) out[0] = 0;
@@ -3597,11 +3600,20 @@ static int switch2_run_hcitool(char *const argv[], char *out, size_t outlen, int
         if (out && outlen) snprintf(out, outlen, "pipe failed: %s", strerror(errno));
         return -1;
     }
+    memset(&default_chld, 0, sizeof(default_chld));
+    default_chld.sa_handler = SIG_DFL;
+    sigemptyset(&default_chld.sa_mask);
+    if (sigaction(SIGCHLD, NULL, &old_chld) == 0 &&
+        sigaction(SIGCHLD, &default_chld, NULL) == 0) {
+        restore_chld = 1;
+    }
     pid = fork();
     if (pid < 0) {
+        int saved_errno = errno;
+        if (restore_chld) sigaction(SIGCHLD, &old_chld, NULL);
         close(pipefd[0]);
         close(pipefd[1]);
-        if (out && outlen) snprintf(out, outlen, "fork failed: %s", strerror(errno));
+        if (out && outlen) snprintf(out, outlen, "fork failed: %s", strerror(saved_errno));
         return -1;
     }
     if (pid == 0) {
@@ -3639,18 +3651,22 @@ static int switch2_run_hcitool(char *const argv[], char *out, size_t outlen, int
     while (waitpid(pid, &status, 0) < 0) {
         if (errno != EINTR) {
             if (out && outlen && !out[0]) snprintf(out, outlen, "waitpid failed: %s", strerror(errno));
-            return -1;
+            goto cleanup;
         }
     }
     if (!WIFEXITED(status) || WEXITSTATUS(status) != 0) {
-        return -1;
+        goto cleanup;
     }
     if (out && outlen) {
         int cc = switch2_parse_hci_cc_status(out);
         if (hci_status) *hci_status = cc;
-        if (cc > 0) return -1;
+        if (cc > 0) goto cleanup;
     }
-    return 0;
+    rc = 0;
+
+cleanup:
+    if (restore_chld) sigaction(SIGCHLD, &old_chld, NULL);
+    return rc;
 }
 
 static void switch2_sleep_ms(int ms) {
