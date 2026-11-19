@@ -754,11 +754,11 @@ check(
 );
 const updateStatus = await req(API, "/api/update-status");
 check(
-  "GET /api/update-status reports the same version and 9 binaries, read-only",
+  "GET /api/update-status reports the same version and 10 binaries, read-only",
   updateStatus.status === 200 && updateStatus.json?.version === version.json?.version &&
     JSON.stringify((updateStatus.json?.files ?? []).map((file) => file.name)) === JSON.stringify([
       "codex_webui", "codex_bthid_keyboard", "codex_bt_pair_agent", "codex_androidtv",
-      "codex_usbeth", "codex_hal_ltcp", "codex_hbus", "codex_portal", "codex_dhcpd",
+      "codex_webos", "codex_usbeth", "codex_hal_ltcp", "codex_hbus", "codex_portal", "codex_dhcpd",
     ]) &&
     (updateStatus.json?.files ?? []).every((file) =>
       typeof file.present === "boolean" && Number.isInteger(file.size)) &&

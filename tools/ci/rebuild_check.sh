@@ -120,7 +120,7 @@ fi
 
 echo "== built file against committed file"
 BUILT="codex_webui codex_hbus codex_bt_pair_agent codex_bthid_keyboard codex_hal_ltcp
-  codex_dhcpd codex_portal codex_usbeth codex_androidtv busybox-extra dropbearmulti"
+  codex_dhcpd codex_portal codex_usbeth codex_androidtv codex_webos busybox-extra dropbearmulti"
 #: a payload/bin binary the build doesn't write would otherwise go unchecked
 for path in payload/bin/*; do
   name=$(basename "$path")

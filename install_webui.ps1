@@ -296,6 +296,7 @@ $GateScriptSpecs = @(
     @("/data/codex/offline_egress_guard.sh", "755", "runtime", "scripts/offline_egress_guard.sh"),
     @("/data/codex/usb_eth_service.sh", "755", "runtime", "scripts/usb_eth_service.sh"),
     @("/data/codex/androidtv_service.sh", "755", "runtime", "scripts/androidtv_service.sh"),
+    @("/data/codex/webos_service.sh", "755", "runtime", "scripts/webos_service.sh"),
     @("/data/codex/recovery_ap.sh", "755", "runtime", "scripts/recovery_ap.sh"),
     @("/pkg/codexactivity/codexactivity.lua", "644", "plugin", "activity/codexactivity.lua"),
     @("/pkg/codexmqtt/codexmqtt.lua", "644", "plugin", "mqtt/codexmqtt.lua")
@@ -345,7 +346,7 @@ USB_ETH_CONF=/data/codex/usb_eth.conf
 WIFI_WAIT=${CODEX_WIFI_WAIT:-15}
 
 BOOTSTRAP_ALWAYS="/etc/init.d/rcS.local /opt/luaworks/tasks/connectserver/netservicestarter.lua"
-BOOTSTRAP_IF_PRESENT="/data/codex/init.sh /data/codex/offline_egress_guard.sh /data/codex/usb_eth_service.sh /data/codex/androidtv_service.sh /data/codex/recovery_ap.sh /pkg/codexactivity/codexactivity.lua /pkg/codexmqtt/codexmqtt.lua"
+BOOTSTRAP_IF_PRESENT="/data/codex/init.sh /data/codex/offline_egress_guard.sh /data/codex/usb_eth_service.sh /data/codex/androidtv_service.sh /data/codex/webos_service.sh /data/codex/recovery_ap.sh /pkg/codexactivity/codexactivity.lua /pkg/codexmqtt/codexmqtt.lua"
 
 die() { echo "error=$*"; exit 1; }
 
@@ -503,6 +504,8 @@ report_off() {
   fi
   if echo "$_ps" | grep '[c]odex_bt_pair_agent' >/dev/null 2>&1 ||
      echo "$_ps" | grep '[c]odex_bthid_keyboard' >/dev/null 2>&1 ||
+     echo "$_ps" | grep '[c]odex_webos' >/dev/null 2>&1 ||
+     echo "$_ps" | grep '[w]ebos_service.sh' >/dev/null 2>&1 ||
      echo "$_ps" | grep '[r]ecovery_ap.sh' >/dev/null 2>&1 ||
      echo "$_ps" | grep '[c]odex_portal' >/dev/null 2>&1 ||
      echo "$_ps" | grep '[c]odex_dhcpd' >/dev/null 2>&1; then
@@ -1536,6 +1539,7 @@ function Build-Inventory() {
     Add-Candidate (New-Candidate "/data/codex/offline_egress_guard.sh" "755" "runtime" -Local (Join-Path $Payload "scripts/offline_egress_guard.sh"))
     Add-Candidate (New-Candidate "/data/codex/recovery_ap.sh" "755" "runtime" -Local (Join-Path $Payload "scripts/recovery_ap.sh"))
     Add-Candidate (New-Candidate "/data/codex/androidtv_service.sh" "755" "runtime" -Local (Join-Path $Payload "scripts/androidtv_service.sh"))
+    Add-Candidate (New-Candidate "/data/codex/webos_service.sh" "755" "runtime" -Local (Join-Path $Payload "scripts/webos_service.sh"))
     Add-Candidate (New-Candidate "/data/codex/androidtv-input-presets.json" "644" "runtime" -Local (Join-Path $Payload "androidtv/input-presets.json"))
     Add-Candidate (New-Candidate "/data/codex/usb_eth_service.sh" "755" "runtime" -Local (Join-Path $Payload "scripts/usb_eth_service.sh"))
     Add-Candidate (New-Candidate "/data/codex/modules/usb-net/r8152.ko" "644" "runtime" -Local (Join-Path $Payload "modules/usb-net/r8152.ko"))
@@ -2537,7 +2541,7 @@ function Invoke-PostWiring() {
         "ln -sf dropbearmulti /data/codex/bin/dropbear; " +
         "ln -sf dropbearmulti /data/codex/bin/dropbearkey; " +
         "chmod 755 $binChmod /data/codex/init.sh /data/codex/offline_egress_guard.sh " +
-        "/data/codex/recovery_ap.sh /data/codex/androidtv_service.sh /data/codex/usb_eth_service.sh /usr/sbin/dropbear " +
+        "/data/codex/recovery_ap.sh /data/codex/androidtv_service.sh /data/codex/webos_service.sh /data/codex/usb_eth_service.sh /usr/sbin/dropbear " +
         "/usr/sbin/dropbearkey /etc/init.d/rcS.local; " +
         "chmod 644 /data/codex/modules/usb-net/r8152.ko /data/codex/modules/usb-net/usbnet.ko /data/codex/modules/usb-net/asix.ko /data/codex/modules/usb-net/cdc_ether.ko /data/codex/modules/usb-net/cdc_ncm.ko /data/codex/modules/usb-net/ax88179_178a.ko /data/codex/modules/usb-net/README.md 2>/dev/null || true; " +
         "chmod 600 /data/codexmqtt/config.json 2>/dev/null || true; " +
@@ -2565,6 +2569,8 @@ function Start-Services() {
         "/data/codex/bin/codex_bthid_keyboard >> /cache/codex-init.log 2>&1 & " +
         "killall codex_androidtv 2>/dev/null || true; " +
         "if [ -x /data/codex/androidtv_service.sh ]; then /data/codex/androidtv_service.sh >/dev/null 2>&1 & fi; " +
+        "killall codex_webos 2>/dev/null || true; " +
+        "if [ -x /data/codex/webos_service.sh ]; then /data/codex/webos_service.sh >/dev/null 2>&1 & fi; " +
         "sleep 1; " +
         "/data/codex/bin/codex_hbus $(Remote-Quote $ResolvedHubId) harmony.automation?discover '{""gatewayType"":""codexactivity""}' >> /cache/codex-init.log 2>&1 || true; " +
         "/data/codex/bin/codex_hbus $(Remote-Quote $ResolvedHubId) harmony.automation?discover '{""gatewayType"":""codexmqtt""}' >> /cache/codex-init.log 2>&1 || true; " +
