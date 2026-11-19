@@ -43,6 +43,46 @@ static void webhook(const char *body) {
     free(req.body);
 }
 
+/* Sends one unauthenticated POST to handle_client over a real loopback TCP
+   connection (the Harmony engine's path) and prints the status line. The
+   smoke test builds this with WEBUI_AUTH_CONFIG naming a file that turns
+   sign-in on. */
+static void loopback_post(const char *path, const char *body) {
+    struct sockaddr_in addr;
+    socklen_t len = sizeof(addr);
+    int listener, client, server;
+    char request[1024], buf[1024], *nl;
+    ssize_t got;
+    memset(&addr, 0, sizeof(addr));
+    addr.sin_family = AF_INET;
+    addr.sin_addr.s_addr = htonl(INADDR_LOOPBACK);
+    listener = socket(AF_INET, SOCK_STREAM, 0);
+    if (listener < 0 || bind(listener, (struct sockaddr *)&addr, sizeof(addr)) != 0 ||
+            listen(listener, 1) != 0 || getsockname(listener, (struct sockaddr *)&addr, &len) != 0) {
+        printf("loopback %s setup-failed\n", path);
+        return;
+    }
+    client = socket(AF_INET, SOCK_STREAM, 0);
+    if (client < 0 || connect(client, (struct sockaddr *)&addr, sizeof(addr)) != 0) {
+        printf("loopback %s setup-failed\n", path);
+        return;
+    }
+    server = accept(listener, NULL, NULL);
+    snprintf(request, sizeof(request),
+        "POST %s HTTP/1.1\r\nHost: 127.0.0.1:8080\r\nContent-Type: application/json\r\n"
+        "Content-Length: %lu\r\n\r\n%s", path, (unsigned long)strlen(body), body);
+    send_all(client, request, strlen(request));
+    handle_client(server);
+    close(server);
+    got = read(client, buf, sizeof(buf) - 1);
+    buf[got > 0 ? got : 0] = 0;
+    nl = strchr(buf, '\r');
+    if (nl) *nl = 0;
+    printf("loopback %s %s\n", path, buf);
+    close(client);
+    close(listener);
+}
+
 int main(int argc, char **argv) {
     static struct bt_inventory inv;
     char *set;
@@ -52,6 +92,11 @@ int main(int argc, char **argv) {
         webhook("{\"device\":\"bt_1730000000_42\",\"command\":\"tv home\"}");
         webhook("{\"device\":\"../etc\",\"command\":\"tvhome\"}");
         webhook("{\"device\":\"bt_1730000000_42\",\"command\":\"tvhome\"}");
+        return 0;
+    }
+    if (argc > 1 && strcmp(argv[1], "auth") == 0) {
+        loopback_post("/api/bt-webhook", "{\"device\":\"bt_1730000000_42\",\"command\":\"tvhome\"}");
+        loopback_post("/api/bt-harmony-device", "{}");
         return 0;
     }
     if (argc > 1 && strcmp(argv[1], "set") == 0) {

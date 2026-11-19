@@ -59,6 +59,7 @@ release|python3 -m unittest discover -s tools/releases -p 'test_*.py'
 docker-manager|python3 -m unittest discover -s docker/tests
 ha-inventory|python3 tools/test_ha_device_inventory.py
 bt-hid-smoke|sh tools/bluetooth_hid_smoke.sh
+bt-harmony-smoke|python3 tools/bt_harmony_webui_smoke.py
 hub-root-tests|PYTHONPATH=tools/hub-root python3 -m unittest discover -s tools/hub-root/tests
 hwreg-offline|PYTHONPATH=tools/hw-regression python3 -m unittest discover -s tools/hw-regression/tests
 catalog-callback|PYTHONPATH=. python3 tools/catalog/test_callback.py

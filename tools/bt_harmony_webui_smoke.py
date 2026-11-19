@@ -82,7 +82,11 @@ def main():
     cc = shlex.split(sys.argv[1] if len(sys.argv) > 1 else os.environ.get("CC", "cc"))
     with tempfile.TemporaryDirectory(prefix="codex-bt-harmony.") as work:
         exe = os.path.join(work, "harness")
+        auth_conf = os.path.join(work, "webui_auth.conf")
+        with open(auth_conf, "w") as f:
+            f.write("enabled=1\nusername=admin\npassword=secret123\n")
         subprocess.run(cc + ["-std=gnu99", "-O1", "-w", "-I", os.path.join(ROOT, "payload/source"),
+                             '-DWEBUI_AUTH_CONFIG="%s"' % auth_conf,
                              "-o", exe, os.path.join(ROOT, "tools/bt_harmony_webui_harness.c")],
                        check=True)
         out = subprocess.run([exe] + list(EXPECTED) + REFUSED, capture_output=True,
@@ -103,6 +107,16 @@ def main():
         check(hooks == ["webhook HTTP/1.1 400 Bad Request"] * 3 +
               ["webhook HTTP/1.1 404 Not Found"],
               "webhook answers: %r" % hooks)
+
+        # With Web UI sign-in on, the Harmony engine still reaches
+        # /api/bt-webhook from 127.0.0.1 without credentials (it stops at
+        # "no Harmony device" here: the host has no saved-device store), as
+        # it does /api/switch2/cmd and /api/webos/cmd. Nothing else is opened.
+        auth = subprocess.run([exe, "auth"], capture_output=True, text=True,
+                              check=True).stdout.splitlines()
+        check(auth == ["loopback /api/bt-webhook HTTP/1.1 404 Not Found",
+                       "loopback /api/bt-harmony-device HTTP/1.1 401 Unauthorized"],
+              "sign-in answers: %r" % auth)
 
         text = subprocess.run([exe, "set"], capture_output=True, text=True,
                               check=True).stdout

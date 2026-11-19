@@ -987,7 +987,9 @@ The protocol posts each press to `http://127.0.0.1:8080/api/bt-webhook`
 "command":"<key name>"}`. The hub answers at once, then reconnects the
 target if needed and sends the key, one call at a time. Like the Home
 Assistant devices, a press is sent once; holding a button does not repeat
-it.
+it. With Web UI sign-in on, the engine's calls from 127.0.0.1 need no
+credentials (as for `/api/switch2/cmd` and `/api/webos/cmd`); calls from
+anywhere else do.
 
 Publishing a device that is already on Harmony again (`publish = "1"`, or
 **Update Harmony device** on the Bluetooth page) brings it up to the hub's

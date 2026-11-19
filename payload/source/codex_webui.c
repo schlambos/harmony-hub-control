@@ -59,7 +59,9 @@
 #ifndef SWITCH2_BURST_MS
 #define SWITCH2_BURST_MS 2000
 #endif
+#ifndef WEBUI_AUTH_CONFIG /* tools/bt_harmony_webui_harness.c points it elsewhere */
 #define WEBUI_AUTH_CONFIG "/data/codex/webui_auth.conf"
+#endif
 #define DEVICE_LIST "/data/resources/DeviceList.json"
 #define FUNCTION_LIST "/data/resources/FunctionList.json"
 #define PROTOCOL_LIST "/data/resources/ProtocolList.json"
@@ -13655,18 +13657,21 @@ static void render_bt_webhook_json(int fd, const struct request *req) {
 
 static void handle_client(int client) {
     struct request req;
-    int switch2_loopback, webos_loopback;
+    int switch2_loopback, webos_loopback, bt_loopback;
     if (read_request(client, &req) != 0) {
         free_request(&req);
         return;
     }
-    /* Local Harmony engine (ipmanager.lua on 127.0.0.1) posts Switch 2 wake and
-       LG webOS commands without Web UI Basic Auth headers. */
+    /* Local Harmony engine (ipmanager.lua on 127.0.0.1) posts Switch 2 wake,
+       LG webOS and hub Bluetooth keyboard commands without Web UI Basic Auth
+       headers. */
     switch2_loopback = (strcmp(req.method, "POST") == 0 &&
         strcmp(req.path, "/api/switch2/cmd") == 0 && peer_is_loopback(client));
     webos_loopback = (strcmp(req.method, "POST") == 0 &&
         strcmp(req.path, "/api/webos/cmd") == 0 && peer_is_loopback(client));
-    if (!switch2_loopback && !webos_loopback && !webui_auth_ok(&req)) {
+    bt_loopback = (strcmp(req.method, "POST") == 0 &&
+        strcmp(req.path, "/api/bt-webhook") == 0 && peer_is_loopback(client));
+    if (!switch2_loopback && !webos_loopback && !bt_loopback && !webui_auth_ok(&req)) {
         send_auth_required(client);
         free_request(&req);
         return;
