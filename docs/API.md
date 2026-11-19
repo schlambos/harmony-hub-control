@@ -501,7 +501,7 @@ and same-origin JSON (`Origin`/`Host` + `application/json`). Pairing
 | POST | `/api/webos/pair-start` | `{"id":"webos1a2b3c4d","host":"192.168.1.40","name":"Living Room LG","mac":"..."}` | Starts SSAP `register` pairing (`wss:3001`, fallback `ws:3000`); TV shows Accept/Deny prompt |
 | GET | `/api/webos/pair-status` | | `state`: `idle`, `connecting`, `prompt`, `paired`, `denied`, `failed` (+ `tvId`, `paired`, `error`) |
 | POST | `/api/webos/pair-cancel` | `{}` | Cancels an in-flight pairing |
-| POST | `/api/webos/refresh` | `{"id":"webos1a2b3c4d"}` | Re-queries `getExternalInputList`, `listApps`, and `getVolume` on a connected TV |
+| POST | `/api/webos/refresh` | `{"id":"webos1a2b3c4d"}` | Re-queries `getExternalInputList`, `listLaunchPoints`, and `getVolume` on a connected TV |
 | POST | `/api/webos/forget` | `{"id":"webos1a2b3c4d"}` | Removes a TV and erases its stored `client-key` |
 | POST | `/api/webos/cmd` | `{"device":"webos1a2b3c4d","command":"VolumeUp"}` | Sends a command (loopback allowed without Web UI auth; non-loopback requires auth + same-origin JSON) |
 | POST | `/api/webos/devices` | `{"devices":[{"entity":"webos1a2b3c4d","name":"Living Room LG","host":"192.168.1.40","mac":"AA:BB:CC:11:22:33","paired":true}],"dryRun":false}` | Replaces the hub's native LG webOS TV device set (`CommitWebOsDevices`); refuses plaintext `clientKey`/`client-key` |

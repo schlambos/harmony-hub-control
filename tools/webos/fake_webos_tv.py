@@ -80,6 +80,37 @@ DEFAULT_APPS = [
     {"id": "com.webos.app.internal", "title": "Internal Service", "visible": False, "systemApp": True},
 ]
 
+# Real webOS 24 (OLED65C4) listApps replies run ~170 KB: 139 apps, most hidden
+# system apps, each with ~40 metadata keys. Pad ours past codex_webos's 128 KB
+# frame cap so a daemon that asks for listApps fails like it did on hardware.
+HIDDEN_SYSTEM_APPS = [
+    {
+        "id": f"com.webos.app.system{i:03d}",
+        "title": f"System Service {i}",
+        "visible": False,
+        "systemApp": True,
+        "folderPath": f"/usr/palm/applications/com.webos.app.system{i:03d}",
+        "requiredPermissions": ["all"] * 8,
+        "description": "x" * 1200,
+    }
+    for i in range(130)
+]
+LIST_APPS_REPLY = DEFAULT_APPS + HIDDEN_SYSTEM_APPS
+# listLaunchPoints only carries home-screen tiles (no hidden apps, no
+# "visible" key) and adds launchPointId plus nested params.
+LAUNCH_POINTS = [
+    {
+        "id": a["id"],
+        "launchPointId": a["id"] + "_default",
+        "title": a["title"],
+        "systemApp": a["systemApp"],
+        "params": {},
+    }
+    for a in DEFAULT_APPS
+    if a.get("visible")
+]
+OVERSIZED_PUSH_BYTES = 200 * 1024
+
 
 def log(event: str, **kw) -> None:
     # Never allow a client-key to appear in logs.
@@ -440,11 +471,12 @@ class FakeWebOSTV:
             "ssap://com.webos.applicationManager/listApps",
             "ssap://com.webos.applicationManager/listLaunchPoints",
         ):
-            log("list_apps", count=len(DEFAULT_APPS))
             if uri.endswith("listLaunchPoints"):
-                ok({"launchPoints": DEFAULT_APPS})
+                log("list_launch_points", count=len(LAUNCH_POINTS))
+                ok({"launchPoints": LAUNCH_POINTS})
             else:
-                ok({"apps": DEFAULT_APPS})
+                log("list_apps", count=len(LIST_APPS_REPLY))
+                ok({"apps": LIST_APPS_REPLY})
             return True
         if uri in (
             "ssap://com.webos.applicationManager/launch",
@@ -545,6 +577,17 @@ class FakeWebOSTV:
                                 "payload": {"client-key": self._client_key},
                             },
                         )
+                        if self.current_mode() == "oversized":
+                            # Unsolicited reply too big for codex_webos to buffer.
+                            self._send_json(
+                                sock,
+                                {
+                                    "type": "response",
+                                    "id": "unsolicited",
+                                    "payload": {"returnValue": True, "blob": "x" * OVERSIZED_PUSH_BYTES},
+                                },
+                            )
+                            log("oversized_push", bytes=OVERSIZED_PUSH_BYTES)
                         continue
                     # Unpaired (or mismatched key): show TV prompt.
                     log("prompt", scheme=scheme)
@@ -681,7 +724,7 @@ def main() -> int:
     ap.add_argument("--host", default="127.0.0.1")
     ap.add_argument("--ws-port", type=int, default=3000, help="ws port (0=ephemeral, -1=disabled)")
     ap.add_argument("--wss-port", type=int, default=3001, help="wss port (0=ephemeral, -1=disabled)")
-    ap.add_argument("--mode-file", default=None, help="file containing mode: accept|deny|offline|drop|no-pointer")
+    ap.add_argument("--mode-file", default=None, help="file containing mode: accept|deny|offline|drop|no-pointer|oversized")
     ap.add_argument("--prompt-delay", type=float, default=0.05)
     args = ap.parse_args()
 

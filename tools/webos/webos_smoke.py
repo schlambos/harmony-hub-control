@@ -217,6 +217,16 @@ def main() -> int:
         tv = wait_tv(daemon_port, tv_id, connected=True, pointer=True)
         assert tv["paired"] is True and tv["mac"] == "AA:BB:CC:11:22:33"
 
+        # 5b. Apps come from listLaunchPoints; listApps (170 KB on a real
+        # webOS 24 TV, past the 128 KB frame cap) is never asked for, and the
+        # session stays up instead of reconnecting in a loop.
+        fake.wait_for("list_launch_points")
+        time.sleep(1.5)
+        tv = call(daemon_port, "/status")["tvs"][0]
+        assert tv["connected"] and tv["connects"] == 1, tv
+        assert sorted(a["title"] for a in tv["apps"]) == ["Disney+", "Netflix", "Plex", "Prime Video", "YouTube"], tv["apps"]
+        assert not any(e.get("event") == "list_apps" for e in fake.events), "daemon asked for listApps"
+
         # 6. Full baseline command set
         m = fake.mark()
         assert call(daemon_port, "/cmd", {"device": tv_id, "command": "VolumeUp"})["ok"]
@@ -301,6 +311,24 @@ def main() -> int:
         assert call(daemon_port, "/cmd", {"device": tv_id, "command": "VolumeUp"})["ok"]
         ptr_err = call(daemon_port, "/cmd", {"device": tv_id, "command": "DirectionUp"})
         assert not ptr_err["ok"] and "pointer" in ptr_err["error"].lower(), ptr_err
+
+        # 10b. An oversized frame from the TV is dropped; the session survives
+        set_mode("oversized")
+        daemon.terminate()
+        daemon.wait(timeout=3)
+        m = fake.mark()
+        daemon = start_daemon()
+        wait_tv(daemon_port, tv_id, connected=True, pointer=True)
+        fake.wait_for("oversized_push", since=m)
+        time.sleep(1.5)
+        tv = call(daemon_port, "/status")["tvs"][0]
+        assert tv["connected"] and tv["connects"] == 1, tv
+        m = fake.mark()
+        assert call(daemon_port, "/cmd", {"device": tv_id, "command": "VolumeUp"})["ok"]
+        fake.wait_for("volume", since=m, action="up")
+        with open(log_path, "r", encoding="utf-8") as f:
+            assert "dropped an oversized WebSocket frame" in f.read()
+        set_mode("accept")
 
         # 11. Security check: client-key NEVER in any API response or log
         api_text = (

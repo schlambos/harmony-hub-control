@@ -65,6 +65,8 @@
 #define LOG_CAP (64 * 1024)
 #define WS_RX_INIT 16384
 #define WS_RX_MAX (128 * 1024)
+/* Receive buffer cap: one maximal frame plus the partial frame/TLS record after it. */
+#define WS_RX_BUF_MAX (WS_RX_MAX * 2)
 #define WS_TX_MAX 16384
 #define WS_PING_MS 20000
 #define WS_QUIET_MS 50000
@@ -550,6 +552,7 @@ struct ws_conn {
 	unsigned char *frag;
 	size_t fragn, fragcap;
 	int frag_op;
+	uint64_t skip; /* bytes still to discard from an oversized frame */
 	char error[128];
 };
 
@@ -563,6 +566,7 @@ static void ws_close(struct ws_conn *c, const char *why) {
 	c->connecting = c->transport_up = c->ws_up = 0;
 	c->txn = c->rxn = c->fragn = 0;
 	c->frag_op = 0;
+	c->skip = 0;
 	free(c->rx); c->rx = NULL; c->rxcap = 0;
 	free(c->frag); c->frag = NULL; c->fragcap = 0;
 	snprintf(c->error, sizeof c->error, "%s", why ? why : "");
@@ -631,6 +635,7 @@ static int ws_open(struct ws_conn *c, const char *host, int port, const char *pa
 	if (!c->rx) { close(fd); ws_close(c, "out of memory"); return -1; }
 	c->rxcap = WS_RX_INIT;
 	c->rxn = 0;
+	c->skip = 0;
 	c->fd = fd;
 	c->use_tls = use_tls;
 	c->connecting = 1;
@@ -683,7 +688,7 @@ static int ws_rx_ensure(struct ws_conn *c, size_t extra) {
 	if (c->rxn + extra <= c->rxcap) return 0;
 	size_t ncap = c->rxcap ? c->rxcap * 2 : WS_RX_INIT;
 	while (ncap < c->rxn + extra) ncap *= 2;
-	if (ncap > WS_RX_MAX) return -1;
+	if (ncap > WS_RX_BUF_MAX) return -1;
 	unsigned char *nb = realloc(c->rx, ncap);
 	if (!nb) return -1;
 	c->rx = nb;
@@ -740,6 +745,13 @@ static int ws_process_rx(struct ws_conn *c, ws_up_cb on_up, ws_text_cb on_text, 
 
 	/* Parse complete RFC 6455 frames. */
 	for (;;) {
+		if (c->skip) {
+			size_t drop = (uint64_t)c->rxn < c->skip ? c->rxn : (size_t)c->skip;
+			memmove(c->rx, c->rx + drop, c->rxn - drop);
+			c->rxn -= drop;
+			c->skip -= drop;
+			if (c->skip) return 0;
+		}
 		if (c->rxn < 2) return 0;
 		unsigned char b0 = c->rx[0], b1 = c->rx[1];
 		int fin = (b0 & 0x80) != 0;
@@ -758,7 +770,15 @@ static int ws_process_rx(struct ws_conn *c, ws_up_cb on_up, ws_text_cb on_text, 
 			hlen = 10;
 		}
 		if (masked) hlen += 4;
-		if (plen > WS_RX_MAX) { ws_close(c, "oversized WebSocket frame"); return -1; }
+		if (plen > WS_RX_MAX) {
+			/* Too big to buffer: discard it as it streams in and keep the
+			 * session (one large reply must not cause a reconnect loop). A
+			 * fragmented message it belongs to is dropped as a whole. */
+			logmsg("dropped an oversized WebSocket frame (%llu bytes)", (unsigned long long)plen);
+			if (opcode == 0x0 || (opcode == 0x1 && !fin)) { c->fragn = 0; c->frag_op = 0; }
+			c->skip = (uint64_t)hlen + plen;
+			continue;
+		}
 		if (c->rxn < hlen + (size_t)plen) return 0;
 
 		unsigned char *payload = malloc((size_t)plen + 1);
@@ -791,9 +811,12 @@ static int ws_process_rx(struct ws_conn *c, ws_up_cb on_up, ws_text_cb on_text, 
 				if (opcode == 0x1) { c->fragn = 0; c->frag_op = 0x1; }
 				if (c->frag_op == 0x1) {
 					if (c->fragn + (size_t)plen + 1 > WS_RX_MAX) {
+						/* Drop the whole message; later fragments are ignored. */
+						logmsg("dropped an oversized fragmented WebSocket message");
 						free(payload);
-						ws_close(c, "oversized fragmented frame");
-						return -1;
+						c->fragn = 0;
+						c->frag_op = 0;
+						continue;
 					}
 					if (c->fragn + (size_t)plen + 1 > c->fragcap) {
 						size_t nc = c->fragcap ? c->fragcap * 2 : 16384;
@@ -1326,7 +1349,9 @@ static void tv_request_metadata(struct tv *t) {
 	tv_next_req(t, "inp", t->req_inputs);
 	ssap_send_request(t->c, t->req_inputs, "ssap://tv/getExternalInputList", NULL);
 	tv_next_req(t, "app", t->req_apps);
-	ssap_send_request(t->c, t->req_apps, "ssap://com.webos.applicationManager/listApps", NULL);
+	/* Launch points are the home-screen apps (~28 KB on webOS 24); listApps
+	 * also returns every hidden system app and outgrows WS_RX_MAX (170 KB). */
+	ssap_send_request(t->c, t->req_apps, "ssap://com.webos.applicationManager/listLaunchPoints", NULL);
 	if (!t->ptr || t->ptr->fd < 0) {
 		tv_next_req(t, "ptr", t->req_ptr);
 		ssap_send_request(t->c, t->req_ptr, "ssap://com.webos.service.networkinput/getPointerInputSocket", NULL);

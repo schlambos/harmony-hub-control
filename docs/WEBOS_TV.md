@@ -58,7 +58,7 @@ HA-bridged LG devices feel identical in activities:
 - **Power:** `PowerOn` (Wake-on-LAN, only emitted when MAC is configured), `PowerOff` (`ssap://system/turnOff`), `PowerToggle`
 - **Volume:** `VolumeUp`, `VolumeDown`, `Mute` (toggle via `getVolume` + `setMute`)
 - **Inputs:** `Input HDMI 1`–`Input HDMI 4` (stable `HDMI_1`–`HDMI_4` port IDs via `tv/switchInput`, never fragile CEC labels)
-- **Apps:** `App <Name>` commands discovered via `com.webos.applicationManager/listApps` and launched via `com.webos.applicationManager/launch`
+- **Apps:** `App <Name>` commands for the TV's home-screen apps, discovered via `com.webos.applicationManager/listLaunchPoints` and launched via `com.webos.applicationManager/launch` (`listApps` is not used: on webOS 24 it also lists every hidden system app and runs ~170 KB)
 - **Transport:** `Play`, `Pause`, `PlayPause`, `Stop` (`ssap://media.controls/*`)
 - **Navigation & remote keys (via pointer-input socket):** `DirectionUp`, `DirectionDown`, `DirectionLeft`, `DirectionRight`, `Select`, `Back`, `Home`, `Exit`, `Menu`, `Guide`, `Info`, `ChannelUp`, `ChannelDown`, `Red`, `Green`, `Yellow`, `Blue`, `0`–`9`, `Dash`, `Record`
 
