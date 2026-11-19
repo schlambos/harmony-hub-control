@@ -2254,6 +2254,72 @@ local SWITCH2_FAMILY = {
   power = {on = "Wake", off = nil}
 }
 
+-- Native LG webOS TVs on the LAN (codex_webos). Mirrors the Android TV
+-- TransportType 64 local-HTTP pattern: the engine posts {"device":"{d}","command":"{c}"}
+-- to codex_webos on 127.0.0.1:8096. Pairing client-keys live ONLY in codex_webos's
+-- private 0600 storage and are NEVER stored in DeviceList.json (only a boolean
+-- paired/keySlot status is recorded). Power honesty: when a WoL MAC is configured,
+-- PowerOn (WoL) + PowerOff (turnOff) wire discrete PowerFeature; without a MAC,
+-- no fake PowerOn is emitted and PowerFeature uses PowerToggle.
+local WEBOS_INPUTS = {
+  {name = "HDMI 1", command = "Input HDMI 1"},
+  {name = "HDMI 2", command = "Input HDMI 2"},
+  {name = "HDMI 3", command = "Input HDMI 3"},
+  {name = "HDMI 4", command = "Input HDMI 4"}
+}
+local WEBOS_BASE_COMMAND_NAMES = {
+  "PowerOff", "PowerToggle",
+  "VolumeUp", "VolumeDown", "Mute",
+  "Play", "Pause", "PlayPause", "Stop",
+  "Back",
+  "DirectionUp", "DirectionDown", "DirectionLeft", "DirectionRight", "Select",
+  "Menu", "Home", "Guide", "Info", "Exit",
+  "ChannelUp", "ChannelDown",
+  "Red", "Green", "Yellow", "Blue",
+  "0", "1", "2", "3", "4", "5", "6", "7", "8", "9",
+  "Dash", "Record",
+  "Input HDMI 1", "Input HDMI 2", "Input HDMI 3", "Input HDMI 4"
+}
+local WEBOS_FAMILY = {
+  label = "LG webOS TV", tag = "melodious-webos-", protocolName = "Melodious LG webOS TV",
+  defaultManufacturer = "LG", defaultModel = "webOS TV",
+  deviceType = 1, typeName = "Television", icon = 1,
+  idPattern = "^webos[0-9a-f]+$", idHint = "a webOS TV id such as webos1a2b3c4d",
+  webhook = "http://127.0.0.1:8096/cmd",
+  commandNames = WEBOS_BASE_COMMAND_NAMES, inputs = WEBOS_INPUTS, webos = true
+}
+
+-- Strict IPv4 validator -> canonical dotted-quad string, or nil.
+local function webosHostFrom(value)
+  if type(value) ~= "string" then
+    return nil
+  end
+  local trimmed = string.match(value, "^%s*(.-)%s*$")
+  local a, b, c, d = string.match(trimmed, "^(%d+)%.(%d+)%.(%d+)%.(%d+)$")
+  if not a then
+    return nil
+  end
+  local na, nb, nc, nd = tonumber(a), tonumber(b), tonumber(c), tonumber(d)
+  if not na or na > 255 or nb > 255 or nc > 255 or nd > 255 then
+    return nil
+  end
+  return string.format("%d.%d.%d.%d", na, nb, nc, nd)
+end
+
+-- Normalize a webOS HDMI input command ("Input HDMI 1".."Input HDMI 16", or "InputHdmi1".."InputHdmi16").
+local function webosInputCommand(name)
+  if type(name) ~= "string" then
+    return nil
+  end
+  local trimmed = string.match(name, "^%s*(.-)%s*$")
+  local n = tonumber(string.match(string.lower(trimmed), "^input%s+hdmi%s+([1-9]%d?)$")) or
+            tonumber(string.match(string.lower(trimmed), "^inputhdmi([1-9]%d?)$"))
+  if n and n >= 1 and n <= 16 then
+    return "Input HDMI " .. n
+  end
+  return nil
+end
+
 -- Strict 6-byte Bluetooth MAC validator -> canonical "AA:BB:CC:DD:EE:FF".
 -- Accepts colon-separated, dash-separated, or 12 bare hex digits; rejects
 -- non-hex, mixed separators, all-00 and all-FF.
@@ -2412,6 +2478,71 @@ local function androidTvInputsFrom(raw, label)
   return inputs
 end
 
+local function webosInputsFrom(raw, label)
+  if raw == nil or raw == json.null then
+    return nil
+  end
+  local list = haList(raw)
+  if not list or #list > MAX_INPUTS then
+    return nil, label .. ": inputs must list at most " .. MAX_INPUTS .. " inputs"
+  end
+  local inputs, names, cmds = {}, {}, {}
+  for i, input in ipairs(list) do
+    local name = type(input) == "table" and haLabel(input.name, 64)
+    if not name then
+      return nil, label .. ": input names must be 1-64 characters without quotes or backslashes"
+    end
+    if names[string.lower(name)] then
+      return nil, label .. ": input " .. name .. " is listed twice"
+    end
+    names[string.lower(name)] = true
+    local command = webosInputCommand(input.command)
+    if not command then
+      return nil, label .. ": input " .. name .. " needs a webOS HDMI command (Input HDMI 1-16)"
+    end
+    if cmds[command] then
+      return nil, label .. ": two inputs use " .. command
+    end
+    cmds[command] = true
+    inputs[i] = {name = name, command = command}
+  end
+  return inputs
+end
+
+local function webosAppsFrom(raw, label)
+  if raw == nil or raw == json.null then
+    return nil
+  end
+  local list = haList(raw)
+  if not list or #list > 48 then
+    return nil, label .. ": apps must list at most 48 apps"
+  end
+  local apps, seen = {}, {}
+  for i, item in ipairs(list) do
+    if type(item) ~= "table" then
+      return nil, label .. ": app " .. i .. " must be an object"
+    end
+    local name = haLabel(item.name, 48)
+    if not name or not string.match(name, "^App [%w][%w _%.%+%-]*$") then
+      return nil, label .. ": app " .. i .. " needs a name like 'App Netflix'"
+    end
+    if seen[string.lower(name)] then
+      return nil, label .. ": app " .. name .. " is listed twice"
+    end
+    seen[string.lower(name)] = true
+    local value = name
+    if item.id ~= nil and item.id ~= json.null and item.id ~= "" then
+      local aid = haValue(item.id, 90)
+      if not aid then
+        return nil, label .. ": app " .. name .. " has an invalid app id"
+      end
+      value = "app:" .. aid
+    end
+    apps[i] = {name = name, value = value}
+  end
+  return apps
+end
+
 local function haDeviceSpecFrom(raw, index, family)
   family = family or HA_FAMILY
   local label = "device " .. index
@@ -2502,6 +2633,54 @@ local function haDeviceSpecFrom(raw, index, family)
       if not spec.pid then
         return nil, label .. ": pid must be 2 hex bytes in wire order (e.g. 66 20, 67 20, or 69 20)"
       end
+    end
+    if family.webos then
+      if raw.clientKey ~= nil or raw.client_key ~= nil or raw["client-key"] ~= nil then
+        return nil, label .. ": client-key must never be stored in hub device config"
+      end
+      spec.host = webosHostFrom(raw.host)
+      if not spec.host then
+        return nil, label .. ": host must be a valid IPv4 address (e.g. 192.168.1.40)"
+      end
+      if raw.mac ~= nil and raw.mac ~= json.null and raw.mac ~= "" then
+        spec.mac = switch2MacFrom(raw.mac)
+        if not spec.mac then
+          return nil, label .. ": mac must be a valid 6-byte MAC address (e.g. AA:BB:CC:11:22:33)"
+        end
+      else
+        spec.mac = ""
+      end
+      if raw.paired ~= nil and raw.paired ~= json.null and type(raw.paired) ~= "boolean" then
+        return nil, label .. ": paired must be true or false"
+      end
+      spec.paired = raw.paired == true
+      local inputs, inputsError = webosInputsFrom(raw.inputs, label)
+      if inputsError then
+        return nil, inputsError
+      end
+      spec.inputs = inputs
+      local apps, appsError = webosAppsFrom(raw.apps, label)
+      if appsError then
+        return nil, appsError
+      end
+      spec.apps = apps
+      if raw.inputDelay ~= nil and raw.inputDelay ~= json.null then
+        local delay = tonumber(raw.inputDelay)
+        if not delay or delay < 0 or delay > 60000 or delay % 1 ~= 0 then
+          return nil, label .. ": inputDelay must be 0-60000 ms"
+        end
+        spec.inputDelay = delay
+      end
+      if spec.mac ~= "" then
+        spec.commands[#spec.commands + 1] = {name = "PowerOn", value = "PowerOn"}
+        spec.power = {type = 1, on = "PowerOn", off = "PowerOff"}
+      else
+        spec.power = {type = 2, toggle = "PowerToggle"}
+      end
+      for _, name in ipairs(family.commandNames) do
+        spec.commands[#spec.commands + 1] = {name = name, value = name}
+      end
+      return spec
     end
     -- A fixed command set: each command's value is its own name.
     for i, name in ipairs(family.commandNames) do
@@ -2804,6 +2983,68 @@ local function androidTvResolveInputs(spec, family, old)
   end
 end
 
+-- Resolve a webOS TV's inputs and apps once the old device is known: keep
+-- existing inputs/apps when omitted from the request so edits never drop
+-- commands an activity uses.
+local function webosResolveInputsAndApps(spec, family, old)
+  local feature = old and featureOf(old, "InputFeature")
+  if spec.inputs == nil then
+    spec.inputs = {}
+    if old then
+      local current = {}
+      for _, input in ipairs(feature and type(feature.Inputs) == "table" and feature.Inputs or {}) do
+        local action = type(input) == "table" and type(input.Actions) == "table" and input.Actions[1]
+        local command = webosInputCommand(action and action.IRCommandName)
+        if type(input.InputName) == "string" and command then
+          current[#current + 1] = {name = input.InputName, command = command, order = tonumber(input.InputOrder) or 0}
+        end
+      end
+      table.sort(current, function(a, b) return a.order < b.order end)
+      for i, input in ipairs(current) do
+        spec.inputs[i] = {name = input.name, command = input.command}
+      end
+    else
+      for i, input in ipairs(family.inputs) do
+        spec.inputs[i] = {name = input.name, command = input.command}
+      end
+    end
+  end
+  if spec.inputDelay == nil and feature then
+    spec.inputDelay = tonumber(feature.InputDelay)
+  end
+  if spec.apps == nil and old then
+    spec.apps = {}
+    for _, command in ipairs(type(old.Commands) == "table" and old.Commands or {}) do
+      if type(command) == "table" and type(command.Name) == "string" and string.sub(command.Name, 1, 4) == "App " then
+        local val = command.Name
+        for _, p in ipairs(type(command.Parameters) == "table" and command.Parameters or {}) do
+          if type(p) == "table" and p.Key == "{c}" and type(p.Value) == "string" and p.Value ~= "" then
+            val = p.Value
+            break
+          end
+        end
+        spec.apps[#spec.apps + 1] = {name = command.Name, value = val}
+      end
+    end
+  end
+  local have = {}
+  for _, command in ipairs(spec.commands) do
+    have[string.lower(command.name)] = true
+  end
+  for _, input in ipairs(spec.inputs) do
+    if not have[string.lower(input.command)] then
+      spec.commands[#spec.commands + 1] = {name = input.command, value = input.command}
+      have[string.lower(input.command)] = true
+    end
+  end
+  for _, app in ipairs(spec.apps or {}) do
+    if not have[string.lower(app.name)] and #spec.commands < HA_MAX_COMMANDS then
+      spec.commands[#spec.commands + 1] = {name = app.name, value = app.value}
+      have[string.lower(app.name)] = true
+    end
+  end
+end
+
 -- Build one device entry from its spec, keeping the IDs, dates and timing
 -- an earlier commit or the device settings editor left on it.
 local function haDeviceEntry(spec, old, deviceId, protocolId, nextId, now, family)
@@ -2822,6 +3063,15 @@ local function haDeviceEntry(spec, old, deviceId, protocolId, nextId, now, famil
         {Key = "{s2mac}", Value = spec.switch2Mac},
         {Key = "{cmac}", Value = spec.controllerMac},
         {Key = "{pid}", Value = spec.pid}
+      }
+    }
+  elseif family.webos then
+    device.Tokens = {
+      Parameters = {
+        {Key = "{d}", Value = spec.key or spec.entity},
+        {Key = "{host}", Value = spec.host},
+        {Key = "{mac}", Value = spec.mac or ""},
+        {Key = "{keySlot}", Value = spec.paired and "set" or "unset"}
       }
     }
   else
@@ -3036,6 +3286,8 @@ local function commitHaDevices(request, family)
     end
     if family.slotInputs then
       androidTvResolveInputs(spec, family, old)
+    elseif family.webos then
+      webosResolveInputsAndApps(spec, family, old)
     end
     local deviceId
     if old then
@@ -3278,6 +3530,8 @@ local function processRequest(raw)
     response = commitHaDevices(request, ANDROIDTV_FAMILY)
   elseif request.op == "CommitSwitch2Devices" then
     response = commitHaDevices(request, SWITCH2_FAMILY)
+  elseif request.op == "CommitWebOsDevices" then
+    response = commitHaDevices(request, WEBOS_FAMILY)
   elseif request.op == "CommitDeviceScreen" then
     response = commitDeviceScreen(request)
   elseif request.op == "CommitRemoteBackground" then
