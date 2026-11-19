@@ -50,6 +50,15 @@
 #ifndef ACTIVITY_RESTRICTIONS_LOCK
 #define ACTIVITY_RESTRICTIONS_LOCK "/var/run/codex-activity-restrictions.lock"
 #endif
+#ifndef SWITCH2_HCITOOL_PATH
+#define SWITCH2_HCITOOL_PATH "/usr/bin/hcitool"
+#endif
+#ifndef SWITCH2_LOCK_FILE
+#define SWITCH2_LOCK_FILE "/var/run/codex-switch2-wake.lock"
+#endif
+#ifndef SWITCH2_BURST_MS
+#define SWITCH2_BURST_MS 2000
+#endif
 #define WEBUI_AUTH_CONFIG "/data/codex/webui_auth.conf"
 #define DEVICE_LIST "/data/resources/DeviceList.json"
 #define FUNCTION_LIST "/data/resources/FunctionList.json"
@@ -3446,6 +3455,383 @@ static void render_androidtv_devices_json(int fd, const struct request *req) {
     render_device_set_json(fd, req, "CommitAndroidTvDevices", "network TV");
 }
 
+static void render_switch2_devices_json(int fd, const struct request *req) {
+    render_device_set_json(fd, req, "CommitSwitch2Devices", "Nintendo Switch 2");
+}
+
+/* Nintendo Switch 2 BLE wake beacon (Option C).
+   Replays the PoC-verified 31-byte BLE advertisement over hci0 using
+   Own_Address_Type = 0x01 (random address = bonded controller MAC), 2-second
+   burst, then disables advertising. Never touches the hub's public BD_ADDR,
+   never invokes bccmd, and never interpolates user input into a shell. */
+static int switch2_hex_nibble(int c) {
+    if (c >= '0' && c <= '9') return c - '0';
+    if (c >= 'a' && c <= 'f') return c - 'a' + 10;
+    if (c >= 'A' && c <= 'F') return c - 'A' + 10;
+    return -1;
+}
+
+/* Strict 6-byte MAC parser: accepts AA:BB:CC:DD:EE:FF, AA-BB-CC-DD-EE-FF, or
+   AABBCCDDEEFF (with optional leading/trailing ASCII whitespace). Rejects
+   mixed separators, non-hex, all-zero and broadcast FF:FF:FF:FF:FF:FF. */
+static int switch2_parse_mac(const char *text, unsigned char out[6]) {
+    const char *p, *end;
+    size_t len;
+    int sep = 0, i, all_zero = 1, all_ff = 1;
+    if (!text || !out) return -1;
+    p = text;
+    while (*p == ' ' || *p == '\t' || *p == '\r' || *p == '\n') p++;
+    end = p + strlen(p);
+    while (end > p && (end[-1] == ' ' || end[-1] == '\t' || end[-1] == '\r' || end[-1] == '\n')) end--;
+    len = (size_t)(end - p);
+    if (len == 17) {
+        sep = p[2];
+        if (sep != ':' && sep != '-') return -1;
+    } else if (len != 12) {
+        return -1;
+    }
+    for (i = 0; i < 6; i++) {
+        int hi = switch2_hex_nibble((unsigned char)p[0]);
+        int lo = switch2_hex_nibble((unsigned char)p[1]);
+        if (hi < 0 || lo < 0) return -1;
+        out[i] = (unsigned char)((hi << 4) | lo);
+        if (out[i] != 0x00) all_zero = 0;
+        if (out[i] != 0xFF) all_ff = 0;
+        p += 2;
+        if (sep && i < 5) {
+            if (*p != sep) return -1;
+            p++;
+        }
+    }
+    if (p != end || all_zero || all_ff) return -1;
+    return 0;
+}
+
+/* Strict 2-byte PID parser in BLE wire order (<PID lo> <PID hi>): accepts
+   "66 20", "66:20", "66-20", or "6620". */
+static int switch2_parse_pid(const char *text, unsigned char out[2]) {
+    const char *p, *end;
+    size_t len;
+    int h0, l0, h1, l1;
+    if (!text || !out) return -1;
+    p = text;
+    while (*p == ' ' || *p == '\t' || *p == '\r' || *p == '\n') p++;
+    end = p + strlen(p);
+    while (end > p && (end[-1] == ' ' || end[-1] == '\t' || end[-1] == '\r' || end[-1] == '\n')) end--;
+    len = (size_t)(end - p);
+    if (len == 5) {
+        if (p[2] != ' ' && p[2] != ':' && p[2] != '-') return -1;
+    } else if (len != 4) {
+        return -1;
+    }
+    h0 = switch2_hex_nibble((unsigned char)p[0]);
+    l0 = switch2_hex_nibble((unsigned char)p[1]);
+    p += (len == 5) ? 3 : 2;
+    h1 = switch2_hex_nibble((unsigned char)p[0]);
+    l1 = switch2_hex_nibble((unsigned char)p[1]);
+    if (h0 < 0 || l0 < 0 || h1 < 0 || l1 < 0) return -1;
+    out[0] = (unsigned char)((h0 << 4) | l0);
+    out[1] = (unsigned char)((h1 << 4) | l1);
+    return 0;
+}
+
+/* Exact 31-byte Switch 2 BLE wake advertisement payload from the hardware PoC:
+   02 01 06 1B FF 53 05 01 00 03 7E 05 <PID lo> <PID hi> 00 01 81
+   <Switch 2 MAC reversed> 0F 00 00 00 00 00 00 00 */
+static void switch2_build_payload(
+    const unsigned char switch2_mac[6],
+    const unsigned char pid[2],
+    unsigned char out[31]
+) {
+    static const unsigned char prefix[12] = {
+        0x02, 0x01, 0x06, 0x1B, 0xFF, 0x53, 0x05, 0x01, 0x00, 0x03, 0x7E, 0x05
+    };
+    memcpy(out, prefix, 12);
+    out[12] = pid[0];
+    out[13] = pid[1];
+    out[14] = 0x00;
+    out[15] = 0x01;
+    out[16] = 0x81;
+    out[17] = switch2_mac[5];
+    out[18] = switch2_mac[4];
+    out[19] = switch2_mac[3];
+    out[20] = switch2_mac[2];
+    out[21] = switch2_mac[1];
+    out[22] = switch2_mac[0];
+    out[23] = 0x0F;
+    memset(out + 24, 0, 7);
+}
+
+/* Parse the status byte of BlueZ hcitool's Command Complete output:
+   "> HCI Event: 0x0e plen 4\n  01 <ocf_lo> <ocf_hi> <status>".
+   Returns 0x00..0xFF when found, or -1 if no Command Complete line is present. */
+static int switch2_parse_hci_cc_status(const char *text) {
+    const char *p = text;
+    if (!p) return -1;
+    while ((p = strstr(p, "HCI Event:")) != NULL) {
+        const char *nl;
+        unsigned int b0, b1, b2, b3;
+        if (strstr(p, "0x0e") == NULL && strstr(p, "0x0E") == NULL) break;
+        nl = strchr(p, '\n');
+        if (!nl) break;
+        if (sscanf(nl + 1, " %x %x %x %x", &b0, &b1, &b2, &b3) == 4 && b3 <= 0xFF) {
+            return (int)b3;
+        }
+        p = nl + 1;
+    }
+    return -1;
+}
+
+/* Run hcitool directly via fork()+execv() with zero shell interpolation.
+   Returns 0 only when the child exits 0 and any reported HCI Command Complete
+   status is 0x00. */
+static int switch2_run_hcitool(char *const argv[], char *out, size_t outlen, int *hci_status) {
+    int pipefd[2];
+    pid_t pid;
+    int status = 0;
+    size_t used = 0;
+    ssize_t n;
+    if (out && outlen) out[0] = 0;
+    if (hci_status) *hci_status = -1;
+    if (pipe(pipefd) < 0) {
+        if (out && outlen) snprintf(out, outlen, "pipe failed: %s", strerror(errno));
+        return -1;
+    }
+    pid = fork();
+    if (pid < 0) {
+        close(pipefd[0]);
+        close(pipefd[1]);
+        if (out && outlen) snprintf(out, outlen, "fork failed: %s", strerror(errno));
+        return -1;
+    }
+    if (pid == 0) {
+        int devnull = open("/dev/null", O_RDONLY);
+        close(pipefd[0]);
+        if (devnull >= 0) {
+            dup2(devnull, STDIN_FILENO);
+            if (devnull > STDERR_FILENO) close(devnull);
+        }
+        dup2(pipefd[1], STDOUT_FILENO);
+        dup2(pipefd[1], STDERR_FILENO);
+        if (pipefd[1] > STDERR_FILENO) close(pipefd[1]);
+        execv(SWITCH2_HCITOOL_PATH, argv);
+        fprintf(stderr, "exec %s failed: %s\n", SWITCH2_HCITOOL_PATH, strerror(errno));
+        _exit(127);
+    }
+    close(pipefd[1]);
+    while (1) {
+        char buf[256];
+        n = read(pipefd[0], buf, sizeof(buf));
+        if (n < 0) {
+            if (errno == EINTR) continue;
+            break;
+        }
+        if (n == 0) break;
+        if (out && outlen && used + 1 < outlen) {
+            size_t avail = outlen - 1 - used;
+            size_t take = (size_t)n < avail ? (size_t)n : avail;
+            memcpy(out + used, buf, take);
+            used += take;
+            out[used] = 0;
+        }
+    }
+    close(pipefd[0]);
+    while (waitpid(pid, &status, 0) < 0) {
+        if (errno != EINTR) {
+            if (out && outlen && !out[0]) snprintf(out, outlen, "waitpid failed: %s", strerror(errno));
+            return -1;
+        }
+    }
+    if (!WIFEXITED(status) || WEXITSTATUS(status) != 0) {
+        return -1;
+    }
+    if (out && outlen) {
+        int cc = switch2_parse_hci_cc_status(out);
+        if (hci_status) *hci_status = cc;
+        if (cc > 0) return -1;
+    }
+    return 0;
+}
+
+static void switch2_sleep_ms(int ms) {
+    struct timespec req, rem;
+    if (ms <= 0) return;
+    req.tv_sec = ms / 1000;
+    req.tv_nsec = (long)(ms % 1000) * 1000000L;
+    while (nanosleep(&req, &rem) < 0 && errno == EINTR) {
+        req = rem;
+    }
+}
+
+/* Execute one serialized Switch 2 BLE wake burst. Always runs advertise-off
+   (LE_Set_Advertise_Enable 0x00) in cleanup even if an earlier step fails. */
+static int switch2_execute_wake_burst(
+    const unsigned char switch2_mac[6],
+    const unsigned char controller_mac[6],
+    const unsigned char pid[2],
+    char *err,
+    size_t errlen
+) {
+    unsigned char payload[31];
+    char ctrl_hex[6][5];
+    char payload_hex[31][5];
+    char out[512];
+    int lock_fd = -1, rc = -1, hci_st = -1, i;
+    char *argv_rand[13];
+    char *argv_params[22] = {
+        "hcitool", "-i", "hci0", "cmd", "0x08", "0x0006",
+        "0x20", "0x00", "0x40", "0x00", "0x00", "0x01",
+        "0x00", "0x00", "0x00", "0x00", "0x00", "0x00",
+        "0x00", "0x07", "0x00", NULL
+    };
+    char *argv_data[39];
+    char *argv_on[8]  = {"hcitool", "-i", "hci0", "cmd", "0x08", "0x000A", "0x01", NULL};
+    char *argv_off[8] = {"hcitool", "-i", "hci0", "cmd", "0x08", "0x000A", "0x00", NULL};
+
+    if (err && errlen) err[0] = 0;
+    switch2_build_payload(switch2_mac, pid, payload);
+    for (i = 0; i < 6; i++) {
+        snprintf(ctrl_hex[i], sizeof(ctrl_hex[i]), "0x%02X", (unsigned)controller_mac[5 - i]);
+    }
+    for (i = 0; i < 31; i++) {
+        snprintf(payload_hex[i], sizeof(payload_hex[i]), "0x%02X", (unsigned)payload[i]);
+    }
+
+    argv_rand[0] = "hcitool"; argv_rand[1] = "-i"; argv_rand[2] = "hci0";
+    argv_rand[3] = "cmd"; argv_rand[4] = "0x08"; argv_rand[5] = "0x0005";
+    for (i = 0; i < 6; i++) argv_rand[6 + i] = ctrl_hex[i];
+    argv_rand[12] = NULL;
+
+    argv_data[0] = "hcitool"; argv_data[1] = "-i"; argv_data[2] = "hci0";
+    argv_data[3] = "cmd"; argv_data[4] = "0x08"; argv_data[5] = "0x0008";
+    argv_data[6] = "0x1F";
+    for (i = 0; i < 31; i++) argv_data[7 + i] = payload_hex[i];
+    argv_data[38] = NULL;
+
+    lock_fd = open(SWITCH2_LOCK_FILE, O_CREAT | O_RDWR, 0600);
+    if (lock_fd < 0) {
+        if (err && errlen) snprintf(err, errlen, "could not open wake lock %s: %s", SWITCH2_LOCK_FILE, strerror(errno));
+        return -1;
+    }
+    while (flock(lock_fd, LOCK_EX) < 0) {
+        if (errno != EINTR) {
+            if (err && errlen) snprintf(err, errlen, "could not acquire wake lock: %s", strerror(errno));
+            close(lock_fd);
+            return -1;
+        }
+    }
+
+    if (switch2_run_hcitool(argv_rand, out, sizeof(out), &hci_st) != 0) {
+        if (err && errlen) {
+            if (hci_st > 0) snprintf(err, errlen, "LE_Set_Random_Address rejected (HCI status 0x%02X)", hci_st);
+            else snprintf(err, errlen, "LE_Set_Random_Address failed%s%s", out[0] ? ": " : "", out);
+        }
+        goto cleanup;
+    }
+    if (switch2_run_hcitool(argv_params, out, sizeof(out), &hci_st) != 0) {
+        if (err && errlen) {
+            if (hci_st > 0) snprintf(err, errlen, "LE_Set_Advertising_Parameters rejected (HCI status 0x%02X)", hci_st);
+            else snprintf(err, errlen, "LE_Set_Advertising_Parameters failed%s%s", out[0] ? ": " : "", out);
+        }
+        goto cleanup;
+    }
+    if (switch2_run_hcitool(argv_data, out, sizeof(out), &hci_st) != 0) {
+        if (err && errlen) {
+            if (hci_st > 0) snprintf(err, errlen, "LE_Set_Advertising_Data rejected (HCI status 0x%02X)", hci_st);
+            else snprintf(err, errlen, "LE_Set_Advertising_Data failed%s%s", out[0] ? ": " : "", out);
+        }
+        goto cleanup;
+    }
+    if (switch2_run_hcitool(argv_on, out, sizeof(out), &hci_st) != 0) {
+        if (err && errlen) {
+            if (hci_st > 0) snprintf(err, errlen, "LE_Set_Advertise_Enable(on) rejected (HCI status 0x%02X)", hci_st);
+            else snprintf(err, errlen, "LE_Set_Advertise_Enable(on) failed%s%s", out[0] ? ": " : "", out);
+        }
+        goto cleanup;
+    }
+    switch2_sleep_ms(SWITCH2_BURST_MS);
+    rc = 0;
+
+cleanup:
+    {
+        char off_out[512];
+        int off_st = -1;
+        int off_rc = switch2_run_hcitool(argv_off, off_out, sizeof(off_out), &off_st);
+        /* 0x0C (Command Disallowed) means advertising was already off. Only
+           report an advertise-off failure when the burst itself had enabled
+           advertising and disabling did not succeed (and wasn't already off). */
+        if (rc == 0 && off_rc != 0 && off_st != 0x0C) {
+            rc = -1;
+            if (err && errlen) {
+                if (off_st > 0) snprintf(err, errlen, "LE_Set_Advertise_Enable(off) rejected (HCI status 0x%02X)", off_st);
+                else snprintf(err, errlen, "LE_Set_Advertise_Enable(off) failed%s%s", off_out[0] ? ": " : "", off_out);
+            }
+        }
+    }
+    flock(lock_fd, LOCK_UN);
+    close(lock_fd);
+    return rc;
+}
+
+/* POST /api/switch2/cmd:
+   {"device":"switch2...","command":"Wake","switch2Mac":"...","controllerMac":"...","pid":"6620"} */
+static void render_switch2_cmd_json(int fd, const struct request *req) {
+    char cmd_name[48], s2_str[32], ctrl_str[32], pid_str[16], err[512];
+    unsigned char s2_mac[6], ctrl_mac[6], pid[2];
+    FILE *f;
+    cmd_name[0] = s2_str[0] = ctrl_str[0] = pid_str[0] = err[0] = 0;
+    if (!req->body || !req->body[0]) {
+        f = send_json_start(fd, "400 Bad Request");
+        if (f) { fputs("{\"ok\":false,\"error\":\"request body is required\"}\n", f); fclose(f); }
+        return;
+    }
+    json_string(req->body, "command", cmd_name, sizeof(cmd_name));
+    json_string(req->body, "switch2Mac", s2_str, sizeof(s2_str));
+    json_string(req->body, "controllerMac", ctrl_str, sizeof(ctrl_str));
+    json_string(req->body, "pid", pid_str, sizeof(pid_str));
+    if (strcasecmp(cmd_name, "Wake") != 0 && strcasecmp(cmd_name, "PowerOn") != 0) {
+        f = send_json_start(fd, "400 Bad Request");
+        if (f) { fputs("{\"ok\":false,\"error\":\"unsupported Switch 2 command; only Wake is supported\"}\n", f); fclose(f); }
+        return;
+    }
+    if (switch2_parse_mac(s2_str, s2_mac) != 0) {
+        f = send_json_start(fd, "400 Bad Request");
+        if (f) { fputs("{\"ok\":false,\"error\":\"invalid Switch 2 Bluetooth MAC address\"}\n", f); fclose(f); }
+        return;
+    }
+    if (switch2_parse_mac(ctrl_str, ctrl_mac) != 0) {
+        f = send_json_start(fd, "400 Bad Request");
+        if (f) { fputs("{\"ok\":false,\"error\":\"invalid bonded controller MAC address\"}\n", f); fclose(f); }
+        return;
+    }
+    if (memcmp(s2_mac, ctrl_mac, 6) == 0) {
+        f = send_json_start(fd, "400 Bad Request");
+        if (f) { fputs("{\"ok\":false,\"error\":\"bonded controller MAC must differ from Switch 2 MAC\"}\n", f); fclose(f); }
+        return;
+    }
+    if (switch2_parse_pid(pid_str, pid) != 0) {
+        f = send_json_start(fd, "400 Bad Request");
+        if (f) { fputs("{\"ok\":false,\"error\":\"invalid controller PID (expected 2 hex bytes, e.g. 66 20)\"}\n", f); fclose(f); }
+        return;
+    }
+    if (switch2_execute_wake_burst(s2_mac, ctrl_mac, pid, err, sizeof(err)) != 0) {
+        chomp(err);
+        f = send_json_start(fd, "500 Internal Server Error");
+        if (f) {
+            fputs("{\"ok\":false,\"error\":", f);
+            json_write_string(f, err[0] ? err : "Switch 2 wake burst failed");
+            fputs("}\n", f);
+            fclose(f);
+        }
+        return;
+    }
+    f = send_json_start(fd, "200 OK");
+    if (f) {
+        fputs("{\"ok\":true}\n", f);
+        fclose(f);
+    }
+}
+
 /* codex_androidtv: the network TV daemon, on 127.0.0.1 only. The web app's
    /api/androidtv/... routes are relayed to it as they are; it answers JSON with
    HTTP 200, errors as {"ok":false,"error":...}. */
@@ -3694,6 +4080,16 @@ static void peer_ip_string(int fd, char *out, size_t outlen) {
             snprintf(out, outlen, "local");
         }
     }
+}
+
+static int peer_is_loopback(int fd) {
+    struct sockaddr_in addr;
+    socklen_t len = sizeof(addr);
+    if (getpeername(fd, (struct sockaddr *)&addr, &len) == 0 &&
+            addr.sin_family == AF_INET) {
+        return ntohl(addr.sin_addr.s_addr) == INADDR_LOOPBACK;
+    }
+    return 0;
 }
 
 static int parse_ha_states_array(
@@ -11976,7 +12372,8 @@ static void render_version_json(int fd) {
         "ha-state",
         "irdb-import",
         "remote-background",
-        "remote-pair"
+        "remote-pair",
+        "switch2-wake"
     };
     FILE *f = send_json_start(fd, "200 OK");
     size_t i;
@@ -12809,11 +13206,16 @@ static void send_payload_too_large(int fd, const struct request *req) {
 
 static void handle_client(int client) {
     struct request req;
+    int switch2_loopback;
     if (read_request(client, &req) != 0) {
         free_request(&req);
         return;
     }
-    if (!webui_auth_ok(&req)) {
+    /* Local Harmony engine (ipmanager.lua on 127.0.0.1) posts Switch 2 wake
+       commands without Web UI Basic Auth headers. */
+    switch2_loopback = (strcmp(req.method, "POST") == 0 &&
+        strcmp(req.path, "/api/switch2/cmd") == 0 && peer_is_loopback(client));
+    if (!switch2_loopback && !webui_auth_ok(&req)) {
         send_auth_required(client);
         free_request(&req);
         return;
@@ -12880,6 +13282,11 @@ static void handle_client(int client) {
         else send_cross_site_refused(client);
     } else if (strcmp(req.method, "GET") == 0 && strcmp(req.path, "/api/androidtv/input-presets") == 0) {
         render_androidtv_presets(client);
+    } else if (strcmp(req.method, "POST") == 0 && strcmp(req.path, "/api/switch2/devices") == 0) {
+        render_switch2_devices_json(client, &req);
+    } else if (strcmp(req.method, "POST") == 0 && strcmp(req.path, "/api/switch2/cmd") == 0) {
+        if (switch2_loopback || request_same_origin_json(&req)) render_switch2_cmd_json(client, &req);
+        else send_cross_site_refused(client);
     } else if (strcmp(req.method, "POST") == 0 && strcmp(req.path, "/api/device-screen") == 0) {
         render_device_screen_json(client, &req);
     } else if (strcmp(req.method, "POST") == 0 && strcmp(req.path, "/api/activity-sync") == 0) {

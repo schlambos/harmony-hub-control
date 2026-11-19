@@ -403,7 +403,7 @@ export function touchScreenState(config, deviceId) {
   const entry = (config?.deviceList?.DevicesWithFeatures ?? []).find((d) => String(d?.Device?.["Id-"]) === id);
   const screen = maps.find((m) => m?.ButtonMapIdentifier === `16417Device${id}`);
   if (screen && !(Number(screen["ButtonMapId-"]) > TOUCH_SCREEN_MAP_FLOOR)) return "logitech";
-  if (/^melodious-(ha|androidtv)-/.test(String(entry?.Device?.AutoDetectedDevice?.Id ?? ""))) return "managed";
+  if (/^melodious-(ha|androidtv|switch2)-/.test(String(entry?.Device?.AutoDetectedDevice?.Id ?? ""))) return "managed";
   if (screen) return "made";
   const hasTouch = maps.some((m) => /^16417/.test(String(m?.ButtonMapIdentifier ?? "")) &&
     m?.["SurfaceId-"] != null && m?.["RemoteId-"] != null);

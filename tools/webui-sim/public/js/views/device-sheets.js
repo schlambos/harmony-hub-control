@@ -12,6 +12,7 @@ import * as hub from "../state.js";
 import { escapeHtml, icon, iconTile, listRow, openSheet, snackbar, spinner } from "../ui/shell.js";
 import { LIMITS, analyzeCapture, deviceTypeOptions, isSafeLabel, normalizeSignal } from "./ir-model.js";
 import { openAndroidTvSheet } from "./androidtv-sheet.js";
+import { openSwitch2Sheet } from "./switch2-sheet.js";
 
 /* -- the hub's /ir/* forms --------------------------------------------------- */
 
@@ -117,6 +118,12 @@ export function openDeviceSheet({ device = null, onDone } = {}) {
             leading: iconTile("tv", { size: 40 }),
             chevron: true,
             attrs: 'data-act="androidtv"',
+          })}${listRow({
+            title: "Nintendo Switch 2 (Bluetooth wake)",
+            subtitle: "Wake only via 2-second BLE beacon; Power Off is a no-op",
+            leading: iconTile("sports_esports", { size: 40 }),
+            chevron: true,
+            attrs: 'data-act="switch2"',
           })}</div>
           <p class="sheet-text">Or a device you control by IR. Then learn its buttons from its own remote, or import codes for it.</p>`}
           ${textField({ id: ids.name, label: "Name", value: stored.Name ?? "", placeholder: "Living room TV", maxlength: LIMITS.name })}
@@ -150,6 +157,11 @@ export function openDeviceSheet({ device = null, onDone } = {}) {
         if (event.target.closest("[data-act='androidtv']")) {
           close();
           openAndroidTvSheet({ onDone });
+          return;
+        }
+        if (event.target.closest("[data-act='switch2']")) {
+          close();
+          openSwitch2Sheet({ onDone });
           return;
         }
         const chip = event.target.closest("[data-type]");

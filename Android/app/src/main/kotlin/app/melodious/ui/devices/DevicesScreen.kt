@@ -156,10 +156,11 @@ private fun DeviceRow(device: HubDevice, subtitle: String, onClick: () -> Unit) 
 
 @Composable
 private fun TransportBadge(device: HubDevice) {
-    val bt = device.isBluetoothHid
+    val bt = device.isBluetoothHid || device.isSwitch2Wake
     Text(
         when {
-            bt -> "Bluetooth"
+            device.isBluetoothHid -> "Bluetooth"
+            device.isSwitch2Wake -> "BLE Wake"
             device.isHomeAssistant -> "Home Assistant"
             device.isNetworkTv -> "Network"
             else -> "IR"
@@ -326,16 +327,26 @@ private fun CommandsList(
     val commands = device.commands.filter { query.isBlank() || it.name.contains(query.trim(), true) }
     LazyColumn(modifier.fillMaxWidth(), contentPadding = PaddingValues(bottom = 24.dp)) {
         item {
-            Row(Modifier.padding(horizontal = 16.dp, vertical = 12.dp), horizontalArrangement = Arrangement.spacedBy(10.dp)) {
-                OutlinedButton(onClick = onLearn, modifier = Modifier.weight(1f).height(48.dp)) {
-                    Icon(Icons.Outlined.SettingsRemote, contentDescription = null, modifier = Modifier.size(18.dp))
-                    Spacer(Modifier.size(8.dp))
-                    Text("Learn a button")
-                }
-                OutlinedButton(onClick = onImport, modifier = Modifier.weight(1f).height(48.dp)) {
-                    Icon(Icons.Outlined.ContentPaste, contentDescription = null, modifier = Modifier.size(18.dp))
-                    Spacer(Modifier.size(8.dp))
-                    Text("Import codes")
+            if (device.isSwitch2Wake) {
+                Text(
+                    "Nintendo Switch 2 wake device — tap Wake to send the 2-second Bluetooth wake burst. Power Off is a no-op (sleep is handled by TV HDMI-CEC standby or the console itself).",
+                    fontSize = 13.sp,
+                    lineHeight = 19.sp,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    modifier = Modifier.padding(horizontal = 20.dp, vertical = 12.dp),
+                )
+            } else {
+                Row(Modifier.padding(horizontal = 16.dp, vertical = 12.dp), horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+                    OutlinedButton(onClick = onLearn, modifier = Modifier.weight(1f).height(48.dp)) {
+                        Icon(Icons.Outlined.SettingsRemote, contentDescription = null, modifier = Modifier.size(18.dp))
+                        Spacer(Modifier.size(8.dp))
+                        Text("Learn a button")
+                    }
+                    OutlinedButton(onClick = onImport, modifier = Modifier.weight(1f).height(48.dp)) {
+                        Icon(Icons.Outlined.ContentPaste, contentDescription = null, modifier = Modifier.size(18.dp))
+                        Spacer(Modifier.size(8.dp))
+                        Text("Import codes")
+                    }
                 }
             }
             OutlinedTextField(

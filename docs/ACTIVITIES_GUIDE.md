@@ -333,7 +333,10 @@ and per-activity caveats), see [Home control buttons](HOME_CONTROL_BUTTONS.md).
 
 Make a backup in Web/Desktop's **Settings → Backup** first. Power/input
 commands already belong to the device's power/input recipe: do not add
-another PowerToggle as an "extra" or you may turn it off again.
+another PowerToggle as an "extra" or you may turn it off again. For
+wake-only devices such as a [Nintendo Switch 2](SWITCH2_WAKE.md), Power On
+fires the BLE wake burst at activity start while Power Off is a no-op
+(sleep is handled by TV HDMI-CEC standby or the console itself).
 
 ### Android: guided Start & end
 

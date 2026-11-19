@@ -79,7 +79,7 @@ fun DeviceSettingsScreen(state: MelodiousUiState, viewModel: MelodiousViewModel,
     var picking by remember { mutableStateOf<PowerSlot?>(null) }
     var confirmLeave by remember { mutableStateOf(false) }
     val names = state.deviceCommandNames(deviceId)
-    val problems = DeviceSettingsModel.validate(settings, names)
+    val problems = DeviceSettingsModel.validate(settings, names, wakeOnly = device.isSwitch2Wake)
     val dirty = settings != saved
     val leave = { if (dirty) confirmLeave = true else onBack() }
     BackHandler(onBack = leave)
@@ -149,8 +149,10 @@ fun DeviceSettingsScreen(state: MelodiousUiState, viewModel: MelodiousViewModel,
             when (settings.powerType) {
                 PowerType.DISCRETE -> ListGroup {
                     CommandRow("On command", settings.powerOn) { picking = PowerSlot.ON }
-                    GroupDivider()
-                    CommandRow("Off command", settings.powerOff) { picking = PowerSlot.OFF }
+                    if (!device.isSwitch2Wake || settings.powerOff.isNotBlank()) {
+                        GroupDivider()
+                        CommandRow("Off command", settings.powerOff) { picking = PowerSlot.OFF }
+                    }
                 }
                 PowerType.TOGGLE -> ListGroup {
                     CommandRow("Power command", settings.powerToggle) { picking = PowerSlot.TOGGLE }

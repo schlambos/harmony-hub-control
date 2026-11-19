@@ -658,6 +658,35 @@ input.m-switch {
   font-size: var(--fs-body-sm);
 }
 
+/* -- Nintendo Switch 2 wake sheet ------------------------------------------------ */
+
+.s2-help {
+  padding: var(--space-3);
+  border-radius: var(--shape-md);
+  background: var(--surface-high);
+  color: var(--on-surface-variant);
+  font-size: var(--fs-body-sm);
+  line-height: 19px;
+}
+
+.s2-help summary {
+  color: var(--on-surface);
+  font-weight: 500;
+  cursor: pointer;
+}
+
+.s2-help ol {
+  margin: var(--space-2) 0 0;
+  padding-left: 1.25rem;
+  display: grid;
+  gap: 6px;
+}
+
+.s2-help code {
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 0.92em;
+}
+
 .sw .form-msg {
   margin: var(--space-2) var(--space-1) 0;
 }

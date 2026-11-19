@@ -40,7 +40,9 @@ object DeviceTouchScreens {
         }
         val device = DeviceSettingsModel.deviceEntry(snapshot, deviceId)?.get("Device") as? JsonObject
         val detected = (device?.get("AutoDetectedDevice") as? JsonObject)?.text("Id")
-        if (detected?.startsWith("melodious-ha-") == true) return DeviceTouchScreen.MANAGED
+        if (detected?.startsWith("melodious-ha-") == true ||
+            detected?.startsWith("melodious-androidtv-") == true ||
+            detected?.startsWith("melodious-switch2-") == true) return DeviceTouchScreen.MANAGED
         if (screen != null) return DeviceTouchScreen.MADE
         val hasTouch = maps.any {
             it.text("ButtonMapIdentifier")?.startsWith("16417") == true && it.present("SurfaceId-") && it.present("RemoteId-")
