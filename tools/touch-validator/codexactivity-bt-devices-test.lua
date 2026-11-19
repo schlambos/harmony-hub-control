@@ -441,6 +441,136 @@ check("an empty Bluetooth set removes the device and its protocol",
     protocolNamed("Melodious Bluetooth keyboard") == nil and #stored("DeviceList").DevicesWithFeatures == 1,
   encodeJson(cleared))
 
+-- Saved keyboard-script commands (#114 follow-up) ---------------------------
+resetHub(seedState())
+local function laptopWith(extraCommands)
+  local cmds = {
+    { name = "PowerOn", value = "tvwake" },
+    { name = "PowerOff", value = "tvsleep" },
+    { name = "Home", value = "tvhome" },
+  }
+  for _, c in ipairs(extraCommands or {}) do cmds[#cmds + 1] = c end
+  return {
+    entity = "bt_1730000099_1",
+    name = "Work Laptop",
+    model = "Android TV keyboard",
+    power = { on = "PowerOn", off = "PowerOff" },
+    commands = cmds,
+  }
+end
+
+local savedInitial = commitBt({ devices = { laptopWith({
+  { name = "Wake and Sign In", value = "saved57616b6520616e64205369676e20496e" },
+  { name = "Deverrouiller Cafe", value = "saved44c3a9766572726f75696c6c657220436166c3a9" },
+  { name = "Home Saved", value = "saved486f6d65" },
+  { name = "Wake Laptop And Enter Sign In Password On Lock S", value = "savedh0123456789abcdef0039" },
+}) } })
+local laptopEntry = entryBy("Melodious Bluetooth")
+local laptopByName = {}
+for _, c in ipairs(laptopEntry and laptopEntry.Commands or {}) do
+  laptopByName[c.Name] = { id = c["Id-"], value = c.Parameters and c.Parameters[1] and c.Parameters[1].Value }
+end
+check("accepts saved-command names (spaced, transliterated, disambiguated, over-long hash)",
+  savedInitial.ok and laptopEntry ~= nil and #laptopEntry.Commands == 7 and
+    laptopByName["Wake and Sign In"] and laptopByName["Wake and Sign In"].value == "saved57616b6520616e64205369676e20496e" and
+    laptopByName["Deverrouiller Cafe"] and laptopByName["Deverrouiller Cafe"].value == "saved44c3a9766572726f75696c6c657220436166c3a9" and
+    laptopByName["Home Saved"] and laptopByName["Home Saved"].value == "saved486f6d65" and
+    laptopByName["Wake Laptop And Enter Sign In Password On Lock S"] and
+    laptopByName["Wake Laptop And Enter Sign In Password On Lock S"].value == "savedh0123456789abcdef0039",
+  encodeJson(savedInitial))
+
+local laptopDevId = laptopEntry and laptopEntry.Device["Id-"]
+local wakeIdBefore = laptopByName["Wake and Sign In"] and laptopByName["Wake and Sign In"].id
+local renamedUnused = commitBt({ devices = { laptopWith({
+  { name = "Wake and Sign In", value = "saved57616b6520616e64205369676e20496e" },
+  { name = "Unlock Laptop", value = "saved556e6c6f636b204c6170746f70" },
+}) } })
+local afterRename = entryBy("Melodious Bluetooth")
+local afterRenameByName = {}
+for _, c in ipairs(afterRename and afterRename.Commands or {}) do
+  afterRenameByName[c.Name] = { id = c["Id-"], value = c.Parameters and c.Parameters[1] and c.Parameters[1].Value }
+end
+check("re-commit after rename and delete removes unused saved commands and keeps existing IDs",
+  renamedUnused.ok and afterRename ~= nil and afterRename.Device["Id-"] == laptopDevId and
+    #afterRename.Commands == 5 and
+    afterRenameByName["Wake and Sign In"] and afterRenameByName["Wake and Sign In"].id == wakeIdBefore and
+    afterRenameByName["Unlock Laptop"] ~= nil and
+    afterRenameByName["Deverrouiller Cafe"] == nil and afterRenameByName["Home Saved"] == nil,
+  encodeJson(renamedUnused))
+
+-- Deleting/renaming a saved command still used by an activity or button must
+-- retain it (no dangling reference, push not refused), then drop it once unused.
+local unlockIdBefore = afterRenameByName["Unlock Laptop"] and afterRenameByName["Unlock Laptop"].id
+local actState = stored("ActivityList")
+actState.Activities[1].EnterActions = {
+  { __type = "DelayActivityAction", Duration = 5, ActionOrder = 0 },
+  { __type = "CommandActivityAction", ["DeviceId-"] = laptopDevId, CommandName = "Wake and Sign In", ActionOrder = 1 },
+}
+hub.files.ActivityList.text = encodeJson(actState)
+local mapState = {
+  ButtonMaps = {
+    {
+      __type = "ActivityButtonMap",
+      ButtonMapIdentifier = "16414Activity1",
+      Buttons = {
+        {
+          ButtonAction = {
+            __type = "ButtonCommandAction",
+            ["DeviceId-"] = laptopDevId,
+            CommandName = "Unlock Laptop",
+          },
+        },
+      },
+    },
+  },
+}
+hub.files.MapList.text = encodeJson(mapState)
+
+local deleteUsed = commitBt({ devices = { laptopWith({
+  { name = "Open Desk", value = "saved4f70656e204465736b" },
+}) } })
+local afterDeleteUsed = entryBy("Melodious Bluetooth")
+local usedByName = {}
+for _, c in ipairs(afterDeleteUsed and afterDeleteUsed.Commands or {}) do
+  usedByName[c.Name] = { id = c["Id-"], value = c.Parameters and c.Parameters[1] and c.Parameters[1].Value }
+end
+local retainedNames = {}
+for _, r in ipairs(deleteUsed.retainedCommands or {}) do
+  retainedNames[#retainedNames + 1] = r.command
+end
+table.sort(retainedNames)
+check("deleting/renaming a command still used by an activity or button is not refused and retains it without dangling refs",
+  deleteUsed.ok == true and afterDeleteUsed ~= nil and
+    usedByName["Open Desk"] ~= nil and
+    usedByName["Wake and Sign In"] ~= nil and
+    usedByName["Wake and Sign In"].id == wakeIdBefore and
+    usedByName["Wake and Sign In"].value == "saved57616b6520616e64205369676e20496e" and
+    usedByName["Unlock Laptop"] ~= nil and
+    usedByName["Unlock Laptop"].id == unlockIdBefore and
+    usedByName["Unlock Laptop"].value == "saved556e6c6f636b204c6170746f70" and
+    #retainedNames == 2 and retainedNames[1] == "Unlock Laptop" and retainedNames[2] == "Wake and Sign In",
+  encodeJson(deleteUsed))
+
+-- Once the activity and button no longer reference them, re-commit drops them cleanly.
+actState.Activities[1].EnterActions = {}
+hub.files.ActivityList.text = encodeJson(actState)
+hub.files.MapList.text = encodeJson({ ButtonMaps = {} })
+local cleanupUsed = commitBt({ devices = { laptopWith({
+  { name = "Open Desk", value = "saved4f70656e204465736b" },
+}) } })
+local afterCleanup = entryBy("Melodious Bluetooth")
+local cleanupByName = {}
+for _, c in ipairs(afterCleanup and afterCleanup.Commands or {}) do
+  cleanupByName[c.Name] = c["Id-"]
+end
+check("once no longer referenced, retained Bluetooth saved commands are dropped on the next commit",
+  cleanupUsed.ok == true and cleanupUsed.changed == true and
+    cleanupByName["Open Desk"] ~= nil and
+    cleanupByName["Wake and Sign In"] == nil and
+    cleanupByName["Unlock Laptop"] == nil and
+    (cleanupUsed.retainedCommands == nil or #cleanupUsed.retainedCommands == 0),
+  encodeJson(cleanupUsed))
+
 -- A set file from codex_webui (tools/bt_harmony_webui_smoke.py) ------------
 if arg and arg[1] then
   local file = assert(io.open(arg[1], "r"))

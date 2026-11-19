@@ -94,18 +94,55 @@ int main(int argc, char **argv) {
         webhook("{\"device\":\"bt_1730000000_42\",\"command\":\"tvhome\"}");
         return 0;
     }
+    if (argc > 1 && strcmp(argv[1], "webhook-saved") == 0) {
+        for (i = 2; i < argc; i++) {
+            struct timespec t0, t1;
+            long ms;
+            clock_gettime(CLOCK_MONOTONIC, &t0);
+            webhook(argv[i]);
+            clock_gettime(CLOCK_MONOTONIC, &t1);
+            ms = (long)((t1.tv_sec - t0.tv_sec) * 1000 + (t1.tv_nsec - t0.tv_nsec) / 1000000);
+            printf("elapsed_ms %ld\n", ms);
+            fflush(stdout);
+            /* Give worker 1 a brief head start so it holds the flock inside
+               WAIT 400 before request 2 arrives — deterministic ordering and
+               direct proof that request 2 answers while worker 1 is mid-WAIT. */
+            if (i == 2) bt_sleep_ms(60);
+        }
+        return 0;
+    }
     if (argc > 1 && strcmp(argv[1], "auth") == 0) {
         loopback_post("/api/bt-webhook", "{\"device\":\"bt_1730000000_42\",\"command\":\"tvhome\"}");
         loopback_post("/api/bt-harmony-device", "{}");
         return 0;
     }
     if (argc > 1 && strcmp(argv[1], "set") == 0) {
+        static const char *saved_names[] = {
+            "Wake and Sign In",
+            "D\xc3\xa9" "verrouiller Caf\xc3\xa9",
+            "De\xcc\x81" "tente",
+            "Stra\xc3\x9f" "e & C\xc5\x93" "ur",
+            "Home",
+            "poweron",
+            "Wake Laptop And Enter Sign In Password On Lock Screen Now",
+            "Wake Laptop And Enter Sign In Password On Lock Screen Later",
+            "Caf\xc3\xa9",
+            "Cafe",
+            "!!!",
+        };
         memset(&inv, 0, sizeof(inv));
         inv.device_count = 4;
         snprintf(inv.devices[0].id, sizeof(inv.devices[0].id), "bt_1730000000_42");
         snprintf(inv.devices[0].name, sizeof(inv.devices[0].name), "Homatics Box R 4k");
         snprintf(inv.devices[0].type, sizeof(inv.devices[0].type), "btkeyboard");
+        snprintf(inv.devices[0].bdaddr, sizeof(inv.devices[0].bdaddr), "AA:BB:CC:DD:EE:FF");
         inv.devices[0].harmony = 1;
+        for (i = 0; i < (int)(sizeof(saved_names) / sizeof(saved_names[0])); i++) {
+            snprintf(inv.devices[0].commands[i].name, sizeof(inv.devices[0].commands[i].name), "%s", saved_names[i]);
+            snprintf(inv.devices[0].commands[i].script, sizeof(inv.devices[0].commands[i].script), "KEY escape");
+            inv.devices[0].commands[i].delay_ms = 35;
+        }
+        inv.devices[0].command_count = (int)(sizeof(saved_names) / sizeof(saved_names[0]));
         snprintf(inv.devices[1].id, sizeof(inv.devices[1].id), "bt_1730000001_7");
         snprintf(inv.devices[1].name, sizeof(inv.devices[1].name), "Not published");
         snprintf(inv.devices[1].type, sizeof(inv.devices[1].type), "btkeyboard");

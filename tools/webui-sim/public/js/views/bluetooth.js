@@ -19,6 +19,9 @@ import {
   QUICK_KEYS,
   TV_KEYS,
   canBeHarmonyDevice,
+  isHubBtEntry,
+  hubBtIdOf,
+  planBtHarmonyCommands,
   btTypeLabel,
   isValidBtAddr,
   normalizeBtAddr,
@@ -531,7 +534,8 @@ export function createBluetoothView(section) {
     clear(savedList);
     savedList.appendChild(el("div", { className: "state-block", children: [el("div", { className: "skel" }), el("div", { className: "skel" })] }));
     try {
-      const devices = parseBtInventory(await getText("/export/bluetooth"));
+      const [btText] = await Promise.all([getText("/export/bluetooth"), hub.ensureConfig().catch(() => {})]);
+      const devices = parseBtInventory(btText);
       if (gen !== generation) return;
       renderInventory(devices);
     } catch (err) {
@@ -550,8 +554,17 @@ export function createBluetoothView(section) {
     for (const dev of devices) savedList.appendChild(deviceCard(dev));
   }
 
+  function harmonyEntryFor(dev) {
+    const entries = hub.state.config?.deviceList?.DevicesWithFeatures;
+    if (!Array.isArray(entries)) return null;
+    return entries.find((e) => isHubBtEntry(e) && hubBtIdOf(e) === dev.id) ?? null;
+  }
+
   function deviceCard(dev) {
     const card = el("div", { className: "panel panel-inset" });
+    const harmonyEntry = dev.harmony ? harmonyEntryFor(dev) : null;
+    const plan = dev.harmony && canBeHarmonyDevice(dev) ? planBtHarmonyCommands(dev, harmonyEntry) : null;
+    const planByName = plan ? new Map(plan.items.map((item) => [item.name, item])) : null;
 
     const delBtn = el("button", { type: "button", className: "btn btn-danger btn-sm", text: "Delete device" });
     dangerGuard(delBtn, {
@@ -575,11 +588,11 @@ export function createBluetoothView(section) {
       }),
     );
 
-    card.appendChild(harmonyRow(dev));
+    card.appendChild(harmonyRow(dev, plan));
 
     const commands = el("div", { className: "setup-fields" });
     if (dev.commands.length) {
-      for (const cmd of dev.commands) commands.appendChild(commandRow(dev, cmd));
+      for (const cmd of dev.commands) commands.appendChild(commandRow(dev, cmd, planByName?.get(cmd.name) ?? null));
     } else {
       commands.appendChild(el("p", { className: "mini muted", text: "No keyboard commands saved for this device yet." }));
     }
@@ -589,9 +602,10 @@ export function createBluetoothView(section) {
   }
 
   /* A saved Standard-keyboard target can be a Harmony device: an IP device
-     whose buttons the hub turns into these Bluetooth keys, so the Harmony
-     remote, the Touch and activities can use it like any other device. */
-  function harmonyRow(dev) {
+     whose buttons the hub turns into these Bluetooth keys and saved keyboard
+     scripts, so the Harmony remote, the Touch and activities can use it like
+     any other device. */
+  function harmonyRow(dev, plan) {
     const row = el("div", { className: "callout" });
     if (!canBeHarmonyDevice(dev)) {
       row.appendChild(el("p", {
@@ -608,23 +622,54 @@ export function createBluetoothView(section) {
         onConfirm: () => setHarmony(dev, false, removeBtn),
       });
       // Publishing again brings an existing Harmony device up to this hub's
-      // command set (new commands, discrete power) and keeps every ID.
+      // command set (TV keys, discrete power, saved scripts) and keeps every ID.
       const updateBtn = el("button", { type: "button", className: "btn btn-secondary btn-sm", text: "Update Harmony device" });
       updateBtn.addEventListener("click", () => setHarmony(dev, true, updateBtn));
+      const publishedCount = plan ? plan.published.length : 0;
+      const scriptSummary = publishedCount
+        ? `, plus ${publishedCount} saved script${publishedCount === 1 ? "" : "s"}`
+        : "";
       row.append(
         el("p", {
           className: "mini",
-          text: `On the Harmony side as “${dev.name}” with power (on, off), Home, Back, OK, Menu, D-pad, media, channel, volume and number buttons. Map them in an activity or on the Devices page.`,
+          text: `On the Harmony side as “${dev.name}” with power (on, off), Home, Back, OK, Menu, D-pad, media, channel, volume and number buttons${scriptSummary}. Map them in an activity or on the Devices page.`,
         }),
-        el("div", { className: "setup-actions", children: [updateBtn, removeBtn] }),
       );
+      if (plan && plan.unpublished.length) {
+        const list = plan.unpublished.map((u) => `“${u.name}” (${u.reason.replace(/^Not published to Harmony:\s*/i, "").replace(/\.$/, "")})`).join("; ");
+        row.appendChild(
+          notice(
+            "warn",
+            `${plan.unpublished.length} saved command${plan.unpublished.length === 1 ? " was" : "s were"} not published to Harmony: ${list}.`,
+          ),
+        );
+      }
+      if (plan && plan.pending.length) {
+        const names = plan.pending.map((p) => `“${p.name}”`).join(", ");
+        row.appendChild(
+          notice(
+            "info",
+            `${plan.pending.length} saved command${plan.pending.length === 1 ? " is" : "s are"} not on the Harmony device yet (${names}). Click Update Harmony device to sync.`,
+          ),
+        );
+      }
+      if (plan && plan.retainedCommands.length) {
+        const names = plan.retainedCommands.map((n) => `“${n}”`).join(", ");
+        row.appendChild(
+          notice(
+            "info",
+            `Kept on the Harmony device because an activity or button still uses it: ${names}. Remove it from activities and buttons, then click Update Harmony device to drop it.`,
+          ),
+        );
+      }
+      row.appendChild(el("div", { className: "setup-actions", children: [updateBtn, removeBtn] }));
     } else {
       const addBtn = el("button", { type: "button", className: "btn btn-secondary btn-sm", text: "Add to Harmony" });
       addBtn.addEventListener("click", () => setHarmony(dev, true, addBtn));
       row.append(
         el("p", {
           className: "mini muted",
-          text: "Add this target as a Harmony device, so its TV keys can be mapped to remote buttons and activities.",
+          text: "Add this target as a Harmony device, so its TV keys and saved keyboard scripts can be mapped to remote buttons and activities.",
         }),
         el("div", { className: "setup-actions", children: [addBtn] }),
       );
@@ -653,7 +698,7 @@ export function createBluetoothView(section) {
     });
   }
 
-  function commandRow(dev, cmd) {
+  function commandRow(dev, cmd, planItem) {
     const row = el("div", { className: "callout" });
     const sendBtn = el("button", { type: "button", className: "btn btn-quiet btn-sm", text: "Send" });
     const delBtn = el("button", { type: "button", className: "btn btn-danger btn-sm", text: "Delete" });
@@ -663,17 +708,49 @@ export function createBluetoothView(section) {
       onConfirm: () => removeCommand(dev.id, cmd.name),
     });
 
+    const titleBits = [el("strong", { text: cmd.name })];
+    if (planItem) {
+      if (planItem.status === "published") {
+        titleBits.push(
+          el("span", {
+            className: "pill pill-live",
+            attrs: { style: "margin-left:var(--space-2)" },
+            text: planItem.renamed ? `On Harmony as “${planItem.harmonyName}”` : "On Harmony",
+          }),
+        );
+      } else if (planItem.status === "pending") {
+        titleBits.push(
+          el("span", {
+            className: "pill pill-dim",
+            attrs: { style: "margin-left:var(--space-2)" },
+            text: "Not synced yet",
+          }),
+        );
+      } else {
+        titleBits.push(
+          el("span", {
+            className: "pill pill-dim",
+            attrs: { style: "margin-left:var(--space-2)" },
+            text: "Not on Harmony",
+          }),
+        );
+      }
+    }
+
+    const meta = [
+      el("div", { children: titleBits }),
+      el("div", { className: "mini muted", text: `${cmd.delayMs} ms between keys` }),
+    ];
+    if (planItem && (planItem.status !== "published" || planItem.renamed)) {
+      meta.push(el("div", { className: "mini muted", text: planItem.reason }));
+    }
+
     row.appendChild(
       el("div", {
         className: "setup-actions",
         attrs: { style: "justify-content:space-between;margin-top:0" },
         children: [
-          el("div", {
-            children: [
-              el("strong", { text: cmd.name }),
-              el("div", { className: "mini muted", text: `${cmd.delayMs} ms between keys` }),
-            ],
-          }),
+          el("div", { children: meta }),
           el("div", { className: "setup-actions", attrs: { style: "margin-top:0" }, children: [sendBtn, delBtn] }),
         ],
       }),
@@ -746,6 +823,7 @@ export function createBluetoothView(section) {
       try {
         const res = await postHubForm("/bt/command", { deviceId, name: cmdName, delayMs: String(clampGapMs(delay)), script });
         savedOut.show({ kind: "ok", message: res.msg || `Saved command ${cmdName}.` });
+        await hub.refreshConfig().catch(() => {});
         await loadInventory();
       } catch (err) {
         savedOut.show({ kind: "error", message: errMsg(err) });
@@ -767,6 +845,7 @@ export function createBluetoothView(section) {
     try {
       const res = await postHubForm("/bt/delete-command", { deviceId, command });
       savedOut.show({ kind: "ok", message: res.msg || `Deleted command ${command}.` });
+      await hub.refreshConfig().catch(() => {});
       await loadInventory();
     } catch (err) {
       savedOut.show({ kind: "error", message: errMsg(err) });

@@ -311,7 +311,245 @@ export function hubBtIdOf(entryOrDevice) {
 }
 
 /** Only the Standard keyboard (Android TV / SHIELD) profile can become a
-    Harmony device: its commands are the TV keys above. */
+    Harmony device: its commands are the TV keys above plus saved scripts. */
 export function canBeHarmonyDevice(device) {
   return String(device?.type ?? "") === "btkeyboard";
+}
+
+/** Fixed Harmony commands for a published Standard-keyboard Bluetooth target
+    (must stay in sync with BT_HARMONY_COMMANDS in payload/source/codex_webui.c). */
+export const BT_HARMONY_FIXED_NAMES = [
+  "PowerOn", "PowerOff", "PowerToggle",
+  "DirectionUp", "DirectionDown", "DirectionLeft", "DirectionRight",
+  "Select", "Back", "Home", "Menu",
+  "PlayPause", "Play", "Pause",
+  "Stop", "NextTrack", "PreviousTrack",
+  "FastForward", "Rewind",
+  "ChannelUp", "ChannelDown",
+  "Mute", "VolumeUp", "VolumeDown",
+  "0", "1", "2", "3", "4", "5", "6", "7", "8", "9",
+];
+
+const BT_HARMONY_MAX_COMMANDS = 128;
+
+const LATIN1_TABLE = [
+  "A", "A", "A", "A", "A", "A", "AE", "C",
+  "E", "E", "E", "E", "I", "I", "I", "I",
+  "D", "N", "O", "O", "O", "O", "O", " ",
+  "O", "U", "U", "U", "U", "Y", "TH", "ss",
+  "a", "a", "a", "a", "a", "a", "ae", "c",
+  "e", "e", "e", "e", "i", "i", "i", "i",
+  "d", "n", "o", "o", "o", "o", "o", " ",
+  "o", "u", "u", "u", "u", "y", "th", "y",
+];
+
+const LATIN_EXT_A_TABLE = [
+  "A", "a", "A", "a", "A", "a", "C", "c",
+  "C", "c", "C", "c", "C", "c", "D", "d",
+  "D", "d", "E", "e", "E", "e", "E", "e",
+  "E", "e", "E", "e", "G", "g", "G", "g",
+  "G", "g", "G", "g", "H", "h", "H", "h",
+  "I", "i", "I", "i", "I", "i", "I", "i",
+  "I", "i", "IJ", "ij", "J", "j", "K", "k",
+  "k", "L", "l", "L", "l", "L", "l", "L",
+  "l", "L", "l", "N", "n", "N", "n", "N",
+  "n", "n", "N", "n", "O", "o", "O", "o",
+  "O", "o", "OE", "oe", "R", "r", "R", "r",
+  "R", "r", "S", "s", "S", "s", "S", "s",
+  "S", "s", "T", "t", "T", "t", "T", "t",
+  "U", "u", "U", "u", "U", "u", "U", "u",
+  "U", "u", "U", "u", "W", "w", "Y", "y",
+  "Y", "Z", "z", "Z", "z", "Z", "z", "s",
+];
+
+/** Transliterate UTF-8 Latin letters to ASCII, mirroring bt_transliterate_utf8()
+    in payload/source/codex_webui.c. */
+export function transliterateLatin(value) {
+  const s = String(value ?? "");
+  let out = "";
+  for (const ch of s) {
+    const cp = ch.codePointAt(0);
+    if (cp < 0x80) out += ch;
+    else if (cp === 0x00a0) out += " ";
+    else if (cp >= 0x00c0 && cp <= 0x00ff) out += LATIN1_TABLE[cp - 0x00c0];
+    else if (cp >= 0x0100 && cp <= 0x017f) out += LATIN_EXT_A_TABLE[cp - 0x0100];
+    else if (cp >= 0x0300 && cp <= 0x036f) out += "";
+    else if (cp >= 0x2010 && cp <= 0x2015) out += "-";
+    else out += " ";
+  }
+  return out;
+}
+
+/** Alphanumeric {c} token for a saved Bluetooth script command, mirroring
+    bt_harmony_encode_saved_value() in payload/source/codex_webui.c. */
+export function btHarmonyCommandValue(rawName) {
+  const bytes = new TextEncoder().encode(String(rawName ?? ""));
+  if (bytes.length === 0) return "";
+  if (bytes.length <= 45) {
+    let hex = "saved";
+    for (const b of bytes) hex += b.toString(16).padStart(2, "0");
+    return hex;
+  }
+  let h = 0xcbf29ce484222325n;
+  for (const b of bytes) {
+    h ^= BigInt(b);
+    h = (h * 0x100000001b3n) & 0xffffffffffffffffn;
+  }
+  return `savedh${h.toString(16).padStart(16, "0")}${(bytes.length & 0xffff).toString(16).padStart(4, "0")}`;
+}
+
+function withHarmonySuffix(base, suffix) {
+  const maxBase = Math.max(0, 48 - suffix.length);
+  return base.slice(0, maxBase).replace(/ +$/, "") + suffix;
+}
+
+/** Predict and reconcile how each saved keyboard script on a published
+    Bluetooth target maps onto its Harmony device commands.
+    Mirrors bt_harmony_resolve_name() / bt_harmony_set_json() in codex_webui.c. */
+export function planBtHarmonyCommands(device, harmonyEntry = null) {
+  const fixedByLower = new Map(BT_HARMONY_FIXED_NAMES.map((n) => [n.toLowerCase(), n]));
+  const used = new Set(fixedByLower.keys());
+  const liveCommands = Array.isArray(harmonyEntry?.Commands) ? harmonyEntry.Commands : null;
+  const liveByLower = liveCommands
+    ? new Map(liveCommands.map((c) => [String(c?.Name ?? "").toLowerCase(), c]))
+    : null;
+  const plannedNamesLower = new Set();
+  const items = [];
+  const commands = Array.isArray(device?.commands) ? device.commands : [];
+
+  for (const cmd of commands) {
+    const rawName = String(cmd?.name ?? "");
+    if (used.size >= BT_HARMONY_MAX_COMMANDS) {
+      items.push({
+        name: rawName,
+        status: "unpublished",
+        harmonyName: null,
+        value: null,
+        renamed: false,
+        changeKind: "limit",
+        reason: "Not published to Harmony: 128-command device limit reached.",
+      });
+      continue;
+    }
+    const trans = transliterateLatin(rawName);
+    let clean = "";
+    let lastSpace = false;
+    for (const ch of trans) {
+      if (/[A-Za-z0-9_.+\-]/.test(ch)) {
+        clean += ch;
+        lastSpace = false;
+      } else if (!lastSpace) {
+        clean += " ";
+        lastSpace = true;
+      }
+    }
+    clean = clean.replace(/^[^A-Za-z0-9]+/, "").replace(/ +$/, "");
+    const truncated = clean.length > 48;
+    const base = clean.slice(0, 48).replace(/ +$/, "");
+    if (!base) {
+      items.push({
+        name: rawName,
+        status: "unpublished",
+        harmonyName: null,
+        value: null,
+        renamed: false,
+        changeKind: "unpublishable",
+        reason: "Not published to Harmony: name has no ASCII letters or digits Harmony accepts.",
+      });
+      continue;
+    }
+    let harmonyName = null;
+    let clashedFixed = null;
+    let clashedDuplicate = false;
+    if (!used.has(base.toLowerCase())) {
+      harmonyName = base;
+    } else if (fixedByLower.has(base.toLowerCase())) {
+      clashedFixed = fixedByLower.get(base.toLowerCase());
+      const first = withHarmonySuffix(base, " Saved");
+      if (first && !used.has(first.toLowerCase())) {
+        harmonyName = first;
+      } else {
+        for (let n = 2; n <= 99; n++) {
+          const cand = withHarmonySuffix(base, ` Saved ${n}`);
+          if (cand && !used.has(cand.toLowerCase())) {
+            harmonyName = cand;
+            break;
+          }
+        }
+      }
+    } else {
+      clashedDuplicate = true;
+      for (let n = 2; n <= 99; n++) {
+        const cand = withHarmonySuffix(base, ` ${n}`);
+        if (cand && !used.has(cand.toLowerCase())) {
+          harmonyName = cand;
+          break;
+        }
+      }
+    }
+    if (!harmonyName) {
+      items.push({
+        name: rawName,
+        status: "unpublished",
+        harmonyName: null,
+        value: null,
+        renamed: false,
+        changeKind: "unpublishable",
+        reason: "Not published to Harmony: could not form a unique Harmony command name.",
+      });
+      continue;
+    }
+    used.add(harmonyName.toLowerCase());
+    plannedNamesLower.add(harmonyName.toLowerCase());
+    const value = btHarmonyCommandValue(rawName);
+    const renamed = harmonyName !== rawName;
+    let changeKind = "exact";
+    let reason = `On Harmony as “${harmonyName}”.`;
+    if (clashedFixed) {
+      changeKind = "clashed";
+      reason = `On Harmony as “${harmonyName}” (renamed to avoid built-in ${clashedFixed}).`;
+    } else if (clashedDuplicate) {
+      changeKind = "clashed";
+      reason = `On Harmony as “${harmonyName}” (renamed to avoid a duplicate command name).`;
+    } else if (truncated) {
+      changeKind = "truncated";
+      reason = `On Harmony as “${harmonyName}” (shortened to 48 characters).`;
+    } else if (renamed) {
+      changeKind = "sanitised";
+      reason = `On Harmony as “${harmonyName}” (adjusted for Harmony naming rules).`;
+    }
+    const isPending = liveByLower !== null && !liveByLower.has(harmonyName.toLowerCase());
+    items.push({
+      name: rawName,
+      status: isPending ? "pending" : "published",
+      harmonyName,
+      value,
+      renamed,
+      changeKind,
+      reason: isPending
+        ? `Not on the Harmony device yet — click Update Harmony device to publish as “${harmonyName}”.`
+        : reason,
+    });
+  }
+
+  const retainedCommands = [];
+  if (liveCommands) {
+    for (const c of liveCommands) {
+      const cname = String(c?.Name ?? "");
+      const params = Array.isArray(c?.Parameters) ? c.Parameters : [];
+      const valParam = params.find((p) => p?.Key === "{c}");
+      const val = String(valParam?.Value ?? "");
+      if (val.startsWith("saved") && !plannedNamesLower.has(cname.toLowerCase())) {
+        retainedCommands.push(cname);
+      }
+    }
+  }
+
+  return {
+    items,
+    published: items.filter((i) => i.status === "published"),
+    pending: items.filter((i) => i.status === "pending"),
+    unpublished: items.filter((i) => i.status === "unpublished"),
+    retainedCommands,
+  };
 }

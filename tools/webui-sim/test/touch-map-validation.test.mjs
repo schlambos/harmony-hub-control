@@ -109,7 +109,7 @@ describe("codexactivity.lua validateGraph (LuaJIT)", () => {
       cwd: new URL("../../../", import.meta.url).pathname,
       encoding: "utf8",
     });
-    assert.match(out, /24\/24 checks passed/);
+    assert.match(out, /28\/28 checks passed/);
   });
 
   it("gives one-shot device screens self-long and simulates Touch gestures (P11/P18)", (t) => {

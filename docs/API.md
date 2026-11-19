@@ -957,9 +957,10 @@ A command that cannot be sent gives `400` with the reason in `message`.
 
 ### A saved target as a Harmony device
 
-A saved Bluetooth device with the `btkeyboard` profile can become a
-Harmony device, so the Harmony remote, the Touch and activities can use
-its keys like any other device's:
+A saved Bluetooth device with the `btkeyboard` profile (the Standard keyboard
+profile used for Android TV, SHIELD, Google TV, and computers/laptops) can
+become a Harmony device, so the Harmony remote, the Touch and activities can
+use its keys and saved keyboard scripts like any other device's:
 
 ```powershell
 Invoke-RestMethod "http://<hub-ip>:8080/api/bt-harmony-device" -Method Post -Body @{
@@ -981,15 +982,33 @@ devices. Its commands:
   `NextTrack`, `PreviousTrack`, `FastForward`, `Rewind`
 - `ChannelUp`, `ChannelDown`, `Mute`, `VolumeUp`, `VolumeDown`
 - `0` to `9`
+- Every publishable saved keyboard-script command stored on that Bluetooth
+  device, appended after the fixed set. Its `{c}` token is `saved<hex>` (UTF-8
+  hex of the saved command name up to 45 bytes) or `savedh<16-hex-fnv1a64><4-hex-len>`
+  for longer names. Accented Latin letters are transliterated (`é` -> `e`,
+  `ß` -> `ss`, `œ` -> `oe`), disallowed punctuation becomes spaces, names over
+  48 characters are shortened, and clashes with built-in keys or earlier saved
+  commands get a unique suffix (` Saved`, ` 2`, ...). A saved name with no
+  ASCII letters or digits after transliteration is skipped and flagged on the
+  Bluetooth page.
 
 The protocol posts each press to `http://127.0.0.1:8080/api/bt-webhook`
 (`render_bt_webhook_json()`) as `{"device":"<saved-device-id>",
-"command":"<key name>"}`. The hub answers at once, then reconnects the
-target if needed and sends the key, one call at a time. Like the Home
-Assistant devices, a press is sent once; holding a button does not repeat
-it. With Web UI sign-in on, the engine's calls from 127.0.0.1 need no
-credentials (as for `/api/switch2/cmd` and `/api/webos/cmd`); calls from
-anywhere else do.
+"command":"<key or saved-script token>"}`. The hub answers `200 OK` at once
+and executes the key or saved script (including `WAIT` and `TEXT` steps) in a
+detached background worker serialized by `/var/run/codex-bt-webhook.lock`, so
+neither the Harmony engine nor the web server blocks and concurrent presses
+cannot interleave. Like the Home Assistant devices, a press is sent once;
+holding a button does not repeat it. With Web UI sign-in on, the engine's
+calls from 127.0.0.1 need no credentials (as for `/api/switch2/cmd` and
+`/api/webos/cmd`); calls from anywhere else do.
+
+Adding, editing, renaming or deleting a saved command on a published device
+re-commits the Harmony device automatically. If a deleted or renamed command
+is still referenced by an activity, button or sequence, `CommitBtDevices`
+retains that command on the Harmony device (reported in `retainedCommands`)
+instead of refusing the sync or leaving a dangling reference; once the
+reference is removed, the next update drops it cleanly.
 
 Publishing a device that is already on Harmony again (`publish = "1"`, or
 **Update Harmony device** on the Bluetooth page) brings it up to the hub's

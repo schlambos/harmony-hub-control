@@ -3,9 +3,12 @@ import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import {
   BT_TYPES,
+  BT_HARMONY_FIXED_NAMES,
   QUICK_KEYS,
   TV_KEYS,
   canBeHarmonyDevice,
+  btHarmonyCommandValue,
+  planBtHarmonyCommands,
   btTypeLabel,
   isAllowedBtType,
   isValidBtAddr,
@@ -298,5 +301,107 @@ describe("canBeHarmonyDevice", () => {
     for (const type of ["btkeyboard-nexus", "fire", "ps3", "wii", "", undefined]) {
       assert.equal(canBeHarmonyDevice({ type }), false, String(type));
     }
+  });
+});
+
+describe("BT_HARMONY_FIXED_NAMES & planBtHarmonyCommands (#114)", () => {
+  it("mirrors BT_HARMONY_COMMANDS in codex_webui.c", () => {
+    const source = readFileSync(new URL("../../../payload/source/codex_webui.c", import.meta.url), "utf8");
+    const start = source.indexOf("} BT_HARMONY_COMMANDS[] = {");
+    const end = source.indexOf("};", start);
+    const block = source.slice(start, end);
+    const cNames = [...block.matchAll(/\{"([^"]+)",\s*"[^"]+"\}/g)].map((m) => m[1]);
+    assert.deepEqual(BT_HARMONY_FIXED_NAMES, cNames);
+  });
+
+  it("encodes saved command values as saved<hex> up to 45 UTF-8 bytes and savedh<hash><len> above", () => {
+    assert.equal(btHarmonyCommandValue("Wake and Sign In"), "saved57616b6520616e64205369676e20496e");
+    assert.equal(btHarmonyCommandValue("Déverrouiller"), "saved44c3a9766572726f75696c6c6572");
+    const overlong = "Wake Laptop And Enter Sign In Password On Lock Screen Now";
+    const hashed = btHarmonyCommandValue(overlong);
+    assert.match(hashed, /^savedh[0-9a-f]{20}$/);
+    assert.ok(hashed.length <= 96);
+  });
+
+  it("plans spaced, accented, clashing, over-long, duplicate, and unpublishable saved commands", () => {
+    const overlong1 = "Wake Laptop And Enter Sign In Password On Lock Screen Now";
+    const overlong2 = "Wake Laptop And Enter Sign In Password On Lock Screen Later";
+    const dev = {
+      id: "bt_1730000000_42",
+      name: "Work Laptop",
+      type: "btkeyboard",
+      harmony: true,
+      commands: [
+        { name: "Wake and Sign In", delayMs: 35, script: "KEY escape" },
+        { name: "Déverrouiller Café", delayMs: 35, script: "KEY escape" },
+        { name: "De\u0301tente", delayMs: 35, script: "KEY escape" },
+        { name: "Straße & Cœur", delayMs: 35, script: "KEY escape" },
+        { name: "Home", delayMs: 35, script: "KEY escape" },
+        { name: "poweron", delayMs: 35, script: "KEY escape" },
+        { name: overlong1, delayMs: 35, script: "KEY escape" },
+        { name: overlong2, delayMs: 35, script: "KEY escape" },
+        { name: "Café", delayMs: 35, script: "KEY escape" },
+        { name: "Cafe", delayMs: 35, script: "KEY escape" },
+        { name: "!!!", delayMs: 35, script: "KEY escape" },
+        { name: "日本語", delayMs: 35, script: "KEY escape" },
+      ],
+    };
+    const plan = planBtHarmonyCommands(dev);
+    const byName = new Map(plan.items.map((item) => [item.name, item]));
+    assert.equal(byName.get("Wake and Sign In").status, "published");
+    assert.equal(byName.get("Wake and Sign In").harmonyName, "Wake and Sign In");
+    assert.equal(byName.get("Wake and Sign In").renamed, false);
+
+    assert.equal(byName.get("Déverrouiller Café").harmonyName, "Deverrouiller Cafe");
+    assert.equal(byName.get("Déverrouiller Café").renamed, true);
+    assert.equal(byName.get("De\u0301tente").harmonyName, "Detente");
+    assert.equal(byName.get("Straße & Cœur").harmonyName, "Strasse Coeur");
+
+    assert.equal(byName.get("Home").harmonyName, "Home Saved");
+    assert.equal(byName.get("Home").renamed, true);
+    assert.match(byName.get("Home").reason, /Home/);
+    assert.equal(byName.get("poweron").harmonyName, "poweron Saved");
+
+    assert.equal(byName.get(overlong1).harmonyName, "Wake Laptop And Enter Sign In Password On Lock S");
+    assert.equal(byName.get(overlong2).harmonyName, "Wake Laptop And Enter Sign In Password On Lock 2");
+    assert.equal(byName.get("Café").harmonyName, "Cafe");
+    assert.equal(byName.get("Cafe").harmonyName, "Cafe 2");
+
+    assert.equal(byName.get("!!!").status, "unpublished");
+    assert.equal(byName.get("!!!").harmonyName, null);
+    assert.ok(byName.get("!!!").reason.length > 0);
+    assert.equal(byName.get("日本語").status, "unpublished");
+    assert.equal(plan.published.length, 10);
+    assert.equal(plan.unpublished.length, 2);
+  });
+
+  it("flags pending commands and retained deleted commands against the live Harmony DeviceList entry", () => {
+    const dev = {
+      id: "bt_1730000000_42",
+      name: "Work Laptop",
+      type: "btkeyboard",
+      harmony: true,
+      commands: [
+        { name: "Wake and Sign In", delayMs: 35, script: "KEY escape" },
+        { name: "New Script", delayMs: 35, script: "KEY enter" },
+      ],
+    };
+    const harmonyEntry = {
+      Device: {
+        "Id-": 39000050,
+        AutoDetectedDevice: { Id: "melodious-bt-39000050" },
+        Tokens: { Parameters: [{ Key: "{d}", Value: "bt_1730000000_42" }] },
+      },
+      Commands: [
+        { Name: "Home", Parameters: [{ Key: "{c}", Value: "tvhome" }] },
+        { Name: "Wake and Sign In", Parameters: [{ Key: "{c}", Value: btHarmonyCommandValue("Wake and Sign In") }] },
+        { Name: "Old Deleted Script", Parameters: [{ Key: "{c}", Value: btHarmonyCommandValue("Old Deleted Script") }] },
+      ],
+    };
+    const plan = planBtHarmonyCommands(dev, harmonyEntry);
+    const byName = new Map(plan.items.map((item) => [item.name, item]));
+    assert.equal(byName.get("Wake and Sign In").status, "published");
+    assert.equal(byName.get("New Script").status, "pending");
+    assert.deepEqual(plan.retainedCommands, ["Old Deleted Script"]);
   });
 });
