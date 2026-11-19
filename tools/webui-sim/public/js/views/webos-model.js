@@ -191,6 +191,20 @@ export function webOsDeviceSet(config, { add = null, remove = "" } = {}) {
   return { devices };
 }
 
+const WEBOS_WAKE_COMMANDS = new Set(["PowerOn", "PowerOff", "PowerToggle"]);
+
+/**
+ * Why a command can't reach this LG webOS TV right now, or "". The hub's
+ * engine posts commands to codex_webos without waiting for an answer, so a
+ * key for a TV that is off would otherwise look sent. Power commands always
+ * go through: they wake the TV (Wake-on-LAN) or are harmless when it's off.
+ */
+export function webOsSendBlocker(tv, command) {
+  if (!tv || tv.connected || WEBOS_WAKE_COMMANDS.has(command)) return "";
+  if (!tv.paired) return "the TV isn't paired yet";
+  return tv.standby ? "the TV is off (standby)" : "the TV is off or unreachable";
+}
+
 /** One-line status summary for an LG webOS TV on its device page. */
 export function webOsStatusText(tv, cfg = null) {
   const host = tv?.host || cfg?.host || "";

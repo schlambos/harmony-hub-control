@@ -11,6 +11,7 @@ import * as hub from "../state.js";
 import { escapeHtml, icon, snackbar, statusDot, vibrate } from "../ui/shell.js";
 import { MAX_REPEAT_MS, REPEATABLE_KEYS, startRepeat } from "./key-repeat.js";
 import { KEY_LABELS, describeHaDeviceState, describeTheaterLink, isHaCommandRedundant, sendsHome } from "./remote-model.js";
+import { isWebOsDevice, webOsIdOf, webOsSendBlocker } from "./webos-model.js";
 
 const HOLD_MS = 500;
 const LOG_MAX = 60;
@@ -43,6 +44,21 @@ function addLog(entry) {
   for (const fn of logListeners) fn();
 }
 
+/* Throws when a native LG webOS TV can't take this command (webOsSendBlocker). */
+async function checkWebOsReachable(action) {
+  const device = hub.deviceById(action.deviceId);
+  if (!isWebOsDevice(device)) return;
+  let tv = null;
+  try {
+    const st = await api.getWebOsStatus();
+    tv = (st.tvs ?? []).find((t) => t.id === webOsIdOf(device)) ?? null;
+  } catch {
+    return; // the send itself reports a dead hub
+  }
+  const why = webOsSendBlocker(tv, action.command);
+  if (why) throw new Error(why);
+}
+
 /** "Volume up → Living room amp · VolumeUp", the resolved line under the tabs. */
 export function describe(label, action) {
   return `${label} → ${hub.deviceName(action.deviceId)} · ${action.command}`;
@@ -59,6 +75,7 @@ export async function sendCommand(action, { label, activityId, status, note } = 
   vibrate();
   status?.(line, "sending");
   try {
+    await checkWebOsReachable(action);
     await api.irSend({
       deviceId: action.deviceId,
       command: action.command,
@@ -93,14 +110,14 @@ export function repeatCommand(action, { label, activityId, status, note } = {}) 
   let sent = false;
   const stop = startRepeat(
     (which, holdId) =>
-      api.irSend({
+      (which === "press" ? checkWebOsReachable(action) : Promise.resolve()).then(() => api.irSend({
         deviceId: action.deviceId,
         command: action.command,
         functionId: action.functionId,
         activityId,
         status: which,
         holdId,
-      }).then((reply) => {
+      })).then((reply) => {
         if (which === "press") {
           sent = true;
           const extra = note ? note() : "";

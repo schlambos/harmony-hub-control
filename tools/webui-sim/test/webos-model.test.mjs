@@ -14,6 +14,7 @@ import {
   webOsIdOf,
   webOsInputsFromTv,
   webOsPairStateText,
+  webOsSendBlocker,
   webOsStatusText,
 } from "../public/js/views/webos-model.js";
 import { deviceDomainLabel, isHaDevice } from "../public/js/views/remote-model.js";
@@ -142,5 +143,19 @@ describe("webos-model", () => {
     assert.match(webOsStatusText({ paired: true, connected: false, mac: "AA:BB:CC:11:22:33", host: "192.168.1.40" }), /Wake-on-LAN/);
     assert.match(webOsPairStateText("prompt", "Living Room LG"), /Accept/);
     assert.match(webOsPairStateText("denied", "Living Room LG"), /declined/);
+  });
+  it("blocks non-power commands for an off or unreachable TV instead of faking a send", () => {
+    const on = { paired: true, connected: true, standby: false };
+    const standby = { paired: true, connected: false, standby: true };
+    const gone = { paired: true, connected: false, standby: false };
+    assert.equal(webOsSendBlocker(on, "VolumeUp"), "");
+    assert.equal(webOsSendBlocker(null, "VolumeUp"), "");
+    assert.match(webOsSendBlocker(standby, "VolumeUp"), /off \(standby\)/);
+    assert.match(webOsSendBlocker(gone, "DirectionUp"), /off or unreachable/);
+    assert.match(webOsSendBlocker({ paired: false, connected: false }, "Mute"), /isn't paired/);
+    for (const power of ["PowerOn", "PowerOff", "PowerToggle"]) {
+      assert.equal(webOsSendBlocker(standby, power), "");
+      assert.equal(webOsSendBlocker(gone, power), "");
+    }
   });
 });
