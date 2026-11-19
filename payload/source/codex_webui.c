@@ -132,6 +132,7 @@ static const char *UPDATE_FILES[] = {
     "codex_bthid_keyboard",
     "codex_bt_pair_agent",
     "codex_androidtv",
+    "codex_webos",
     "codex_usbeth",
     "codex_hal_ltcp",
     "codex_hbus",
@@ -3459,6 +3460,10 @@ static void render_switch2_devices_json(int fd, const struct request *req) {
     render_device_set_json(fd, req, "CommitSwitch2Devices", "Nintendo Switch 2");
 }
 
+static void render_webos_devices_json(int fd, const struct request *req) {
+    render_device_set_json(fd, req, "CommitWebOsDevices", "LG webOS TV");
+}
+
 /* Nintendo Switch 2 BLE wake beacon (Option C).
    Replays the PoC-verified 31-byte BLE advertisement over hci0 using
    Own_Address_Type = 0x01 (random address = bonded controller MAC), 2-second
@@ -4014,6 +4019,71 @@ static void render_androidtv_presets(int fd) {
         fclose(f);
     }
     free(buf);
+}
+
+/* codex_webos: native LG webOS TV daemon, on 127.0.0.1:8096 only. The web app's
+   /api/webos/... routes are relayed to it; pairing client-keys never leave the daemon. */
+#define WEBOS_DAEMON_PORT 8096
+#define WEBOS_REPLY_MAX 32768
+
+static void webos_relay(int fd, const char *method, const char *path, const char *req_body, size_t body_len) {
+    struct sockaddr_in addr;
+    struct timeval tv = {4, 0};
+    char head[384], *reply = NULL, *body;
+    size_t got = 0;
+    int sock = -1, n;
+    FILE *f;
+    reply = (char *)malloc(WEBOS_REPLY_MAX + 1);
+    if (!reply) goto unavailable;
+    sock = socket(AF_INET, SOCK_STREAM, 0);
+    if (sock < 0) goto unavailable;
+    setsockopt(sock, SOL_SOCKET, SO_RCVTIMEO, &tv, sizeof(tv));
+    setsockopt(sock, SOL_SOCKET, SO_SNDTIMEO, &tv, sizeof(tv));
+    memset(&addr, 0, sizeof(addr));
+    addr.sin_family = AF_INET;
+    addr.sin_port = htons(WEBOS_DAEMON_PORT);
+    addr.sin_addr.s_addr = htonl(INADDR_LOOPBACK);
+    if (connect(sock, (struct sockaddr *)&addr, sizeof(addr)) != 0) goto unavailable;
+    n = snprintf(head, sizeof(head),
+        "%s %s HTTP/1.0\r\nHost: 127.0.0.1\r\nContent-Type: application/json\r\n"
+        "Content-Length: %u\r\n\r\n", method, path, (unsigned)body_len);
+    if (n <= 0 || (size_t)n >= sizeof(head)) goto unavailable;
+    if (send(sock, head, (size_t)n, MSG_NOSIGNAL) != n) goto unavailable;
+    if (body_len && send(sock, req_body, body_len, MSG_NOSIGNAL) != (ssize_t)body_len) goto unavailable;
+    for (;;) {
+        ssize_t r = recv(sock, reply + got, WEBOS_REPLY_MAX - got, 0);
+        if (r < 0 && errno == EINTR) continue;
+        if (r <= 0) break;
+        got += (size_t)r;
+        if (got >= WEBOS_REPLY_MAX) break;
+    }
+    reply[got] = 0;
+    body = strstr(reply, "\r\n\r\n");
+    if (!body || body[4] != '{') goto unavailable;
+    f = send_json_start(fd, "200 OK");
+    if (f) {
+        fputs(body + 4, f);
+        fputc('\n', f);
+        fclose(f);
+    }
+    close(sock);
+    free(reply);
+    return;
+unavailable:
+    if (sock >= 0) close(sock);
+    free(reply);
+    f = send_json_start(fd, "503 Service Unavailable");
+    if (f) {
+        fputs("{\"ok\":false,\"error\":\"The hub's LG webOS TV service (codex_webos) isn't answering. "
+            "Restart the hub; if it keeps happening, reinstall Melodious.\"}\n", f);
+        fclose(f);
+    }
+}
+
+static void render_webos_proxy(int fd, const struct request *req, const char *method, const char *path) {
+    size_t body_len = req->body ? req->body_len : 0;
+    if (body_len > 4096) body_len = 4096;
+    webos_relay(fd, method, path, req->body, body_len);
 }
 
 /* One device's Touch screen: {"deviceId":..,"remove":bool,"dryRun":bool}.
@@ -13222,16 +13292,18 @@ static void send_payload_too_large(int fd, const struct request *req) {
 
 static void handle_client(int client) {
     struct request req;
-    int switch2_loopback;
+    int switch2_loopback, webos_loopback;
     if (read_request(client, &req) != 0) {
         free_request(&req);
         return;
     }
-    /* Local Harmony engine (ipmanager.lua on 127.0.0.1) posts Switch 2 wake
-       commands without Web UI Basic Auth headers. */
+    /* Local Harmony engine (ipmanager.lua on 127.0.0.1) posts Switch 2 wake and
+       LG webOS commands without Web UI Basic Auth headers. */
     switch2_loopback = (strcmp(req.method, "POST") == 0 &&
         strcmp(req.path, "/api/switch2/cmd") == 0 && peer_is_loopback(client));
-    if (!switch2_loopback && !webui_auth_ok(&req)) {
+    webos_loopback = (strcmp(req.method, "POST") == 0 &&
+        strcmp(req.path, "/api/webos/cmd") == 0 && peer_is_loopback(client));
+    if (!switch2_loopback && !webos_loopback && !webui_auth_ok(&req)) {
         send_auth_required(client);
         free_request(&req);
         return;
@@ -13302,6 +13374,31 @@ static void handle_client(int client) {
         render_switch2_devices_json(client, &req);
     } else if (strcmp(req.method, "POST") == 0 && strcmp(req.path, "/api/switch2/cmd") == 0) {
         if (switch2_loopback || request_same_origin_json(&req)) render_switch2_cmd_json(client, &req);
+        else send_cross_site_refused(client);
+    } else if (strcmp(req.method, "POST") == 0 && strcmp(req.path, "/api/webos/devices") == 0) {
+        if (request_same_origin_json(&req)) render_webos_devices_json(client, &req);
+        else send_cross_site_refused(client);
+    } else if (strcmp(req.method, "POST") == 0 && strcmp(req.path, "/api/webos/cmd") == 0) {
+        if (webos_loopback || request_same_origin_json(&req)) render_webos_proxy(client, &req, "POST", "/cmd");
+        else send_cross_site_refused(client);
+    } else if (strcmp(req.method, "GET") == 0 && strcmp(req.path, "/api/webos/status") == 0) {
+        render_webos_proxy(client, &req, "GET", "/status");
+    } else if (strcmp(req.method, "POST") == 0 && strcmp(req.path, "/api/webos/save") == 0) {
+        if (request_same_origin_json(&req)) render_webos_proxy(client, &req, "POST", "/save");
+        else send_cross_site_refused(client);
+    } else if (strcmp(req.method, "POST") == 0 && strcmp(req.path, "/api/webos/pair-start") == 0) {
+        if (request_same_origin_json(&req)) render_webos_proxy(client, &req, "POST", "/pair/start");
+        else send_cross_site_refused(client);
+    } else if (strcmp(req.method, "GET") == 0 && strcmp(req.path, "/api/webos/pair-status") == 0) {
+        render_webos_proxy(client, &req, "GET", "/pair/status");
+    } else if (strcmp(req.method, "POST") == 0 && strcmp(req.path, "/api/webos/pair-cancel") == 0) {
+        if (request_same_origin_json(&req)) render_webos_proxy(client, &req, "POST", "/pair/cancel");
+        else send_cross_site_refused(client);
+    } else if (strcmp(req.method, "POST") == 0 && strcmp(req.path, "/api/webos/refresh") == 0) {
+        if (request_same_origin_json(&req)) render_webos_proxy(client, &req, "POST", "/refresh");
+        else send_cross_site_refused(client);
+    } else if (strcmp(req.method, "POST") == 0 && strcmp(req.path, "/api/webos/forget") == 0) {
+        if (request_same_origin_json(&req)) render_webos_proxy(client, &req, "POST", "/forget");
         else send_cross_site_refused(client);
     } else if (strcmp(req.method, "POST") == 0 && strcmp(req.path, "/api/device-screen") == 0) {
         render_device_screen_json(client, &req);

@@ -242,8 +242,14 @@ tar -C "$BUILD" -xzf "$BEARSSL_TARBALL"
     -Ibearssl-$BEARSSL_VERSION/inc -Ibearssl-$BEARSSL_VERSION/src \
     -o "$OUT/codex_androidtv" "$SRC/codex_androidtv.c" \
     $(find "bearssl-$BEARSSL_VERSION/src" -name '*.c' | LC_ALL=C sort)
+  "$OFFICIAL_ZIG" cc -target mips-linux-musleabi -Os -static -s "$PDR_LDFLAGS" \
+    -ffunction-sections -fdata-sections -Wl,--gc-sections \
+    -Ibearssl-$BEARSSL_VERSION/inc -Ibearssl-$BEARSSL_VERSION/src \
+    -o "$OUT/codex_webos" "$SRC/codex_webos.c" \
+    $(find "bearssl-$BEARSSL_VERSION/src" -name '*.c' | LC_ALL=C sort)
 )
 check_pin codex_androidtv "$OUT/codex_androidtv"
+check_pin codex_webos "$OUT/codex_webos"
 
 # ---------------------------------------------------------------------------
 # busybox-extra — BusyBox 1.37.0, Official Zig 0.16.0, static. A second
@@ -344,7 +350,7 @@ check_pin dropbearmulti "$OUT/dropbearmulti"
 cd "$OUT"
 ln -sf dropbearmulti dropbear
 ln -sf dropbearmulti dropbearkey
-BIN_LIST="busybox-extra codex_androidtv codex_bt_pair_agent codex_bthid_keyboard codex_dhcpd codex_hal_ltcp codex_hbus codex_portal codex_usbeth codex_webui dropbearmulti"
+BIN_LIST="busybox-extra codex_androidtv codex_bt_pair_agent codex_bthid_keyboard codex_dhcpd codex_hal_ltcp codex_hbus codex_portal codex_usbeth codex_webos codex_webui dropbearmulti"
 # shellcheck disable=SC2086
 md5sum $BIN_LIST > MD5SUMS
 # shellcheck disable=SC2086

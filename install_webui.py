@@ -398,6 +398,7 @@ GATE_SCRIPT_SPECS: list[tuple[str, str, str, Path]] = [
     ),
     ("/data/codex/usb_eth_service.sh", "755", "runtime", PAYLOAD / "scripts" / "usb_eth_service.sh"),
     ("/data/codex/androidtv_service.sh", "755", "runtime", PAYLOAD / "scripts" / "androidtv_service.sh"),
+    ("/data/codex/webos_service.sh", "755", "runtime", PAYLOAD / "scripts" / "webos_service.sh"),
     ("/data/codex/recovery_ap.sh", "755", "runtime", PAYLOAD / "scripts" / "recovery_ap.sh"),
     ("/pkg/codexactivity/codexactivity.lua", "644", "plugin", PAYLOAD / "activity" / "codexactivity.lua"),
     ("/pkg/codexmqtt/codexmqtt.lua", "644", "plugin", PAYLOAD / "mqtt" / "codexmqtt.lua"),
@@ -446,7 +447,7 @@ USB_ETH_CONF=/data/codex/usb_eth.conf
 WIFI_WAIT=${CODEX_WIFI_WAIT:-15}
 
 BOOTSTRAP_ALWAYS="/etc/init.d/rcS.local /opt/luaworks/tasks/connectserver/netservicestarter.lua"
-BOOTSTRAP_IF_PRESENT="/data/codex/init.sh /data/codex/offline_egress_guard.sh /data/codex/usb_eth_service.sh /data/codex/androidtv_service.sh /data/codex/recovery_ap.sh /pkg/codexactivity/codexactivity.lua /pkg/codexmqtt/codexmqtt.lua"
+BOOTSTRAP_IF_PRESENT="/data/codex/init.sh /data/codex/offline_egress_guard.sh /data/codex/usb_eth_service.sh /data/codex/androidtv_service.sh /data/codex/webos_service.sh /data/codex/recovery_ap.sh /pkg/codexactivity/codexactivity.lua /pkg/codexmqtt/codexmqtt.lua"
 
 die() { echo "error=$*"; exit 1; }
 
@@ -604,6 +605,8 @@ report_off() {
   fi
   if echo "$_ps" | grep '[c]odex_bt_pair_agent' >/dev/null 2>&1 ||
      echo "$_ps" | grep '[c]odex_bthid_keyboard' >/dev/null 2>&1 ||
+     echo "$_ps" | grep '[c]odex_webos' >/dev/null 2>&1 ||
+     echo "$_ps" | grep '[w]ebos_service.sh' >/dev/null 2>&1 ||
      echo "$_ps" | grep '[r]ecovery_ap.sh' >/dev/null 2>&1 ||
      echo "$_ps" | grep '[c]odex_portal' >/dev/null 2>&1 ||
      echo "$_ps" | grep '[c]odex_dhcpd' >/dev/null 2>&1; then
@@ -1607,6 +1610,9 @@ class Installer:
                     "/data/codex/androidtv_service.sh", "755", "runtime", local=PAYLOAD / "scripts" / "androidtv_service.sh"
                 ),
                 Candidate(
+                    "/data/codex/webos_service.sh", "755", "runtime", local=PAYLOAD / "scripts" / "webos_service.sh"
+                ),
+                Candidate(
                     "/data/codex/androidtv-input-presets.json", "644", "runtime",
                     local=PAYLOAD / "androidtv" / "input-presets.json",
                 ),
@@ -2519,7 +2525,7 @@ class Installer:
             "ln -sf dropbearmulti /data/codex/bin/dropbear; "
             "ln -sf dropbearmulti /data/codex/bin/dropbearkey; "
             f"chmod 755 {bin_chmod} /data/codex/init.sh /data/codex/offline_egress_guard.sh "
-            "/data/codex/recovery_ap.sh /data/codex/androidtv_service.sh /data/codex/usb_eth_service.sh /usr/sbin/dropbear "
+            "/data/codex/recovery_ap.sh /data/codex/androidtv_service.sh /data/codex/webos_service.sh /data/codex/usb_eth_service.sh /usr/sbin/dropbear "
             "/usr/sbin/dropbearkey /etc/init.d/rcS.local; "
             "chmod 644 /data/codex/modules/usb-net/r8152.ko /data/codex/modules/usb-net/usbnet.ko /data/codex/modules/usb-net/asix.ko /data/codex/modules/usb-net/cdc_ether.ko /data/codex/modules/usb-net/cdc_ncm.ko /data/codex/modules/usb-net/ax88179_178a.ko /data/codex/modules/usb-net/README.md 2>/dev/null || true; "
             "chmod 600 /data/codexmqtt/config.json 2>/dev/null || true; "
@@ -2667,6 +2673,9 @@ class Installer:
             # codex_androidtv: kill the running copy; its service loop starts the new one.
             "killall codex_androidtv 2>/dev/null || true; "
             "if [ -x /data/codex/androidtv_service.sh ]; then /data/codex/androidtv_service.sh >/dev/null 2>&1 & fi; "
+            # codex_webos: kill the running copy; its service loop starts the new one.
+            "killall codex_webos 2>/dev/null || true; "
+            "if [ -x /data/codex/webos_service.sh ]; then /data/codex/webos_service.sh >/dev/null 2>&1 & fi; "
             "sleep 1; "
             f"/data/codex/bin/codex_hbus {remote_quote(self.hub_id)} harmony.automation?discover "
             f"{remote_quote('{\"gatewayType\":\"codexactivity\"}')} >> /cache/codex-init.log 2>&1 || true; "

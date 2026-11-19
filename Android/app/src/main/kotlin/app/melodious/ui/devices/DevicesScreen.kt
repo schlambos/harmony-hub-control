@@ -161,6 +161,7 @@ private fun TransportBadge(device: HubDevice) {
         when {
             device.isBluetoothHid -> "Bluetooth"
             device.isSwitch2Wake -> "BLE Wake"
+            device.isWebOsTv -> "LG webOS"
             device.isHomeAssistant -> "Home Assistant"
             device.isNetworkTv -> "Network"
             else -> "IR"
@@ -330,6 +331,14 @@ private fun CommandsList(
             if (device.isSwitch2Wake) {
                 Text(
                     "Nintendo Switch 2 wake device — tap Wake to send the 2-second Bluetooth wake burst. Power Off is a no-op (sleep is handled by TV HDMI-CEC standby or the console itself).",
+                    fontSize = 13.sp,
+                    lineHeight = 19.sp,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    modifier = Modifier.padding(horizontal = 20.dp, vertical = 12.dp),
+                )
+            } else if (device.isWebOsTv) {
+                Text(
+                    "LG webOS TV — commands run directly over your LAN (Power On uses Wake-on-LAN when a MAC is configured). Add or re-pair LG webOS TVs from the Web or Desktop app.",
                     fontSize = 13.sp,
                     lineHeight = 19.sp,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,

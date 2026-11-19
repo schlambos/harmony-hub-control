@@ -268,6 +268,45 @@ export function saveSwitch2Devices({ devices, dryRun = false }) {
   return request("/api/switch2/devices", { method: "POST", body: { devices, dryRun } });
 }
 
+/* -- native LG webOS TVs (codex_webos, proxied by codex_webui) -------------- */
+
+export function getWebOsStatus() {
+  return request("/api/webos/status");
+}
+
+export function saveWebOsTv(body) {
+  return request("/api/webos/save", { method: "POST", body });
+}
+
+export function startWebOsPairing(body) {
+  return request("/api/webos/pair-start", { method: "POST", body });
+}
+
+export function getWebOsPairStatus() {
+  return request("/api/webos/pair-status");
+}
+
+export function cancelWebOsPairing() {
+  return request("/api/webos/pair-cancel", { method: "POST", body: {} });
+}
+
+export function refreshWebOsTv({ id }) {
+  return request("/api/webos/refresh", { method: "POST", body: { id } });
+}
+
+export function forgetWebOsTv({ id }) {
+  return request("/api/webos/forget", { method: "POST", body: { id } });
+}
+
+export function sendWebOsCommand({ device, command }) {
+  return request("/api/webos/cmd", { method: "POST", body: { device, command } });
+}
+
+/** The hub's whole set of native LG webOS TV devices (codexactivity CommitWebOsDevices). */
+export function saveWebOsDevices({ devices, dryRun = false }) {
+  return request("/api/webos/devices", { method: "POST", body: { devices, dryRun } });
+}
+
 export function getSimEvents() {
   return request(["/api", "sim", "events"].join("/"));
 }

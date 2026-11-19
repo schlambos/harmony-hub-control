@@ -43,6 +43,7 @@ PINNED_BINARIES = {
     "codex_hbus": "payload/bin/codex_hbus",
     "codex_portal": "payload/bin/codex_portal",
     "codex_usbeth": "payload/bin/codex_usbeth",
+    "codex_webos": "payload/bin/codex_webos",
     "codex_webui": "payload/bin/codex_webui",
     "dropbearmulti": "payload/bin/dropbearmulti",
 }

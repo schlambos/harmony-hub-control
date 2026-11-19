@@ -31,6 +31,7 @@ const RESTART_SET = [
   "codex_androidtv",
   "codex_bt_pair_agent",
   "codex_bthid_keyboard",
+  "codex_webos",
   "codex_webui",
 ];
 

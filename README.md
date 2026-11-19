@@ -161,7 +161,7 @@ backups.
   - Dropbear SSH: [`third_party/dropbear-2025.89/`](third_party/dropbear-2025.89/);
   - BusyBox 1.37.0 (GPL-2.0), built into `busybox-extra`, with its patch, configuration and how to
     rebuild it: [`third_party/busybox-1.37.0/`](third_party/busybox-1.37.0/);
-  - BearSSL 0.6 (MIT), built into `codex_androidtv`: [`third_party/bearssl-0.6/`](third_party/bearssl-0.6/);
+  - BearSSL 0.6 (MIT), built into `codex_androidtv` and `codex_webos`: [`third_party/bearssl-0.6/`](third_party/bearssl-0.6/);
   - the Linux kernel 2.6.31 (GPL-2.0), from Logitech's published hub kernel archive, built into
     `asix.ko` with two upstream Linux 3.1 patches by Marek Vasut; config, patches and how to rebuild:
     [`third_party/linux-2.6.31-harmony/`](third_party/linux-2.6.31-harmony/README.md).

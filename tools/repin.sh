@@ -28,7 +28,7 @@ BEARSSL_VERSION=0.6
 BEARSSL_SHA256=6705bba1714961b41a728dfc5debbe348d2966c117649392f8c8139efc83ff14
 BUN_VERSION=1.3.14
 
-ZIG_BINS="codex_webui codex_bt_pair_agent codex_bthid_keyboard codex_hal_ltcp codex_hbus codex_dhcpd codex_portal codex_usbeth codex_flash_free codex_androidtv"
+ZIG_BINS="codex_webui codex_bt_pair_agent codex_bthid_keyboard codex_hal_ltcp codex_hbus codex_dhcpd codex_portal codex_usbeth codex_flash_free codex_androidtv codex_webos"
 ALL_BINS="$ZIG_BINS busybox-extra dropbearmulti"
 
 usage() {
@@ -294,17 +294,17 @@ build_one() {
         -o payload/helpers/codex_flash_free \
         payload/source/codex_flash_free.c
       ;;
-    codex_androidtv)
+    codex_androidtv|codex_webos)
       resolve_zig
       ensure_bearssl
-      echo "repin: building codex_androidtv..."
+      echo "repin: building $_name..."
       (
         cd "$REPO_ROOT/build/tmp"
         # shellcheck disable=SC2046
         "$OFFICIAL_ZIG" cc -target mips-linux-musleabi -Os -static -s "$_pdr" \
           -ffunction-sections -fdata-sections -Wl,--gc-sections \
           -Ibearssl-$BEARSSL_VERSION/inc -Ibearssl-$BEARSSL_VERSION/src \
-          -o "$REPO_ROOT/payload/bin/codex_androidtv" "$REPO_ROOT/payload/source/codex_androidtv.c" \
+          -o "$REPO_ROOT/payload/bin/$_name" "$REPO_ROOT/payload/source/$_name.c" \
           $(find "bearssl-$BEARSSL_VERSION/src" -name '*.c' | LC_ALL=C sort)
       )
       ;;
@@ -503,6 +503,7 @@ if [ "$ALL" -eq 0 ] && [ -z "$REQUESTED" ]; then
       payload/source/codex_usbeth.c) add_build codex_usbeth ;;
       payload/source/codex_flash_free.c) add_build codex_flash_free ;;
       payload/source/codex_androidtv.c) add_build codex_androidtv ;;
+      payload/source/codex_webos.c) add_build codex_webos ;;
       build/discard-mips-pdr.ld)
         for _zb in $ZIG_BINS; do add_build "$_zb"; done
         ;;

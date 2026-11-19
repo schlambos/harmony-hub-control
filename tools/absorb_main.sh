@@ -148,7 +148,7 @@ fi
 
 # Identify binaries whose source inputs or binaries changed on the branch
 # (MERGE_BASE..HEAD) and on main (MERGE_BASE..MAIN_REF).
-ZIG_BINS="codex_webui codex_bt_pair_agent codex_bthid_keyboard codex_hal_ltcp codex_hbus codex_dhcpd codex_portal codex_usbeth codex_flash_free codex_androidtv"
+ZIG_BINS="codex_webui codex_bt_pair_agent codex_bthid_keyboard codex_hal_ltcp codex_hbus codex_dhcpd codex_portal codex_usbeth codex_flash_free codex_androidtv codex_webos"
 
 SRC_BINS=""
 BIN_TOUCHED=""
@@ -186,6 +186,7 @@ scan_inputs() {
       payload/source/codex_usbeth.c) add_src_bin codex_usbeth ;;
       payload/source/codex_flash_free.c) add_src_bin codex_flash_free ;;
       payload/source/codex_androidtv.c) add_src_bin codex_androidtv ;;
+      payload/source/codex_webos.c) add_src_bin codex_webos ;;
       build/discard-mips-pdr.ld)
         for _zb in $ZIG_BINS; do add_src_bin "$_zb"; done
         ;;

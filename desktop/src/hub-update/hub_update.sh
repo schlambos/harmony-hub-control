@@ -92,6 +92,9 @@ apply() {
     # codex_androidtv's service loop restarts it with the new binary.
     killall codex_androidtv 2>/dev/null
     if [ -x /data/codex/androidtv_service.sh ]; then /data/codex/androidtv_service.sh >/dev/null 2>&1 & fi
+    # codex_webos's service loop restarts it with the new binary.
+    killall codex_webos 2>/dev/null
+    if [ -x /data/codex/webos_service.sh ]; then /data/codex/webos_service.sh >/dev/null 2>&1 & fi
     sleep 1
     if [ -n "$HUB_ID" ]; then
       /data/codex/bin/codex_hbus "$HUB_ID" "harmony.automation?discover" '{"gatewayType":"codexactivity"}' >> /cache/codex-init.log 2>&1

@@ -153,6 +153,23 @@ The output doesn't depend on where the tree or BearSSL is unpacked. For the
 fake-TV smoke test, build the same way with `-target x86_64-linux-musl` (or
 your host) into `build/output/codex_androidtv-native`.
 
+### codex_webos (Official Zig, BearSSL 0.6)
+
+Hub-native LAN control for LG webOS TVs ([WEBOS_TV.md](WEBOS_TV.md)). Uses the
+same BearSSL 0.6 tarball and Official Zig 0.16.0 invocation as `codex_androidtv`:
+
+```sh
+cd build/tmp
+"$OFFICIAL_ZIG" cc -target mips-linux-musleabi -Os -static -s -Wl,-T,../discard-mips-pdr.ld \
+  -ffunction-sections -fdata-sections -Wl,--gc-sections \
+  -Ibearssl-0.6/inc -Ibearssl-0.6/src \
+  -o ../../payload/bin/codex_webos ../../payload/source/codex_webos.c \
+  $(find bearssl-0.6/src -name '*.c' | LC_ALL=C sort)
+```
+
+Result must be `ELF 32-bit MSB executable, MIPS, MIPS32 rel2`, statically
+linked, stripped, matching `build/pins/codex_webos`.
+
 ### codex_flash_free (installer helper, Official Zig, `-mcpu=mips32`)
 
 The installers copy this probe into their RAM staging folder, run it to read

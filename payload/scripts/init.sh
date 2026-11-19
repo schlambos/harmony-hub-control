@@ -103,6 +103,11 @@ if [ -x /data/codex/androidtv_service.sh ]; then
   /data/codex/androidtv_service.sh >/dev/null 2>&1 &
 fi
 
+if [ -x /data/codex/webos_service.sh ]; then
+  # Native LG webOS TVs: keeps codex_webos running (one copy, respawned).
+  /data/codex/webos_service.sh >/dev/null 2>&1 &
+fi
+
 if [ -x /data/codex/recovery_ap.sh ]; then
   if [ ! -f /var/run/codex-recovery-monitor.pid ]; then
     /data/codex/recovery_ap.sh monitor >> "$LOG" 2>&1 &
