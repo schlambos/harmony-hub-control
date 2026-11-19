@@ -154,18 +154,20 @@ private fun DeviceRow(device: HubDevice, subtitle: String, onClick: () -> Unit) 
     }
 }
 
+internal fun transportBadgeLabel(device: HubDevice): String = when {
+    device.isSwitch2Wake -> "BLE Wake"
+    device.isBluetoothHid || device.isHubBluetooth -> "Bluetooth"
+    device.isWebOsTv -> "LG webOS"
+    device.isHomeAssistant -> "Home Assistant"
+    device.isNetworkTv -> "Network"
+    else -> "IR"
+}
+
 @Composable
 private fun TransportBadge(device: HubDevice) {
-    val bt = device.isBluetoothHid || device.isSwitch2Wake
+    val bt = device.isBluetoothHid || device.isSwitch2Wake || device.isHubBluetooth
     Text(
-        when {
-            device.isBluetoothHid -> "Bluetooth"
-            device.isSwitch2Wake -> "BLE Wake"
-            device.isWebOsTv -> "LG webOS"
-            device.isHomeAssistant -> "Home Assistant"
-            device.isNetworkTv -> "Network"
-            else -> "IR"
-        },
+        transportBadgeLabel(device),
         fontSize = 12.sp,
         fontWeight = FontWeight.Medium,
         color = if (bt) Color(0xFFB9CBFF) else Color(0xFFC3C8D2),

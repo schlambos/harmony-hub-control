@@ -358,6 +358,9 @@ export function devices() {
   return raw.map((entry) => {
     const device = entry.Device ?? {};
     const transport = Number(device.Transport) || 1;
+    // A saved Bluetooth target published by the hub (codexactivity
+    // CommitBtDevices): an IP device whose keys the hub sends over Bluetooth.
+    const melodiousBt = String(device.AutoDetectedDevice?.Id ?? "").startsWith("melodious-bt-");
     return {
       id: String(device["Id-"]),
       name: device.Name || device.FriendlyName || `Device ${device["Id-"]}`,
@@ -367,12 +370,14 @@ export function devices() {
       typeLabel: device.DeviceTypeDisplayName || device.DeviceType || "",
       transport,
       // Transport 32 is Bluetooth HID; 64 is IP (Home Assistant, a network TV
-      // driven by codex_androidtv or codex_webos, or a Switch 2 BLE wake device); else IR.
-      isBluetooth: transport === 32,
+      // driven by codex_androidtv or codex_webos, a Switch 2 BLE wake device, or
+      // one of the hub's own Bluetooth keyboard targets); else IR.
+      isBluetooth: transport === 32 || melodiousBt,
+      isMelodiousBt: melodiousBt,
       isAndroidTv: String(device.AutoDetectedDevice?.Id ?? "").startsWith("melodious-androidtv-"),
       isSwitch2: String(device.AutoDetectedDevice?.Id ?? "").startsWith("melodious-switch2-"),
       isWebOs: String(device.AutoDetectedDevice?.Id ?? "").startsWith("melodious-webos-"),
-      isHa: !String(device.AutoDetectedDevice?.Id ?? "").startsWith("melodious-androidtv-") &&
+      isHa: !melodiousBt && !String(device.AutoDetectedDevice?.Id ?? "").startsWith("melodious-androidtv-") &&
         !String(device.AutoDetectedDevice?.Id ?? "").startsWith("melodious-switch2-") &&
         !String(device.AutoDetectedDevice?.Id ?? "").startsWith("melodious-webos-") &&
         (transport === 64 || String(device.Manufacturer ?? "").toLowerCase().includes("home assistant")),
