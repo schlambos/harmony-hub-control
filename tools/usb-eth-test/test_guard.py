@@ -497,6 +497,156 @@ echo recovered
             self.assertEqual(self.route_metric("224.0.0.0", "ath0"), ["0"], bogus)
 
 
+# wpa_cli for WifiLinkWatchdog: "status" reports the wpa_state in FAKE_WPA_STATE.
+FAKE_WPA_STATUS = """#!/bin/sh
+echo "wpa_cli $*" >> "$FAKE_LOG"
+case " $* " in
+  *" status "*) echo "bssid=00:11:22:33:44:55"; echo "wpa_state=$(cat "$FAKE_WPA_STATE")" ;;
+  *) echo OK ;;
+esac
+exit 0
+"""
+
+# The hub's BusyBox ping without options: one echo request, "is alive!" or,
+# after 5 s, "No response from". Answers while FAKE_PING_ALIVE exists.
+FAKE_PING = """#!/bin/sh
+echo "ping $*" >> "$FAKE_LOG"
+if [ -f "$FAKE_PING_ALIVE" ]; then echo "$1 is alive!"; exit 0; fi
+echo "No response from $1"
+exit 1
+"""
+
+
+class WifiLinkWatchdog(GuardHub):
+    """#202: with the blocker on, the guard does the stock netmonitor's job of
+    reassociating Wi-Fi when the gateway stops answering, since netmonitor
+    finds no default route to ping through."""
+
+    def setUp(self):
+        super().setUp()
+        self.kill_worker()  # no USB Ethernet: Wi-Fi carries local traffic
+        for name, body in (("wpa_cli", FAKE_WPA_STATUS), ("ping", FAKE_PING)):
+            p = self.tmp / "bin" / name
+            p.write_text(body)
+            p.chmod(0o755)
+        (self.tmp / "wpa-state").write_text("COMPLETED\n")
+        (self.tmp / "ping-alive").write_text("")
+        self.uptime = 1000
+
+    def tick(self, seconds=2):
+        """One pass of the monitor loop, `seconds` after the last one."""
+        self.uptime += seconds
+        (self.tmp / "uptime").write_text(f"{self.uptime}.42 1234.56\n")
+        e = dict(self.env, GUARD_PATH=self.env["USBETH_PATH"], GUARD_BLOCKER=self.env["USBETH_BLOCKER"],
+                 GUARD_GATEWAY_STATE=str(self.tmp / "run/gateway"), GUARD_PID_FILE=str(self.tmp / "run/guard.pid"),
+                 GUARD_LAN_DEV_FILE=str(self.tmp / "run/codex-lan-dev"), GUARD_SYS=self.env["USBETH_SYS"],
+                 GUARD_LOG=str(self.tmp / "guard.log"),
+                 GUARD_USBETH_WIFI_OFF=str(self.tmp / "run/codex-usb-eth-wifi-off"),
+                 GUARD_USBETH_PID=str(self.tmp / "run/codex-usb-eth-worker.pid"),
+                 GUARD_USBETH_SERVICE=str(self.tmp / "no-usb_eth_service.sh"),
+                 GUARD_LINK_STATE=str(self.tmp / "run/wifi-link"), GUARD_UPTIME=str(self.tmp / "uptime"),
+                 FAKE_WPA_STATE=str(self.tmp / "wpa-state"), FAKE_PING_ALIVE=str(self.tmp / "ping-alive"))
+        r = subprocess.run(SHELL + [str(GUARD), "tick"], env=e, capture_output=True, text=True, timeout=30)
+        self.assertEqual(r.returncode, 0, r.stderr)
+
+    def calls(self, prefix):
+        log = self.tmp / "calls.log"
+        return [l for l in (log.read_text().splitlines() if log.exists() else []) if l.startswith(prefix)]
+
+    def reassociations(self):
+        return len(self.calls("wpa_cli -i ath0 reassociate"))
+
+    def test_the_blocker_leaves_netmonitor_no_gateway_to_ping(self):
+        r = self.routes()
+        r.append({"net": "0.0.0.0", "mask": "0.0.0.0", "gw": "192.168.1.1", "dev": "ath0", "metric": "0"})
+        (self.tmp / "routes.json").write_text(json.dumps(r))
+        self.tick()
+        # The stock /usr/bin/netmonitor's gateway lookup, on the table the guard leaves.
+        table = subprocess.run([str(self.tmp / "bin/route"), "-n"], env=self.env, capture_output=True, text=True).stdout
+        gateway = subprocess.run(["awk", '{if($1=="0.0.0.0") print $2}'], input=table, capture_output=True, text=True).stdout
+        self.assertEqual(gateway.strip(), "")
+
+    def test_reassociates_after_five_missed_pings_once_the_gateway_answered(self):
+        self.tick()
+        self.assertEqual(len(self.calls("ping 192.168.1.1")), 1)
+        (self.tmp / "ping-alive").unlink()  # the access point stops passing traffic
+        self.tick(30)
+        for _ in range(3):
+            self.tick()
+        self.assertEqual(self.reassociations(), 0, "reassociated before the fifth miss")
+        self.tick()
+        self.assertEqual(self.reassociations(), 1)
+        self.assertIn("reassociated Wi-Fi (gateway 192.168.1.1 stopped answering)", (self.tmp / "guard.log").read_text())
+        # Then it waits 30 s before checking again, and counts five more misses.
+        self.tick()
+        self.assertEqual(len(self.calls("ping")), 6)
+        self.tick(30)
+        for _ in range(4):
+            self.tick()
+        self.assertEqual(self.reassociations(), 2)
+
+    def test_a_gateway_that_answers_again_resets_the_count(self):
+        self.tick()
+        (self.tmp / "ping-alive").unlink()
+        self.tick(30)
+        self.tick()
+        self.tick()
+        (self.tmp / "ping-alive").write_text("")
+        self.tick()
+        (self.tmp / "ping-alive").unlink()
+        self.tick(30)
+        self.tick()
+        self.tick()
+        self.tick()
+        self.assertEqual(self.reassociations(), 0)
+
+    def test_checks_every_thirty_seconds_while_the_gateway_answers(self):
+        self.tick()
+        for _ in range(14):
+            self.tick()
+        self.assertEqual(len(self.calls("ping")), 1)
+        self.tick()
+        self.assertEqual(len(self.calls("ping")), 2)
+
+    def test_a_gateway_that_never_answered_never_triggers_it(self):
+        (self.tmp / "ping-alive").unlink()  # a router that ignores ping
+        for _ in range(12):
+            self.tick(30)
+        self.assertEqual(self.reassociations(), 0)
+
+    def test_leaves_a_link_that_is_down_to_wpa_supplicant(self):
+        self.tick()
+        (self.tmp / "ping-alive").unlink()
+        (self.tmp / "wpa-state").write_text("SCANNING\n")
+        for _ in range(8):
+            self.tick(30)
+        self.assertEqual(self.reassociations(), 0)
+        self.assertEqual(len(self.calls("ping")), 1, "pinged while not associated")
+
+    def test_stays_out_of_the_way_with_the_blocker_off(self):
+        # The default route stays, so netmonitor does this itself.
+        (self.tmp / "data/cloud_blocker.conf").write_text("0\n")
+        r = self.routes()
+        r.append({"net": "0.0.0.0", "mask": "0.0.0.0", "gw": "192.168.1.1", "dev": "ath0", "metric": "0"})
+        (self.tmp / "routes.json").write_text(json.dumps(r))
+        (self.tmp / "ping-alive").unlink()
+        for _ in range(8):
+            self.tick(30)
+        self.assertEqual(self.calls("ping"), [])
+        self.assertEqual(self.reassociations(), 0)
+        self.assertFalse((self.tmp / "run/wifi-link").exists())
+
+    def test_stays_out_of_the_way_while_usb_ethernet_has_wifi_off(self):
+        live = subprocess.Popen(["sleep", "60"])
+        self.addCleanup(lambda: (live.kill(), live.wait()))
+        (self.tmp / "run/codex-usb-eth-worker.pid").write_text(f"{live.pid}\n")
+        (self.tmp / "run/codex-usb-eth-wifi-off").write_text("")
+        (self.tmp / "ping-alive").unlink()
+        for _ in range(8):
+            self.tick(30)
+        self.assertEqual(self.calls("ping"), [])
+
+
 class GuardAndService(unittest.TestCase):
     """The egress guard and the real usb_eth_service.sh together, in
     test_service.py's sandbox: the worker dies while the cable carries local
