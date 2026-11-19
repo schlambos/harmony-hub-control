@@ -4,26 +4,26 @@ Melodious includes an **experimental, native Swift/SwiftUI client for iPhone and
 
 It ships with the **2.5.0** release as an **unsigned `.ipa` (`melodious-ios-2.5.0.ipa`) for sideloading** with AltStore or SideStore, or you can build and install it directly onto your iPad or iPhone from a Mac using Xcode free provisioning. It is not on the App Store or TestFlight.
 
-> **Preview note:** The images below are SwiftUI **layout renders at device sizes** (iPad 1194×834 and iPhone 393×852) rendered on macOS against `tools/webui-sim`. They are not iOS Simulator captures and will be replaced by real iOS Simulator captures once the app is built with Xcode.
+> **Screenshots:** Captured directly from **iOS 27.2 Simulator** (`Xcode 27.2`) running against `tools/webui-sim` on **iPad Pro 11-inch (M5)** (`2420×1668`, landscape) and **iPhone 18 Pro** (`1206×2622`, portrait).
 
 <table>
 <tr>
-<td align="center"><img src="screenshots/ios/ipad-remote.png" alt="Melodious iPad layout render — split view remote" width="520"><br><sub>iPad layout render (1194×834): hub &amp; activities sidebar, remote keypad, and More keys panel</sub></td>
-<td align="center"><img src="screenshots/ios/iphone-remote.png" alt="Melodious iPhone layout render — compact remote" width="180"><br><sub>iPhone layout render (393×852): compact tab layout</sub></td>
+<td align="center"><img src="screenshots/ios/ipad-remote.png" alt="Melodious on iPad Pro 11-inch (M5) Simulator — split view remote" width="520"><br><sub>iPad Pro 11-inch (M5) Simulator (iOS 27.2): hub &amp; activities sidebar, remote keypad, and More keys panel</sub></td>
+<td align="center"><img src="screenshots/ios/iphone-remote.png" alt="Melodious on iPhone 18 Pro Simulator — compact remote" width="180"><br><sub>iPhone 18 Pro Simulator (iOS 27.2): compact tab layout</sub></td>
 </tr>
 </table>
 
 <details>
-<summary>More iPad and iPhone layout renders</summary>
+<summary>More iPad and iPhone Simulator screenshots</summary>
 
 <table>
 <tr>
-<td align="center"><img src="screenshots/ios/ipad-activities.png" alt="iPad Activities layout render" width="440"><br><sub>iPad layout render: Activities</sub></td>
-<td align="center"><img src="screenshots/ios/ipad-devices.png" alt="iPad Devices layout render" width="440"><br><sub>iPad layout render: Device commands</sub></td>
+<td align="center"><img src="screenshots/ios/ipad-activities.png" alt="iPad Pro 11-inch (M5) Simulator — Activities" width="440"><br><sub>iPad Simulator: Activities</sub></td>
+<td align="center"><img src="screenshots/ios/ipad-devices.png" alt="iPad Pro 11-inch (M5) Simulator — Device commands" width="440"><br><sub>iPad Simulator: Device commands</sub></td>
 </tr>
 <tr>
-<td align="center"><img src="screenshots/ios/iphone-activities.png" alt="iPhone Activities layout render" width="180"><br><sub>iPhone layout render: Activities</sub></td>
-<td align="center"><img src="screenshots/ios/iphone-devices.png" alt="iPhone Devices layout render" width="180"><br><sub>iPhone layout render: Devices</sub></td>
+<td align="center"><img src="screenshots/ios/iphone-activities.png" alt="iPhone 18 Pro Simulator — Activities" width="180"><br><sub>iPhone Simulator: Activities</sub></td>
+<td align="center"><img src="screenshots/ios/iphone-devices.png" alt="iPhone 18 Pro Simulator — Devices" width="180"><br><sub>iPhone Simulator: Devices</sub></td>
 </tr>
 </table>
 
@@ -109,7 +109,7 @@ If you have a Mac with Xcode, you can build, sign with a free Apple ID, and inst
    ```bash
    open ios/Melodious/Melodious.xcodeproj
    ```
-2. In the project navigator, select **Melodious** (top-level project) → select the **Melodious** app target → open the **Signing & Capabilities** tab.
+2. In the left Project Navigator (`⌘1`), click **Melodious** (top-level blue project icon), then in the editor column select **Melodious** under **TARGETS** (not under **PROJECT**) and open the **Signing & Capabilities** tab.
 3. Check **Automatically manage signing**.
 4. Under **Team**, select your **Personal Team** (if you haven't added your Apple ID yet, click **Add Account…** in Xcode → Settings → Accounts; a free Apple ID works).
 5. If Apple reports that the bundle identifier `app.melodious.ios` is already registered to another team in Apple's portal, append your own suffix in the **Bundle Identifier** field (for example `app.melodious.ios.yourname`).
@@ -134,13 +134,13 @@ This runs `xcodebuild` (`-configuration Release -destination "generic/platform=i
 
 ### Run the unit tests and simulator against `tools/webui-sim`
 
-On a Mac with Xcode installed, you can run the XCTest unit test suite (hub URL parsing, `/24` subnet candidate generation, `/api/version` + `/api/activity-config` + state-digest JSON fixture parsing, remote key → HBus press/hold/release frame sequences, and saved-hub persistence) on an iPad simulator:
+On a Mac with Xcode installed (verified with **Xcode 27.2** / **iOS 27.2 Simulator**), run the 15-test XCTest unit suite (hub URL parsing, `/24` subnet candidate generation, `/api/version` + `/api/activity-config` + state-digest JSON fixture parsing, remote key → HBus press/hold/release frame sequences, and saved-hub persistence) on an iPad simulator:
 
 ```bash
 xcodebuild test \
   -project ios/Melodious/Melodious.xcodeproj \
   -scheme Melodious \
-  -destination 'platform=iOS Simulator,name=iPad Pro 11-inch (M4)'
+  -destination 'platform=iOS Simulator,name=iPad Pro 11-inch (M5)'
 ```
 
 To run the app in the iPad or iPhone simulator against the local mock hub without touching a real Harmony Hub:
