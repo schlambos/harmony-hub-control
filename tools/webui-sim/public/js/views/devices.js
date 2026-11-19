@@ -467,6 +467,7 @@ export function createDevicesView(section) {
       currentActivityId: hub.state.currentId,
       selectedDeviceId: device.id,
       deviceCommands: device.commands,
+      deviceEntry: device.entry,
     });
   }
 

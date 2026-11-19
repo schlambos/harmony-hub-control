@@ -20,6 +20,7 @@ export function resolveSkinPowerAction({
   currentActivityId,
   selectedDeviceId,
   deviceCommands,
+  deviceEntry,
 }) {
   if (mode === "activities") {
     const id = String(currentActivityId ?? "");
@@ -28,7 +29,28 @@ export function resolveSkinPowerAction({
   }
   const deviceId = String(selectedDeviceId ?? "");
   if (!deviceId) return { kind: "inert", reason: "no-device" };
-  const cmd = matchCommand(deviceCommands, POWER_ALIASES);
+  let cmd = matchCommand(deviceCommands, POWER_ALIASES);
+  if (!cmd?.name && deviceEntry) {
+    const features = Array.isArray(deviceEntry.DeviceFeatures) ? deviceEntry.DeviceFeatures : [];
+    const pf = features.find((f) => String(f?.__type ?? "").includes("PowerFeature"));
+    const powerType = Number(pf?.PowerTypeId);
+    if (pf && powerType !== 0 && powerType !== 3) {
+      const cmds = Array.isArray(deviceCommands) ? deviceCommands : [];
+      const candidates = [
+        ...(Array.isArray(pf.PowerOffActions) ? pf.PowerOffActions : []),
+        ...(Array.isArray(pf.PowerToggleActions) ? pf.PowerToggleActions : []),
+        ...(Array.isArray(pf.PowerOnActions) ? pf.PowerOnActions : []),
+      ];
+      for (const action of candidates) {
+        if (!action?.IRCommandName) continue;
+        const hit = cmds.find((c) => c?.name === action.IRCommandName);
+        if (hit?.name) {
+          cmd = hit;
+          break;
+        }
+      }
+    }
+  }
   if (!cmd?.name) return { kind: "inert", reason: "no-power-command" };
   return {
     kind: "device-power",
