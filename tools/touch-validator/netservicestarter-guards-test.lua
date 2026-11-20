@@ -142,9 +142,14 @@ end
 
 local getTime = handlers["harmony.engine?gettime"]
 check("registers the time guard under the stock name", type(getTime) == "function")
-check("leaves every firmware command to the stock handlers",
-  handlers["setup.firmware?check"] == nil and handlers["setup.firmware"] == nil and
+local fwCheck = handlers["setup.firmware?check"]
+check("registers setup.firmware?check (Ultimate-scoped) while leaving setup.firmware and harmony.firmware stock",
+  type(fwCheck) == "function" and handlers["setup.firmware"] == nil and
   handlers["harmony.firmware"] == nil)
+nativeCalls = {}
+local touchFw = fwCheck("setup.firmware?check", "check", { package = { "base" } })
+check("setup.firmware?check without a preceding Ultimate sus:// defers to stock",
+  touchFw.native == "setup.firmware?check" and #nativeCalls == 1)
 if type(getTime) ~= "function" then
   print(string.format("%d/%d checks passed", count - failures, count))
   os.exit(1)
