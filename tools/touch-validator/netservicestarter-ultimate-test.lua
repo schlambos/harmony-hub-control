@@ -240,8 +240,14 @@ local function loadEnv(opts)
       end,
       getHubEtag = function(name) return env.stored[name] and env.stored[name].hetag end,
       getEtag = function(name) return env.stored[name] and env.stored[name].etag end,
-      isAnySyncInProgress = function() return opts.syncing or false end,
+      isAnySyncInProgress = function()
+        if opts.syncCheckError then error("sync lookup failed") end
+        return opts.syncing or false
+      end,
       saveResource = function(mime, etag, body, name, _, hetag)
+        if opts.failSave and opts.failSave[name] then
+          return false, "disk full"
+        end
         env.resSaves[#env.resSaves + 1] = {
           mime = mime, etag = etag, body = body, name = name, hetag = hetag
         }
@@ -446,6 +452,47 @@ if type(fwCheck) == "function" then
   local blockerOffFw = fwCheck("setup.firmware?check", "check", { package = { "base" } })
   check("cloud blocker off: setup.firmware?check defers to stock handler",
     blockerOffFw.native == true and #fresh.nativeFwCalls == before + 1, encode(blockerOffFw))
+
+  -- Reviewer finding 1: other remote resource -> Ultimate resource -> other remote fw check -> Ultimate fw check
+  -- on the same/unspecified peer must NEVER give Touch (99), Elite (111), or 950 (112) the Ultimate's 200!
+  fresh.blocker = "1"
+  for _, skin in ipairs({ "99", "111", "112" }) do
+    fresh.now = fresh.now + 120
+    local otherSus = getResource("proxy.resource?get", nil, {
+      uri = "sus://product/" .. skin .. "/unit/OTHER" .. skin .. "/image/latest/SysBuild=4.15.330",
+    })
+    local ultSus2 = getResource("proxy.resource?get", nil, {
+      uri = "sus://product/100/unit/ULT100/image/latest/SysBuild=4.15.330",
+    })
+    local beforeOther = #fresh.nativeFwCalls
+    local otherFw = fwCheck("setup.firmware?check", "check", { package = { "base" } })
+    local ultFw2 = fwCheck("setup.firmware?check", "check", { package = { "base" } })
+    check("ambiguous interleave (skin " .. skin .. " then 100, shared peer): skin " .. skin .. " gets stock 506",
+      otherSus.data.code == "304" and ultSus2.data.status == 0 and
+      otherFw.native == true and otherFw.code == "506" and
+      ultFw2.native == true and ultFw2.code == "506" and
+      #fresh.nativeFwCalls == beforeOther + 2,
+      "other=" .. encode(otherFw) .. " ult=" .. encode(ultFw2))
+  end
+
+  -- Distinct clientId peers: Touch (c99) and Ultimate (c100) do not interfere with each other.
+  fresh.now = fresh.now + 120
+  getResource("proxy.resource?get", nil, {
+    clientId = "c99",
+    uri = "sus://product/99/unit/TOUCH99/image/latest/SysBuild=4.15.330",
+  })
+  getResource("proxy.resource?get", nil, {
+    clientId = "c100",
+    uri = "sus://product/100/unit/ULT100/image/latest/SysBuild=4.15.330",
+  })
+  local beforePeers = #fresh.nativeFwCalls
+  local peerTouchFw = fwCheck("setup.firmware?check", "check", { clientId = "c99", package = { "base" } })
+  local peerUltFw = fwCheck("setup.firmware?check", "check", { clientId = "c100", package = { "base" } })
+  check("distinct clientId peers: Touch gets stock 506 while Ultimate gets 200 status=0",
+    peerTouchFw.native == true and peerTouchFw.code == "506" and
+    peerUltFw.code == "200" and peerUltFw.native == nil and
+    #fresh.nativeFwCalls == beforePeers + 1,
+    "touch=" .. encode(peerTouchFw) .. " ult=" .. encode(peerUltFw))
 end
 
 -- 2. Already-activated hub (Touch/Elite/950): Context, Settings, CapabilityList
@@ -475,6 +522,9 @@ local partial = loadEnv({
   remoteId = 20264150,
   accountId = "hub2-local",
   isSetupComplete = false,
+  files = {
+    ["/data/resources/Context.json"] = '{"HouseholdId-":777}',
+  },
   stored = {
     AutomationConfig = { etag = '"ac"', hetag = "1", resource = {} },
     Context = { etag = '"user-ctx"', hetag = "2", resource = { ["HouseholdId-"] = 777 } },
@@ -486,6 +536,63 @@ check("partial hub with existing Context: Context untouched, Settings + Capabili
   partial.stored.CapabilityList ~= nil and
   partial.digest.isSetupComplete == true and partial.digestSaves == 1,
   "saves=" .. #partial.resSaves .. " isSetupComplete=" .. tostring(partial.digest.isSetupComplete))
+
+-- 4. Reviewer finding 2: save failure must NOT mark isSetupComplete=true.
+local saveFail = loadEnv({
+  mode = 3,
+  remoteId = 20264150,
+  accountId = "hub2-local",
+  isSetupComplete = false,
+  failSave = { CapabilityList = true },
+  stored = { AutomationConfig = { etag = '"ac"', hetag = "1", resource = {} } },
+})
+check("save failure on required resource: does NOT mark isSetupComplete=true",
+  saveFail.digest.isSetupComplete == false and saveFail.digestSaves == 0,
+  "isSetupComplete=" .. tostring(saveFail.digest.isSetupComplete) .. " digestSaves=" .. saveFail.digestSaves)
+
+-- 5. Reviewer finding 2: sync-status lookup error must fail closed (no writes, no isSetupComplete).
+local syncErr = loadEnv({
+  mode = 3,
+  remoteId = 20264150,
+  accountId = "hub2-local",
+  isSetupComplete = false,
+  syncCheckError = true,
+  stored = { AutomationConfig = { etag = '"ac"', hetag = "1", resource = {} } },
+})
+check("sync-status lookup error: fails closed with 0 resource writes and isSetupComplete=false",
+  #syncErr.resSaves == 0 and syncErr.digest.isSetupComplete == false and syncErr.digestSaves == 0,
+  "resSaves=" .. #syncErr.resSaves .. " isSetupComplete=" .. tostring(syncErr.digest.isSetupComplete))
+
+-- 6. Reviewer finding 2: orphan disk file (not readable via getResource) is preserved,
+--    AND does NOT mark isSetupComplete=true.
+local orphanFile = loadEnv({
+  mode = 3,
+  remoteId = 20264150,
+  accountId = "hub2-local",
+  isSetupComplete = false,
+  files = { ["/data/resources/Context.json"] = '{"user":true}' },
+  stored = { AutomationConfig = { etag = '"ac"', hetag = "1", resource = {} } },
+})
+check("orphan disk Context.json without indexed resource: preserved, isSetupComplete stays false",
+  orphanFile.files["/data/resources/Context.json"] == '{"user":true}' and
+  orphanFile.stored.Context == nil and
+  orphanFile.digest.isSetupComplete == false and orphanFile.digestSaves == 0,
+  "isSetupComplete=" .. tostring(orphanFile.digest.isSetupComplete))
+
+-- 7. Reviewer finding 2: indexed CapabilityList without disk copy is NOT marked complete.
+local noDiskCopy = loadEnv({
+  mode = 3,
+  remoteId = 20264150,
+  accountId = "hub2-local",
+  isSetupComplete = false,
+  stored = {
+    AutomationConfig = { etag = '"ac"', hetag = "1", resource = {} },
+    CapabilityList = { etag = '"cap"', hetag = "1", resource = { Capabilities = {} } },
+  },
+})
+check("indexed CapabilityList missing disk copy: preserved, isSetupComplete stays false",
+  noDiskCopy.digest.isSetupComplete == false and noDiskCopy.digestSaves == 0,
+  "isSetupComplete=" .. tostring(noDiskCopy.digest.isSetupComplete))
 
 print(string.format("%d/%d checks passed", count - failures, count))
 if failures > 0 then os.exit(1) end

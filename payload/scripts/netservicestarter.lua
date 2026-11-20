@@ -888,7 +888,57 @@ local ULTIMATE_FW_SKINS = {
   ["108"] = true,
 }
 local ULTIMATE_FW_CHECK_WINDOW_SECONDS = 60
-local pendingUltimateFwCheckAt = nil
+local fwCheckPeers = {}
+
+local function fwCheckPeerKey(params)
+  if type(params) == "table" and params.clientId ~= nil and params.clientId ~= "" then
+    return tostring(params.clientId)
+  end
+  return "__default__"
+end
+
+local function prunePeerFwState(state, now)
+  if not state then
+    return
+  end
+  if state.ultimateAt and (now < state.ultimateAt or (now - state.ultimateAt) > ULTIMATE_FW_CHECK_WINDOW_SECONDS) then
+    state.ultimateAt = nil
+    state.ultimatePending = 0
+  end
+  if state.nonUltimateAt and (now < state.nonUltimateAt or (now - state.nonUltimateAt) > ULTIMATE_FW_CHECK_WINDOW_SECONDS) then
+    state.nonUltimateAt = nil
+    state.nonUltimatePending = 0
+  end
+  if (state.ultimatePending or 0) <= 0 and (state.nonUltimatePending or 0) <= 0 then
+    state.ambiguous = false
+  end
+end
+
+local function recordSusFwCheck(params, isUltimate)
+  local peer = fwCheckPeerKey(params)
+  local now = os.time()
+  local state = fwCheckPeers[peer]
+  if not state then
+    state = { ultimatePending = 0, nonUltimatePending = 0, ambiguous = false }
+    fwCheckPeers[peer] = state
+  end
+  prunePeerFwState(state, now)
+  if isUltimate then
+    state.ultimateAt = now
+    state.ultimatePending = (state.ultimatePending or 0) + 1
+    if (state.nonUltimatePending or 0) > 0 then
+      state.ambiguous = true
+    end
+  else
+    state.nonUltimateAt = now
+    state.nonUltimatePending = (state.nonUltimatePending or 0) + 1
+    if (state.ultimatePending or 0) > 0 then
+      state.ambiguous = true
+    end
+    state.ultimateAt = nil
+    state.ultimatePending = 0
+  end
+end
 
 local function offlineResourceGet(cmd, verb, params)
   if not cloudBlockerEnabled() then
@@ -910,7 +960,7 @@ local function offlineResourceGet(cmd, verb, params)
       local skinId = string.match(uri, "^sus://product/(%w+)/")
       if skinId and ULTIMATE_FW_SKINS[skinId] then
         local currentVersion = string.match(uri, "SysBuild=([^&%s]+)") or ""
-        pendingUltimateFwCheckAt = os.time()
+        recordSusFwCheck(params, true)
         log.notice("codex offline guard answered remote firmware check: no update", uri)
         return connectUtils.createResponse(cmd, "200", json.encode({"OK"}), {
           status = 0,
@@ -922,8 +972,8 @@ local function offlineResourceGet(cmd, verb, params)
         })
       end
       -- Any non-Ultimate sus:// check (Touch skin 99, Elite/950 111/112)
-      -- clears any pending Ultimate token and keeps the existing bare-304 reply.
-      pendingUltimateFwCheckAt = nil
+      -- marks this peer non-Ultimate/ambiguous and keeps the bare-304 reply.
+      recordSusFwCheck(params, false)
       log.notice("codex offline guard blocked resource get", uri)
       return connectUtils.createResponse(cmd, "200", "OK", {
         code = "304",
@@ -1155,9 +1205,19 @@ local function resourcePresent(name)
   return false
 end
 
+local function resourceUsable(name)
+  local statusOk, status, _, resource = pcall(function()
+    return resMgr.getResource(name)
+  end)
+  if not statusOk or tostring(status or "") ~= "200" or resource == nil then
+    return false
+  end
+  return fileExists("/data/resources/" .. name .. ".json")
+end
+
 local function seedMinimalResource(name, jsonText)
   if resourcePresent(name) then
-    return false
+    return resourceUsable(name)
   end
   local ok, saved, detail = pcall(function()
     return resMgr.saveResource(
@@ -1166,7 +1226,7 @@ local function seedMinimalResource(name, jsonText)
   end)
   if ok and saved then
     log.notice("codex blank hub; seeded minimal", name)
-    return true
+    return resourceUsable(name)
   end
   log.notice("codex could not seed minimal " .. name .. ":", tostring(detail or saved))
   return false
@@ -1178,8 +1238,9 @@ end
 -- #219) refuses to start setup.sync?begin while isSetupComplete is false, and
 -- syncJuniperWithHub aborts the pull if Context, Settings, or CapabilityList
 -- (read via hot.1.data.resource from /data/resources/CapabilityList.json) are
--- missing. Seed genuinely absent records (never touching existing ones) and
--- mark isSetupComplete=true in local mode on a mode-3 hub.
+-- missing. Seed genuinely absent records (never touching existing ones),
+-- verify every required indexed resource and disk copy, fail closed on unknown
+-- sync state, and only then mark isSetupComplete=true in local mode on mode 3.
 local function ensureMinimalOfflineSetup()
   if not cloudBlockerEnabled() then
     return
@@ -1190,7 +1251,7 @@ local function ensureMinimalOfflineSetup()
   local syncOk, syncing = pcall(function()
     return resMgr.isAnySyncInProgress()
   end)
-  if syncOk and syncing then
+  if not syncOk or syncing then
     return
   end
 
@@ -1232,7 +1293,7 @@ local function ensureMinimalOfflineSetup()
     '"AccountUri":"harmony://Account/' .. jsonEscape(accountIdStr) .. '",' ..
     '"SetupSession":{"Type":0,"Client":"melodious-local","SetupType":null,"IsStale":false},' ..
     '"Email":"' .. jsonEscape(hubEmail) .. '"}'
-  seedMinimalResource("Context", contextJson)
+  local contextReady = seedMinimalResource("Context", contextJson)
 
   local settingsJson = '{"RemoteName":"Harmony Remote",' ..
     '"UserImageBucketUri":"https://images.melodious.invalid/UserImages/100/",' ..
@@ -1250,9 +1311,14 @@ local function ensureMinimalOfflineSetup()
     '{"SettingId":16,"MaxCount":1,"MinCount":0,"Values":["true"],"Name":"AccelFlag","DefaultValue":"true"},' ..
     '{"SettingId":17,"MaxCount":1,"MinCount":0,"Values":["true"],"Name":"TimeZoneFlag","DefaultValue":"true"}' ..
     ']}'
-  seedMinimalResource("Settings", settingsJson)
+  local settingsReady = seedMinimalResource("Settings", settingsJson)
 
-  seedMinimalResource("CapabilityList", '{"MaxActivities":null,"Capabilities":[]}')
+  local capReady = seedMinimalResource("CapabilityList", '{"MaxActivities":null,"Capabilities":[]}')
+
+  if not (contextReady and settingsReady and capReady) then
+    log.notice("codex blank hub; minimal offline setup incomplete, keeping isSetupComplete unchanged")
+    return
+  end
 
   local digestOk, localDigest = pcall(function()
     return require("tasks.harmonywebservices.core.statedigest"):instance()
@@ -1425,18 +1491,40 @@ local function offlineGetTime(cmd, verb, params)
   })
 end
 
-local function consumeUltimateFwCheck()
-  if not pendingUltimateFwCheckAt then
+local function consumeUltimateFwCheck(params)
+  local peer = fwCheckPeerKey(params)
+  local state = fwCheckPeers[peer]
+  if not state then
     return false
   end
-  local ts = pendingUltimateFwCheckAt
-  pendingUltimateFwCheckAt = nil
   local now = os.time()
-  return now >= ts and (now - ts) <= ULTIMATE_FW_CHECK_WINDOW_SECONDS
+  prunePeerFwState(state, now)
+  if state.ambiguous or (state.nonUltimatePending or 0) > 0 then
+    if (state.nonUltimatePending or 0) > 0 then
+      state.nonUltimatePending = state.nonUltimatePending - 1
+      if state.nonUltimatePending <= 0 then
+        state.nonUltimateAt = nil
+      end
+    end
+    state.ultimateAt = nil
+    state.ultimatePending = 0
+    if (state.nonUltimatePending or 0) <= 0 then
+      state.ambiguous = false
+    end
+    return false
+  end
+  if not state.ultimateAt or (state.ultimatePending or 0) <= 0 then
+    return false
+  end
+  state.ultimatePending = state.ultimatePending - 1
+  if state.ultimatePending <= 0 then
+    state.ultimateAt = nil
+  end
+  return true
 end
 
 local function offlineFirmwareCheck(cmd, verb, params)
-  if not cloudBlockerEnabled() or not consumeUltimateFwCheck() then
+  if not cloudBlockerEnabled() or not consumeUltimateFwCheck(params) then
     local native = require("tasks.setup.apihandler.firmware")
     return native.processCmdDefault(cmd, verb, params)
   end
