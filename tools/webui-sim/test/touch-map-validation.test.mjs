@@ -150,7 +150,20 @@ describe("netservicestarter.lua Touch Sync guards (LuaJIT)", () => {
       cwd: new URL("../../../", import.meta.url).pathname,
       encoding: "utf8",
     });
-    assert.match(out, /55\/55 checks passed/);
+    assert.match(out, /56\/56 checks passed/);
+  });
+
+  it("unblocks a never-activated Harmony Ultimate (skin 100) offline without changing Touch (99) or Elite/950 (111/112) (#219)", (t) => {
+    const probe = spawnSync("luajit", ["-v"], { encoding: "utf8" });
+    if (probe.error || probe.status !== 0) {
+      t.skip("luajit is not available");
+      return;
+    }
+    const out = execFileSync("luajit", ["tools/touch-validator/netservicestarter-ultimate-test.lua"], {
+      cwd: new URL("../../../", import.meta.url).pathname,
+      encoding: "utf8",
+    });
+    assert.match(out, /21\/21 checks passed/);
   });
 });
 

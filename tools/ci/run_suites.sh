@@ -83,6 +83,7 @@ lua-remote-background|luajit $LUA/codexactivity-remote-background-test.lua
 lua-touch-controls|luajit $LUA/codexactivity-touch-controls-test.lua
 lua-validate|luajit $LUA/codexactivity-validate-test.lua tools/webui-sim/fixtures/touch-maplist.json
 lua-guards|luajit $LUA/netservicestarter-guards-test.lua
+lua-ultimate-sync|luajit $LUA/netservicestarter-ultimate-test.lua
 lua-restrictions|luajit $LUA/netservicestarter-restrictions-test.lua
 lua-lan-advertise|luajit $LUA/netservicestarter-lan-advertise-test.lua
 lua-mqtt|luajit $LUA/codexmqtt-test.lua

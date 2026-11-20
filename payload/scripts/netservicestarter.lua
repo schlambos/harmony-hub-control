@@ -876,6 +876,20 @@ local function localRemoteImage(cmd, uri, imageName)
   }, nil, bytes)
 end
 
+-- Harmony Ultimate family skins (100 = Ultimate, 102 = Ultimate One,
+-- 105 = Ultimate Home, 108 = Ultimate Home/Pro w/ HC). A never-cloud-activated
+-- Ultimate loops on setup.firmware?check -> 506 offline after checking its own
+-- sus:// URI (#219). Touch (99) and Elite/950 (111, 112) stay on the existing
+-- bare-304 + stock-fallback path.
+local ULTIMATE_FW_SKINS = {
+  ["100"] = true,
+  ["102"] = true,
+  ["105"] = true,
+  ["108"] = true,
+}
+local ULTIMATE_FW_CHECK_WINDOW_SECONDS = 60
+local pendingUltimateFwCheckAt = nil
+
 local function offlineResourceGet(cmd, verb, params)
   if not cloudBlockerEnabled() then
     return nativeResourceHandler.processGetResource(cmd, verb, params)
@@ -892,10 +906,34 @@ local function offlineResourceGet(cmd, verb, params)
         return image
       end
     end
+    if string.find(uri, "sus://", 1, true) then
+      local skinId = string.match(uri, "^sus://product/(%w+)/")
+      if skinId and ULTIMATE_FW_SKINS[skinId] then
+        local currentVersion = string.match(uri, "SysBuild=([^&%s]+)") or ""
+        pendingUltimateFwCheckAt = os.time()
+        log.notice("codex offline guard answered remote firmware check: no update", uri)
+        return connectUtils.createResponse(cmd, "200", json.encode({"OK"}), {
+          status = 0,
+          name = "base",
+          currentVersion = currentVersion,
+          productId = skinId,
+          totalBytes = 0,
+          bytesDownloaded = 0
+        })
+      end
+      -- Any non-Ultimate sus:// check (Touch skin 99, Elite/950 111/112)
+      -- clears any pending Ultimate token and keeps the existing bare-304 reply.
+      pendingUltimateFwCheckAt = nil
+      log.notice("codex offline guard blocked resource get", uri)
+      return connectUtils.createResponse(cmd, "200", "OK", {
+        code = "304",
+        uri = uri,
+        localOnly = true
+      })
+    end
     log.notice("codex offline guard blocked resource get", uri)
-    local code = string.find(uri, "sus://", 1, true) and "304" or "404"
     return connectUtils.createResponse(cmd, "200", "OK", {
-      code = code,
+      code = "404",
       uri = uri,
       localOnly = true
     })
@@ -1098,6 +1136,139 @@ local function ensureMinimalAutomationConfig()
   end
 end
 
+local function resourcePresent(name)
+  local statusOk, status = pcall(function()
+    return (resMgr.getResource(name))
+  end)
+  if statusOk and tostring(status or "") == "200" then
+    return true
+  end
+  if fileExists("/data/resources/" .. name .. ".json") then
+    return true
+  end
+  local etagOk, hubEtag = pcall(function()
+    return resMgr.getHubEtag(name)
+  end)
+  if etagOk and hubEtag ~= nil then
+    return true
+  end
+  return false
+end
+
+local function seedMinimalResource(name, jsonText)
+  if resourcePresent(name) then
+    return false
+  end
+  local ok, saved, detail = pcall(function()
+    return resMgr.saveResource(
+      "application/json", newResourceEtag(), jsonText, name, nil, "1"
+    )
+  end)
+  if ok and saved then
+    log.notice("codex blank hub; seeded minimal", name)
+    return true
+  end
+  log.notice("codex could not seed minimal " .. name .. ":", tostring(detail or saved))
+  return false
+end
+
+-- A hub provisioned locally via FRESH_HUB_ACTIVATION (mode 3, no cloud sync)
+-- lacks Context, Settings, and CapabilityList, and statedigest keeps
+-- isSetupComplete=false. A never-activated screen remote (Harmony Ultimate,
+-- #219) refuses to start setup.sync?begin while isSetupComplete is false, and
+-- syncJuniperWithHub aborts the pull if Context, Settings, or CapabilityList
+-- (read via hot.1.data.resource from /data/resources/CapabilityList.json) are
+-- missing. Seed genuinely absent records (never touching existing ones) and
+-- mark isSetupComplete=true in local mode on a mode-3 hub.
+local function ensureMinimalOfflineSetup()
+  if not cloudBlockerEnabled() then
+    return
+  end
+  if tonumber(prefMgr.mode) ~= 3 then
+    return
+  end
+  local syncOk, syncing = pcall(function()
+    return resMgr.isAnySyncInProgress()
+  end)
+  if syncOk and syncing then
+    return
+  end
+
+  local remoteIdNum = tonumber(prefMgr.remoteId)
+  if not remoteIdNum or remoteIdNum <= 0 or remoteIdNum ~= math.floor(remoteIdNum) then
+    remoteIdNum = 1
+  end
+  local accountIdNum = tonumber(prefMgr.accountId)
+  if not accountIdNum or accountIdNum <= 0 or accountIdNum ~= math.floor(accountIdNum) then
+    accountIdNum = remoteIdNum
+  end
+  local accountIdStr = prefMgr.accountId
+  if accountIdStr == nil or accountIdStr == "" then
+    accountIdStr = "hub-local-" .. tostring(remoteIdNum)
+  else
+    accountIdStr = tostring(accountIdStr)
+  end
+  local lang = tostring(prefMgr.language or "en-US")
+  if lang == "" then
+    lang = "en-US"
+  elseif not string.find(lang, "-", 1, true) then
+    lang = lang .. "-US"
+  end
+  local tzConf = readTimezoneConf()
+  local tzZone = (tzConf and tzConf.zone and tzConf.zone ~= "")
+    and string.lower(tzConf.zone) or "america/new_york"
+  local hubName = (type(prefMgr.name) == "string" and prefMgr.name ~= "")
+    and prefMgr.name or "Harmony Hub"
+  local hubEmail = (type(prefMgr.email) == "string" and prefMgr.email ~= "")
+    and prefMgr.email or "hub@local"
+
+  local contextJson = '{"LatestSLAAccepted":true,"HouseholdUserProfileUri":' ..
+    '"svcs.myharmony.com/res//household/' .. tostring(remoteIdNum) .. '-melodious/user/default",' ..
+    '"AccountId-":' .. tostring(accountIdNum) .. ',' ..
+    '"Locale":{"TimeZone":"' .. jsonEscape(tzZone) .. '","UserTimeZone":null},' ..
+    '"InstallerId":null,"CountryCode":"US","Language":"' .. jsonEscape(lang) .. '",' ..
+    '"HouseholdId-":' .. tostring(remoteIdNum) .. ',"Mode":3,"DataConsent":false,' ..
+    '"Name":"' .. jsonEscape(hubName) .. '",' ..
+    '"AccountUri":"harmony://Account/' .. jsonEscape(accountIdStr) .. '",' ..
+    '"SetupSession":{"Type":0,"Client":"melodious-local","SetupType":null,"IsStale":false},' ..
+    '"Email":"' .. jsonEscape(hubEmail) .. '"}'
+  seedMinimalResource("Context", contextJson)
+
+  local settingsJson = '{"RemoteName":"Harmony Remote",' ..
+    '"UserImageBucketUri":"https://images.melodious.invalid/UserImages/100/",' ..
+    '"DefaultImageBucketUri":"https://images.melodious.invalid/DefaultImages/100/",' ..
+    '"Settings":[' ..
+    '{"SettingId":1,"MaxCount":5,"MinCount":0,"Values":[],"Name":"UserImages","DefaultValue":null},' ..
+    '{"SettingId":2,"MaxCount":1,"MinCount":0,"Values":[],"Name":"BackgroundImage","DefaultValue":null},' ..
+    '{"SettingId":3,"MaxCount":1,"MinCount":0,"Values":["true"],"Name":"TwelveHourClock","DefaultValue":"true"},' ..
+    '{"SettingId":4,"MaxCount":1,"MinCount":0,"Values":[],"Name":"ScreenBrightness","DefaultValue":null},' ..
+    '{"SettingId":5,"MaxCount":1,"MinCount":0,"Values":["29"],"Name":"ScreenTimeout","DefaultValue":null},' ..
+    '{"SettingId":6,"MaxCount":1,"MinCount":0,"Values":["true"],"Name":"IsWiFiEnabled","DefaultValue":"true"},' ..
+    '{"SettingId":11,"MaxCount":1,"MinCount":0,"Values":["false"],"Name":"ScreenLockFlag","DefaultValue":"true"},' ..
+    '{"SettingId":12,"MaxCount":1,"MinCount":0,"Values":["false"],"Name":"EditLock","DefaultValue":"false"},' ..
+    '{"SettingId":13,"MaxCount":1,"MinCount":0,"Values":["35"],"Name":"KeyBrightness","DefaultValue":"35"},' ..
+    '{"SettingId":16,"MaxCount":1,"MinCount":0,"Values":["true"],"Name":"AccelFlag","DefaultValue":"true"},' ..
+    '{"SettingId":17,"MaxCount":1,"MinCount":0,"Values":["true"],"Name":"TimeZoneFlag","DefaultValue":"true"}' ..
+    ']}'
+  seedMinimalResource("Settings", settingsJson)
+
+  seedMinimalResource("CapabilityList", '{"MaxActivities":null,"Capabilities":[]}')
+
+  local digestOk, localDigest = pcall(function()
+    return require("tasks.harmonywebservices.core.statedigest"):instance()
+  end)
+  if digestOk and type(localDigest) == "table" and localDigest.isSetupComplete ~= true then
+    localDigest.isSetupComplete = true
+    localDigest.stateVersion = (tonumber(localDigest.stateVersion) or 0) + 1
+    if type(localDigest.saveStateDigest) == "function" then
+      pcall(function()
+        localDigest:saveStateDigest()
+      end)
+    end
+    log.notice("codex blank hub; marked statedigest isSetupComplete=true")
+  end
+end
+
 local function offlineResourcePut(cmd, verb, params)
   if not cloudBlockerEnabled() then
     return nativeResourceHandler.processPutResource(cmd, verb, params)
@@ -1234,11 +1405,13 @@ end
 -- only with internet, so offline the Touch gets 506 "Wi-Fi is not available"
 -- and its clock is never set. The hub keeps NTP time itself.
 --
--- The same Sync also asks for a hub firmware check (setup.firmware?check).
--- Leave that to the stock handler, which fails offline: a Touch that gets a
--- successful check goes on to judge its own update status, which the offline
--- sus:// answer leaves empty, and stops on a "myharmony.com" screen that
--- needs a forced restart. Failing the check ends the Sync harmlessly.
+-- For Touch (skin 99) and Elite/950 (111/112), setup.firmware?check stays on
+-- the stock handler (which fails 506 offline and ends manual Sync harmlessly,
+-- avoiding the bare-304 myharmony.com trap). For Ultimate-family remotes
+-- (skins 100/102/105/108, #219), checkForRemoteUpdate calls sus://product/<skin>
+-- immediately before setup.firmware?check; when both answer with stock no-update
+-- status=0, firmwareCheckCallback (appscommon/harmony.lua:5380) advances into
+-- resync("auto") instead of looping forever on 506.
 local function offlineGetTime(cmd, verb, params)
   if not cloudBlockerEnabled() or os.time() < NTP_MIN_VALID then
     local native = require("tasks.harmonyengine.apihandler.harmonyengine")
@@ -1250,6 +1423,30 @@ local function offlineGetTime(cmd, verb, params)
     utcTime = os.date("!*t"),
     tz = localDigest.tz
   })
+end
+
+local function consumeUltimateFwCheck()
+  if not pendingUltimateFwCheckAt then
+    return false
+  end
+  local ts = pendingUltimateFwCheckAt
+  pendingUltimateFwCheckAt = nil
+  local now = os.time()
+  return now >= ts and (now - ts) <= ULTIMATE_FW_CHECK_WINDOW_SECONDS
+end
+
+local function offlineFirmwareCheck(cmd, verb, params)
+  if not cloudBlockerEnabled() or not consumeUltimateFwCheck() then
+    local native = require("tasks.setup.apihandler.firmware")
+    return native.processCmdDefault(cmd, verb, params)
+  end
+  local fwVersion = (system.getFirmwareVersion and system.getFirmwareVersion()) or ""
+  local fwJson = '{"bytesDownloaded":0,"totalBytes":0,"currentVersion":"' ..
+    jsonEscape(fwVersion) ..
+    '","status":0,"packages":{},"stage":0,"expectedStages":0,' ..
+    '"maxStageTimeRemaining":0,"packageId":"","expectedTimeRemaining":0}'
+  log.notice("codex offline guard answered hub firmware check for Ultimate: no update", cmd)
+  return connectUtils.createResponse(cmd, "200", json.encode({"OK"}), fwJson)
 end
 
 local function installOfflineApiGuards()
@@ -1282,6 +1479,9 @@ local function installOfflineApiGuards()
   )
   engine.registerMessage(
     "harmony.engine?gettime", nil, offlineGetTime
+  )
+  engine.registerMessage(
+    "setup.firmware?check", nil, offlineFirmwareCheck
   )
   log.notice("codex offline HBus guards registered")
 end
@@ -1664,6 +1864,10 @@ if not melodiousOff() then
   local autoOk, autoErr = pcall(ensureMinimalAutomationConfig)
   if not autoOk then
     log.notice("codex AutomationConfig seed failed:", tostring(autoErr))
+  end
+  local setupOk, setupErr = pcall(ensureMinimalOfflineSetup)
+  if not setupOk then
+    log.notice("codex offline setup seed failed:", tostring(setupErr))
   end
   installCloudHttpGuard()
   installOfflineApiGuards()
