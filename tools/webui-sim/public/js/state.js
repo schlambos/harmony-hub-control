@@ -126,6 +126,19 @@ export function refreshConfig() {
   return done;
 }
 
+/* Refresh an already-loaded config so editors open on the latest revision,
+   keeping the cached copy if the refresh fails. Loads via ensureConfig() if
+   nothing has been fetched yet. */
+export async function ensureFreshConfig() {
+  if (!state.config) return ensureConfig();
+  try {
+    await refreshConfig();
+  } catch (_) {
+    // Keep the cached config on screen when a transient refresh fails.
+  }
+  return state;
+}
+
 function extractCurrentActivity(payload) {
   const raw =
     typeof payload === "string"
@@ -208,6 +221,7 @@ export function refreshState() {
 // state only when something actually changed — a remote starting an activity,
 // or another client making a change — rather than on a fixed expensive timer.
 let lastStateVersion = null;
+let lastConfigVersion = null;
 let statePollTimer = null;
 
 // Pure: pull the stateVersion out of an /api/state reply (robust to the engine
@@ -216,6 +230,16 @@ export function extractStateVersion(payload) {
   if (payload == null) return null;
   const raw = (typeof payload === "string" ? payload : JSON.stringify(payload)).replace(/\\/g, "");
   const match = raw.match(/"stateVersion"\s*:\s*"?(\d+)/i);
+  return match ? match[1] : null;
+}
+
+// Pure: pull configVersion out of an /api/state reply so background hub config
+// updates (e.g. Home Assistant device pushes or another client) keep the cached
+// config revision current.
+export function extractConfigVersion(payload) {
+  if (payload == null) return null;
+  const raw = (typeof payload === "string" ? payload : JSON.stringify(payload)).replace(/\\/g, "");
+  const match = raw.match(/"configVersion"\s*:\s*"?(\d+)/i);
   return match ? match[1] : null;
 }
 
@@ -251,7 +275,11 @@ export async function pollStateDigest() {
   if (!res || !res.changed) return false;
   const version = extractStateVersion(res.reply);
   if (version) lastStateVersion = version;
+  const configVersion = extractConfigVersion(res.reply);
+  const configMoved = Boolean(configVersion && lastConfigVersion !== null && configVersion !== lastConfigVersion);
+  if (configVersion) lastConfigVersion = configVersion;
   await refreshState();
+  if (configMoved && state.config) refreshConfig().catch(() => {});
   return true;
 }
 

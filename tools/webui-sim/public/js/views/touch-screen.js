@@ -40,6 +40,7 @@ import {
   removeButton,
   sameKey,
   saveOutcome,
+  saveTouchWithRebase,
   setCommand,
   setLabel,
   setLongCommand,
@@ -506,21 +507,21 @@ export function createTouchScreenView(section) {
     return true;
   }
 
-  function currentPayload() {
+  function currentPayload(config = hub.state.config) {
     const twinEdits = twinsChanged().map((t) => ({ remote: t.remote, rows: t.rows, base: t.base }));
     const mapList = isSmart()
-      ? buildTouchControlsMapList(hub.state.config, { hard: { activityId, rows: hardRows, base: hardBase }, twins: twinEdits }, { remote })
-      : buildTouchControlsMapList(hub.state.config, {
+      ? buildTouchControlsMapList(config, { hard: { activityId, rows: hardRows, base: hardBase }, twins: twinEdits }, { remote })
+      : buildTouchControlsMapList(config, {
         soft: softDraft,
         hard: { rows: hardRows },
         gestures: { rows: gestureRows },
         twins: twinEdits,
       });
     return {
-      baseRevision: hub.state.config.revision,
-      activityList: JSON.parse(JSON.stringify(hub.state.config.activityList)),
+      baseRevision: config.revision,
+      activityList: JSON.parse(JSON.stringify(config.activityList)),
       mapList,
-      functionList: JSON.parse(JSON.stringify(hub.state.config.functionList)),
+      functionList: JSON.parse(JSON.stringify(config.functionList)),
     };
   }
 
@@ -1123,9 +1124,9 @@ export function createTouchScreenView(section) {
 
   async function save() {
     if (saving || !dirty) return;
-    let payload;
+    let initialPayload;
     try {
-      payload = currentPayload();
+      initialPayload = currentPayload();
     } catch (error) {
       snackbar(`Not saved — ${error.message}`, { error: true });
       return;
@@ -1141,7 +1142,18 @@ export function createTouchScreenView(section) {
       gestureRows = readGestures(hub.state.config, activityId).rows;
     };
     try {
-      await api.saveActivity(payload);
+      await saveTouchWithRebase({
+        getConfig: () => hub.state.config,
+        reloadConfig: () => hub.reloadConfig(),
+        buildPayload: (cfg) => (cfg === hub.state.config && initialPayload && cfg.revision === initialPayload.baseRevision
+          ? initialPayload
+          : currentPayload(cfg)),
+        activityId,
+        base,
+        remote,
+        twins: twinChecks,
+        saveFn: (p) => api.saveActivity(p),
+      });
       dirty = false;
       saved = true;
       await hub.reloadConfig();
@@ -1150,10 +1162,11 @@ export function createTouchScreenView(section) {
     } catch (error) {
       // The hub can apply a save and still report a failure (a slow engine),
       // so look at what it has now before saying what happened.
-      await hub.reloadConfig();
+      if (!error.reloaded) await hub.reloadConfig();
+      const sentMapList = error.lastPayload?.mapList ?? initialPayload.mapList;
       const outcome = hub.state.configError
         ? "unknown"
-        : controlsSaveOutcome(hub.state.config, activityId, base, payload.mapList, { remote, twins: twinChecks });
+        : controlsSaveOutcome(hub.state.config, activityId, base, sentMapList, { remote, twins: twinChecks });
       if (error.status === 504 && outcome !== "saved") {
         // The hub's writer hasn't answered yet and may still apply this save.
         snackbar("The hub is still saving. Your changes are still here; reload in a minute to see whether they landed before you save again.", { error: true });
@@ -1323,7 +1336,7 @@ export function createTouchScreenView(section) {
       paired = undefined;
       root.innerHTML = `<div class="m-center">${spinner("Loading")}</div>`;
       updateBar();
-      await hub.ensureConfig();
+      await hub.ensureFreshConfig();
       if (token !== showToken || section.hidden) return;
       if (hub.state.configError) {
         renderBlocked("error");

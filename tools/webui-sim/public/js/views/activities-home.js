@@ -191,6 +191,7 @@ export function createActivitiesHomeView(section) {
     busy = true;
     render();
     try {
+      await hub.ensureFreshConfig();
       await fn({ config: hub.state.config, revision: hub.state.config?.revision });
       if (done) snackbar(done);
     } catch (error) {

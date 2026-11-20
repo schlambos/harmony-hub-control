@@ -933,3 +933,60 @@ export function touchSavePayload(config, draft, options) {
     functionList: cloneJsonResource(config.functionList),
   };
 }
+
+/**
+ * Save Touch/remote controls, rebasing ONCE onto a freshly reloaded config when
+ * a 409 Conflict came from an unrelated resource change (e.g. an HA device push
+ * or another activity), while refusing to overwrite if this activity's own map
+ * or edited twin maps changed on the hub.
+ */
+export async function saveTouchWithRebase({
+  getConfig,
+  reloadConfig,
+  buildPayload,
+  activityId,
+  base,
+  remote = TOUCH_REMOTE,
+  twins = [],
+  saveFn,
+}) {
+  const initial = getConfig();
+  let payload = buildPayload(initial);
+  if (initial) {
+    const precheck = controlsSaveOutcome(initial, activityId, base, payload.mapList, { remote, twins });
+    if (precheck !== "unchanged") {
+      const conflict = new Error("this screen changed on the hub while you were editing it");
+      conflict.status = 409;
+      conflict.lastPayload = payload;
+      conflict.reloaded = true;
+      throw conflict;
+    }
+  }
+  try {
+    const result = await saveFn(payload);
+    return { result, payload, rebased: false };
+  } catch (error) {
+    if (error?.status !== 409) {
+      error.lastPayload = payload;
+      throw error;
+    }
+    await reloadConfig();
+    const fresh = getConfig();
+    const outcome = fresh
+      ? controlsSaveOutcome(fresh, activityId, base, payload.mapList, { remote, twins })
+      : "unknown";
+    if (outcome !== "unchanged") {
+      error.lastPayload = payload;
+      error.reloaded = true;
+      throw error;
+    }
+    payload = buildPayload(fresh);
+    try {
+      const result = await saveFn(payload);
+      return { result, payload, rebased: true };
+    } catch (retryError) {
+      retryError.lastPayload = payload;
+      throw retryError;
+    }
+  }
+}

@@ -1,3 +1,5 @@
+import * as hub from "../state.js";
+
 const TEMPLATE = `
   <div class="section-head">
     <div>
@@ -189,6 +191,7 @@ export function createActivitiesView(section) {
     },
     onHide() {
       section.classList.remove("active");
+      hub.refreshConfig().catch(() => {});
     },
   };
 }
