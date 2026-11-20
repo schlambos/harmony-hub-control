@@ -380,6 +380,76 @@ print('{"id":1,"code":200}')
                   "step 3 serialized Script 2 Tab+Enter after Script 1 finished: %r" % (parsed[3],))
             check(parsed[4][1] == "KEY" and "A10100003E0000000000" in parsed[4][2],
                   "step 4 serialized Script 3 over-long F5: %r" % (parsed[4],))
+
+            # Reviewer finding 1: stable script identity (savedid<id>) survives rename
+            # and routes webhook execution to the renamed script.
+            with open(bt_store, "w") as f:
+                json.dump({
+                    "version": 1,
+                    "devices": [{
+                        "id": "bt_1730000000_42",
+                        "name": "Work Laptop",
+                        "type": "btkeyboard",
+                        "bdaddr": "AA:BB:CC:DD:EE:FF",
+                        "harmony": True,
+                        "commands": [],
+                    }],
+                }, f)
+            sr_out = subprocess.run([exe, "save-rename-check"], capture_output=True, text=True,
+                                    check=True, env=env).stdout.splitlines()
+            add_line = next((l for l in sr_out if l.startswith("add ")), "")
+            ren_line = next((l for l in sr_out if l.startswith("rename ")), "")
+            id_add = add_line.split("id=", 1)[1].strip() if "id=" in add_line else ""
+            id_ren = ren_line.split("id=", 1)[1].split()[0].strip() if "id=" in ren_line else ""
+            check(bool(id_add) and id_add == id_ren and "name=Espresso" in ren_line,
+                  "stable script id must be assigned on add and preserved on rename: %r" % sr_out)
+            # Execute via stable savedid<id> token after rename!
+            if os.path.exists(event_log):
+                os.unlink(event_log)
+            id_body = json.dumps({"device": "bt_1730000000_42", "command": "savedid" + id_add})
+            id_res = subprocess.run([exe, "webhook-saved", id_body], capture_output=True, text=True,
+                                    check=True, env=env).stdout.splitlines()
+            check("webhook HTTP/1.1 200 OK" in id_res, "savedid webhook must succeed: %r" % id_res)
+            deadline = time.monotonic() + 3.0
+            id_events = []
+            while time.monotonic() < deadline:
+                if os.path.exists(event_log):
+                    with open(event_log) as f:
+                        id_events = [line.strip() for line in f if line.strip()]
+                    if id_events:
+                        break
+                time.sleep(0.05)
+            check(len(id_events) == 1 and "A10100003E0000000000" in id_events[0],
+                  "savedid webhook must run renamed script F5: %r" % id_events)
+
+            # Reviewer finding 2: fork failure (outer OR inner) must NOT report 200 queued!
+            for stage in ("outer", "inner"):
+                fail_env = env.copy()
+                fail_env["BT_WEBHOOK_FAIL_FORK"] = stage
+                fail_res = subprocess.run([exe, "webhook-saved", id_body], capture_output=True, text=True,
+                                          check=True, env=fail_env).stdout.splitlines()
+                check("webhook HTTP/1.1 503 Service Unavailable" in fail_res,
+                      "%s fork failure must return 503, not 200 queued: %r" % (stage, fail_res))
+
+            # Reviewer finding 2: lock open failure must fail closed and send 0 keystrokes!
+            bad_lock_exe = os.path.join(work, "harness_bad_lock")
+            subprocess.run(cc + ["-std=gnu99", "-O1", "-w", "-I", os.path.join(ROOT, "payload/source"),
+                                 '-DWEBUI_AUTH_CONFIG="%s"' % auth_conf,
+                                 '-DBT_DEVICE_STORE="%s"' % bt_store,
+                                 '-DBT_WEBHOOK_LOCK_FILE="%s/no_such_dir/lock"' % work,
+                                 '-DBT_TEXT_FIFO="%s"' % bt_fifo,
+                                 '-DBT_TEXT_STATUS="%s"' % bt_status,
+                                 '-DBT_TARGET_FILE="%s"' % bt_target,
+                                 '-DBT_PROFILE_FILE="%s"' % bt_profile,
+                                 '-DCODEX_HAL_LTCP_BIN="%s"' % fake_hal,
+                                 "-o", bad_lock_exe, os.path.join(ROOT, "tools/bt_harmony_webui_harness.c")],
+                           check=True)
+            if os.path.exists(event_log):
+                os.unlink(event_log)
+            lock_out = subprocess.run([bad_lock_exe, "run-saved", "bt_1730000000_42", "Espresso"],
+                                      capture_output=True, text=True, check=True, env=env).stdout.strip()
+            check(lock_out.startswith("rc -1 ") and "lock" in lock_out.lower() and not os.path.exists(event_log),
+                  "run_saved_bt_command must fail closed without sending keystrokes on lock error: %r" % lock_out)
         finally:
             fifo_stop.set()
             reader_thread.join(timeout=1.0)

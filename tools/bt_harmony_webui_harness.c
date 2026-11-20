@@ -3,6 +3,7 @@
  * the real source and calls its static functions; nothing touches a hub.
  * Built and driven by tools/bt_harmony_webui_smoke.py.
  */
+#define BT_HARMONY_TEST_HOOKS 1
 #define main codex_webui_main
 #include "../payload/source/codex_webui.c"
 #undef main
@@ -109,6 +110,26 @@ int main(int argc, char **argv) {
                direct proof that request 2 answers while worker 1 is mid-WAIT. */
             if (i == 2) bt_sleep_ms(60);
         }
+        return 0;
+    }
+    if (argc > 1 && strcmp(argv[1], "run-saved") == 0 && argc >= 4) {
+        char msg[512];
+        int rc = send_bt_saved_command(argv[2], argv[3], msg, sizeof(msg));
+        printf("rc %d %s\n", rc, msg);
+        return 0;
+    }
+    if (argc > 1 && strcmp(argv[1], "save-rename-check") == 0) {
+        char msg[512];
+        int rc1, rc2;
+        rc1 = upsert_bt_command("bt_1730000000_42", "", "Cafe", "KEY f5", 20, msg, sizeof(msg));
+        load_bt_inventory(&inv);
+        printf("add rc=%d id=%s\n", rc1,
+            (inv.device_count > 0 && inv.devices[0].command_count > 0) ? inv.devices[0].commands[inv.devices[0].command_count - 1].id : "");
+        rc2 = upsert_bt_command("bt_1730000000_42", "Cafe", "Espresso", "KEY f5", 20, msg, sizeof(msg));
+        load_bt_inventory(&inv);
+        printf("rename rc=%d id=%s name=%s\n", rc2,
+            (inv.device_count > 0 && inv.devices[0].command_count > 0) ? inv.devices[0].commands[inv.devices[0].command_count - 1].id : "",
+            (inv.device_count > 0 && inv.devices[0].command_count > 0) ? inv.devices[0].commands[inv.devices[0].command_count - 1].name : "");
         return 0;
     }
     if (argc > 1 && strcmp(argv[1], "auth") == 0) {

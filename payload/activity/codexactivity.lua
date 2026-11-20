@@ -3374,9 +3374,10 @@ local function commitHaDevices(request, family)
       -- writer updates it, so match the old device by key from here on.
       deviceId = normalizedId(old.Device["Id-"])
       local ref = refs[deviceId]
-      local oldByLower
+      local oldByLower, oldByValue
       if family.retainUsedCommands then
         oldByLower = {}
+        oldByValue = {}
         for _, command in ipairs(type(old.Commands) == "table" and old.Commands or {}) do
           if type(command) == "table" and type(command.Name) == "string" then
             local value
@@ -3386,9 +3387,59 @@ local function commitHaDevices(request, family)
                 break
               end
             end
-            oldByLower[string.lower(command.Name)] = {name = command.Name, value = value or command.Name}
+            local entry = {name = command.Name, value = value or command.Name}
+            local lower = string.lower(command.Name)
+            oldByLower[lower] = entry
+            if not oldByValue[entry.value] or (ref and ref.commands and ref.commands[lower]) then
+              oldByValue[entry.value] = entry
+            end
           end
         end
+        -- Reserve referenced name->value ownership before accepting incoming
+        -- names so deleting one side of a collision can never redirect an
+        -- existing button to a different script token.
+        local reservedLower = {}
+        for lower in pairs(ref and ref.commands or {}) do
+          local keptOld = oldByLower[lower]
+          if keptOld then
+            reservedLower[lower] = keptOld
+          end
+        end
+        local takenLower = {}
+        for lower in pairs(reservedLower) do
+          takenLower[lower] = true
+        end
+        local rewritten = {}
+        for _, command in ipairs(spec.commands) do
+          local desiredName = command.name
+          local desiredLower = string.lower(desiredName)
+          local res = reservedLower[desiredLower]
+          if res and res.value ~= command.value then
+            local prior = oldByValue[command.value]
+            local priorLower = prior and string.lower(prior.name) or nil
+            if prior and (not takenLower[priorLower] or
+                (reservedLower[priorLower] and reservedLower[priorLower].value == command.value)) then
+              desiredName = prior.name
+            else
+              local base = string.sub(desiredName:gsub(" %d+$", ""), 1, 44):gsub("%s+$", "")
+              local n = 2
+              while true do
+                local cand = base .. " " .. tostring(n)
+                local candLower = string.lower(cand)
+                if not takenLower[candLower] or
+                    (reservedLower[candLower] and reservedLower[candLower].value == command.value) then
+                  desiredName = cand
+                  break
+                end
+                n = n + 1
+              end
+            end
+            desiredLower = string.lower(desiredName)
+          end
+          takenLower[desiredLower] = true
+          rewritten[#rewritten + 1] = {name = desiredName, value = command.value}
+        end
+        spec.commands = rewritten
       end
       local usedCommands = {}
       for name in pairs(ref and ref.commands or {}) do

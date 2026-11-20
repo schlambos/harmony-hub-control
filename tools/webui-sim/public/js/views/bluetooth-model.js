@@ -382,8 +382,13 @@ export function transliterateLatin(value) {
 
 /** Alphanumeric {c} token for a saved Bluetooth script command, mirroring
     bt_harmony_encode_saved_value() in payload/source/codex_webui.c. */
-export function btHarmonyCommandValue(rawName) {
-  const bytes = new TextEncoder().encode(String(rawName ?? ""));
+export function btHarmonyCommandValue(rawOrCmd) {
+  if (rawOrCmd && typeof rawOrCmd === "object") {
+    const id = String(rawOrCmd.id ?? "");
+    if (id && /^[A-Za-z0-9]{1,31}$/.test(id)) return `savedid${id}`;
+    return btHarmonyCommandValue(rawOrCmd.name ?? "");
+  }
+  const bytes = new TextEncoder().encode(String(rawOrCmd ?? ""));
   if (bytes.length === 0) return "";
   if (bytes.length <= 45) {
     let hex = "saved";
@@ -501,7 +506,7 @@ export function planBtHarmonyCommands(device, harmonyEntry = null) {
     }
     used.add(harmonyName.toLowerCase());
     plannedNamesLower.add(harmonyName.toLowerCase());
-    const value = btHarmonyCommandValue(rawName);
+    const value = btHarmonyCommandValue(cmd);
     const renamed = harmonyName !== rawName;
     let changeKind = "exact";
     let reason = `On Harmony as “${harmonyName}”.`;

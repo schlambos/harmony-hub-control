@@ -571,6 +571,68 @@ check("once no longer referenced, retained Bluetooth saved commands are dropped 
     (cleanupUsed.retainedCommands == nil or #cleanupUsed.retainedCommands == 0),
   encodeJson(cleanupUsed))
 
+-- Reviewer finding: [Café, Cafe] maps to [Cafe -> T1, Cafe 2 -> T2].
+-- Deleting Café (T1) while a button references "Cafe" MUST retain "Cafe" -> T1
+-- and keep Cafe (T2) on "Cafe 2" (never redirect the button to T2).
+-- Deleting Cafe (T2) while a button references "Cafe 2" MUST retain "Cafe 2" -> T2
+-- and keep Café (T1) on "Cafe".
+local collInit = commitBt({ devices = { laptopWith({
+  { name = "Cafe", value = "savedidc1" },
+  { name = "Cafe 2", value = "savedidc2" },
+}) } })
+local collDev = entryBy("Melodious Bluetooth")
+local collDevId = collDev and collDev.Device["Id-"]
+hub.files.MapList.text = encodeJson({
+  ButtonMaps = {
+    {
+      __type = "ActivityButtonMap",
+      ButtonMapIdentifier = "16414Activity1",
+      Buttons = {
+        { ButtonAction = { __type = "ButtonCommandAction", ["DeviceId-"] = collDevId, CommandName = "Cafe" } },
+        { ButtonAction = { __type = "ButtonCommandAction", ["DeviceId-"] = collDevId, CommandName = "Cafe 2" } },
+      },
+    },
+  },
+})
+-- Delete Café (T1): C planner now proposes Cafe -> T2.
+local deleteFirst = commitBt({ devices = { laptopWith({
+  { name = "Cafe", value = "savedidc2" },
+}) } })
+local afterDelFirst = entryBy("Melodious Bluetooth")
+local delFirstByName = {}
+for _, c in ipairs(afterDelFirst and afterDelFirst.Commands or {}) do
+  delFirstByName[c.Name] = c.Parameters and c.Parameters[1] and c.Parameters[1].Value
+end
+check("deleting first side of collision retains bound Cafe -> T1 and keeps T2 on Cafe 2",
+  collInit.ok and deleteFirst.ok and
+    delFirstByName["Cafe"] == "savedidc1" and
+    delFirstByName["Cafe 2"] == "savedidc2" and
+    deleteFirst.retainedCommands ~= nil and #deleteFirst.retainedCommands == 1 and
+    deleteFirst.retainedCommands[1].command == "Cafe",
+  encodeJson(delFirstByName) .. " " .. encodeJson(deleteFirst.retainedCommands))
+
+-- Reset to [Cafe -> T1, Cafe 2 -> T2] and delete second side (Cafe / T2).
+commitBt({ devices = { laptopWith({
+  { name = "Cafe", value = "savedidc1" },
+  { name = "Cafe 2", value = "savedidc2" },
+}) } })
+local deleteSecond = commitBt({ devices = { laptopWith({
+  { name = "Cafe", value = "savedidc1" },
+}) } })
+local afterDelSecond = entryBy("Melodious Bluetooth")
+local delSecondByName = {}
+for _, c in ipairs(afterDelSecond and afterDelSecond.Commands or {}) do
+  delSecondByName[c.Name] = c.Parameters and c.Parameters[1] and c.Parameters[1].Value
+end
+check("deleting second side of collision keeps Cafe -> T1 and retains bound Cafe 2 -> T2",
+  deleteSecond.ok and
+    delSecondByName["Cafe"] == "savedidc1" and
+    delSecondByName["Cafe 2"] == "savedidc2" and
+    deleteSecond.retainedCommands ~= nil and #deleteSecond.retainedCommands == 1 and
+    deleteSecond.retainedCommands[1].command == "Cafe 2",
+  encodeJson(delSecondByName) .. " " .. encodeJson(deleteSecond.retainedCommands))
+hub.files.MapList.text = encodeJson({ ButtonMaps = {} })
+
 -- A set file from codex_webui (tools/bt_harmony_webui_smoke.py) ------------
 if arg and arg[1] then
   local file = assert(io.open(arg[1], "r"))

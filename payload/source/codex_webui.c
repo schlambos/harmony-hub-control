@@ -241,6 +241,7 @@ struct ir_inventory {
 };
 
 struct bt_saved_command {
+    char id[32];
     char name[128];
     char script[MAX_BT_SCRIPT_LEN];
     int delay_ms;
@@ -8381,6 +8382,17 @@ static int load_bt_inventory(struct bt_inventory *inv) {
                 struct bt_saved_command *cmd = &dev->commands[dev->command_count];
                 const char *obj_end = find_matching_json(cpos, '{', '}');
                 if (!obj_end || obj_end > cmd_end) break;
+                memset(cmd, 0, sizeof(*cmd));
+                json_string_range(cpos, obj_end, "id", cmd->id, sizeof(cmd->id));
+                if (cmd->id[0]) {
+                    size_t idi;
+                    for (idi = 0; cmd->id[idi]; idi++) {
+                        if (!isalnum((unsigned char)cmd->id[idi])) {
+                            cmd->id[0] = 0;
+                            break;
+                        }
+                    }
+                }
                 json_string_range(cpos, obj_end, "name", cmd->name, sizeof(cmd->name));
                 json_string_range(cpos, obj_end, "script", cmd->script, sizeof(cmd->script));
                 cmd->delay_ms = (int)json_long_range(cpos, obj_end, "delayMs", 35);
@@ -8417,7 +8429,12 @@ static int save_bt_inventory(const struct bt_inventory *inv) {
         for (j = 0; j < dev->command_count; j++) {
             const struct bt_saved_command *cmd = &dev->commands[j];
             if (j) fputc(',', f);
-            fputs("{\"name\":", f); json_write_string(f, cmd->name);
+            fputc('{', f);
+            if (cmd->id[0]) {
+                fputs("\"id\":", f); json_write_string(f, cmd->id);
+                fputc(',', f);
+            }
+            fputs("\"name\":", f); json_write_string(f, cmd->name);
             fputs(",\"delayMs\":", f); fprintf(f, "%d", cmd->delay_ms);
             fputs(",\"script\":", f); json_write_string(f, cmd->script);
             fputc('}', f);
@@ -8436,6 +8453,50 @@ static int save_bt_inventory(const struct bt_inventory *inv) {
     chmod(BT_DEVICE_STORE, 0644);
     sync();
     return 0;
+}
+
+static void bt_assign_command_id(const struct bt_saved_device *dev, char *out, size_t outlen) {
+    static unsigned long seq = 0;
+    unsigned long base = (unsigned long)time(NULL);
+    int attempt;
+    if (!out || outlen == 0) return;
+    for (attempt = 0; attempt < 256; attempt++) {
+        char cand[32];
+        int i, dup = 0;
+        seq++;
+        snprintf(cand, sizeof(cand), "c%08lx%04lx",
+            base & 0xffffffffUL, ((unsigned long)getpid() ^ (seq + (unsigned long)attempt)) & 0xffffUL);
+        for (i = 0; dev && i < dev->command_count; i++) {
+            if (strcmp(dev->commands[i].id, cand) == 0) {
+                dup = 1;
+                break;
+            }
+        }
+        if (!dup) {
+            copy_text(out, outlen, cand);
+            return;
+        }
+    }
+    copy_text(out, outlen, "");
+}
+
+static int bt_webhook_acquire_lock(char *err, size_t errlen) {
+    int lock_fd = open(BT_WEBHOOK_LOCK_FILE, O_RDWR | O_CREAT, 0600);
+    if (lock_fd < 0) {
+        if (err && errlen) {
+            snprintf(err, errlen, "could not open Bluetooth script lock: %s", strerror(errno));
+        }
+        return -1;
+    }
+    while (flock(lock_fd, LOCK_EX) < 0) {
+        if (errno == EINTR) continue;
+        if (err && errlen) {
+            snprintf(err, errlen, "could not acquire Bluetooth script lock: %s", strerror(errno));
+        }
+        close(lock_fd);
+        return -1;
+    }
+    return lock_fd;
 }
 
 static int find_bt_device_index(const struct bt_inventory *inv, const char *device_id) {
@@ -8599,6 +8660,7 @@ static int upsert_bt_command(const char *device_id, const char *old_name, const 
         }
         cidx = dev->command_count++;
         memset(&dev->commands[cidx], 0, sizeof(dev->commands[cidx]));
+        bt_assign_command_id(dev, dev->commands[cidx].id, sizeof(dev->commands[cidx].id));
     }
     copy_text(dev->commands[cidx].name, sizeof(dev->commands[cidx].name), name);
     copy_text(dev->commands[cidx].script, sizeof(dev->commands[cidx].script), script);
@@ -8678,12 +8740,14 @@ static int send_bt_saved_command(const char *device_id, const char *name, char *
     }
     cmd = &dev->commands[cidx];
     reply[0] = 0;
-    lock_fd = open(BT_WEBHOOK_LOCK_FILE, O_RDWR | O_CREAT, 0600);
-    if (lock_fd >= 0) {
-        while (flock(lock_fd, LOCK_EX) < 0 && errno == EINTR) {}
+    lock_fd = bt_webhook_acquire_lock(reply, sizeof(reply));
+    if (lock_fd < 0) {
+        snprintf(msg, msglen, "Failed to send Bluetooth command %s on %s. %s",
+            name, dev->name, reply);
+        return -1;
     }
     rc = run_bt_saved_script(dev->type, dev->bdaddr, cmd->script, cmd->delay_ms, reply, sizeof(reply));
-    if (lock_fd >= 0) close(lock_fd);
+    close(lock_fd);
     snprintf(msg, msglen, "%s Bluetooth command %s on %s. %s",
         rc == 0 ? "Sent" : "Failed to send", name, dev->name, reply[0] ? reply : "");
     return rc;
@@ -13801,12 +13865,38 @@ static void bt_harmony_encode_saved_value(const char *raw_name, char *out, size_
     }
 }
 
+static void bt_harmony_encode_command_value(const struct bt_saved_command *cmd, char *out, size_t outlen) {
+    if (!out || outlen == 0) return;
+    out[0] = 0;
+    if (!cmd) return;
+    if (cmd->id[0]) {
+        snprintf(out, outlen, "savedid%s", cmd->id);
+        return;
+    }
+    bt_harmony_encode_saved_value(cmd->name, out, outlen);
+}
+
 /* Resolve a "saved..." webhook key back to the saved command on dev.
-   Sets *syntax_ok = 1 when key has valid saved<hex> or savedh<20hex> syntax. */
+   Sets *syntax_ok = 1 when key has valid savedid<id>, saved<hex>, or savedh<20hex> syntax. */
 static const struct bt_saved_command *bt_harmony_find_saved_command(const struct bt_saved_device *dev, const char *key, int *syntax_ok) {
     int i;
     if (syntax_ok) *syntax_ok = 0;
     if (!dev || !key || strncmp(key, "saved", 5) != 0) return NULL;
+    if (strncmp(key, "savedid", 7) == 0) {
+        const char *id = key + 7;
+        size_t idlen = strlen(id), j;
+        if (idlen == 0 || idlen >= 32) return NULL;
+        for (j = 0; j < idlen; j++) {
+            if (!isalnum((unsigned char)id[j])) return NULL;
+        }
+        if (syntax_ok) *syntax_ok = 1;
+        for (i = 0; i < dev->command_count; i++) {
+            if (dev->commands[i].id[0] && strcmp(dev->commands[i].id, id) == 0) {
+                return &dev->commands[i];
+            }
+        }
+        return NULL;
+    }
     if (key[5] == 'h') {
         char expected[40];
         if (strlen(key) != 26) return NULL;
@@ -13891,7 +13981,7 @@ static char *bt_harmony_set_json(const struct bt_inventory *inv) {
                     cmd_name, sizeof(cmd_name)) != 0) {
                 continue;
             }
-            bt_harmony_encode_saved_value(dev->commands[k].name, cmd_value, sizeof(cmd_value));
+            bt_harmony_encode_command_value(&dev->commands[k], cmd_value, sizeof(cmd_value));
             if (!cmd_value[0]) continue;
             used += (size_t)snprintf(out + used, cap - used,
                 ",{\"name\":\"%s\",\"value\":\"%s\"}", cmd_name, cmd_value);
@@ -14019,15 +14109,31 @@ fail:
     free(reply);
 }
 
+#ifdef BT_HARMONY_TEST_HOOKS
+static pid_t bt_webhook_fork(int stage) {
+    const char *fail = getenv("BT_WEBHOOK_FAIL_FORK");
+    if (fail && ((stage == 1 && strcmp(fail, "outer") == 0) ||
+                 (stage == 2 && strcmp(fail, "inner") == 0))) {
+        errno = EAGAIN;
+        return -1;
+    }
+    return fork();
+}
+#else
+#define bt_webhook_fork(stage) fork()
+#endif
+
 static void bt_webhook_execute(const struct bt_saved_device *dev, const struct bt_saved_command *saved_cmd, const char *key) {
     char detail[512], reply[4096];
     int lock_fd, rc;
-    lock_fd = open(BT_WEBHOOK_LOCK_FILE, O_RDWR | O_CREAT, 0600);
-    if (lock_fd >= 0) {
-        while (flock(lock_fd, LOCK_EX) < 0 && errno == EINTR) {}
-    }
     detail[0] = 0;
     reply[0] = 0;
+    lock_fd = bt_webhook_acquire_lock(detail, sizeof(detail));
+    if (lock_fd < 0) {
+        fprintf(stderr, "bt-webhook device=%s command=%s result=failed %s\n",
+            dev->id, saved_cmd ? saved_cmd->name : key, detail);
+        return;
+    }
     rc = ensure_bt_address_connection(dev->name, dev->bdaddr, dev->type, detail, sizeof(detail));
     if (rc >= 0) {
         if (saved_cmd) {
@@ -14039,15 +14145,15 @@ static void bt_webhook_execute(const struct bt_saved_device *dev, const struct b
     fprintf(stderr, "bt-webhook device=%s command=%s result=%s %s%s\n",
         dev->id, saved_cmd ? saved_cmd->name : key, rc >= 0 ? "sent" : "failed", detail,
         rc < 0 && reply[0] ? reply : "");
-    if (lock_fd >= 0) close(lock_fd);
+    close(lock_fd);
 }
 
 /* POST /api/bt-webhook  {"device":"bt_...","command":"tvhome" | "saved..."}
    Called by the Harmony engine for the Bluetooth Harmony devices (their
-   protocol, see codexactivity). It answers at once, so neither the engine's
-   2 s timeout nor the web server blocks on a reconnect or a script's WAIT
-   steps, then runs the key or saved script in a detached worker serialized
-   with flock so concurrent presses never interleave. */
+   protocol, see codexactivity). It launches a detached worker first and
+   verifies the handoff over a pipe before answering 200 queued, so a failed
+   fork is reported as 503 instead of a false success. The worker serializes
+   execution with flock so concurrent scripts never interleave. */
 static void render_bt_webhook_json(int fd, const struct request *req) {
     char device_id[48], key[128], press[96], release[32], err[256];
     struct bt_inventory *inv = NULL;
@@ -14108,6 +14214,61 @@ static void render_bt_webhook_json(int fd, const struct request *req) {
             dev = &inv->devices[idx];
         }
     }
+    if (dev) {
+        int handoff[2];
+        if (pipe(handoff) < 0) {
+            status = "503 Service Unavailable";
+            problem = "failed to prepare Bluetooth worker";
+        } else {
+            pid = bt_webhook_fork(1);
+            if (pid < 0) {
+                close(handoff[0]);
+                close(handoff[1]);
+                status = "503 Service Unavailable";
+                problem = "failed to start Bluetooth worker";
+            } else if (pid == 0) {
+                pid_t worker;
+                close(handoff[0]);
+                worker = bt_webhook_fork(2);
+                if (worker < 0) {
+                    char fail_mark = 'E';
+                    ssize_t wr = write(handoff[1], &fail_mark, 1);
+                    (void)wr;
+                    close(handoff[1]);
+                    _exit(1);
+                }
+                if (worker > 0) {
+                    char ok_mark = 'K';
+                    ssize_t wr = write(handoff[1], &ok_mark, 1);
+                    (void)wr;
+                    close(handoff[1]);
+                    _exit(0);
+                }
+                close(handoff[1]);
+                setsid();
+                {
+                    int close_fd;
+                    for (close_fd = 3; close_fd < 256; close_fd++) close(close_fd);
+                }
+                bt_webhook_execute(dev, saved_cmd, key);
+                free(inv);
+                _exit(0);
+            } else {
+                char mark = 0;
+                ssize_t got;
+                close(handoff[1]);
+                do {
+                    got = read(handoff[0], &mark, 1);
+                } while (got < 0 && errno == EINTR);
+                close(handoff[0]);
+                while (waitpid(pid, NULL, 0) < 0 && errno == EINTR) {}
+                if (got != 1 || mark != 'K') {
+                    status = "503 Service Unavailable";
+                    problem = "failed to start Bluetooth worker";
+                }
+            }
+        }
+    }
     f = send_json_start(fd, status);
     if (f) {
         if (problem) {
@@ -14118,28 +14279,6 @@ static void render_bt_webhook_json(int fd, const struct request *req) {
             fputs("{\"ok\":true,\"queued\":true}\n", f);
         }
         fclose(f);
-    }
-    if (!dev) {
-        free(inv);
-        return;
-    }
-    shutdown(fd, SHUT_RDWR);
-    pid = fork();
-    if (pid == 0) {
-        pid_t worker = fork();
-        int close_fd;
-        if (worker < 0) _exit(0);
-        if (worker != 0) _exit(0);
-        setsid();
-        for (close_fd = 3; close_fd < 256; close_fd++) close(close_fd);
-        bt_webhook_execute(dev, saved_cmd, key);
-        free(inv);
-        _exit(0);
-    }
-    if (pid > 0) {
-        while (waitpid(pid, NULL, 0) < 0 && errno == EINTR) {}
-    } else {
-        bt_webhook_execute(dev, saved_cmd, key);
     }
     free(inv);
 }
