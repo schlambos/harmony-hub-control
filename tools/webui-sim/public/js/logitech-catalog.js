@@ -72,10 +72,38 @@ export function catalogRows(packageJson, hubProtocolNames) {
   };
 }
 
+/**
+ * Protocols the hub knows natively (ensure_builtin_protocol_for_id in
+ * payload/source/codex_webui.c) and automatically writes to ProtocolList.json
+ * on import, even on a brand-new blank hub whose ProtocolList starts empty.
+ */
+export const BUILTIN_HUB_PROTOCOLS = Object.freeze(["Toshiba 32 Bit", "MemorexO1 32 Bit"]);
+
 /** Protocol names the hub has, read from an exported ProtocolList. */
 export function hubProtocolNames(protocolList) {
   const protocols = Array.isArray(protocolList?.Protocols) ? protocolList.Protocols : [];
   return protocols.map((p) => String(p?.Name ?? "")).filter(Boolean);
+}
+
+/**
+ * Protocol names the hub can accept for catalog KeyCodes, given a parsed
+ * `/export/protocols` ProtocolList export: every name already in ProtocolList
+ * plus the hub's built-in protocols. Returns null if `protocolList` is not a
+ * valid ProtocolList object.
+ */
+export function supportedHubProtocolNames(protocolList) {
+  if (!protocolList || typeof protocolList !== "object" || !Array.isArray(protocolList.Protocols)) {
+    return null;
+  }
+  const merged = [...hubProtocolNames(protocolList)];
+  const seen = new Set(merged);
+  for (const name of BUILTIN_HUB_PROTOCOLS) {
+    if (!seen.has(name)) {
+      seen.add(name);
+      merged.push(name);
+    }
+  }
+  return merged;
 }
 
 /** Human summary of a conversion, for the sheet's status line. */

@@ -1,6 +1,13 @@
 import { describe, it } from "node:test";
 import assert from "node:assert/strict";
-import { catalogRows, hubProtocolNames, describeCatalogRows, isCatalogPackage } from "../public/js/logitech-catalog.js";
+import {
+  BUILTIN_HUB_PROTOCOLS,
+  catalogRows,
+  hubProtocolNames,
+  supportedHubProtocolNames,
+  describeCatalogRows,
+  isCatalogPackage,
+} from "../public/js/logitech-catalog.js";
 
 const PKG = {
   schema_version: "0.2.0",
@@ -60,5 +67,37 @@ describe("hubProtocolNames", () => {
       ["Sony 15 Bit", "Toshiba 32 Bit"],
     );
     assert.deepEqual(hubProtocolNames(null), []);
+  });
+});
+
+describe("supportedHubProtocolNames", () => {
+  it("includes built-in hub protocols on a fresh hub with an empty ProtocolList", () => {
+    assert.deepEqual(BUILTIN_HUB_PROTOCOLS, ["Toshiba 32 Bit", "MemorexO1 32 Bit"]);
+    const freshNames = supportedHubProtocolNames({ Protocols: [] });
+    assert.deepEqual(freshNames, ["Toshiba 32 Bit", "MemorexO1 32 Bit"]);
+
+    const lgPkg = {
+      schema_version: "0.2.0",
+      resources: {
+        global_language_commands: [
+          { Name: "PowerToggle", KeyCode: "G:Toshiba 32 Bit:(0x20DF10EF)(Repeat)():3", ProtocolId: 2 },
+          { Name: "VolumeUp", KeyCode: "G:Toshiba 32 Bit:(0x20DF40BF)(Repeat)():3", ProtocolId: 2 },
+          { Name: "Unsupported", KeyCode: "G:RC6 Mode 0:()(0x1)():0", ProtocolId: 999 },
+        ],
+      },
+    };
+    const result = catalogRows(lgPkg, freshNames);
+    assert.deepEqual(result.rows.map((r) => r.name), ["PowerToggle", "VolumeUp"]);
+    assert.deepEqual(result.protocolsUsed, ["Toshiba 32 Bit"]);
+    assert.deepEqual(result.missingProtocols, ["RC6 Mode 0"]);
+  });
+
+  it("merges ProtocolList entries with built-in protocols without duplicates and returns null on invalid input", () => {
+    assert.deepEqual(
+      supportedHubProtocolNames({ Protocols: [{ Name: "Sony 15 Bit" }, { Name: "Toshiba 32 Bit" }] }),
+      ["Sony 15 Bit", "Toshiba 32 Bit", "MemorexO1 32 Bit"],
+    );
+    assert.equal(supportedHubProtocolNames(null), null);
+    assert.equal(supportedHubProtocolNames({}), null);
   });
 });

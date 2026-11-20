@@ -8,7 +8,7 @@
    library or a file is built with textContent, never innerHTML. */
 
 import { getJson, importCatalog, postApiForm } from "../api.js";
-import { catalogRows, describeCatalogRows, hubProtocolNames, isCatalogPackage } from "../logitech-catalog.js";
+import { catalogRows, describeCatalogRows, isCatalogPackage, supportedHubProtocolNames } from "../logitech-catalog.js";
 import * as hub from "../state.js";
 import { clear, el, setText } from "../setup-kit.js";
 import { openSheet, snackbar } from "../ui/shell.js";
@@ -372,7 +372,7 @@ export function openImportSheet({ device }) {
     pkg: null,
     rows: [],
     skipped: [],
-    protocols: [],
+    protocols: null,
     protocolsUsed: [],
     missingProtocols: [],
     signedIn: false,
@@ -400,14 +400,17 @@ export function openImportSheet({ device }) {
   }
 
   async function loadHubProtocols() {
-    if (catalogState.protocols.length) return catalogState.protocols;
+    if (Array.isArray(catalogState.protocols)) return catalogState.protocols;
     try {
-      const text = await (await fetch("/export/protocols", { cache: "no-store" })).text();
-      catalogState.protocols = hubProtocolNames(JSON.parse(text));
+      const res = await fetch("/export/protocols", { cache: "no-store" });
+      if (!res.ok) return null;
+      const names = supportedHubProtocolNames(JSON.parse(await res.text()));
+      if (!names) return null;
+      catalogState.protocols = names;
+      return catalogState.protocols;
     } catch (_) {
-      catalogState.protocols = [];
+      return null;
     }
-    return catalogState.protocols;
   }
 
   function renderCatalogAccount() {
@@ -490,14 +493,14 @@ export function openImportSheet({ device }) {
     }
     catalogState.pkg = pkg;
     const protocols = await loadHubProtocols();
-    const converted = catalogRows(pkg, protocols);
+    const converted = catalogRows(pkg, protocols ?? []);
     catalogState.rows = converted.rows;
     catalogState.skipped = converted.skipped;
     catalogState.protocolsUsed = converted.protocolsUsed;
     catalogState.missingProtocols = converted.missingProtocols;
     renderCatalogPreview();
     setMessage(refs.catalogStatus,
-      protocols.length
+      protocols !== null
         ? `Loaded ${label}: ${describeCatalogRows(converted)}.`
         : `Loaded ${label}, but the hub's protocol list couldn't be read, so no KeyCode can be checked yet.`,
       converted.rows.length ? "ok" : "warn");
