@@ -3460,9 +3460,11 @@ local function commitHaDevices(request, family)
             spec.commands[#spec.commands + 1] = {name = keptOld.name, value = keptOld.value}
             result.retainedCommands = result.retainedCommands or {}
             result.retainedCommands[#result.retainedCommands + 1] = {
+              entity = key,
               device = spec.name,
               deviceId = deviceId,
-              command = keptOld.name
+              command = keptOld.name,
+              value = keptOld.value
             }
           else
             return {

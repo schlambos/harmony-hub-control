@@ -983,14 +983,16 @@ devices. Its commands:
 - `ChannelUp`, `ChannelDown`, `Mute`, `VolumeUp`, `VolumeDown`
 - `0` to `9`
 - Every publishable saved keyboard-script command stored on that Bluetooth
-  device, appended after the fixed set. Its `{c}` token is `saved<hex>` (UTF-8
-  hex of the saved command name up to 45 bytes) or `savedh<16-hex-fnv1a64><4-hex-len>`
-  for longer names. Accented Latin letters are transliterated (`é` -> `e`,
-  `ß` -> `ss`, `œ` -> `oe`), disallowed punctuation becomes spaces, names over
-  48 characters are shortened, and clashes with built-in keys or earlier saved
-  commands get a unique suffix (` Saved`, ` 2`, ...). A saved name with no
-  ASCII letters or digits after transliteration is skipped and flagged on the
-  Bluetooth page.
+  device, appended after the fixed set. Its `{c}` token is `savedid<id>` using
+  the saved command's stable ID. Scripts created before stable IDs used
+  `saved<hex>` (UTF-8 hex of the saved command name up to 45 bytes) or
+  `savedh<16-hex-fnv1a64><4-hex-len>` for longer names; those original tokens
+  remain executable after an upgrade and rename. Accented Latin letters are
+  transliterated (`é` -> `e`, `ß` -> `ss`, `œ` -> `oe`), disallowed punctuation
+  becomes spaces, names over 48 characters are shortened, and clashes with
+  built-in keys or earlier saved commands get a unique suffix (` Saved`, ` 2`,
+  ...). A saved name with no ASCII letters or digits after transliteration is
+  skipped and flagged on the Bluetooth page.
 
 The protocol posts each press to `http://127.0.0.1:8080/api/bt-webhook`
 (`render_bt_webhook_json()`) as `{"device":"<saved-device-id>",
@@ -1007,8 +1009,11 @@ Adding, editing, renaming or deleting a saved command on a published device
 re-commits the Harmony device automatically. If a deleted or renamed command
 is still referenced by an activity, button or sequence, `CommitBtDevices`
 retains that command on the Harmony device (reported in `retainedCommands`)
-instead of refusing the sync or leaving a dangling reference; once the
-reference is removed, the next update drops it cleanly.
+instead of refusing the sync or leaving a dangling reference. The hub also
+keeps the deleted script in a hidden `retained` record (and the original name
+token on legacy renames), so the retained Harmony command still executes it.
+Once the last reference is removed, the next update drops both the Harmony
+command and its hidden script record cleanly.
 
 Publishing a device that is already on Harmony again (`publish = "1"`, or
 **Update Harmony device** on the Bluetooth page) brings it up to the hub's

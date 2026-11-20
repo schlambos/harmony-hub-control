@@ -535,8 +535,11 @@ for _, c in ipairs(afterDeleteUsed and afterDeleteUsed.Commands or {}) do
   usedByName[c.Name] = { id = c["Id-"], value = c.Parameters and c.Parameters[1] and c.Parameters[1].Value }
 end
 local retainedNames = {}
+local retainedTokens = {}
 for _, r in ipairs(deleteUsed.retainedCommands or {}) do
   retainedNames[#retainedNames + 1] = r.command
+  retainedTokens[r.command] = r.value
+  check("retained command identifies its saved Bluetooth target", r.entity == "bt_1730000099_1", encodeJson(r))
 end
 table.sort(retainedNames)
 check("deleting/renaming a command still used by an activity or button is not refused and retains it without dangling refs",
@@ -548,7 +551,9 @@ check("deleting/renaming a command still used by an activity or button is not re
     usedByName["Unlock Laptop"] ~= nil and
     usedByName["Unlock Laptop"].id == unlockIdBefore and
     usedByName["Unlock Laptop"].value == "saved556e6c6f636b204c6170746f70" and
-    #retainedNames == 2 and retainedNames[1] == "Unlock Laptop" and retainedNames[2] == "Wake and Sign In",
+    #retainedNames == 2 and retainedNames[1] == "Unlock Laptop" and retainedNames[2] == "Wake and Sign In" and
+    retainedTokens["Unlock Laptop"] == "saved556e6c6f636b204c6170746f70" and
+    retainedTokens["Wake and Sign In"] == "saved57616b6520616e64205369676e20496e",
   encodeJson(deleteUsed))
 
 -- Once the activity and button no longer reference them, re-commit drops them cleanly.

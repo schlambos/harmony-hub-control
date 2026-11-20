@@ -450,6 +450,103 @@ print('{"id":1,"code":200}')
                                       capture_output=True, text=True, check=True, env=env).stdout.strip()
             check(lock_out.startswith("rc -1 ") and "lock" in lock_out.lower() and not os.path.exists(event_log),
                   "run_saved_bt_command must fail closed without sending keystrokes on lock error: %r" % lock_out)
+
+            # Upgrade regression: a pre-stable-ID command's original Harmony
+            # token must still execute after rename. A referenced delete keeps
+            # a hidden script record until the writer says the token is unused.
+            with open(bt_store, "w") as f:
+                json.dump({
+                    "version": 1,
+                    "devices": [{
+                        "id": "bt_1730000000_42",
+                        "name": "Work Laptop",
+                        "type": "btkeyboard",
+                        "bdaddr": "AA:BB:CC:DD:EE:FF",
+                        "harmony": True,
+                        "commands": [{
+                            "name": "Cafe",
+                            "delayMs": 20,
+                            "script": "KEY f6",
+                        }],
+                    }],
+                }, f)
+            legacy_out = subprocess.run([exe, "legacy-rename-check"], capture_output=True,
+                                        text=True, check=True, env=env).stdout.strip()
+            check("id=c" in legacy_out and "name=Espresso" in legacy_out and "count=1" in legacy_out,
+                  "legacy rename must retain one script and assign a stable ID: %r" % legacy_out)
+            legacy_token = saved_value("Cafe")
+            if os.path.exists(event_log):
+                os.unlink(event_log)
+            legacy_body = json.dumps({"device": "bt_1730000000_42", "command": legacy_token})
+            legacy_res = subprocess.run([exe, "webhook-saved", legacy_body], capture_output=True,
+                                        text=True, check=True, env=env).stdout.splitlines()
+            check("webhook HTTP/1.1 200 OK" in legacy_res,
+                  "legacy token must survive rename instead of returning 404: %r" % legacy_res)
+            deadline = time.monotonic() + 3.0
+            legacy_events = []
+            while time.monotonic() < deadline:
+                if os.path.exists(event_log):
+                    with open(event_log) as f:
+                        legacy_events = [line.strip() for line in f if line.strip()]
+                    if legacy_events:
+                        break
+                time.sleep(0.05)
+            check(len(legacy_events) == 1 and "A10100003F0000000000" in legacy_events[0],
+                  "legacy token must execute the renamed F6 script: %r" % legacy_events)
+
+            retained_env = env.copy()
+            retained_env["BT_HARMONY_TEST_REPLY"] = json.dumps({
+                "ok": True,
+                "retainedCommands": [{
+                    "entity": "bt_1730000000_42",
+                    "device": "Work Laptop",
+                    "command": "Cafe",
+                    "value": legacy_token,
+                }],
+            })
+            delete_out = subprocess.run([exe, "delete-command-check"], capture_output=True,
+                                        text=True, check=True, env=retained_env).stdout.strip()
+            with open(bt_store) as f:
+                retained_store = json.load(f)
+            retained_commands = retained_store["devices"][0]["commands"]
+            check(len(retained_commands) == 1 and retained_commands[0].get("retained") is True,
+                  "referenced delete must retain a runnable script record: %r / %r" %
+                  (delete_out, retained_commands))
+            current_set = json.loads(subprocess.run([exe, "current-set"], capture_output=True,
+                                                    text=True, check=True, env=env).stdout)
+            check(all(not c["value"].startswith("saved") for c in current_set["devices"][0]["commands"]),
+                  "a deleted script must not be republished as an active command")
+            if os.path.exists(event_log):
+                os.unlink(event_log)
+            deleted_res = subprocess.run([exe, "webhook-saved", legacy_body], capture_output=True,
+                                         text=True, check=True, env=env).stdout.splitlines()
+            check("webhook HTTP/1.1 200 OK" in deleted_res,
+                  "referenced deleted token must execute instead of returning 404: %r" % deleted_res)
+            deadline = time.monotonic() + 3.0
+            deleted_events = []
+            while time.monotonic() < deadline:
+                if os.path.exists(event_log):
+                    with open(event_log) as f:
+                        deleted_events = [line.strip() for line in f if line.strip()]
+                    if deleted_events:
+                        break
+                time.sleep(0.05)
+            check(len(deleted_events) == 1 and "A10100003F0000000000" in deleted_events[0],
+                  "referenced deleted token must run the retained F6 script: %r" % deleted_events)
+
+            cleanup_env = env.copy()
+            cleanup_env["BT_HARMONY_TEST_REPLY"] = json.dumps({"ok": True, "changed": True})
+            cleanup_out = subprocess.run([exe, "sync-device-check"], capture_output=True,
+                                         text=True, check=True, env=cleanup_env).stdout.strip()
+            with open(bt_store) as f:
+                cleaned_store = json.load(f)
+            check(cleaned_store["devices"][0]["commands"] == [],
+                  "last-reference cleanup must remove the hidden script record: %r / %r" %
+                  (cleanup_out, cleaned_store))
+            cleaned_res = subprocess.run([exe, "webhook-saved", legacy_body], capture_output=True,
+                                         text=True, check=True, env=env).stdout.splitlines()
+            check("webhook HTTP/1.1 404 Not Found" in cleaned_res,
+                  "fully cleaned token should no longer resolve: %r" % cleaned_res)
         finally:
             fifo_stop.set()
             reader_thread.join(timeout=1.0)

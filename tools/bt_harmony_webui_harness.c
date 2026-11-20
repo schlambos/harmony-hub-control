@@ -132,6 +132,41 @@ int main(int argc, char **argv) {
             (inv.device_count > 0 && inv.devices[0].command_count > 0) ? inv.devices[0].commands[inv.devices[0].command_count - 1].name : "");
         return 0;
     }
+    if (argc > 1 && strcmp(argv[1], "legacy-rename-check") == 0) {
+        char msg[512];
+        int rc = upsert_bt_command("bt_1730000000_42", "Cafe", "Espresso", "KEY f6", 20, msg, sizeof(msg));
+        load_bt_inventory(&inv);
+        printf("legacy-rename rc=%d id=%s name=%s count=%d\n", rc,
+            (inv.device_count > 0 && inv.devices[0].command_count > 0) ? inv.devices[0].commands[0].id : "",
+            (inv.device_count > 0 && inv.devices[0].command_count > 0) ? inv.devices[0].commands[0].name : "",
+            inv.device_count > 0 ? inv.devices[0].command_count : 0);
+        return 0;
+    }
+    if (argc > 1 && strcmp(argv[1], "delete-command-check") == 0) {
+        char msg[512];
+        int rc = delete_bt_command("bt_1730000000_42", "Espresso", msg, sizeof(msg));
+        load_bt_inventory(&inv);
+        printf("delete rc=%d count=%d message=%s\n", rc,
+            inv.device_count > 0 ? inv.devices[0].command_count : 0, msg);
+        return 0;
+    }
+    if (argc > 1 && strcmp(argv[1], "sync-device-check") == 0) {
+        char msg[512];
+        int rc = upsert_bt_device("bt_1730000000_42", "Work Laptop", "btkeyboard",
+            "AA:BB:CC:DD:EE:FF", msg, sizeof(msg));
+        load_bt_inventory(&inv);
+        printf("sync rc=%d count=%d message=%s\n", rc,
+            inv.device_count > 0 ? inv.devices[0].command_count : 0, msg);
+        return 0;
+    }
+    if (argc > 1 && strcmp(argv[1], "current-set") == 0) {
+        load_bt_inventory(&inv);
+        set = bt_harmony_set_json(&inv);
+        if (!set) return 1;
+        printf("%s\n", set);
+        free(set);
+        return 0;
+    }
     if (argc > 1 && strcmp(argv[1], "auth") == 0) {
         loopback_post("/api/bt-webhook", "{\"device\":\"bt_1730000000_42\",\"command\":\"tvhome\"}");
         loopback_post("/api/bt-harmony-device", "{}");

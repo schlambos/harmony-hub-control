@@ -243,8 +243,12 @@ struct ir_inventory {
 struct bt_saved_command {
     char id[32];
     char name[128];
+    /* Original name token for scripts created before stable IDs existed. */
+    char legacy_name[128];
     char script[MAX_BT_SCRIPT_LEN];
     int delay_ms;
+    /* Deleted locally but still executable while Harmony retains a reference. */
+    int retained;
 };
 
 struct bt_saved_device {
@@ -281,6 +285,7 @@ static int multi_remote_off_pending(void);
 static int run_bt_saved_script(const char *type, const char *bdaddr, const char *script, int gap_ms, char *out, size_t outlen);
 struct bt_inventory;
 static int bt_harmony_commit(const struct bt_inventory *inv, int dry_run, char *reply, size_t reply_len, char *msg, size_t msg_len);
+static int bt_harmony_cleanup_retained(struct bt_inventory *inv, const char *reply);
 static int bt_harmony_name_publishable(const char *raw);
 #define BT_HARMONY_REPLY 16384
 
@@ -8394,7 +8399,9 @@ static int load_bt_inventory(struct bt_inventory *inv) {
                     }
                 }
                 json_string_range(cpos, obj_end, "name", cmd->name, sizeof(cmd->name));
+                json_string_range(cpos, obj_end, "legacyName", cmd->legacy_name, sizeof(cmd->legacy_name));
                 json_string_range(cpos, obj_end, "script", cmd->script, sizeof(cmd->script));
+                cmd->retained = json_bool_range(cpos, obj_end, "retained", 0);
                 cmd->delay_ms = (int)json_long_range(cpos, obj_end, "delayMs", 35);
                 if (cmd->delay_ms < 15) cmd->delay_ms = 35;
                 if (cmd->delay_ms > 5000) cmd->delay_ms = 5000;
@@ -8435,8 +8442,12 @@ static int save_bt_inventory(const struct bt_inventory *inv) {
                 fputc(',', f);
             }
             fputs("\"name\":", f); json_write_string(f, cmd->name);
+            if (cmd->legacy_name[0]) {
+                fputs(",\"legacyName\":", f); json_write_string(f, cmd->legacy_name);
+            }
             fputs(",\"delayMs\":", f); fprintf(f, "%d", cmd->delay_ms);
             fputs(",\"script\":", f); json_write_string(f, cmd->script);
+            if (cmd->retained) fputs(",\"retained\":true", f);
             fputc('}', f);
         }
         fputs("]}", f);
@@ -8510,12 +8521,12 @@ static int find_bt_device_index(const struct bt_inventory *inv, const char *devi
 static int find_bt_command_index(const struct bt_saved_device *dev, const char *name) {
     int i;
     for (i = 0; i < dev->command_count; i++) {
-        if (strcmp(dev->commands[i].name, name) == 0) return i;
+        if (!dev->commands[i].retained && strcmp(dev->commands[i].name, name) == 0) return i;
     }
     return -1;
 }
 
-static void bt_harmony_sync_after_save(const struct bt_inventory *inv, char *msg, size_t msglen) {
+static void bt_harmony_sync_after_save(struct bt_inventory *inv, char *msg, size_t msglen) {
     char *reply = (char *)malloc(BT_HARMONY_REPLY);
     char note[512], err[256];
     int rc = reply ? bt_harmony_commit(inv, 0, reply, BT_HARMONY_REPLY, note, sizeof(note)) : -1;
@@ -8533,6 +8544,17 @@ static void bt_harmony_sync_after_save(const struct bt_inventory *inv, char *msg
     } else if (reply && strstr(reply, "\"retainedCommands\"") != NULL) {
         snprintf(msg + used, msglen - used,
             " Kept the previous command on the Harmony device because an activity or button still uses it.");
+    }
+    if (rc == 0 && reply) {
+        int cleaned = bt_harmony_cleanup_retained(inv, reply);
+        if (cleaned > 0) {
+            backup_settings();
+            if (save_bt_inventory(inv) != 0) {
+                used = strlen(msg);
+                snprintf(msg + used, msglen - used,
+                    " The Harmony device was updated, but local retained-script cleanup could not be saved.");
+            }
+        }
     }
     free(reply);
 }
@@ -8662,6 +8684,16 @@ static int upsert_bt_command(const char *device_id, const char *old_name, const 
         memset(&dev->commands[cidx], 0, sizeof(dev->commands[cidx]));
         bt_assign_command_id(dev, dev->commands[cidx].id, sizeof(dev->commands[cidx].id));
     }
+    if (!dev->commands[cidx].id[0]) {
+        /* Upgrading a legacy script must not orphan its already-published
+           saved<old-name> token when its name changes. */
+        copy_text(dev->commands[cidx].legacy_name, sizeof(dev->commands[cidx].legacy_name), old_name);
+        bt_assign_command_id(dev, dev->commands[cidx].id, sizeof(dev->commands[cidx].id));
+        if (!dev->commands[cidx].id[0]) {
+            snprintf(msg, msglen, "Could not assign a stable Bluetooth command ID.");
+            return -1;
+        }
+    }
     copy_text(dev->commands[cidx].name, sizeof(dev->commands[cidx].name), name);
     copy_text(dev->commands[cidx].script, sizeof(dev->commands[cidx].script), script);
     dev->commands[cidx].delay_ms = delay_ms;
@@ -8702,8 +8734,14 @@ static int delete_bt_command(const char *device_id, const char *name, char *msg,
         snprintf(msg, msglen, "Bluetooth command %s was not found.", name);
         return -1;
     }
-    for (i = cidx; i + 1 < dev->command_count; i++) dev->commands[i] = dev->commands[i + 1];
-    dev->command_count--;
+    if (dev->harmony) {
+        /* Commits omit retained scripts, but keep their tokens executable until
+           codexactivity confirms that no Harmony reference retains them. */
+        dev->commands[cidx].retained = 1;
+    } else {
+        for (i = cidx; i + 1 < dev->command_count; i++) dev->commands[i] = dev->commands[i + 1];
+        dev->command_count--;
+    }
     backup_settings();
     if (save_bt_inventory(&inv) != 0) {
         snprintf(msg, msglen, "Failed to delete Bluetooth command.");
@@ -8845,6 +8883,7 @@ static void bt_saved_devices_panel(FILE *f, const struct bt_inventory *inv) {
         fprintf(f, "<div class='command-list mini'>");
         for (j = 0; j < dev->command_count; j++) {
             const struct bt_saved_command *cmd = &dev->commands[j];
+            if (cmd->retained) continue;
             fprintf(f, "<div class='command'><div><strong>");
             html(f, cmd->name);
             fprintf(f, "</strong><div class='muted'>Keyboard script / %d ms between keys</div><pre class='mini command-preview'>", cmd->delay_ms);
@@ -13905,9 +13944,14 @@ static const struct bt_saved_command *bt_harmony_find_saved_command(const struct
         }
         if (syntax_ok) *syntax_ok = 1;
         for (i = 0; i < dev->command_count; i++) {
-            if (strlen(dev->commands[i].name) <= 45) continue;
-            bt_harmony_encode_saved_value(dev->commands[i].name, expected, sizeof(expected));
-            if (strcasecmp(key, expected) == 0) return &dev->commands[i];
+            if (strlen(dev->commands[i].name) > 45) {
+                bt_harmony_encode_saved_value(dev->commands[i].name, expected, sizeof(expected));
+                if (strcasecmp(key, expected) == 0) return &dev->commands[i];
+            }
+            if (dev->commands[i].legacy_name[0] && strlen(dev->commands[i].legacy_name) > 45) {
+                bt_harmony_encode_saved_value(dev->commands[i].legacy_name, expected, sizeof(expected));
+                if (strcasecmp(key, expected) == 0) return &dev->commands[i];
+            }
         }
         return NULL;
     }
@@ -13915,7 +13959,6 @@ static const struct bt_saved_command *bt_harmony_find_saved_command(const struct
         const char *hex = key + 5;
         size_t hlen = strlen(hex), j;
         char decoded[128];
-        int cidx;
         if (hlen < 2 || (hlen & 1) != 0 || hlen / 2 >= sizeof(decoded)) return NULL;
         for (j = 0; j < hlen; j += 2) {
             int hi = hexval(hex[j]), lo = hexval(hex[j + 1]);
@@ -13924,9 +13967,85 @@ static const struct bt_saved_command *bt_harmony_find_saved_command(const struct
         }
         decoded[hlen / 2] = 0;
         if (syntax_ok) *syntax_ok = 1;
-        cidx = find_bt_command_index(dev, decoded);
-        return cidx >= 0 ? &dev->commands[cidx] : NULL;
+        for (i = 0; i < dev->command_count; i++) {
+            if (strcmp(dev->commands[i].name, decoded) == 0 ||
+                (dev->commands[i].legacy_name[0] && strcmp(dev->commands[i].legacy_name, decoded) == 0)) {
+                return &dev->commands[i];
+            }
+        }
+        return NULL;
     }
+}
+
+/* Match retainedCommands by saved-device entity and Harmony token, rather than
+   by a display name that may have been transliterated or disambiguated. */
+static int bt_harmony_reply_retains(const char *reply, const struct bt_saved_device *dev,
+        const struct bt_saved_command *cmd, int *valid) {
+    const char *key, *arr, *arr_end, *pos;
+    char wanted[104], legacy[104];
+    *valid = 1;
+    wanted[0] = 0;
+    legacy[0] = 0;
+    bt_harmony_encode_command_value(cmd, wanted, sizeof(wanted));
+    if (cmd->legacy_name[0]) {
+        bt_harmony_encode_saved_value(cmd->legacy_name, legacy, sizeof(legacy));
+    }
+    key = strstr(reply, "\"retainedCommands\"");
+    if (!key) return 0;
+    arr = strchr(key, '[');
+    arr_end = arr ? find_matching_json(arr, '[', ']') : NULL;
+    if (!arr || !arr_end) {
+        *valid = 0;
+        return 0;
+    }
+    pos = arr + 1;
+    while ((pos = strchr(pos, '{')) != NULL && pos < arr_end) {
+        const char *end = find_matching_json(pos, '{', '}');
+        char entity[48], value[104];
+        if (!end || end > arr_end) {
+            *valid = 0;
+            return 0;
+        }
+        entity[0] = 0;
+        value[0] = 0;
+        json_string_range(pos, end, "entity", entity, sizeof(entity));
+        json_string_range(pos, end, "value", value, sizeof(value));
+        if (!entity[0] || !value[0]) {
+            *valid = 0;
+            return 0;
+        }
+        if (strcmp(entity, dev->id) == 0 &&
+            ((wanted[0] && strcmp(value, wanted) == 0) ||
+             (legacy[0] && strcmp(value, legacy) == 0))) {
+            return 1;
+        }
+        pos = end + 1;
+    }
+    return 0;
+}
+
+/* A successful writer response lists every referenced retained token. Remove
+   hidden records it no longer lists; never erase one on a malformed response. */
+static int bt_harmony_cleanup_retained(struct bt_inventory *inv, const char *reply) {
+    int i, j, changed = 0;
+    if (!inv || !reply || reply[0] != '{') return -1;
+    for (i = 0; i < inv->device_count; i++) {
+        struct bt_saved_device *dev = &inv->devices[i];
+        int kept = 0;
+        for (j = 0; j < dev->command_count; j++) {
+            struct bt_saved_command *cmd = &dev->commands[j];
+            int valid = 1;
+            if (cmd->retained && !bt_harmony_reply_retains(reply, dev, cmd, &valid)) {
+                if (!valid) return -1;
+                changed++;
+                continue;
+            }
+            if (kept != j) dev->commands[kept] = *cmd;
+            kept++;
+        }
+        dev->command_count = kept;
+    }
+    return changed;
 }
 
 /* {"devices":[...]} for every saved btkeyboard device marked harmony. */
@@ -13977,6 +14096,7 @@ static char *bt_harmony_set_json(const struct bt_inventory *inv) {
         }
         for (k = 0; k < dev->command_count && name_count < BT_HARMONY_MAX_COMMANDS; k++) {
             char cmd_name[52], cmd_value[104];
+            if (dev->commands[k].retained) continue;
             if (bt_harmony_resolve_name(dev->commands[k].name, used_names, name_count,
                     cmd_name, sizeof(cmd_name)) != 0) {
                 continue;
@@ -14009,6 +14129,16 @@ static int bt_harmony_commit(const struct bt_inventory *inv, int dry_run, char *
         snprintf(msg, msg_len, "not enough memory for the Bluetooth Harmony devices");
         return -1;
     }
+#ifdef BT_HARMONY_TEST_HOOKS
+    {
+        const char *forced_reply = getenv("BT_HARMONY_TEST_REPLY");
+        if (forced_reply) {
+            copy_text(reply, reply_len, forced_reply);
+            free(set);
+            return 0;
+        }
+    }
+#endif
     snprintf(request_id, sizeof(request_id), "%ld-%ld-%08x",
         (long)getpid(), (long)time(NULL), resource_hash(set, strlen(set)));
     request_len = strlen(set) + strlen(request_id) + 128;
@@ -14036,7 +14166,7 @@ static void render_bt_harmony_device_json(int fd, const struct request *req) {
     char *reply = NULL;
     struct bt_inventory *inv = NULL;
     struct bt_saved_device *dev;
-    int idx, publish, dry_run, previous, rc;
+    int idx, publish, dry_run, previous, rc, cleaned = 0;
     FILE *f;
     const char *status = "200 OK";
     form_value(req->body, "deviceId", device_id, sizeof(device_id));
@@ -14074,12 +14204,16 @@ static void render_bt_harmony_device_json(int fd, const struct request *req) {
     previous = dev->harmony;
     dev->harmony = publish;
     rc = bt_harmony_commit(inv, dry_run, reply, BT_HARMONY_REPLY, msg, sizeof(msg));
+    if (rc == 0 && !dry_run) {
+        cleaned = bt_harmony_cleanup_retained(inv, reply);
+        if (cleaned < 0) cleaned = 0;
+    }
     if (reply[0] != '{') {
         status = "503 Service Unavailable";
         if (!msg[0]) snprintf(msg, sizeof(msg), "The Harmony device was not saved.");
         goto fail;
     }
-    if (rc == 0 && !dry_run && previous != publish) {
+    if (rc == 0 && !dry_run && (previous != publish || cleaned > 0)) {
         backup_settings();
         if (save_bt_inventory(inv) != 0) {
             status = "500 Internal Server Error";

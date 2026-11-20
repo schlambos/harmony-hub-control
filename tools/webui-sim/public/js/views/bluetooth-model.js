@@ -143,6 +143,7 @@ export function parseBtInventory(jsonText) {
       // Published as a Harmony device (POST /api/bt-harmony-device).
       harmony: d?.harmony === true,
       commands: (Array.isArray(d?.commands) ? d.commands : [])
+        .filter((c) => c?.retained !== true)
         .map((c) => ({
           name: String(c?.name ?? ""),
           delayMs: clampGapMs(c?.delayMs),

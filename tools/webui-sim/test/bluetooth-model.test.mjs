@@ -163,6 +163,7 @@ describe("parseBtInventory", () => {
           bdaddr: "AA:BB:CC:DD:EE:FF",
           commands: [
             { name: "Open YT", delayMs: 40, script: "TEXT youtube\nKEY enter" },
+            { name: "Deleted but referenced", retained: true, script: "KEY enter" },
             { name: "bad", delayMs: 5, script: "" },
           ],
         },
