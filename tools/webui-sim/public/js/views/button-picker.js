@@ -17,6 +17,45 @@ export function matchingRowsOfAllChips(lists, query) {
     }));
 }
 
+/** Search commands across devices: active device's matches come first with
+    unprefixed names, followed by other devices' matches as "Device · Command".
+    With an empty query, returns only the active device's commands. */
+export function searchDeviceCommands(devices, activeDeviceId, query) {
+  const words = String(query ?? "").trim().toLowerCase().split(/\s+/).filter(Boolean);
+  const active = devices.find((d) => String(d.id) === String(activeDeviceId)) ?? null;
+  if (!words.length) {
+    if (!active) return [];
+    return (active.commands ?? []).map((command, index) => ({
+      device: active,
+      command,
+      index,
+      label: command.name,
+      isActive: true,
+    }));
+  }
+  const ordered = active
+    ? [active, ...devices.filter((d) => String(d.id) !== String(active.id))]
+    : devices;
+  const out = [];
+  for (const device of ordered) {
+    const isActive = Boolean(active && String(device.id) === String(active.id));
+    for (let index = 0; index < (device.commands ?? []).length; index += 1) {
+      const command = device.commands[index];
+      const text = `${device.name} ${command.name}`.toLowerCase();
+      if (words.every((word) => text.includes(word))) {
+        out.push({
+          device,
+          command,
+          index,
+          label: isActive ? command.name : `${device.name} · ${command.name}`,
+          isActive,
+        });
+      }
+    }
+  }
+  return out;
+}
+
 /**
  * openSheet options for one button's sheet. Fixed: label, tabs, tabsLabel,
  * chips, searchLabel. Asked after every change: now(tab), tabEnabled(tab),
@@ -40,8 +79,8 @@ export function showCurrentRow(content) {
 
 /* The sticky top (title, tabs, chips, search) covers the list's first rows,
    and grows with every line of chips: centre the row in the part below it. */
-function scrollToRow(content, row) {
-  if (!row) return;
+export function scrollToRow(content, row) {
+  if (!row || !content) return;
   const top = content.querySelector(".pick-top");
   content.style.scrollPaddingTop = top ? `${top.offsetHeight}px` : "";
   row.scrollIntoView({ block: "center" });
@@ -56,9 +95,9 @@ function tabsMarkup({ tabs, tabsLabel }) {
             </div>`;
 }
 
-function chipsMarkup() {
-  const chips = `<div class="pick-chips is-row" role="group" aria-label="Device" data-pick-chips></div>`;
-  const step = (direction, label, name) => `<button type="button" class="icon-btn pick-chip-step" data-pick-scroll="${direction}" aria-label="${label}" title="${label}" hidden>${icon(name)}</button>`;
+export function chipRowMarkup({ attr = "data-pick-chips", label = "Device" } = {}) {
+  const chips = `<div class="pick-chips is-row" role="group" aria-label="${escapeHtml(label)}" ${attr}></div>`;
+  const step = (direction, text, name) => `<button type="button" class="icon-btn pick-chip-step" data-pick-scroll="${direction}" aria-label="${text}" title="${text}" hidden>${icon(name)}</button>`;
   return `<div class="pick-chip-row">
               ${step(-1, "Show previous choices", "keyboard_arrow_left")}
               ${chips}
@@ -84,7 +123,7 @@ function renderPicker(content, close, picker) {
               <button type="button" class="btn btn-filled btn-sm" data-pick="done">Done</button>
             </div>
             <p class="pick-now" data-pick-now></p>${tabsMarkup(picker)}
-            ${chipsMarkup()}
+            ${chipRowMarkup()}
             <label class="search-field">${icon("search", { size: 22 })}<input type="search" data-pick-search placeholder="${escapeHtml(searchLabel)}" aria-label="${escapeHtml(searchLabel)}" autocomplete="off"></label>
           </div>
           <div class="pick-list" data-pick-list></div>
@@ -211,21 +250,28 @@ const CHIP_EDGE = 40;
 // Pixels a wheel "line" moves (deltaMode 1, Firefox with a mouse).
 const WHEEL_LINE = 40;
 
-/* Wires the row's wheel, arrows and edge marks. The row only gets its size
-   once the sheet opens, so the edges follow its size as well as its scroll. */
-function followChipRow(content) {
-  const row = content.querySelector(".pick-chips.is-row");
-  const [back, forward] = content.querySelectorAll("[data-pick-scroll]");
-  const markEdges = () => markHiddenChips(row, back, forward);
-  row.addEventListener("scroll", markEdges, { passive: true });
-  new ResizeObserver(markEdges).observe(row);
-  row.addEventListener("wheel", (event) => wheelSideways(row, content, event), { passive: false });
-  content.querySelector(".pick-chip-row").addEventListener("click", (event) => {
-    const step = event.target.closest("[data-pick-scroll]");
-    if (!step) return;
-    const left = Number(step.dataset.pickScroll) * (row.clientWidth - 2 * CHIP_EDGE);
-    row.scrollBy({ left, behavior: "smooth" });
-  });
+/* Wires each chip row's wheel, arrows and edge marks. The row only gets its
+   size once the sheet opens, so the edges follow its size as well as scroll. */
+export function followChipRow(content, scrollHost = content) {
+  const wraps = content?.querySelectorAll ? [...content.querySelectorAll(".pick-chip-row")] : [];
+  for (const wrap of wraps) {
+    if (wrap.dataset?.chipRowBound) continue;
+    if (wrap.dataset) wrap.dataset.chipRowBound = "1";
+    const row = wrap.querySelector(".pick-chips.is-row");
+    const [back, forward] = wrap.querySelectorAll("[data-pick-scroll]");
+    if (!row || !back || !forward) continue;
+    const markEdges = () => markHiddenChips(row, back, forward);
+    row.addEventListener("scroll", markEdges, { passive: true });
+    if (typeof ResizeObserver === "function") new ResizeObserver(markEdges).observe(row);
+    else markEdges();
+    row.addEventListener("wheel", (event) => wheelSideways(row, scrollHost, event), { passive: false });
+    wrap.addEventListener("click", (event) => {
+      const step = event.target.closest("[data-pick-scroll]");
+      if (!step) return;
+      const left = Number(step.dataset.pickScroll) * (row.clientWidth - 2 * CHIP_EDGE);
+      row.scrollBy({ left, behavior: "smooth" });
+    });
+  }
 }
 
 /* Fade and arrow on each side that has more chips. An arrow that hides while
@@ -264,8 +310,8 @@ function wheelPixels(event, page) {
 /* Centres the pressed chip when it is hidden or under an arrow. Only the row
    moves: scrollIntoView would also scroll the sheet. Needs the row to be the
    chips' offsetParent (position: relative in wizard.css). */
-function showPressedChip(content) {
-  const row = content.querySelector(".pick-chips.is-row");
+export function showPressedChip(content) {
+  const row = content?.matches?.(".pick-chips.is-row") ? content : content?.querySelector(".pick-chips.is-row");
   const chip = row?.querySelector('[aria-pressed="true"]');
   if (!chip) return;
   const start = chip.offsetLeft - CHIP_EDGE;
