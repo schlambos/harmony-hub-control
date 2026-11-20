@@ -2224,6 +2224,7 @@ local HA_FAMILY = {
   label = "Home Assistant", tag = HA_DEVICE_TAG, protocolName = HA_PROTOCOL_NAME,
   manufacturer = HA_MANUFACTURER, defaultModel = HA_DEFAULT_MODEL,
   deviceType = 44, typeName = "Home Appliance", icon = 44, mergedDevices = true,
+  retainReferenced = true,
   idPattern = "^[a-z0-9_]+%.[a-z0-9_]+$", idHint = "an entity ID such as light.kitchen"
 }
 local ANDROIDTV_FAMILY = {
@@ -3221,12 +3222,16 @@ local function commitHaDevices(request, family)
     }
   end
 
-  local owned, ownedByEntity, kept, otherNames = {}, {}, {}, {}
+  local owned, ownedByEntity, ownedOrder, kept, otherNames = {}, {}, {}, {}, {}
   for _, entry in ipairs(deviceList.DevicesWithFeatures) do
     local device = type(entry) == "table" and entry.Device or {}
-    if isHaDevice(entry, family) and haEntityOf(entry) then
-      owned[haEntityOf(entry)] = entry
-      ownedByEntity[haEntityOf(entry)] = entry
+    local entity = isHaDevice(entry, family) and haEntityOf(entry) or nil
+    if entity then
+      if not ownedByEntity[entity] then
+        ownedOrder[#ownedOrder + 1] = entity
+      end
+      owned[entity] = entry
+      ownedByEntity[entity] = entry
     else
       kept[#kept + 1] = entry
       if type(device.Name) == "string" then
@@ -3248,11 +3253,12 @@ local function commitHaDevices(request, family)
   protocolList.Protocols = {}
   -- The family's protocol keeps its place, so a commit for one family never
   -- reorders (and so never re-saves) a list that holds another's too.
-  local protocolId, protocolSlot
+  local protocolId, protocolSlot, oldProtocol
   for _, protocol in ipairs(oldProtocols.resource.Protocols) do
     if isHaProtocol(protocol, family) then
       if not protocolId then
         protocolId = protocol["Id-"]
+        oldProtocol = protocol
         protocolSlot = #protocolList.Protocols + 1
         protocolList.Protocols[protocolSlot] = false
       end
@@ -3264,8 +3270,6 @@ local function commitHaDevices(request, family)
     protocolId = protocolId or nextId()
     protocolSlot = protocolSlot or #protocolList.Protocols + 1
     protocolList.Protocols[protocolSlot] = haProtocol(protocolId, set.webhook, family)
-  elseif protocolSlot then
-    table.remove(protocolList.Protocols, protocolSlot)
   end
 
   local now = "/Date(" .. tostring(os.time() or 0) .. "000+0000)/"
@@ -3348,6 +3352,7 @@ local function commitHaDevices(request, family)
       -- ID above all existing ones.
       deviceId = tostring(nextId())
     end
+    local oldEntity = old and haEntityOf(old) or nil
     local before = old and copyValue(old) or nil
     local entry = haDeviceEntry(spec, old, deviceId, protocolId, nextId, now, family)
     wanted[key] = true
@@ -3402,10 +3407,14 @@ local function commitHaDevices(request, family)
     end
     if old then
       owned[key] = true
+      if oldEntity then
+        ownedByEntity[oldEntity] = true
+      end
     end
   end
-  for entity, entry in pairs(ownedByEntity) do
-    if entry ~= true and not wanted[entity] then
+  for _, entity in ipairs(ownedOrder) do
+    local entry = ownedByEntity[entity]
+    if entry and entry ~= true and not wanted[entity] then
       local deviceId = normalizedId(entry.Device["Id-"])
       local ref = refs[deviceId]
       if ref then
@@ -3414,15 +3423,33 @@ local function commitHaDevices(request, family)
           where[#where + 1] = name
         end
         table.sort(where)
-        return {
-          ok = false,
-          localOnly = true,
-          error = tostring(entry.Device.Name) .. " is still used by " ..
-            table.concat(where, ", ") .. "; remove it from its activities and buttons first"
-        }
+        if family.retainReferenced then
+          kept[#kept + 1] = entry
+          ownedByEntity[entity] = true
+          result.retained[#result.retained + 1] = {
+            name = tostring(entry.Device.Name),
+            deviceId = deviceId,
+            usedBy = where
+          }
+        else
+          return {
+            ok = false,
+            localOnly = true,
+            error = tostring(entry.Device.Name) .. " is still used by " ..
+              table.concat(where, ", ") .. "; remove it from its activities and buttons first"
+          }
+        end
+      else
+        result.removed[#result.removed + 1] = tostring(entry.Device.Name)
+        gone[#gone + 1] = deviceId
       end
-      result.removed[#result.removed + 1] = tostring(entry.Device.Name)
-      gone[#gone + 1] = deviceId
+    end
+  end
+  if #set.devices == 0 and protocolSlot then
+    if #result.retained > 0 and oldProtocol then
+      protocolList.Protocols[protocolSlot] = oldProtocol
+    else
+      table.remove(protocolList.Protocols, protocolSlot)
     end
   end
   deviceList.DevicesWithFeatures = kept

@@ -65,7 +65,16 @@ local function decodeJson(text)
         local esc = text:sub(pos + 1, pos + 1)
         if esc == "u" then
           local code = tonumber(text:sub(pos + 2, pos + 5), 16) or 0
-          out[#out + 1] = code < 128 and string.char(code) or "?"
+          if code < 0x80 then
+            out[#out + 1] = string.char(code)
+          elseif code < 0x800 then
+            out[#out + 1] = string.char(0xc0 + math.floor(code / 0x40), 0x80 + (code % 0x40))
+          else
+            out[#out + 1] = string.char(
+              0xe0 + math.floor(code / 0x1000),
+              0x80 + (math.floor(code / 0x40) % 0x40),
+              0x80 + (code % 0x40))
+          end
           pos = pos + 6
         else
           local map = { n = "\n", t = "\t", r = "\r", b = "\b", f = "\f" }
@@ -462,9 +471,12 @@ hub.files.MapList.text = encodeJson(maps)
 savesBefore = #hub.saves
 
 local gone = commit({ webhook = WEBHOOK, devices = {} })
-check("refuses to remove a device an activity uses",
-  gone.ok == false and gone.error:find("still used by ActivityList, MapList", 1, true) and
-    #hub.saves == savesBefore, gone.error)
+check("retains a device an activity uses instead of aborting the push",
+  gone.ok == true and gone.changed == false and #gone.retained == 1 and
+    gone.retained[1].name == "Kitchen lamp" and
+    table.concat(gone.retained[1].usedBy, ", ") == "ActivityList, MapList" and
+    haEntry() ~= nil and haProtocol() ~= nil and #hub.saves == savesBefore,
+  encodeJson(gone))
 local noDim = lamp({ name = "Kitchen lamp" })
 local noDimResponse = commit({ webhook = WEBHOOK, devices = { noDim } })
 check("refuses to drop a command a button uses",
@@ -662,6 +674,113 @@ local unchangedV2 = commit({ webhook = WEBHOOK, devices = { merged({
 check("an unchanged v2 set saves nothing",
   unchangedV2.changed == false and unchangedV2.devices[1].migratedFrom == nil,
   encodeJson(unchangedV2))
+
+-- Issue #162: unpushed referenced HA device ("Salon") is retained while
+-- new single entities/scripts still commit cleanly, and UTF-8 labels work.
+resetHub(seedState())
+local salonSpec = {
+  key = "light.salon",
+  name = "Salon",
+  model = "Pièce Hue",
+  entities = {
+    { alias = "light.salon", entity = "light.salon" },
+    { alias = "select.salon_scene", entity = "select.salon_scene" },
+  },
+  commands = {
+    { name = "PowerOn", value = "light.salon:turn_on" },
+    { name = "PowerOff", value = "light.salon:turn_off" },
+    { name = "Input Detente", value = "select.salon_scene:select_option:Détente" },
+    { name = "Input Eclairage", value = "select.salon_scene:select_option:Éclairage" },
+  },
+  power = { on = "PowerOn", off = "PowerOff" },
+  inputs = {
+    { name = "Détente", command = "Input Detente" },
+    { name = "Éclairage", command = "Input Eclairage" },
+  },
+}
+local salonAdded = commit({ webhook = WEBHOOK, devices = { salonSpec } })
+check("issue #162: adds French Hue room with UTF-8 model, input labels and values",
+  salonAdded.ok and salonAdded.changed and salonAdded.added[1] == "Salon",
+  encodeJson(salonAdded))
+local salonId = salonAdded.devices and salonAdded.devices[1] and salonAdded.devices[1].deviceId
+local salonEntry
+for _, e in ipairs(stored("DeviceList").DevicesWithFeatures) do
+  if tostring(e.Device["Id-"]) == tostring(salonId) then salonEntry = e end
+end
+check("issue #162: preserves UTF-8 model, input name and command value",
+  salonEntry ~= nil and salonEntry.Device.Model == "Pièce Hue" and
+    salonEntry.Commands[3].Parameters[1].Value == "select.salon_scene:select_option:Détente" and
+    featureOf(salonEntry, "InputFeature").Inputs[1].InputName == "Détente",
+  encodeJson(salonEntry))
+-- Command names stay ASCII (Touch/Elite 14-byte split) and UTF-8 byte limits hold.
+local badAccentCmd = commit({ webhook = WEBHOOK, devices = { {
+  entity = "script.bad_cmd", name = "Bad Cmd",
+  commands = { { name = "Input Détente", value = "turn_on" } },
+} } })
+check("issue #162: rejects non-ASCII command name",
+  badAccentCmd.ok == false and badAccentCmd.error:find("needs a name of letters", 1, true),
+  encodeJson(badAccentCmd))
+local over64BytesName = commit({ webhook = WEBHOOK, devices = { {
+  entity = "script.long_utf8", name = string.rep("é", 33),
+  commands = { { name = "Run", value = "turn_on" } },
+} } })
+check("issue #162: rejects device name exceeding 64 UTF-8 bytes",
+  over64BytesName.ok == false and over64BytesName.error:find("1-64", 1, true),
+  encodeJson(over64BytesName))
+
+-- Assign Salon to an activity button in MapList, then push a single script
+-- without Salon (e.g. after recreating the HA hub entry or unticking Salon).
+hub.files.MapList.text = encodeJson({ ButtonMaps = { {
+  __type = "ActivityButtonMap",
+  Buttons = { { ButtonAction = {
+    __type = "ButtonCommandAction",
+    ["DeviceId-"] = tonumber(salonId),
+    CommandName = "PowerOn",
+  } } },
+} } })
+local scriptSpec = {
+  entity = "script.bonne_nuit",
+  name = "Entrée",
+  commands = { { name = "Run", value = "turn_on" } },
+}
+local pushScript = commit({ webhook = WEBHOOK, devices = { scriptSpec } })
+check("issue #162: single script commits even while unpushed Salon is used by MapList",
+  pushScript.ok == true and pushScript.changed == true and
+    pushScript.added[1] == "Entrée" and #pushScript.retained == 1 and
+    pushScript.retained[1].name == "Salon" and
+    pushScript.retained[1].deviceId == salonId and
+    table.concat(pushScript.retained[1].usedBy, ",") == "MapList",
+  encodeJson(pushScript))
+local foundSalon, foundScript = false, false
+for _, e in ipairs(stored("DeviceList").DevicesWithFeatures) do
+  if tostring(e.Device["Id-"]) == tostring(salonId) then foundSalon = true end
+  if e.Device.Name == "Entrée" then foundScript = true end
+end
+check("issue #162: both retained Salon and newly added script are in DeviceList",
+  foundSalon and foundScript and haProtocol() ~= nil)
+
+savesBefore = #hub.saves
+local pushScriptAgain = commit({ webhook = WEBHOOK, devices = { scriptSpec } })
+check("issue #162: repeating push with retained Salon is a no-op with zero saves",
+  pushScriptAgain.ok == true and pushScriptAgain.changed == false and
+    #pushScriptAgain.retained == 1 and pushScriptAgain.retained[1].name == "Salon" and
+    #hub.saves == savesBefore,
+  encodeJson(pushScriptAgain))
+
+local emptyWhileReferenced = commit({ devices = {} })
+check("issue #162: empty set removes unreferenced script, retains Salon, and keeps protocol",
+  emptyWhileReferenced.ok == true and emptyWhileReferenced.removed[1] == "Entrée" and
+    #emptyWhileReferenced.retained == 1 and emptyWhileReferenced.retained[1].name == "Salon" and
+    haProtocol() ~= nil,
+  encodeJson(emptyWhileReferenced))
+
+-- Once Salon is removed from MapList, the next push removes it and the protocol.
+hub.files.MapList.text = encodeJson({ ButtonMaps = {} })
+local cleanupSalon = commit({ devices = {} })
+check("issue #162: once MapList reference is cleared, Salon and protocol are removed",
+  cleanupSalon.ok == true and cleanupSalon.removed[1] == "Salon" and
+    #cleanupSalon.retained == 0 and haEntry() == nil and haProtocol() == nil,
+  encodeJson(cleanupSalon))
 
 print(string.format("%d/%d checks passed", count - failures, count))
 os.exit(failures == 0 and 0 or 1)
