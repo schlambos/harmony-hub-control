@@ -420,6 +420,7 @@ export function createHomeButtonsView(section) {
     const result = await saveMapList(mapList, {
       done: "Saved. The remote's buttons work this way now.",
       check: (config) => saveOutcome(config, sent),
+      rebuild: (config) => buildHomeButtonsMapList(config, sent),
     });
     saving = false;
     if (result !== "kept") {
@@ -496,7 +497,7 @@ export function createHomeButtonsView(section) {
       }
       root.innerHTML = `<div class="m-center">${spinner("Loading")}</div>`;
       updateBar();
-      await hub.ensureConfig();
+      await hub.ensureFreshConfig();
       if (token !== showToken || section.hidden) return;
       if (hub.state.configError) {
         renderBlocked("error");

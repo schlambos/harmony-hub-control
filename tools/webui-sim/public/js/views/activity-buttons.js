@@ -102,6 +102,7 @@ export function createActivityButtonsView(section) {
     const result = await saveMapList(built.mapList, {
       done: "Saved. The remote uses the new buttons at once.",
       check: (config) => activityButtonsSaveOutcome(config, draft.baseRows, draft.rows, draft.remote),
+      rebuild: (config) => buildActivityButtonsMapList(config, draft.rows, draft.remote).mapList,
     });
     saving = false;
     if (result === "kept") ({ rows, baseRows, dirty } = draft);
@@ -146,7 +147,7 @@ export function createActivityButtonsView(section) {
         dirty = false;
       }
       if (!dirty) rows = null;
-      hub.ensureConfig();
+      hub.ensureFreshConfig();
       render();
     },
     onHide() {},

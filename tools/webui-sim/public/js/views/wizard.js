@@ -11,13 +11,14 @@ import {
   ACTIVITY_TYPES,
   BUTTON_SOURCE,
   ROLE_TYPES,
+  activitySnapshot,
   defaultPowerDelay,
   draftButtonsFromMap,
   inputOptions,
   mappingSourceLabel,
   preferredDeviceForButtonKey,
   reconcileWizardButtons,
-  saveDraft,
+  saveDraftWithRebase,
 } from "../wizard-model.js";
 import {
   confirmDialog,
@@ -157,6 +158,7 @@ export function createWizardView(section) {
   let dirty = false; // something changed since the wizard opened
   let saving = false;
   let snapshot = {}; // the keys as the wizard opened them, for Undo
+  let baseSnapshot = null; // this activity's resources as loaded, for 409 rebase safety
   let cleared = new Set(); // keys the user cleared: suggestions stay out
   let blocked = ""; // "error" | "missing" when there is nothing to edit
   let sheet = null;
@@ -607,22 +609,24 @@ export function createWizardView(section) {
     render();
     try {
       const remotes = await pairedRemotes();
-      const outcome = await saveDraft({
-        config: hub.state.config,
-        revision: hub.state.config?.revision,
+      const outcome = await saveDraftWithRebase({
+        getConfig: () => hub.state.config,
+        reloadConfig: () => hub.reloadConfig(),
         // A job must have a device; a broken one from old data is left out.
         draft: { ...draft, roles: draft.roles.filter((r) => r.deviceId) },
         editId: editId || null,
         remotes,
+        baseSnapshot,
       });
       dirty = false;
       await hub.reloadConfig();
       snackbar(`Saved “${outcome.name}”`);
       if (!section.hidden) location.hash = "#activities";
     } catch (error) {
-      // A refused save usually means the setup changed elsewhere: reload it,
-      // so trying again saves onto the latest copy.
+      // A refused save usually means this activity changed elsewhere: reload
+      // and update our baseline so trying again saves onto the latest copy.
       await hub.reloadConfig();
+      baseSnapshot = editId ? activitySnapshot(hub.state.config, editId) : null;
       snackbar(`Couldn't save — ${error.message || "hub error"}. The latest setup is reloaded; try again.`, { error: true });
     } finally {
       saving = false;
@@ -1020,10 +1024,11 @@ export function createWizardView(section) {
       dirty = false;
       saving = false;
       blocked = "";
+      baseSnapshot = null;
       cleared = new Set();
       root.innerHTML = `<div class="m-center">${spinner("Loading")}</div>`;
       updateBar();
-      await hub.ensureConfig();
+      await hub.ensureFreshConfig();
       if (token !== showToken || section.hidden) return;
       if (hub.state.configError) {
         renderBlocked("error");
@@ -1042,6 +1047,7 @@ export function createWizardView(section) {
           return;
         }
         editId = id;
+        baseSnapshot = activitySnapshot(hub.state.config, editId);
         draft = draftFrom(activity);
         if (args[1] === "buttons") step = BUTTONS_STEP;
       } else {

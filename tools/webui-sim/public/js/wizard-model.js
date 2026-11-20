@@ -1207,10 +1207,24 @@ export function buildActivityGraph({ config, draft, editId, remotes = [] }) {
   };
 }
 
+/* Canonical snapshot of one activity's resources, so a 409 caused by an
+   unrelated change (e.g. a Home Assistant device push or another activity)
+   can be distinguished from a real concurrent edit to this same activity. */
+export function activitySnapshot(config, editId) {
+  if (!editId) return null;
+  const id = String(editId);
+  const activity = (config?.activityList?.Activities ?? []).find((a) => String(a?.["Id-"]) === id) ?? null;
+  const maps = (config?.mapList?.ButtonMaps ?? [])
+    .filter((m) => String(m?.["ActivityId-"] ?? "") === id)
+    .sort((a, b) => String(a?.ButtonMapIdentifier ?? "").localeCompare(String(b?.ButtonMapIdentifier ?? "")));
+  const fn = (config?.functionList?.FunctionMaps ?? []).find((m) => isActivityFunctionMap(m, id)) ?? null;
+  return JSON.stringify({ activity, maps, fn });
+}
+
 /* Build the three replacement resources for the draft and POST them.
    editId: when set, that activity is updated in place and only its wizard-owned
    16414 map is replaced; otherwise a new activity is appended. */
-export async function saveDraft({ config, revision, draft, editId, remotes }) {
+export async function saveDraft({ config, revision, draft, editId, remotes, saveFn = api.saveActivity }) {
   const graph = buildActivityGraph({ config, draft, editId, remotes });
   const payload = {
     baseRevision: revision,
@@ -1218,8 +1232,39 @@ export async function saveDraft({ config, revision, draft, editId, remotes }) {
     mapList: graph.mapList,
     functionList: graph.functionList,
   };
-  const result = await api.saveActivity(payload);
+  const result = await saveFn(payload);
   return { result, activityId: graph.activityId, name: graph.name };
+}
+
+/* Save a wizard draft, automatically rebasing ONCE onto a reloaded hub config
+   when a 409 Conflict comes from an unrelated resource change (so the user's
+   first Save succeeds without needing to click twice). Refuses to overwrite if
+   this same activity actually changed on the hub. */
+export async function saveDraftWithRebase({
+  getConfig,
+  reloadConfig,
+  draft,
+  editId,
+  remotes,
+  baseSnapshot = null,
+  saveFn = api.saveActivity,
+}) {
+  const checkUnchanged = (cfg) => !editId || baseSnapshot == null || activitySnapshot(cfg, editId) === baseSnapshot;
+  const initial = getConfig();
+  if (!checkUnchanged(initial)) {
+    const conflict = new Error("this activity changed on the hub while you were editing it");
+    conflict.status = 409;
+    throw conflict;
+  }
+  try {
+    return await saveDraft({ config: initial, revision: initial?.revision, draft, editId, remotes, saveFn });
+  } catch (error) {
+    if (error?.status !== 409) throw error;
+    await reloadConfig();
+    const fresh = getConfig();
+    if (!fresh || !checkUnchanged(fresh)) throw error;
+    return await saveDraft({ config: fresh, revision: fresh.revision, draft, editId, remotes, saveFn });
+  }
 }
 
 const ACTION_FIELDS = ["ButtonAction", "ButtonLongPressAction", "ButtonDoublePressAction"];
