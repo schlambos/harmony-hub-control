@@ -23,7 +23,9 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.statusBarsPadding
 import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.LazyRow
 import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
@@ -48,6 +50,7 @@ import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.material3.rememberModalBottomSheetState
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -479,7 +482,7 @@ private fun ButtonsStep(state: MelodiousUiState, viewModel: MelodiousViewModel) 
     }
 }
 
-@OptIn(ExperimentalMaterial3Api::class, ExperimentalLayoutApi::class)
+@OptIn(ExperimentalMaterial3Api::class)
 @Composable
 private fun CommandPickerSheet(
     title: String,
@@ -491,7 +494,11 @@ private fun CommandPickerSheet(
 ) {
     var deviceId by rememberSaveable { mutableStateOf(current?.deviceId ?: devices.firstOrNull()?.id) }
     var query by rememberSaveable { mutableStateOf("") }
-    val device = devices.firstOrNull { it.id == deviceId }
+    val chipRowState = rememberLazyListState()
+    LaunchedEffect(deviceId, devices) {
+        val idx = devices.indexOfFirst { it.id == deviceId }
+        if (idx >= 0) chipRowState.scrollToItem(idx)
+    }
     ModalBottomSheet(
         onDismissRequest = onDismiss,
         sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true),
@@ -502,9 +509,22 @@ private fun CommandPickerSheet(
                 Text("“$title” button", fontSize = 20.sp, fontWeight = FontWeight.Medium, modifier = Modifier.weight(1f))
                 if (current != null) TextButton(onClick = onClear) { Text("Clear", color = MaterialTheme.colorScheme.error) }
             }
-            FlowRow(Modifier.padding(horizontal = 16.dp, vertical = 8.dp), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                devices.forEach { d ->
-                    FilterChip(selected = d.id == deviceId, onClick = { deviceId = d.id }, label = { Text(d.name) }, modifier = Modifier.heightIn(min = 40.dp))
+            LazyRow(
+                state = chipRowState,
+                modifier = Modifier.fillMaxWidth().padding(vertical = 8.dp),
+                contentPadding = PaddingValues(horizontal = 16.dp),
+                horizontalArrangement = Arrangement.spacedBy(8.dp),
+            ) {
+                items(devices, key = { it.id }) { d ->
+                    FilterChip(
+                        selected = d.id == deviceId,
+                        onClick = {
+                            deviceId = d.id
+                            if (query.isNotEmpty()) query = ""
+                        },
+                        label = { Text(d.name) },
+                        modifier = Modifier.heightIn(min = 40.dp),
+                    )
                 }
             }
             OutlinedTextField(
@@ -516,24 +536,24 @@ private fun CommandPickerSheet(
                 shape = RoundedCornerShape(26.dp),
                 modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 4.dp),
             )
-            val commands = device?.commands.orEmpty().filter { query.isBlank() || it.name.contains(query.trim(), ignoreCase = true) }
+            val matches = filterPickerCommands(devices, deviceId, query)
             // Open scrolled to the command this button already uses, so the checkmark is visible.
-            val listState = androidx.compose.foundation.lazy.rememberLazyListState(
-                initialFirstVisibleItemIndex = commands.indexOfFirst { it.name == current?.commandName && device?.id == current.deviceId }
+            val listState = rememberLazyListState(
+                initialFirstVisibleItemIndex = matches.indexOfFirst { it.command.name == current?.commandName && it.device.id == current.deviceId }
                     .coerceAtLeast(0).let { (it - 2).coerceAtLeast(0) },
             )
             LazyColumn(Modifier.fillMaxWidth().weight(1f), state = listState, contentPadding = PaddingValues(bottom = 24.dp)) {
-                items(commands, key = { it.name }) { cmd ->
-                    val isCurrent = current?.deviceId == device?.id && current?.commandName == cmd.name
+                items(matches, key = { "${it.device.id}:${it.command.name}" }) { match ->
+                    val isCurrent = current?.deviceId == match.device.id && current?.commandName == match.command.name
                     Row(
                         Modifier
                             .fillMaxWidth()
-                            .clickable(role = Role.Button) { device?.let { onPick(it, cmd) } }
+                            .clickable(role = Role.Button) { onPick(match.device, match.command) }
                             .heightIn(min = 52.dp)
                             .padding(horizontal = 20.dp),
                         verticalAlignment = Alignment.CenterVertically,
                     ) {
-                        Text(cmd.name, fontSize = 16.sp, modifier = Modifier.weight(1f))
+                        Text(match.label, fontSize = 16.sp, modifier = Modifier.weight(1f))
                         if (isCurrent) Icon(Icons.Filled.Check, contentDescription = "Current", tint = MaterialTheme.colorScheme.primary)
                     }
                 }

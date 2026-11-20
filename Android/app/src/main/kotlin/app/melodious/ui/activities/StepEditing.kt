@@ -7,14 +7,15 @@ import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.KeyboardArrowUp
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
-import androidx.compose.foundation.layout.ExperimentalLayoutApi
-import androidx.compose.foundation.layout.FlowRow
+import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.LazyRow
 import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Check
@@ -26,6 +27,7 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.saveable.rememberSaveable
@@ -36,6 +38,7 @@ import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import app.melodious.protocol.graph.SequenceStep
+import app.melodious.protocol.model.DeviceCommand
 import app.melodious.protocol.model.HubDevice
 import app.melodious.ui.theme.MelodiousColors
 
@@ -49,12 +52,55 @@ internal fun describe(step: SequenceStep, devices: List<HubDevice>): String = wh
 internal fun formatSeconds(seconds: Double): String =
     if (seconds % 1.0 == 0.0) "${seconds.toInt()} s" else "$seconds s"
 
+internal data class PickerCommandMatch(
+    val device: HubDevice,
+    val command: DeviceCommand,
+    val label: String,
+)
+
+/**
+ * Search commands across devices: with an empty query returns only the active device's
+ * commands; when searching, returns matching commands on the active device first
+ * (unprefixed) and other devices underneath ("Device · Command") so any command can be
+ * found regardless of device count.
+ */
+internal fun filterPickerCommands(
+    devices: List<HubDevice>,
+    activeDeviceId: String?,
+    query: String,
+    exclude: (String) -> Boolean = { false },
+): List<PickerCommandMatch> {
+    val words = query.trim().lowercase().split(Regex("\\s+")).filter { it.isNotEmpty() }
+    val active = devices.firstOrNull { it.id == activeDeviceId }
+    if (words.isEmpty()) {
+        return active?.commands.orEmpty()
+            .filterNot { exclude(it.name) }
+            .map { PickerCommandMatch(active!!, it, it.name) }
+    }
+    val ordered = if (active != null) listOf(active) + devices.filter { it.id != active.id } else devices
+    val matches = mutableListOf<PickerCommandMatch>()
+    for (device in ordered) {
+        val isActive = active != null && device.id == active.id
+        for (cmd in device.commands) {
+            if (exclude(cmd.name)) continue
+            val text = "${device.name} ${cmd.name}".lowercase()
+            if (words.all { text.contains(it) }) {
+                matches += PickerCommandMatch(
+                    device = device,
+                    command = cmd,
+                    label = if (isActive) cmd.name else "${device.name} · ${cmd.name}",
+                )
+            }
+        }
+    }
+    return matches
+}
+
 
 // ---------------------------------------------------------------------------
 // Shared pickers
 // ---------------------------------------------------------------------------
 
-@OptIn(ExperimentalLayoutApi::class)
 @Composable
 internal fun CommandPicker(
     devices: List<HubDevice>,
@@ -66,12 +112,28 @@ internal fun CommandPicker(
 ) {
     var deviceId by rememberSaveable { mutableStateOf(selected?.deviceId ?: devices.firstOrNull()?.id) }
     var query by rememberSaveable { mutableStateOf("") }
-    val device = devices.firstOrNull { it.id == deviceId }
-    val commands = device?.commands.orEmpty().filterNot { exclude(it.name) }.filter { query.isBlank() || it.name.contains(query.trim(), ignoreCase = true) }
+    val chipRowState = rememberLazyListState()
+    LaunchedEffect(deviceId, devices) {
+        val idx = devices.indexOfFirst { it.id == deviceId }
+        if (idx >= 0) chipRowState.scrollToItem(idx)
+    }
+    val matches = filterPickerCommands(devices, deviceId, query, exclude)
     Column(modifier, verticalArrangement = Arrangement.spacedBy(8.dp)) {
-        FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-            devices.forEach { d ->
-                FilterChip(selected = d.id == deviceId, onClick = { deviceId = d.id }, label = { Text(d.name) }, modifier = Modifier.heightIn(min = 40.dp))
+        LazyRow(
+            state = chipRowState,
+            horizontalArrangement = Arrangement.spacedBy(8.dp),
+            contentPadding = PaddingValues(horizontal = 2.dp),
+        ) {
+            items(devices, key = { it.id }) { d ->
+                FilterChip(
+                    selected = d.id == deviceId,
+                    onClick = {
+                        deviceId = d.id
+                        if (query.isNotEmpty()) query = ""
+                    },
+                    label = { Text(d.name) },
+                    modifier = Modifier.heightIn(min = 40.dp),
+                )
             }
         }
         OutlinedTextField(
@@ -84,18 +146,20 @@ internal fun CommandPicker(
             modifier = Modifier.fillMaxWidth(),
         )
         LazyColumn(Modifier.fillMaxWidth().weight(1f)) {
-            items(commands, key = { it.name }) { cmd ->
-                val isSelected = selected?.deviceId == device?.id && selected?.command == cmd.name
+            items(matches, key = { "${it.device.id}:${it.command.name}" }) { match ->
+                val isSelected = selected?.deviceId == match.device.id && selected?.command == match.command.name
                 Column {
                     Row(
                         Modifier
                             .fillMaxWidth()
-                            .clickable(role = Role.Button) { device?.let { onPick(SequenceStep.Command(it.id, cmd.name, cmd.functionId)) } }
+                            .clickable(role = Role.Button) {
+                                onPick(SequenceStep.Command(match.device.id, match.command.name, match.command.functionId))
+                            }
                             .heightIn(min = 52.dp)
                             .padding(horizontal = 8.dp),
                         verticalAlignment = Alignment.CenterVertically,
                     ) {
-                        Text(cmd.name, fontSize = 16.sp, modifier = Modifier.weight(1f))
+                        Text(match.label, fontSize = 16.sp, modifier = Modifier.weight(1f))
                         if (isSelected) Icon(Icons.Filled.Check, contentDescription = "Selected", tint = MaterialTheme.colorScheme.primary)
                     }
                     HorizontalDivider(color = MelodiousColors.Divider)

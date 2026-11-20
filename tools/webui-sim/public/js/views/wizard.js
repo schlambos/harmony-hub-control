@@ -41,6 +41,13 @@ import {
   roleLabel,
   sortPickerDevices,
 } from "./remote-model.js";
+import {
+  chipRowMarkup,
+  followChipRow,
+  scrollToRow,
+  searchDeviceCommands,
+  showPressedChip,
+} from "./button-picker.js";
 
 const STEPS = [
   { label: "Name", next: "Next: devices" },
@@ -752,24 +759,29 @@ export function createWizardView(section) {
       label: `${label} button`,
       className: "pick-sheet",
       render: (content, close) => {
-        content.innerHTML = `<div class="pick-top">
-            <div class="pick-head">
-              <h2 class="sheet-title" tabindex="-1" autofocus>“${escapeHtml(label)}” button</h2>
-              <span data-pick-clear></span>
-            </div>
-            <p class="pick-now" data-pick-now></p>
-            <div class="m-chips" role="group" aria-label="Press behaviour" data-pick-mode></div>
-            <p class="wiz-hint" data-pick-hint></p>
-            <div class="seg-tabs" role="tablist" aria-label="When the key is">
-              <button type="button" role="tab" class="seg-tab" data-pick-tab="press">Press</button>
-              <button type="button" role="tab" class="seg-tab" data-pick-tab="hold">Hold</button>
-            </div>
-            <div class="pick-chips" role="group" aria-label="Device" data-pick-chips></div>
-            <label class="search-field">${icon("search", { size: 22 })}<input type="search" data-pick-search placeholder="Search commands" aria-label="Search commands" autocomplete="off"></label>
+        content.innerHTML = `<div class="pick-head">
+            <h2 class="sheet-title" tabindex="-1" autofocus>“${escapeHtml(label)}” button</h2>
+            <span data-pick-clear></span>
           </div>
-          <div class="pick-list" data-pick-list></div>
-          <div class="pick-foot" data-pick-foot></div>`;
+          <div class="pick-scroll" data-pick-scroll-area>
+            <div class="pick-meta">
+              <p class="pick-now" data-pick-now></p>
+              <div class="m-chips" role="group" aria-label="Press behaviour" data-pick-mode></div>
+              <p class="wiz-hint" data-pick-hint></p>
+              <div class="seg-tabs" role="tablist" aria-label="When the key is">
+                <button type="button" role="tab" class="seg-tab" data-pick-tab="press">Press</button>
+                <button type="button" role="tab" class="seg-tab" data-pick-tab="hold">Hold</button>
+              </div>
+            </div>
+            <div class="pick-top">
+              ${chipRowMarkup({ attr: "data-pick-chips", label: "Device" })}
+              <label class="search-field">${icon("search", { size: 22 })}<input type="search" data-pick-search placeholder="Search commands" aria-label="Search commands" autocomplete="off"></label>
+            </div>
+            <div class="pick-list" data-pick-list></div>
+            <div class="pick-foot" data-pick-foot></div>
+          </div>`;
         const $ = (selector) => content.querySelector(selector);
+        const scroller = $("[data-pick-scroll-area]");
 
         function pressMode() {
           const m = mapping();
@@ -823,32 +835,30 @@ export function createWizardView(section) {
 
         function drawList() {
           const m = mapping();
-          const device = devices.find((d) => d.id === deviceId);
-          const q = query.trim().toLowerCase();
+          const q = query.trim();
           const current = tab === "hold" ? m?.hold : m;
           const check = icon("check", { cls: "pick-check", label: "Current" });
-          const rows = (device?.commands ?? [])
-            .map((c, i) => ({ c, i }))
-            .filter(({ c }) => !q || c.name.toLowerCase().includes(q))
-            .map(({ c, i }) => {
-              const on = current?.deviceId === deviceId && current?.command?.name === c.name;
-              return `<button type="button" class="pick-row${on ? " is-current" : ""}" data-pick-command="${i}"><span>${escapeHtml(c.name)}</span>${on ? check : ""}</button>`;
-            });
+          const matches = searchDeviceCommands(devices, deviceId, q);
+          const rows = matches.map(({ device, command, index, label: rowLabel }) => {
+            const on = current?.deviceId === device.id && current?.command?.name === command.name;
+            return `<button type="button" class="pick-row${on ? " is-current" : ""}" data-pick-chip="${escapeHtml(device.id)}" data-pick-command="${index}"><span>${escapeHtml(rowLabel)}</span>${on ? check : ""}</button>`;
+          });
           const none = tab === "hold" && !q
             ? `<button type="button" class="pick-row${m?.hold ? "" : " is-current"}" data-pick-none><span>No hold action</span>${m?.hold ? "" : check}</button>`
             : "";
-          $("[data-pick-list]").innerHTML = !device
+          $("[data-pick-list]").innerHTML = !devices.length
             ? `<p class="list-note">Choose the activity's devices first.</p>`
             : rows.length || none
               ? none + rows.join("")
-              : `<p class="list-note">Nothing matches “${escapeHtml(query.trim())}”.</p>`;
+              : `<p class="list-note">Nothing matches “${escapeHtml(q)}”.</p>`;
         }
 
         // After a new tab or device, show the command in use, else the top.
         function showCurrent() {
           const row = $(".pick-row.is-current");
-          if (row) row.scrollIntoView({ block: "center" });
-          else content.scrollTop = 0;
+          if (row) scrollToRow(scroller, row);
+          else scroller.scrollTop = 0;
+          showPressedChip(content);
         }
 
         function finish(update) {
@@ -877,6 +887,10 @@ export function createWizardView(section) {
           const chip = event.target.closest("[data-pick-device]");
           if (chip) {
             deviceId = chip.dataset.pickDevice;
+            if (query) {
+              query = "";
+              $("[data-pick-search]").value = "";
+            }
             drawTop();
             drawList();
             showCurrent();
@@ -884,7 +898,8 @@ export function createWizardView(section) {
           }
           const row = event.target.closest("[data-pick-command]");
           if (row) {
-            const device = devices.find((d) => d.id === deviceId);
+            const targetId = row.dataset.pickChip ?? deviceId;
+            const device = devices.find((d) => d.id === targetId);
             const command = device?.commands[Number(row.dataset.pickCommand)];
             if (command) finish(() => (tab === "hold" ? setHold(key, device, command) : setPress(key, device, command)));
             return;
@@ -906,15 +921,18 @@ export function createWizardView(section) {
           if (!event.target.matches("[data-pick-search]")) return;
           query = event.target.value;
           drawList();
-          content.scrollTop = 0;
+          scroller.scrollTop = 0;
         });
 
+        followChipRow(content, scroller);
         drawTop();
         drawList();
       },
     }, () => `[data-key="${key}"]`);
-    // Open on the command the key sends now, as the app does.
-    opened.content.querySelector(".pick-row.is-current")?.scrollIntoView({ block: "center" });
+    // Open on the command the key sends now, as the app does, and centre its device chip.
+    const scroller = opened.content.querySelector("[data-pick-scroll-area]");
+    scrollToRow(scroller, opened.content.querySelector(".pick-row.is-current"));
+    showPressedChip(opened.content);
   }
 
   /* -- events ---------------------------------------------------------------------- */
