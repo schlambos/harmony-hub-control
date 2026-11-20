@@ -3103,6 +3103,8 @@ static int offline_writer_lock(void) {
    request, so the caller must not undo it. */
 #define OFFLINE_WRITER_NO_ANSWER (-2)
 
+static int offline_writer_held_lock_fd = -1;
+
 static int offline_writer_request(
     const char *request,
     size_t request_len,
@@ -3115,11 +3117,13 @@ static int offline_writer_request(
     char response_id[96], error[512];
     char *response = NULL;
     size_t response_len = 0;
-    int attempt, rc = -1, lock_fd;
-    lock_fd = offline_writer_lock();
-    if (lock_fd < 0) {
-        snprintf(msg, msg_len, "another change is still being saved on the hub; try again");
-        return -1;
+    int attempt, rc = -1, lock_fd = -1;
+    if (offline_writer_held_lock_fd < 0) {
+        lock_fd = offline_writer_lock();
+        if (lock_fd < 0) {
+            snprintf(msg, msg_len, "another change is still being saved on the hub; try again");
+            return -1;
+        }
     }
     unlink(ACTIVITY_RESPONSE_FILE);
     unlink(ACTIVITY_REQUEST_FILE);
@@ -3157,7 +3161,94 @@ static int offline_writer_request(
 out:
     unlink(ACTIVITY_REQUEST_FILE);
     free(response);
-    close(lock_fd);
+    if (lock_fd >= 0) close(lock_fd);
+    return rc;
+}
+
+static int offline_writer_request_locked(
+    const char *request,
+    size_t request_len,
+    const char *request_id,
+    char *reply,
+    size_t reply_len,
+    char *msg,
+    size_t msg_len
+) {
+    int prev = offline_writer_held_lock_fd;
+    int rc;
+    offline_writer_held_lock_fd = 1;
+    rc = offline_writer_request(request, request_len, request_id,
+        reply, reply_len, msg, msg_len);
+    offline_writer_held_lock_fd = prev;
+    return rc;
+}
+
+static int offline_activity_commit_locked(
+    const char *activities,
+    size_t activities_len,
+    const char *maps,
+    size_t maps_len,
+    const char *functions,
+    size_t functions_len,
+    const char *base_revision,
+    int activity_changed,
+    int map_changed,
+    int function_changed,
+    char *reply,
+    size_t reply_len,
+    char *msg,
+    size_t msg_len
+) {
+    char request_id[96];
+    char *request = NULL;
+    size_t request_len;
+    int written, rc = -1;
+    snprintf(request_id, sizeof(request_id), "%ld-%ld-%08x-%08x",
+        (long)getpid(), (long)time(NULL),
+        resource_hash(activities, activities_len),
+        resource_hash(maps, maps_len) ^ resource_hash(functions, functions_len));
+    request_len = activities_len + maps_len + functions_len +
+        strlen(request_id) + (base_revision ? strlen(base_revision) : 0) + 540;
+    request = (char *)malloc(request_len);
+    if (!request) {
+        snprintf(msg, msg_len, "not enough memory for the offline activity transaction");
+        goto out;
+    }
+    if (base_revision && base_revision[0]) {
+        written = snprintf(request, request_len,
+            "{\"id\":\"%s\",\"op\":\"CommitActivityResources\","
+            "\"baseRevision\":\"%s\","
+            "\"activityChanged\":%s,\"mapChanged\":%s,\"functionChanged\":%s,"
+            "\"activityList\":%s,\"mapList\":%s,\"functionList\":%s}",
+            request_id,
+            base_revision,
+            activity_changed ? "true" : "false",
+            map_changed ? "true" : "false",
+            function_changed ? "true" : "false",
+            activities,
+            maps,
+            functions);
+    } else {
+        written = snprintf(request, request_len,
+            "{\"id\":\"%s\",\"op\":\"CommitActivityResources\","
+            "\"activityChanged\":%s,\"mapChanged\":%s,\"functionChanged\":%s,"
+            "\"activityList\":%s,\"mapList\":%s,\"functionList\":%s}",
+            request_id,
+            activity_changed ? "true" : "false",
+            map_changed ? "true" : "false",
+            function_changed ? "true" : "false",
+            activities,
+            maps,
+            functions);
+    }
+    if (written < 0 || (size_t)written >= request_len) {
+        snprintf(msg, msg_len, "offline activity transaction was too large");
+        goto out;
+    }
+    rc = offline_writer_request_locked(request, (size_t)written, request_id,
+        reply, reply_len, msg, msg_len);
+out:
+    free(request);
     return rc;
 }
 
@@ -3176,40 +3267,20 @@ static int offline_activity_commit(
     char *msg,
     size_t msg_len
 ) {
-    char request_id[96];
-    char *request = NULL;
-    size_t request_len;
-    int written, rc = -1;
-    snprintf(request_id, sizeof(request_id), "%ld-%ld-%08x-%08x",
-        (long)getpid(), (long)time(NULL),
-        resource_hash(activities, activities_len),
-        resource_hash(maps, maps_len) ^ resource_hash(functions, functions_len));
-    request_len = activities_len + maps_len + functions_len +
-        strlen(request_id) + 480;
-    request = (char *)malloc(request_len);
-    if (!request) {
-        snprintf(msg, msg_len, "not enough memory for the offline activity transaction");
-        goto out;
+    int lock_fd = offline_writer_lock();
+    int rc;
+    if (lock_fd < 0) {
+        snprintf(msg, msg_len, "another change is still being saved on the hub; try again");
+        return -1;
     }
-    written = snprintf(request, request_len,
-        "{\"id\":\"%s\",\"op\":\"CommitActivityResources\","
-        "\"activityChanged\":%s,\"mapChanged\":%s,\"functionChanged\":%s,"
-        "\"activityList\":%s,\"mapList\":%s,\"functionList\":%s}",
-        request_id,
-        activity_changed ? "true" : "false",
-        map_changed ? "true" : "false",
-        function_changed ? "true" : "false",
-        activities,
-        maps,
-        functions);
-    if (written < 0 || (size_t)written >= request_len) {
-        snprintf(msg, msg_len, "offline activity transaction was too large");
-        goto out;
-    }
-    rc = offline_writer_request(request, (size_t)written, request_id,
+    rc = offline_activity_commit_locked(
+        activities, activities_len,
+        maps, maps_len,
+        functions, functions_len,
+        NULL,
+        activity_changed, map_changed, function_changed,
         reply, reply_len, msg, msg_len);
-out:
-    free(request);
+    close(lock_fd);
     return rc;
 }
 
@@ -4670,7 +4741,7 @@ static void render_activity_save_json(int fd, const struct request *req) {
     char base_revision[64], current_revision[40], final_revision[40];
     char msg[768], commit_reply[32768], rollback_reply[32768], rollback_msg[768];
     int sync_remote, activity_changed, map_changed, function_changed;
-    int commit_rc = 0, rollback_ok = 1;
+    int commit_rc = 0, rollback_ok = 1, lock_fd = -1;
     FILE *f;
     if (!req->body || !req->body_len ||
         json_object_value_copy(req->body, "activityList", &activities, &activities_len) != 0 ||
@@ -4692,6 +4763,18 @@ static void render_activity_save_json(int fd, const struct request *req) {
         f = send_json_start(fd, "400 Bad Request");
         if (f) {
             fputs("{\"ok\":false,\"error\":", f); json_write_string(f, msg); fputs("}\n", f);
+            fclose(f);
+        }
+        goto out;
+    }
+    /* Hold the shared writer lock across revision comparison, commit, and
+       read-back verification so no concurrent tab, Android save, or HA push
+       can interleave between check and write. */
+    lock_fd = offline_writer_lock();
+    if (lock_fd < 0) {
+        f = send_json_start(fd, "503 Service Unavailable");
+        if (f) {
+            fputs("{\"ok\":false,\"error\":\"another change is still being saved on the hub; try again\"}\n", f);
             fclose(f);
         }
         goto out;
@@ -4734,10 +4817,11 @@ static void render_activity_save_json(int fd, const struct request *req) {
     commit_reply[0] = 0;
     msg[0] = 0;
     if (activity_changed || map_changed || function_changed || sync_remote) {
-        commit_rc = offline_activity_commit(
+        commit_rc = offline_activity_commit_locked(
             activities, activities_len,
             maps, maps_len,
             functions, functions_len,
+            base_revision,
             activity_changed, map_changed, function_changed,
             commit_reply, sizeof(commit_reply), msg, sizeof(msg));
         if (commit_rc == OFFLINE_WRITER_NO_ANSWER) {
@@ -4748,6 +4832,19 @@ static void render_activity_save_json(int fd, const struct request *req) {
                 fputs("{\"ok\":false,\"saved\":false,\"pending\":true,\"localOnly\":true,"
                     "\"rolledBack\":false,\"error\":"
                     "\"the hub is still applying this save; reload in a minute to see whether it landed\"}\n", f);
+                fclose(f);
+            }
+            goto out;
+        }
+        if (commit_rc != 0 && json_bool(commit_reply, "conflict", 0)) {
+            char conflict_rev[64];
+            conflict_rev[0] = 0;
+            json_string(commit_reply, "revision", conflict_rev, sizeof(conflict_rev));
+            f = send_json_start(fd, "409 Conflict");
+            if (f) {
+                fputs("{\"ok\":false,\"error\":\"activity resources changed since this editor loaded\",\"revision\":", f);
+                json_write_string(f, conflict_rev[0] ? conflict_rev : current_revision);
+                fputs("}\n", f);
                 fclose(f);
             }
             goto out;
@@ -4816,10 +4913,11 @@ rollback:
     rollback_msg[0] = 0;
     if (!rollback_ok) {
         rollback_reply[0] = 0;
-        rollback_ok = offline_activity_commit(
+        rollback_ok = offline_activity_commit_locked(
                 old_activities, old_activities_len,
                 old_maps, old_maps_len,
                 old_functions, old_functions_len,
+                NULL,
                 1, 1, 1,
                 rollback_reply, sizeof(rollback_reply),
                 rollback_msg, sizeof(rollback_msg)) == 0 &&
@@ -4847,6 +4945,7 @@ rollback:
     }
 
 out:
+    if (lock_fd >= 0) close(lock_fd);
     free(activities); free(maps); free(functions);
     free(old_activities); free(old_maps); free(old_functions);
     free(saved_activities); free(saved_maps); free(saved_functions);

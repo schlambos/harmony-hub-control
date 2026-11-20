@@ -654,6 +654,41 @@ local function validateGraph(activityList, mapList, functionList, deviceList, ol
   return true
 end
 
+local function fnv1a32(data)
+  local h = 2166136261
+  for i = 1, #data do
+    local b = string.byte(data, i)
+    local lo = h % 256
+    local hi = h - lo
+    local x, p = 0, 1
+    local a, c = lo, b
+    while a > 0 or c > 0 do
+      local ra, rc = a % 2, c % 2
+      if ra ~= rc then
+        x = x + p
+      end
+      a = (a - ra) / 2
+      c = (c - rc) / 2
+      p = p * 2
+    end
+    h = hi + x
+    local h_lo = h % 65536
+    local h_hi = (h - h_lo) / 65536
+    h = (((h_lo * 256 + h_hi * 403) % 65536) * 65536 + h_lo * 403) % 4294967296
+  end
+  return string.format("%08x", h)
+end
+
+local function currentActivityRevision()
+  local act = readFile("/data/resources/ActivityList.json")
+  local map = readFile("/data/resources/MapList.json")
+  local fn = readFile("/data/resources/FunctionList.json")
+  if not act or not map or not fn then
+    return nil
+  end
+  return fnv1a32(act) .. "-" .. fnv1a32(map) .. "-" .. fnv1a32(fn)
+end
+
 local function commitActivityResources(request)
   if not blockerActive() then
     return {
@@ -673,6 +708,18 @@ local function commitActivityResources(request)
   local oldFunctions, functionReadError = resourceSnapshot("FunctionList")
   if not oldFunctions then
     return {ok = false, localOnly = true, error = functionReadError}
+  end
+  if type(request.baseRevision) == "string" and request.baseRevision ~= "" then
+    local currentRevision = currentActivityRevision()
+    if currentRevision and currentRevision ~= request.baseRevision then
+      return {
+        ok = false,
+        conflict = true,
+        localOnly = true,
+        revision = currentRevision,
+        error = "activity resources changed since this editor loaded"
+      }
+    end
   end
   local devices, deviceReadError = resourceSnapshot("DeviceList")
   if not devices then

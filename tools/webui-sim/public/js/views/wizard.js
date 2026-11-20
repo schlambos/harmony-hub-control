@@ -623,11 +623,14 @@ export function createWizardView(section) {
       snackbar(`Saved “${outcome.name}”`);
       if (!section.hidden) location.hash = "#activities";
     } catch (error) {
-      // A refused save usually means this activity changed elsewhere: reload
-      // and update our baseline so trying again saves onto the latest copy.
+      // Reload the latest hub config for inspection, but keep the original
+      // baseSnapshot intact on conflict so a blind second click cannot
+      // overwrite another client's edit without reopening this activity.
       await hub.reloadConfig();
-      baseSnapshot = editId ? activitySnapshot(hub.state.config, editId) : null;
-      snackbar(`Couldn't save — ${error.message || "hub error"}. The latest setup is reloaded; try again.`, { error: true });
+      const message = error?.status === 409
+        ? "Couldn't save — this activity changed on the hub while you were editing it. Reopen the activity to review the latest changes before saving."
+        : `Couldn't save — ${error.message || "hub error"}.`;
+      snackbar(message, { error: true });
     } finally {
       saving = false;
       if (!section.hidden) render();

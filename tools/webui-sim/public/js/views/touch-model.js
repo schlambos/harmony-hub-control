@@ -950,7 +950,18 @@ export async function saveTouchWithRebase({
   twins = [],
   saveFn,
 }) {
-  let payload = buildPayload(getConfig());
+  const initial = getConfig();
+  let payload = buildPayload(initial);
+  if (initial) {
+    const precheck = controlsSaveOutcome(initial, activityId, base, payload.mapList, { remote, twins });
+    if (precheck !== "unchanged") {
+      const conflict = new Error("this screen changed on the hub while you were editing it");
+      conflict.status = 409;
+      conflict.lastPayload = payload;
+      conflict.reloaded = true;
+      throw conflict;
+    }
+  }
   try {
     const result = await saveFn(payload);
     return { result, payload, rebased: false };

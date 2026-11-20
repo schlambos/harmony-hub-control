@@ -11,6 +11,17 @@ import * as hub from "../state.js";
 import { snackbar } from "../ui/shell.js";
 
 export async function saveMapList(mapList, { done, check, rebuild = null }) {
+  // Check the editor's baseline BEFORE the first POST too: a background digest
+  // refresh can update hub.state.config with another client's edit while the
+  // user is still on this view, which would otherwise stamp a stale draft with
+  // the new revision.
+  if (hub.state.config && typeof check === "function") {
+    const precheck = check(hub.state.config);
+    if (precheck !== "unchanged") {
+      snackbar("Couldn't save — these buttons changed on the hub while you were editing them. This shows what the hub has now.", { error: true });
+      return "replaced";
+    }
+  }
   const makePayload = (config, nextMapList) => ({
     baseRevision: config.revision,
     activityList: structuredClone(config.activityList),
