@@ -8,6 +8,7 @@
 #include <netdb.h>
 #include <netinet/in.h>
 #include <signal.h>
+#include <stdint.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -84,11 +85,24 @@
 #endif
 #define IR_EVENT_LOG "/data/codex/ir-events.log"
 #define IR_CANCEL_PREFIX "/tmp/codex_ir_cancel_"
+#ifndef BT_TEXT_FIFO
 #define BT_TEXT_FIFO "/tmp/bthid_input"
+#endif
+#ifndef BT_TEXT_STATUS
 #define BT_TEXT_STATUS "/tmp/bthid_status"
+#endif
+#ifndef BT_TARGET_FILE
 #define BT_TARGET_FILE "/data/codex/bthid_target"
+#endif
+#ifndef BT_PROFILE_FILE
 #define BT_PROFILE_FILE "/data/codex/bthid_profile"
+#endif
+#ifndef BT_DEVICE_STORE
 #define BT_DEVICE_STORE "/data/codex/bt-devices.json"
+#endif
+#ifndef BT_WEBHOOK_LOCK_FILE
+#define BT_WEBHOOK_LOCK_FILE "/var/run/codex-bt-webhook.lock"
+#endif
 #define BT_PAIR_AGENT_PID "/var/run/codex-bt-pair-agent.pid"
 #define BT_HID_CONTROL_PID "/var/run/codex-bt-hid-control.pid"
 /* The agents log to RAM: a launch redirect into a full /cache (jffs2) fails
@@ -97,6 +111,9 @@
 #define BT_HID_CONTROL_LOG "/var/volatile/codex-bt-hid-control.log"
 #define CODEX_BIN_DIR "/data/codex/bin"
 #define BT_PAIR_AGENT_BIN CODEX_BIN_DIR "/codex_bt_pair_agent"
+#ifndef CODEX_HAL_LTCP_BIN
+#define CODEX_HAL_LTCP_BIN CODEX_BIN_DIR "/codex_hal_ltcp"
+#endif
 #ifndef CODEX_HBUS_BIN
 #define CODEX_HBUS_BIN CODEX_BIN_DIR "/codex_hbus"
 #endif
@@ -224,9 +241,14 @@ struct ir_inventory {
 };
 
 struct bt_saved_command {
+    char id[32];
     char name[128];
+    /* Original name token for scripts created before stable IDs existed. */
+    char legacy_name[128];
     char script[MAX_BT_SCRIPT_LEN];
     int delay_ms;
+    /* Deleted locally but still executable while Harmony retains a reference. */
+    int retained;
 };
 
 struct bt_saved_device {
@@ -263,6 +285,8 @@ static int multi_remote_off_pending(void);
 static int run_bt_saved_script(const char *type, const char *bdaddr, const char *script, int gap_ms, char *out, size_t outlen);
 struct bt_inventory;
 static int bt_harmony_commit(const struct bt_inventory *inv, int dry_run, char *reply, size_t reply_len, char *msg, size_t msg_len);
+static int bt_harmony_cleanup_retained(struct bt_inventory *inv, const char *reply);
+static int bt_harmony_name_publishable(const char *raw);
 #define BT_HARMONY_REPLY 16384
 
 static void chomp(char *s) {
@@ -8363,8 +8387,21 @@ static int load_bt_inventory(struct bt_inventory *inv) {
                 struct bt_saved_command *cmd = &dev->commands[dev->command_count];
                 const char *obj_end = find_matching_json(cpos, '{', '}');
                 if (!obj_end || obj_end > cmd_end) break;
+                memset(cmd, 0, sizeof(*cmd));
+                json_string_range(cpos, obj_end, "id", cmd->id, sizeof(cmd->id));
+                if (cmd->id[0]) {
+                    size_t idi;
+                    for (idi = 0; cmd->id[idi]; idi++) {
+                        if (!isalnum((unsigned char)cmd->id[idi])) {
+                            cmd->id[0] = 0;
+                            break;
+                        }
+                    }
+                }
                 json_string_range(cpos, obj_end, "name", cmd->name, sizeof(cmd->name));
+                json_string_range(cpos, obj_end, "legacyName", cmd->legacy_name, sizeof(cmd->legacy_name));
                 json_string_range(cpos, obj_end, "script", cmd->script, sizeof(cmd->script));
+                cmd->retained = json_bool_range(cpos, obj_end, "retained", 0);
                 cmd->delay_ms = (int)json_long_range(cpos, obj_end, "delayMs", 35);
                 if (cmd->delay_ms < 15) cmd->delay_ms = 35;
                 if (cmd->delay_ms > 5000) cmd->delay_ms = 5000;
@@ -8399,9 +8436,18 @@ static int save_bt_inventory(const struct bt_inventory *inv) {
         for (j = 0; j < dev->command_count; j++) {
             const struct bt_saved_command *cmd = &dev->commands[j];
             if (j) fputc(',', f);
-            fputs("{\"name\":", f); json_write_string(f, cmd->name);
+            fputc('{', f);
+            if (cmd->id[0]) {
+                fputs("\"id\":", f); json_write_string(f, cmd->id);
+                fputc(',', f);
+            }
+            fputs("\"name\":", f); json_write_string(f, cmd->name);
+            if (cmd->legacy_name[0]) {
+                fputs(",\"legacyName\":", f); json_write_string(f, cmd->legacy_name);
+            }
             fputs(",\"delayMs\":", f); fprintf(f, "%d", cmd->delay_ms);
             fputs(",\"script\":", f); json_write_string(f, cmd->script);
+            if (cmd->retained) fputs(",\"retained\":true", f);
             fputc('}', f);
         }
         fputs("]}", f);
@@ -8420,6 +8466,50 @@ static int save_bt_inventory(const struct bt_inventory *inv) {
     return 0;
 }
 
+static void bt_assign_command_id(const struct bt_saved_device *dev, char *out, size_t outlen) {
+    static unsigned long seq = 0;
+    unsigned long base = (unsigned long)time(NULL);
+    int attempt;
+    if (!out || outlen == 0) return;
+    for (attempt = 0; attempt < 256; attempt++) {
+        char cand[32];
+        int i, dup = 0;
+        seq++;
+        snprintf(cand, sizeof(cand), "c%08lx%04lx",
+            base & 0xffffffffUL, ((unsigned long)getpid() ^ (seq + (unsigned long)attempt)) & 0xffffUL);
+        for (i = 0; dev && i < dev->command_count; i++) {
+            if (strcmp(dev->commands[i].id, cand) == 0) {
+                dup = 1;
+                break;
+            }
+        }
+        if (!dup) {
+            copy_text(out, outlen, cand);
+            return;
+        }
+    }
+    copy_text(out, outlen, "");
+}
+
+static int bt_webhook_acquire_lock(char *err, size_t errlen) {
+    int lock_fd = open(BT_WEBHOOK_LOCK_FILE, O_RDWR | O_CREAT, 0600);
+    if (lock_fd < 0) {
+        if (err && errlen) {
+            snprintf(err, errlen, "could not open Bluetooth script lock: %s", strerror(errno));
+        }
+        return -1;
+    }
+    while (flock(lock_fd, LOCK_EX) < 0) {
+        if (errno == EINTR) continue;
+        if (err && errlen) {
+            snprintf(err, errlen, "could not acquire Bluetooth script lock: %s", strerror(errno));
+        }
+        close(lock_fd);
+        return -1;
+    }
+    return lock_fd;
+}
+
 static int find_bt_device_index(const struct bt_inventory *inv, const char *device_id) {
     int i;
     for (i = 0; i < inv->device_count; i++) {
@@ -8431,9 +8521,42 @@ static int find_bt_device_index(const struct bt_inventory *inv, const char *devi
 static int find_bt_command_index(const struct bt_saved_device *dev, const char *name) {
     int i;
     for (i = 0; i < dev->command_count; i++) {
-        if (strcmp(dev->commands[i].name, name) == 0) return i;
+        if (!dev->commands[i].retained && strcmp(dev->commands[i].name, name) == 0) return i;
     }
     return -1;
+}
+
+static void bt_harmony_sync_after_save(struct bt_inventory *inv, char *msg, size_t msglen) {
+    char *reply = (char *)malloc(BT_HARMONY_REPLY);
+    char note[512], err[256];
+    int rc = reply ? bt_harmony_commit(inv, 0, reply, BT_HARMONY_REPLY, note, sizeof(note)) : -1;
+    size_t used = strlen(msg);
+    if (rc != 0) {
+        err[0] = 0;
+        if (reply && reply[0] == '{') json_string(reply, "error", err, sizeof(err));
+        if (err[0]) {
+            snprintf(msg + used, msglen - used,
+                " The Harmony device was not updated (%s).", err);
+        } else {
+            snprintf(msg + used, msglen - used,
+                " The Harmony device was not updated; save it again or remove it from Harmony.");
+        }
+    } else if (reply && strstr(reply, "\"retainedCommands\"") != NULL) {
+        snprintf(msg + used, msglen - used,
+            " Kept the previous command on the Harmony device because an activity or button still uses it.");
+    }
+    if (rc == 0 && reply) {
+        int cleaned = bt_harmony_cleanup_retained(inv, reply);
+        if (cleaned > 0) {
+            backup_settings();
+            if (save_bt_inventory(inv) != 0) {
+                used = strlen(msg);
+                snprintf(msg + used, msglen - used,
+                    " The Harmony device was updated, but local retained-script cleanup could not be saved.");
+            }
+        }
+    }
+    free(reply);
 }
 
 static int upsert_bt_device(const char *device_id, const char *name, const char *type, const char *bdaddr, char *msg, size_t msglen) {
@@ -8482,15 +8605,7 @@ static int upsert_bt_device(const char *device_id, const char *name, const char 
     snprintf(msg, msglen, "Saved Bluetooth device %s.", name);
     if (inv.devices[idx].harmony) {
         /* Keep the Harmony device's name in step. */
-        char *reply = (char *)malloc(BT_HARMONY_REPLY);
-        char note[512];
-        int rc = reply ? bt_harmony_commit(&inv, 0, reply, BT_HARMONY_REPLY, note, sizeof(note)) : -1;
-        if (rc != 0) {
-            size_t used = strlen(msg);
-            snprintf(msg + used, msglen - used,
-                " The Harmony device was not updated; save it again or remove it from Harmony.");
-        }
-        free(reply);
+        bt_harmony_sync_after_save(&inv, msg, msglen);
     }
     return 0;
 }
@@ -8567,6 +8682,17 @@ static int upsert_bt_command(const char *device_id, const char *old_name, const 
         }
         cidx = dev->command_count++;
         memset(&dev->commands[cidx], 0, sizeof(dev->commands[cidx]));
+        bt_assign_command_id(dev, dev->commands[cidx].id, sizeof(dev->commands[cidx].id));
+    }
+    if (!dev->commands[cidx].id[0]) {
+        /* Upgrading a legacy script must not orphan its already-published
+           saved<old-name> token when its name changes. */
+        copy_text(dev->commands[cidx].legacy_name, sizeof(dev->commands[cidx].legacy_name), old_name);
+        bt_assign_command_id(dev, dev->commands[cidx].id, sizeof(dev->commands[cidx].id));
+        if (!dev->commands[cidx].id[0]) {
+            snprintf(msg, msglen, "Could not assign a stable Bluetooth command ID.");
+            return -1;
+        }
     }
     copy_text(dev->commands[cidx].name, sizeof(dev->commands[cidx].name), name);
     copy_text(dev->commands[cidx].script, sizeof(dev->commands[cidx].script), script);
@@ -8577,6 +8703,14 @@ static int upsert_bt_command(const char *device_id, const char *old_name, const 
         return -1;
     }
     snprintf(msg, msglen, "Saved Bluetooth command %s.", name);
+    if (dev->harmony) {
+        if (!bt_harmony_name_publishable(name)) {
+            size_t used = strlen(msg);
+            snprintf(msg + used, msglen - used,
+                " Not added to the Harmony device because the name has no ASCII letters or digits.");
+        }
+        bt_harmony_sync_after_save(&inv, msg, msglen);
+    }
     return 0;
 }
 
@@ -8600,14 +8734,23 @@ static int delete_bt_command(const char *device_id, const char *name, char *msg,
         snprintf(msg, msglen, "Bluetooth command %s was not found.", name);
         return -1;
     }
-    for (i = cidx; i + 1 < dev->command_count; i++) dev->commands[i] = dev->commands[i + 1];
-    dev->command_count--;
+    if (dev->harmony) {
+        /* Commits omit retained scripts, but keep their tokens executable until
+           codexactivity confirms that no Harmony reference retains them. */
+        dev->commands[cidx].retained = 1;
+    } else {
+        for (i = cidx; i + 1 < dev->command_count; i++) dev->commands[i] = dev->commands[i + 1];
+        dev->command_count--;
+    }
     backup_settings();
     if (save_bt_inventory(&inv) != 0) {
         snprintf(msg, msglen, "Failed to delete Bluetooth command.");
         return -1;
     }
     snprintf(msg, msglen, "Deleted Bluetooth command %s.", name);
+    if (dev->harmony) {
+        bt_harmony_sync_after_save(&inv, msg, msglen);
+    }
     return 0;
 }
 
@@ -8615,7 +8758,7 @@ static int send_bt_saved_command(const char *device_id, const char *name, char *
     struct bt_inventory inv;
     struct bt_saved_device *dev;
     struct bt_saved_command *cmd;
-    int didx, cidx, rc;
+    int didx, cidx, rc, lock_fd;
     char reply[8192];
     if (!safe_bt_store_id(device_id) || !safe_label(name)) {
         snprintf(msg, msglen, "Invalid Bluetooth command request.");
@@ -8635,7 +8778,14 @@ static int send_bt_saved_command(const char *device_id, const char *name, char *
     }
     cmd = &dev->commands[cidx];
     reply[0] = 0;
+    lock_fd = bt_webhook_acquire_lock(reply, sizeof(reply));
+    if (lock_fd < 0) {
+        snprintf(msg, msglen, "Failed to send Bluetooth command %s on %s. %s",
+            name, dev->name, reply);
+        return -1;
+    }
     rc = run_bt_saved_script(dev->type, dev->bdaddr, cmd->script, cmd->delay_ms, reply, sizeof(reply));
+    close(lock_fd);
     snprintf(msg, msglen, "%s Bluetooth command %s on %s. %s",
         rc == 0 ? "Sent" : "Failed to send", name, dev->name, reply[0] ? reply : "");
     return rc;
@@ -8733,6 +8883,7 @@ static void bt_saved_devices_panel(FILE *f, const struct bt_inventory *inv) {
         fprintf(f, "<div class='command-list mini'>");
         for (j = 0; j < dev->command_count; j++) {
             const struct bt_saved_command *cmd = &dev->commands[j];
+            if (cmd->retained) continue;
             fprintf(f, "<div class='command'><div><strong>");
             html(f, cmd->name);
             fprintf(f, "</strong><div class='muted'>Keyboard script / %d ms between keys</div><pre class='mini command-preview'>", cmd->delay_ms);
@@ -11986,7 +12137,7 @@ static int run_hal_json(const char *cmd_name, const char *params_json, int timeo
     if (timeout > 30) timeout = 30;
     shell_escape_single(cmd_name, esc_cmd, sizeof(esc_cmd));
     shell_escape_single(params_json, esc_params, sizeof(esc_params));
-    snprintf(cmd, sizeof(cmd), "/data/codex/bin/codex_hal_ltcp '%s' '%s' %d 2>&1", esc_cmd, esc_params, timeout);
+    snprintf(cmd, sizeof(cmd), CODEX_HAL_LTCP_BIN " '%s' '%s' %d 2>&1", esc_cmd, esc_params, timeout);
     return run_cmd(cmd, out, outlen);
 }
 
@@ -11997,7 +12148,7 @@ static int run_hal_json_binary_hex(const char *cmd_name, const char *params_json
     shell_escape_single(cmd_name, esc_cmd, sizeof(esc_cmd));
     shell_escape_single(params_json, esc_params, sizeof(esc_params));
     shell_escape_single(payload_hex, esc_payload, sizeof(esc_payload));
-    snprintf(cmd, sizeof(cmd), "/data/codex/bin/codex_hal_ltcp '%s' '%s' %d '%s' 2>&1", esc_cmd, esc_params, timeout, esc_payload);
+    snprintf(cmd, sizeof(cmd), CODEX_HAL_LTCP_BIN " '%s' '%s' %d '%s' 2>&1", esc_cmd, esc_params, timeout, esc_payload);
     return run_cmd(cmd, out, outlen);
 }
 
@@ -12016,7 +12167,7 @@ static int run_hal_json_binary_sequence(const char *cmd_name, const char *params
     shell_escape_single(cmd_name, esc_cmd, sizeof(esc_cmd));
     shell_escape_single(params_json, esc_params, sizeof(esc_params));
     shell_escape_single(path, esc_path, sizeof(esc_path));
-    snprintf(cmd, sizeof(cmd), "/data/codex/bin/codex_hal_ltcp '%s' '%s' %d --gap-ms=%d --seq-file='%s' 2>&1; rc=$?; rm -f '%s'; exit $rc",
+    snprintf(cmd, sizeof(cmd), CODEX_HAL_LTCP_BIN " '%s' '%s' %d --gap-ms=%d --seq-file='%s' 2>&1; rc=$?; rm -f '%s'; exit $rc",
         esc_cmd, esc_params, timeout, gap_ms, esc_path, esc_path);
     return run_cmd(cmd, out, outlen);
 }
@@ -12419,6 +12570,40 @@ static int flush_bt_saved_sequence(const char *type, const char *bdaddr, char **
     return 0;
 }
 
+static void bt_sleep_ms(int ms) {
+    struct timespec req, rem;
+    if (ms <= 0) return;
+    req.tv_sec = ms / 1000;
+    req.tv_nsec = (long)(ms % 1000) * 1000000L;
+    while (nanosleep(&req, &rem) < 0 && errno == EINTR) {
+        req = rem;
+    }
+}
+
+/* After a fresh BT reconnect, codex_bthid_keyboard may still be in its 1-2 s
+   poll sleep before switching /tmp/bthid_status from no_target to listening.
+   Wait briefly when the runtime is alive and the link is already authenticated. */
+static void wait_for_bt_text_fifo_ready(const char *bdaddr) {
+    char status[1024], state[48], target[64];
+    int attempt;
+    for (attempt = 0; attempt < 10; attempt++) {
+        status[0] = 0;
+        state[0] = 0;
+        target[0] = 0;
+        if (read_text(BT_TEXT_STATUS, status, sizeof(status)) <= 0 ||
+            !bthid_status_runtime_alive(status)) {
+            return;
+        }
+        json_string(status, "state", state, sizeof(state));
+        json_string(status, "target", target, sizeof(target));
+        if (strcmp(state, "listening") == 0 && safe_bt_addr(target) &&
+            (!bdaddr || !bdaddr[0] || strcasecmp(target, bdaddr) == 0)) {
+            return;
+        }
+        bt_sleep_ms(250);
+    }
+}
+
 static int run_bt_saved_script(const char *type, const char *bdaddr, const char *script, int gap_ms, char *out, size_t outlen) {
     char *copy, *line, *save;
     char *seq = NULL;
@@ -12471,7 +12656,7 @@ static int run_bt_saved_script(const char *type, const char *bdaddr, const char 
             }
             if (ms < 0) ms = 0;
             if (ms > 60000) ms = 60000;
-            usleep((useconds_t)ms * 1000);
+            bt_sleep_ms(ms);
             waits++;
         } else if (strcasecmp(clean, "TEXT") == 0 || strcasecmp(clean, "TYPE") == 0) {
             size_t chars = strlen(arg);
@@ -12485,6 +12670,7 @@ static int run_bt_saved_script(const char *type, const char *bdaddr, const char 
                 free(copy);
                 return -1;
             }
+            wait_for_bt_text_fifo_ready(bdaddr);
             if (write_bt_text_fifo(arg, err, sizeof(err)) != 0) {
                 snprintf(out, outlen, "Bluetooth text helper failed: %s", err);
                 free(copy);
@@ -12493,7 +12679,7 @@ static int run_bt_saved_script(const char *type, const char *bdaddr, const char 
             text_bytes += (int)chars;
             settle_ms = 100 + (int)chars * (gap_ms + 5);
             if (settle_ms > 120000) settle_ms = 120000;
-            usleep((useconds_t)settle_ms * 1000);
+            bt_sleep_ms(settle_ms);
             snprintf(note, sizeof(note), "typed %lu text byte%s", (unsigned long)chars, chars == 1 ? "" : "s");
             append_run_status(out, outlen, note);
         } else {
@@ -13517,23 +13703,375 @@ static const struct {
     {"8", "number8"}, {"9", "number9"},
 };
 #define BT_HARMONY_MODEL "Android TV keyboard"
+#define BT_HARMONY_MAX_COMMANDS 128
+
+/* Transliterate UTF-8 Latin letters (Latin-1 Supplement + Latin Extended-A)
+   to ASCII so accented saved-command names become readable Harmony command
+   names (e.g. "Déverrouiller" -> "Deverrouiller") instead of losing letters.
+   NFD combining marks (U+0300..U+036F) are dropped; dashes map to '-'; other
+   non-ASCII code points become spaces so words stay separated. */
+static void bt_transliterate_utf8(const char *in, char *out, size_t outlen) {
+    static const char *const LATIN1[64] = {
+        "A","A","A","A","A","A","AE","C",  /* C0..C7 */
+        "E","E","E","E","I","I","I","I",   /* C8..CF */
+        "D","N","O","O","O","O","O"," ",   /* D0..D7 */
+        "O","U","U","U","U","Y","TH","ss", /* D8..DF */
+        "a","a","a","a","a","a","ae","c",  /* E0..E7 */
+        "e","e","e","e","i","i","i","i",   /* E8..EF */
+        "d","n","o","o","o","o","o"," ",   /* F0..F7 */
+        "o","u","u","u","u","y","th","y",  /* F8..FF */
+    };
+    static const char *const LATIN_EXT_A[128] = {
+        "A","a","A","a","A","a","C","c",   /* 100..107 */
+        "C","c","C","c","C","c","D","d",   /* 108..10F */
+        "D","d","E","e","E","e","E","e",   /* 110..117 */
+        "E","e","E","e","G","g","G","g",   /* 118..11F */
+        "G","g","G","g","H","h","H","h",   /* 120..127 */
+        "I","i","I","i","I","i","I","i",   /* 128..12F */
+        "I","i","IJ","ij","J","j","K","k", /* 130..137 */
+        "k","L","l","L","l","L","l","L",   /* 138..13F */
+        "l","L","l","N","n","N","n","N",   /* 140..147 */
+        "n","n","N","n","O","o","O","o",   /* 148..14F */
+        "O","o","OE","oe","R","r","R","r", /* 150..157 */
+        "R","r","S","s","S","s","S","s",   /* 158..15F */
+        "S","s","T","t","T","t","T","t",   /* 160..167 */
+        "U","u","U","u","U","u","U","u",   /* 168..16F */
+        "U","u","U","u","W","w","Y","y",   /* 170..177 */
+        "Y","Z","z","Z","z","Z","z","s",   /* 178..17F */
+    };
+    const unsigned char *p = (const unsigned char *)(in ? in : "");
+    size_t w = 0;
+    if (!out || outlen == 0) return;
+    while (*p && w + 1 < outlen) {
+        const char *rep = NULL;
+        if (*p < 0x80) {
+            out[w++] = (char)*p++;
+            continue;
+        }
+        if ((*p & 0xe0) == 0xc0 && (p[1] & 0xc0) == 0x80) {
+            unsigned int cp = ((unsigned int)(p[0] & 0x1f) << 6) | (unsigned int)(p[1] & 0x3f);
+            p += 2;
+            if (cp == 0x00a0) rep = " ";
+            else if (cp >= 0x00c0 && cp <= 0x00ff) rep = LATIN1[cp - 0x00c0];
+            else if (cp >= 0x0100 && cp <= 0x017f) rep = LATIN_EXT_A[cp - 0x0100];
+            else if (cp >= 0x0300 && cp <= 0x036f) rep = "";
+            else rep = " ";
+        } else if ((*p & 0xf0) == 0xe0 && (p[1] & 0xc0) == 0x80 && (p[2] & 0xc0) == 0x80) {
+            unsigned int cp = ((unsigned int)(p[0] & 0x0f) << 12) |
+                ((unsigned int)(p[1] & 0x3f) << 6) | (unsigned int)(p[2] & 0x3f);
+            p += 3;
+            if (cp >= 0x2010 && cp <= 0x2015) rep = "-";
+            else rep = " ";
+        } else if ((*p & 0xf8) == 0xf0 && (p[1] & 0xc0) == 0x80 &&
+                   (p[2] & 0xc0) == 0x80 && (p[3] & 0xc0) == 0x80) {
+            p += 4;
+            rep = " ";
+        } else {
+            p++;
+            rep = " ";
+        }
+        while (*rep && w + 1 < outlen) out[w++] = *rep++;
+    }
+    out[w] = 0;
+}
+
+static int bt_harmony_name_publishable(const char *raw) {
+    char trans[256];
+    size_t i;
+    bt_transliterate_utf8(raw, trans, sizeof(trans));
+    for (i = 0; trans[i]; i++) {
+        if (isalnum((unsigned char)trans[i])) return 1;
+    }
+    return 0;
+}
+
+static int bt_harmony_is_fixed_name(const char *name) {
+    size_t i;
+    for (i = 0; i < sizeof(BT_HARMONY_COMMANDS) / sizeof(BT_HARMONY_COMMANDS[0]); i++) {
+        if (strcasecmp(BT_HARMONY_COMMANDS[i].name, name) == 0) return 1;
+    }
+    return 0;
+}
+
+static int bt_harmony_name_taken(const char *name, char (*used)[52], size_t used_count) {
+    size_t i;
+    for (i = 0; i < used_count; i++) {
+        if (strcasecmp(used[i], name) == 0) return 1;
+    }
+    return 0;
+}
+
+static void bt_harmony_with_suffix(const char *base, const char *suffix, char *out, size_t outlen) {
+    size_t slen = strlen(suffix);
+    size_t max_base = slen < 48 ? 48 - slen : 0;
+    size_t blen = strlen(base);
+    if (blen > max_base) blen = max_base;
+    while (blen > 0 && base[blen - 1] == ' ') blen--;
+    if (blen + slen + 1 > outlen) {
+        if (outlen > 0) out[0] = 0;
+        return;
+    }
+    memcpy(out, base, blen);
+    memcpy(out + blen, suffix, slen + 1);
+}
+
+/* Produce a unique Harmony command name matching ^[A-Za-z0-9][A-Za-z0-9 _.+-]*$
+   with length <= 48, mirroring planBtHarmonyCommands() in bluetooth-model.js.
+   Returns 0 on success, -1 if raw has no ASCII alphanumerics after transliteration. */
+static int bt_harmony_resolve_name(const char *raw, char (*used)[52], size_t used_count, char *out, size_t outlen) {
+    char trans[256], clean[256], base[52], cand[52], suffix[24];
+    size_t i, w = 0, start = 0, len;
+    int last_space = 0, n;
+    bt_transliterate_utf8(raw, trans, sizeof(trans));
+    for (i = 0; trans[i] && w + 1 < sizeof(clean); i++) {
+        unsigned char c = (unsigned char)trans[i];
+        if (isalnum(c) || c == '_' || c == '.' || c == '+' || c == '-') {
+            clean[w++] = (char)c;
+            last_space = 0;
+        } else {
+            if (!last_space) {
+                clean[w++] = ' ';
+                last_space = 1;
+            }
+        }
+    }
+    clean[w] = 0;
+    while (clean[start] && !isalnum((unsigned char)clean[start])) start++;
+    len = strlen(clean + start);
+    while (len > 0 && clean[start + len - 1] == ' ') len--;
+    if (len > 48) len = 48;
+    while (len > 0 && clean[start + len - 1] == ' ') len--;
+    if (len == 0) return -1;
+    memcpy(base, clean + start, len);
+    base[len] = 0;
+    if (!bt_harmony_name_taken(base, used, used_count)) {
+        copy_text(out, outlen, base);
+        return 0;
+    }
+    if (bt_harmony_is_fixed_name(base)) {
+        bt_harmony_with_suffix(base, " Saved", cand, sizeof(cand));
+        if (cand[0] && !bt_harmony_name_taken(cand, used, used_count)) {
+            copy_text(out, outlen, cand);
+            return 0;
+        }
+        for (n = 2; n <= 99; n++) {
+            snprintf(suffix, sizeof(suffix), " Saved %d", n);
+            bt_harmony_with_suffix(base, suffix, cand, sizeof(cand));
+            if (cand[0] && !bt_harmony_name_taken(cand, used, used_count)) {
+                copy_text(out, outlen, cand);
+                return 0;
+            }
+        }
+        return -1;
+    }
+    for (n = 2; n <= 99; n++) {
+        snprintf(suffix, sizeof(suffix), " %d", n);
+        bt_harmony_with_suffix(base, suffix, cand, sizeof(cand));
+        if (cand[0] && !bt_harmony_name_taken(cand, used, used_count)) {
+            copy_text(out, outlen, cand);
+            return 0;
+        }
+    }
+    return -1;
+}
+
+/* Value for a saved Bluetooth script command: "saved" + lowercase hex of raw_name
+   when <= 45 UTF-8 bytes (total <= 95 <= codexactivity's 96-byte value cap), else
+   "savedh" + 16-hex FNV-1a-64 + 4-hex byte length (26 alphanumeric chars). */
+static void bt_harmony_encode_saved_value(const char *raw_name, char *out, size_t outlen) {
+    static const char HEX[] = "0123456789abcdef";
+    const unsigned char *p = (const unsigned char *)(raw_name ? raw_name : "");
+    size_t len = strlen((const char *)p), i;
+    if (!out || outlen == 0) return;
+    out[0] = 0;
+    if (len == 0) return;
+    if (len <= 45) {
+        if (5 + len * 2 + 1 > outlen) return;
+        memcpy(out, "saved", 5);
+        for (i = 0; i < len; i++) {
+            out[5 + i * 2] = HEX[(p[i] >> 4) & 0x0f];
+            out[5 + i * 2 + 1] = HEX[p[i] & 0x0f];
+        }
+        out[5 + len * 2] = 0;
+    } else {
+        uint64_t h = 0xcbf29ce484222325ULL;
+        for (i = 0; i < len; i++) {
+            h ^= (uint64_t)p[i];
+            h *= 0x100000001b3ULL;
+        }
+        snprintf(out, outlen, "savedh%016llx%04x",
+            (unsigned long long)h, (unsigned)(len & 0xffff));
+    }
+}
+
+static void bt_harmony_encode_command_value(const struct bt_saved_command *cmd, char *out, size_t outlen) {
+    if (!out || outlen == 0) return;
+    out[0] = 0;
+    if (!cmd) return;
+    if (cmd->id[0]) {
+        snprintf(out, outlen, "savedid%s", cmd->id);
+        return;
+    }
+    bt_harmony_encode_saved_value(cmd->name, out, outlen);
+}
+
+/* Resolve a "saved..." webhook key back to the saved command on dev.
+   Sets *syntax_ok = 1 when key has valid savedid<id>, saved<hex>, or savedh<20hex> syntax. */
+static const struct bt_saved_command *bt_harmony_find_saved_command(const struct bt_saved_device *dev, const char *key, int *syntax_ok) {
+    int i;
+    if (syntax_ok) *syntax_ok = 0;
+    if (!dev || !key || strncmp(key, "saved", 5) != 0) return NULL;
+    if (strncmp(key, "savedid", 7) == 0) {
+        const char *id = key + 7;
+        size_t idlen = strlen(id), j;
+        if (idlen == 0 || idlen >= 32) return NULL;
+        for (j = 0; j < idlen; j++) {
+            if (!isalnum((unsigned char)id[j])) return NULL;
+        }
+        if (syntax_ok) *syntax_ok = 1;
+        for (i = 0; i < dev->command_count; i++) {
+            if (dev->commands[i].id[0] && strcmp(dev->commands[i].id, id) == 0) {
+                return &dev->commands[i];
+            }
+        }
+        return NULL;
+    }
+    if (key[5] == 'h') {
+        char expected[40];
+        if (strlen(key) != 26) return NULL;
+        for (i = 6; i < 26; i++) {
+            if (!isxdigit((unsigned char)key[i])) return NULL;
+        }
+        if (syntax_ok) *syntax_ok = 1;
+        for (i = 0; i < dev->command_count; i++) {
+            if (strlen(dev->commands[i].name) > 45) {
+                bt_harmony_encode_saved_value(dev->commands[i].name, expected, sizeof(expected));
+                if (strcasecmp(key, expected) == 0) return &dev->commands[i];
+            }
+            if (dev->commands[i].legacy_name[0] && strlen(dev->commands[i].legacy_name) > 45) {
+                bt_harmony_encode_saved_value(dev->commands[i].legacy_name, expected, sizeof(expected));
+                if (strcasecmp(key, expected) == 0) return &dev->commands[i];
+            }
+        }
+        return NULL;
+    }
+    {
+        const char *hex = key + 5;
+        size_t hlen = strlen(hex), j;
+        char decoded[128];
+        if (hlen < 2 || (hlen & 1) != 0 || hlen / 2 >= sizeof(decoded)) return NULL;
+        for (j = 0; j < hlen; j += 2) {
+            int hi = hexval(hex[j]), lo = hexval(hex[j + 1]);
+            if (hi < 0 || lo < 0) return NULL;
+            decoded[j / 2] = (char)((hi << 4) | lo);
+        }
+        decoded[hlen / 2] = 0;
+        if (syntax_ok) *syntax_ok = 1;
+        for (i = 0; i < dev->command_count; i++) {
+            if (strcmp(dev->commands[i].name, decoded) == 0 ||
+                (dev->commands[i].legacy_name[0] && strcmp(dev->commands[i].legacy_name, decoded) == 0)) {
+                return &dev->commands[i];
+            }
+        }
+        return NULL;
+    }
+}
+
+/* Match retainedCommands by saved-device entity and Harmony token, rather than
+   by a display name that may have been transliterated or disambiguated. */
+static int bt_harmony_reply_retains(const char *reply, const struct bt_saved_device *dev,
+        const struct bt_saved_command *cmd, int *valid) {
+    const char *key, *arr, *arr_end, *pos;
+    char wanted[104], legacy[104];
+    *valid = 1;
+    wanted[0] = 0;
+    legacy[0] = 0;
+    bt_harmony_encode_command_value(cmd, wanted, sizeof(wanted));
+    if (cmd->legacy_name[0]) {
+        bt_harmony_encode_saved_value(cmd->legacy_name, legacy, sizeof(legacy));
+    }
+    key = strstr(reply, "\"retainedCommands\"");
+    if (!key) return 0;
+    arr = strchr(key, '[');
+    arr_end = arr ? find_matching_json(arr, '[', ']') : NULL;
+    if (!arr || !arr_end) {
+        *valid = 0;
+        return 0;
+    }
+    pos = arr + 1;
+    while ((pos = strchr(pos, '{')) != NULL && pos < arr_end) {
+        const char *end = find_matching_json(pos, '{', '}');
+        char entity[48], value[104];
+        if (!end || end > arr_end) {
+            *valid = 0;
+            return 0;
+        }
+        entity[0] = 0;
+        value[0] = 0;
+        json_string_range(pos, end, "entity", entity, sizeof(entity));
+        json_string_range(pos, end, "value", value, sizeof(value));
+        if (!entity[0] || !value[0]) {
+            *valid = 0;
+            return 0;
+        }
+        if (strcmp(entity, dev->id) == 0 &&
+            ((wanted[0] && strcmp(value, wanted) == 0) ||
+             (legacy[0] && strcmp(value, legacy) == 0))) {
+            return 1;
+        }
+        pos = end + 1;
+    }
+    return 0;
+}
+
+/* A successful writer response lists every referenced retained token. Remove
+   hidden records it no longer lists; never erase one on a malformed response. */
+static int bt_harmony_cleanup_retained(struct bt_inventory *inv, const char *reply) {
+    int i, j, changed = 0;
+    if (!inv || !reply || reply[0] != '{') return -1;
+    for (i = 0; i < inv->device_count; i++) {
+        struct bt_saved_device *dev = &inv->devices[i];
+        int kept = 0;
+        for (j = 0; j < dev->command_count; j++) {
+            struct bt_saved_command *cmd = &dev->commands[j];
+            int valid = 1;
+            if (cmd->retained && !bt_harmony_reply_retains(reply, dev, cmd, &valid)) {
+                if (!valid) return -1;
+                changed++;
+                continue;
+            }
+            if (kept != j) dev->commands[kept] = *cmd;
+            kept++;
+        }
+        dev->command_count = kept;
+    }
+    return changed;
+}
 
 /* {"devices":[...]} for every saved btkeyboard device marked harmony. */
 static char *bt_harmony_set_json(const struct bt_inventory *inv) {
     char *out;
+    char (*used_names)[52];
     size_t cap = 512, used = 0;
-    int i, first = 1;
+    size_t fixed_count = sizeof(BT_HARMONY_COMMANDS) / sizeof(BT_HARMONY_COMMANDS[0]);
+    int i, k, first = 1;
     size_t j;
     for (i = 0; i < inv->device_count; i++) {
-        /* escaped id and name (<= 6 bytes per char) plus the commands */
-        cap += 2048 + sizeof(BT_HARMONY_COMMANDS) / sizeof(BT_HARMONY_COMMANDS[0]) * 64;
+        /* escaped id and name (<= 6 bytes per char) plus fixed and saved commands */
+        cap += 2048 + fixed_count * 64 + (size_t)inv->devices[i].command_count * 256;
     }
     out = (char *)malloc(cap);
-    if (!out) return NULL;
+    used_names = (char (*)[52])calloc(BT_HARMONY_MAX_COMMANDS, sizeof(*used_names));
+    if (!out || !used_names) {
+        free(out);
+        free(used_names);
+        return NULL;
+    }
     used += (size_t)snprintf(out + used, cap - used, "{\"devices\":[");
     for (i = 0; i < inv->device_count; i++) {
         const struct bt_saved_device *dev = &inv->devices[i];
         char *name, *id;
+        size_t name_count = 0;
         if (!dev->harmony || strcmp(dev->type, "btkeyboard") != 0) continue;
         name = json_escape_alloc(dev->name);
         id = json_escape_alloc(dev->id);
@@ -13541,6 +14079,7 @@ static char *bt_harmony_set_json(const struct bt_inventory *inv) {
             free(name);
             free(id);
             free(out);
+            free(used_names);
             return NULL;
         }
         used += (size_t)snprintf(out + used, cap - used,
@@ -13549,15 +14088,30 @@ static char *bt_harmony_set_json(const struct bt_inventory *inv) {
             first ? "" : ",", id, name);
         free(name);
         free(id);
-        for (j = 0; j < sizeof(BT_HARMONY_COMMANDS) / sizeof(BT_HARMONY_COMMANDS[0]); j++) {
+        for (j = 0; j < fixed_count && name_count < BT_HARMONY_MAX_COMMANDS; j++) {
             used += (size_t)snprintf(out + used, cap - used,
                 "%s{\"name\":\"%s\",\"value\":\"%s\"}", j ? "," : "",
                 BT_HARMONY_COMMANDS[j].name, BT_HARMONY_COMMANDS[j].key);
+            copy_text(used_names[name_count++], sizeof(used_names[0]), BT_HARMONY_COMMANDS[j].name);
+        }
+        for (k = 0; k < dev->command_count && name_count < BT_HARMONY_MAX_COMMANDS; k++) {
+            char cmd_name[52], cmd_value[104];
+            if (dev->commands[k].retained) continue;
+            if (bt_harmony_resolve_name(dev->commands[k].name, used_names, name_count,
+                    cmd_name, sizeof(cmd_name)) != 0) {
+                continue;
+            }
+            bt_harmony_encode_command_value(&dev->commands[k], cmd_value, sizeof(cmd_value));
+            if (!cmd_value[0]) continue;
+            used += (size_t)snprintf(out + used, cap - used,
+                ",{\"name\":\"%s\",\"value\":\"%s\"}", cmd_name, cmd_value);
+            copy_text(used_names[name_count++], sizeof(used_names[0]), cmd_name);
         }
         used += (size_t)snprintf(out + used, cap - used, "]}");
         first = 0;
     }
     snprintf(out + used, cap - used, "]}");
+    free(used_names);
     return out;
 }
 
@@ -13575,6 +14129,16 @@ static int bt_harmony_commit(const struct bt_inventory *inv, int dry_run, char *
         snprintf(msg, msg_len, "not enough memory for the Bluetooth Harmony devices");
         return -1;
     }
+#ifdef BT_HARMONY_TEST_HOOKS
+    {
+        const char *forced_reply = getenv("BT_HARMONY_TEST_REPLY");
+        if (forced_reply) {
+            copy_text(reply, reply_len, forced_reply);
+            free(set);
+            return 0;
+        }
+    }
+#endif
     snprintf(request_id, sizeof(request_id), "%ld-%ld-%08x",
         (long)getpid(), (long)time(NULL), resource_hash(set, strlen(set)));
     request_len = strlen(set) + strlen(request_id) + 128;
@@ -13602,7 +14166,7 @@ static void render_bt_harmony_device_json(int fd, const struct request *req) {
     char *reply = NULL;
     struct bt_inventory *inv = NULL;
     struct bt_saved_device *dev;
-    int idx, publish, dry_run, previous, rc;
+    int idx, publish, dry_run, previous, rc, cleaned = 0;
     FILE *f;
     const char *status = "200 OK";
     form_value(req->body, "deviceId", device_id, sizeof(device_id));
@@ -13640,12 +14204,16 @@ static void render_bt_harmony_device_json(int fd, const struct request *req) {
     previous = dev->harmony;
     dev->harmony = publish;
     rc = bt_harmony_commit(inv, dry_run, reply, BT_HARMONY_REPLY, msg, sizeof(msg));
+    if (rc == 0 && !dry_run) {
+        cleaned = bt_harmony_cleanup_retained(inv, reply);
+        if (cleaned < 0) cleaned = 0;
+    }
     if (reply[0] != '{') {
         status = "503 Service Unavailable";
         if (!msg[0]) snprintf(msg, sizeof(msg), "The Harmony device was not saved.");
         goto fail;
     }
-    if (rc == 0 && !dry_run && previous != publish) {
+    if (rc == 0 && !dry_run && (previous != publish || cleaned > 0)) {
         backup_settings();
         if (save_bt_inventory(inv) != 0) {
             status = "500 Internal Server Error";
@@ -13675,19 +14243,61 @@ fail:
     free(reply);
 }
 
-/* POST /api/bt-webhook  {"device":"bt_...","command":"tvhome"}
+#ifdef BT_HARMONY_TEST_HOOKS
+static pid_t bt_webhook_fork(int stage) {
+    const char *fail = getenv("BT_WEBHOOK_FAIL_FORK");
+    if (fail && ((stage == 1 && strcmp(fail, "outer") == 0) ||
+                 (stage == 2 && strcmp(fail, "inner") == 0))) {
+        errno = EAGAIN;
+        return -1;
+    }
+    return fork();
+}
+#else
+#define bt_webhook_fork(stage) fork()
+#endif
+
+static void bt_webhook_execute(const struct bt_saved_device *dev, const struct bt_saved_command *saved_cmd, const char *key) {
+    char detail[512], reply[4096];
+    int lock_fd, rc;
+    detail[0] = 0;
+    reply[0] = 0;
+    lock_fd = bt_webhook_acquire_lock(detail, sizeof(detail));
+    if (lock_fd < 0) {
+        fprintf(stderr, "bt-webhook device=%s command=%s result=failed %s\n",
+            dev->id, saved_cmd ? saved_cmd->name : key, detail);
+        return;
+    }
+    rc = ensure_bt_address_connection(dev->name, dev->bdaddr, dev->type, detail, sizeof(detail));
+    if (rc >= 0) {
+        if (saved_cmd) {
+            rc = run_bt_saved_script(dev->type, dev->bdaddr, saved_cmd->script, saved_cmd->delay_ms, reply, sizeof(reply));
+        } else {
+            rc = run_bt_saved_script(dev->type, dev->bdaddr, key, 35, reply, sizeof(reply));
+        }
+    }
+    fprintf(stderr, "bt-webhook device=%s command=%s result=%s %s%s\n",
+        dev->id, saved_cmd ? saved_cmd->name : key, rc >= 0 ? "sent" : "failed", detail,
+        rc < 0 && reply[0] ? reply : "");
+    close(lock_fd);
+}
+
+/* POST /api/bt-webhook  {"device":"bt_...","command":"tvhome" | "saved..."}
    Called by the Harmony engine for the Bluetooth Harmony devices (their
-   protocol, see codexactivity). It answers at once, so the engine's 2 s
-   timeout never fires, then connects if needed and sends the key. Calls
-   are serialized so quick presses keep their order. */
+   protocol, see codexactivity). It launches a detached worker first and
+   verifies the handoff over a pipe before answering 200 queued, so a failed
+   fork is reported as 503 instead of a false success. The worker serializes
+   execution with flock so concurrent scripts never interleave. */
 static void render_bt_webhook_json(int fd, const struct request *req) {
-    char device_id[48], key[48], press[96], release[32], err[256], detail[512], reply[4096];
+    char device_id[48], key[128], press[96], release[32], err[256];
     struct bt_inventory *inv = NULL;
     const struct bt_saved_device *dev = NULL;
+    const struct bt_saved_command *saved_cmd = NULL;
     const char *problem = NULL;
     const char *status = "200 OK";
-    int idx, lock_fd, rc;
+    int idx;
     size_t i;
+    pid_t pid;
     FILE *f;
     device_id[0] = 0;
     key[0] = 0;
@@ -13696,7 +14306,7 @@ static void render_bt_webhook_json(int fd, const struct request *req) {
         json_string(req->body, "command", key, sizeof(key));
     }
     inv = (struct bt_inventory *)malloc(sizeof(*inv));
-    /* Key names only: letters and digits (bt_keyboard_report_hex). */
+    /* Key names and saved-script tokens are strictly alphanumeric. */
     for (i = 0; key[i]; i++) {
         if (!isalnum((unsigned char)key[i])) {
             key[0] = 0;
@@ -13715,12 +14325,82 @@ static void render_bt_webhook_json(int fd, const struct request *req) {
         if (idx < 0 || !inv->devices[idx].harmony) {
             status = "404 Not Found";
             problem = "no Harmony device for this saved Bluetooth device";
+        } else if (strncmp(key, "saved", 5) == 0) {
+            int syntax_ok = 0;
+            saved_cmd = bt_harmony_find_saved_command(&inv->devices[idx], key, &syntax_ok);
+            if (!syntax_ok) {
+                status = "400 Bad Request";
+                problem = "invalid saved Bluetooth command key";
+            } else if (!saved_cmd) {
+                status = "404 Not Found";
+                problem = "saved Bluetooth command was not found";
+            } else if (!safe_bt_script_text(saved_cmd->script)) {
+                status = "400 Bad Request";
+                problem = "saved Bluetooth script is empty or invalid";
+            } else {
+                dev = &inv->devices[idx];
+            }
         } else if (bt_keyboard_report_hex(key, press, sizeof(press), release,
                        sizeof(release), err, sizeof(err)) != 0) {
             status = "400 Bad Request";
             problem = err;
         } else {
             dev = &inv->devices[idx];
+        }
+    }
+    if (dev) {
+        int handoff[2];
+        if (pipe(handoff) < 0) {
+            status = "503 Service Unavailable";
+            problem = "failed to prepare Bluetooth worker";
+        } else {
+            pid = bt_webhook_fork(1);
+            if (pid < 0) {
+                close(handoff[0]);
+                close(handoff[1]);
+                status = "503 Service Unavailable";
+                problem = "failed to start Bluetooth worker";
+            } else if (pid == 0) {
+                pid_t worker;
+                close(handoff[0]);
+                worker = bt_webhook_fork(2);
+                if (worker < 0) {
+                    char fail_mark = 'E';
+                    ssize_t wr = write(handoff[1], &fail_mark, 1);
+                    (void)wr;
+                    close(handoff[1]);
+                    _exit(1);
+                }
+                if (worker > 0) {
+                    char ok_mark = 'K';
+                    ssize_t wr = write(handoff[1], &ok_mark, 1);
+                    (void)wr;
+                    close(handoff[1]);
+                    _exit(0);
+                }
+                close(handoff[1]);
+                setsid();
+                {
+                    int close_fd;
+                    for (close_fd = 3; close_fd < 256; close_fd++) close(close_fd);
+                }
+                bt_webhook_execute(dev, saved_cmd, key);
+                free(inv);
+                _exit(0);
+            } else {
+                char mark = 0;
+                ssize_t got;
+                close(handoff[1]);
+                do {
+                    got = read(handoff[0], &mark, 1);
+                } while (got < 0 && errno == EINTR);
+                close(handoff[0]);
+                while (waitpid(pid, NULL, 0) < 0 && errno == EINTR) {}
+                if (got != 1 || mark != 'K') {
+                    status = "503 Service Unavailable";
+                    problem = "failed to start Bluetooth worker";
+                }
+            }
         }
     }
     f = send_json_start(fd, status);
@@ -13734,23 +14414,6 @@ static void render_bt_webhook_json(int fd, const struct request *req) {
         }
         fclose(f);
     }
-    if (!dev) {
-        free(inv);
-        return;
-    }
-    shutdown(fd, SHUT_RDWR);
-    lock_fd = open("/var/run/codex-bt-webhook.lock", O_RDWR | O_CREAT, 0600);
-    if (lock_fd >= 0) flock(lock_fd, LOCK_EX);
-    detail[0] = 0;
-    reply[0] = 0;
-    rc = ensure_bt_address_connection(dev->name, dev->bdaddr, dev->type, detail, sizeof(detail));
-    if (rc >= 0) {
-        rc = run_bt_saved_script(dev->type, dev->bdaddr, key, 35, reply, sizeof(reply));
-    }
-    fprintf(stderr, "bt-webhook device=%s command=%s result=%s %s%s\n",
-        dev->id, key, rc >= 0 ? "sent" : "failed", detail,
-        rc < 0 && reply[0] ? reply : "");
-    if (lock_fd >= 0) close(lock_fd);
     free(inv);
 }
 

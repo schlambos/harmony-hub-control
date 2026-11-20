@@ -3,6 +3,7 @@
  * the real source and calls its static functions; nothing touches a hub.
  * Built and driven by tools/bt_harmony_webui_smoke.py.
  */
+#define BT_HARMONY_TEST_HOOKS 1
 #define main codex_webui_main
 #include "../payload/source/codex_webui.c"
 #undef main
@@ -94,18 +95,110 @@ int main(int argc, char **argv) {
         webhook("{\"device\":\"bt_1730000000_42\",\"command\":\"tvhome\"}");
         return 0;
     }
+    if (argc > 1 && strcmp(argv[1], "webhook-saved") == 0) {
+        for (i = 2; i < argc; i++) {
+            struct timespec t0, t1;
+            long ms;
+            clock_gettime(CLOCK_MONOTONIC, &t0);
+            webhook(argv[i]);
+            clock_gettime(CLOCK_MONOTONIC, &t1);
+            ms = (long)((t1.tv_sec - t0.tv_sec) * 1000 + (t1.tv_nsec - t0.tv_nsec) / 1000000);
+            printf("elapsed_ms %ld\n", ms);
+            fflush(stdout);
+            /* Give worker 1 a brief head start so it holds the flock inside
+               WAIT 400 before request 2 arrives — deterministic ordering and
+               direct proof that request 2 answers while worker 1 is mid-WAIT. */
+            if (i == 2) bt_sleep_ms(60);
+        }
+        return 0;
+    }
+    if (argc > 1 && strcmp(argv[1], "run-saved") == 0 && argc >= 4) {
+        char msg[512];
+        int rc = send_bt_saved_command(argv[2], argv[3], msg, sizeof(msg));
+        printf("rc %d %s\n", rc, msg);
+        return 0;
+    }
+    if (argc > 1 && strcmp(argv[1], "save-rename-check") == 0) {
+        char msg[512];
+        int rc1, rc2;
+        rc1 = upsert_bt_command("bt_1730000000_42", "", "Cafe", "KEY f5", 20, msg, sizeof(msg));
+        load_bt_inventory(&inv);
+        printf("add rc=%d id=%s\n", rc1,
+            (inv.device_count > 0 && inv.devices[0].command_count > 0) ? inv.devices[0].commands[inv.devices[0].command_count - 1].id : "");
+        rc2 = upsert_bt_command("bt_1730000000_42", "Cafe", "Espresso", "KEY f5", 20, msg, sizeof(msg));
+        load_bt_inventory(&inv);
+        printf("rename rc=%d id=%s name=%s\n", rc2,
+            (inv.device_count > 0 && inv.devices[0].command_count > 0) ? inv.devices[0].commands[inv.devices[0].command_count - 1].id : "",
+            (inv.device_count > 0 && inv.devices[0].command_count > 0) ? inv.devices[0].commands[inv.devices[0].command_count - 1].name : "");
+        return 0;
+    }
+    if (argc > 1 && strcmp(argv[1], "legacy-rename-check") == 0) {
+        char msg[512];
+        int rc = upsert_bt_command("bt_1730000000_42", "Cafe", "Espresso", "KEY f6", 20, msg, sizeof(msg));
+        load_bt_inventory(&inv);
+        printf("legacy-rename rc=%d id=%s name=%s count=%d\n", rc,
+            (inv.device_count > 0 && inv.devices[0].command_count > 0) ? inv.devices[0].commands[0].id : "",
+            (inv.device_count > 0 && inv.devices[0].command_count > 0) ? inv.devices[0].commands[0].name : "",
+            inv.device_count > 0 ? inv.devices[0].command_count : 0);
+        return 0;
+    }
+    if (argc > 1 && strcmp(argv[1], "delete-command-check") == 0) {
+        char msg[512];
+        int rc = delete_bt_command("bt_1730000000_42", "Espresso", msg, sizeof(msg));
+        load_bt_inventory(&inv);
+        printf("delete rc=%d count=%d message=%s\n", rc,
+            inv.device_count > 0 ? inv.devices[0].command_count : 0, msg);
+        return 0;
+    }
+    if (argc > 1 && strcmp(argv[1], "sync-device-check") == 0) {
+        char msg[512];
+        int rc = upsert_bt_device("bt_1730000000_42", "Work Laptop", "btkeyboard",
+            "AA:BB:CC:DD:EE:FF", msg, sizeof(msg));
+        load_bt_inventory(&inv);
+        printf("sync rc=%d count=%d message=%s\n", rc,
+            inv.device_count > 0 ? inv.devices[0].command_count : 0, msg);
+        return 0;
+    }
+    if (argc > 1 && strcmp(argv[1], "current-set") == 0) {
+        load_bt_inventory(&inv);
+        set = bt_harmony_set_json(&inv);
+        if (!set) return 1;
+        printf("%s\n", set);
+        free(set);
+        return 0;
+    }
     if (argc > 1 && strcmp(argv[1], "auth") == 0) {
         loopback_post("/api/bt-webhook", "{\"device\":\"bt_1730000000_42\",\"command\":\"tvhome\"}");
         loopback_post("/api/bt-harmony-device", "{}");
         return 0;
     }
     if (argc > 1 && strcmp(argv[1], "set") == 0) {
+        static const char *saved_names[] = {
+            "Wake and Sign In",
+            "D\xc3\xa9" "verrouiller Caf\xc3\xa9",
+            "De\xcc\x81" "tente",
+            "Stra\xc3\x9f" "e & C\xc5\x93" "ur",
+            "Home",
+            "poweron",
+            "Wake Laptop And Enter Sign In Password On Lock Screen Now",
+            "Wake Laptop And Enter Sign In Password On Lock Screen Later",
+            "Caf\xc3\xa9",
+            "Cafe",
+            "!!!",
+        };
         memset(&inv, 0, sizeof(inv));
         inv.device_count = 4;
         snprintf(inv.devices[0].id, sizeof(inv.devices[0].id), "bt_1730000000_42");
         snprintf(inv.devices[0].name, sizeof(inv.devices[0].name), "Homatics Box R 4k");
         snprintf(inv.devices[0].type, sizeof(inv.devices[0].type), "btkeyboard");
+        snprintf(inv.devices[0].bdaddr, sizeof(inv.devices[0].bdaddr), "AA:BB:CC:DD:EE:FF");
         inv.devices[0].harmony = 1;
+        for (i = 0; i < (int)(sizeof(saved_names) / sizeof(saved_names[0])); i++) {
+            snprintf(inv.devices[0].commands[i].name, sizeof(inv.devices[0].commands[i].name), "%s", saved_names[i]);
+            snprintf(inv.devices[0].commands[i].script, sizeof(inv.devices[0].commands[i].script), "KEY escape");
+            inv.devices[0].commands[i].delay_ms = 35;
+        }
+        inv.devices[0].command_count = (int)(sizeof(saved_names) / sizeof(saved_names[0]));
         snprintf(inv.devices[1].id, sizeof(inv.devices[1].id), "bt_1730000001_7");
         snprintf(inv.devices[1].name, sizeof(inv.devices[1].name), "Not published");
         snprintf(inv.devices[1].type, sizeof(inv.devices[1].type), "btkeyboard");

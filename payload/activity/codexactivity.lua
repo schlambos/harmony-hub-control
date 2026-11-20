@@ -2419,7 +2419,11 @@ local BT_FAMILY = {
   deviceType = 44, typeName = "Home Appliance", icon = 44,
   idPattern = "^bt_[0-9]+_[0-9]+$", idHint = "a saved Bluetooth device ID such as bt_1730000000_42",
   -- Only codex_webui on this hub; never a URL from the request.
-  webhook = "http://127.0.0.1:8080/api/bt-webhook"
+  webhook = "http://127.0.0.1:8080/api/bt-webhook",
+  -- Deleting or renaming a saved script that an activity or button still uses
+  -- keeps that command on the Harmony device until those references are gone,
+  -- instead of refusing the sync or leaving a dangling reference.
+  retainUsedCommands = true
 }
 
 -- The engine clears capodDeviceList[uid] after every answered IP command,
@@ -3370,19 +3374,105 @@ local function commitHaDevices(request, family)
       -- writer updates it, so match the old device by key from here on.
       deviceId = normalizedId(old.Device["Id-"])
       local ref = refs[deviceId]
+      local oldByLower, oldByValue
+      if family.retainUsedCommands then
+        oldByLower = {}
+        oldByValue = {}
+        for _, command in ipairs(type(old.Commands) == "table" and old.Commands or {}) do
+          if type(command) == "table" and type(command.Name) == "string" then
+            local value
+            for _, param in ipairs(type(command.Parameters) == "table" and command.Parameters or {}) do
+              if type(param) == "table" and param.Key == "{c}" and type(param.Value) == "string" then
+                value = param.Value
+                break
+              end
+            end
+            local entry = {name = command.Name, value = value or command.Name}
+            local lower = string.lower(command.Name)
+            oldByLower[lower] = entry
+            if not oldByValue[entry.value] or (ref and ref.commands and ref.commands[lower]) then
+              oldByValue[entry.value] = entry
+            end
+          end
+        end
+        -- Reserve referenced name->value ownership before accepting incoming
+        -- names so deleting one side of a collision can never redirect an
+        -- existing button to a different script token.
+        local reservedLower = {}
+        for lower in pairs(ref and ref.commands or {}) do
+          local keptOld = oldByLower[lower]
+          if keptOld then
+            reservedLower[lower] = keptOld
+          end
+        end
+        local takenLower = {}
+        for lower in pairs(reservedLower) do
+          takenLower[lower] = true
+        end
+        local rewritten = {}
+        for _, command in ipairs(spec.commands) do
+          local desiredName = command.name
+          local desiredLower = string.lower(desiredName)
+          local res = reservedLower[desiredLower]
+          if res and res.value ~= command.value then
+            local prior = oldByValue[command.value]
+            local priorLower = prior and string.lower(prior.name) or nil
+            if prior and (not takenLower[priorLower] or
+                (reservedLower[priorLower] and reservedLower[priorLower].value == command.value)) then
+              desiredName = prior.name
+            else
+              local base = string.sub(desiredName:gsub(" %d+$", ""), 1, 44):gsub("%s+$", "")
+              local n = 2
+              while true do
+                local cand = base .. " " .. tostring(n)
+                local candLower = string.lower(cand)
+                if not takenLower[candLower] or
+                    (reservedLower[candLower] and reservedLower[candLower].value == command.value) then
+                  desiredName = cand
+                  break
+                end
+                n = n + 1
+              end
+            end
+            desiredLower = string.lower(desiredName)
+          end
+          takenLower[desiredLower] = true
+          rewritten[#rewritten + 1] = {name = desiredName, value = command.value}
+        end
+        spec.commands = rewritten
+      end
+      local usedCommands = {}
       for name in pairs(ref and ref.commands or {}) do
+        usedCommands[#usedCommands + 1] = name
+      end
+      table.sort(usedCommands)
+      for _, name in ipairs(usedCommands) do
         local stillThere = false
         for _, command in ipairs(spec.commands) do
           if string.lower(command.name) == name then
             stillThere = true
+            break
           end
         end
         if not stillThere then
-          return {
-            ok = false,
-            localOnly = true,
-            error = spec.name .. ": an activity, button or sequence still uses command " .. name
-          }
+          local keptOld = oldByLower and oldByLower[name] or nil
+          if keptOld and #spec.commands < HA_MAX_COMMANDS then
+            spec.commands[#spec.commands + 1] = {name = keptOld.name, value = keptOld.value}
+            result.retainedCommands = result.retainedCommands or {}
+            result.retainedCommands[#result.retainedCommands + 1] = {
+              entity = key,
+              device = spec.name,
+              deviceId = deviceId,
+              command = keptOld.name,
+              value = keptOld.value
+            }
+          else
+            return {
+              ok = false,
+              localOnly = true,
+              error = spec.name .. ": an activity, button or sequence still uses command " .. name
+            }
+          end
         end
       end
       local problems = inputsInUse(deviceId, {list = spec.inputs})
