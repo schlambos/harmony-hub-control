@@ -4,7 +4,9 @@ import { readFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import {
+  IR_OUTPUTS,
   SETTINGS_LIMITS,
+  isIrDevice,
   commandNames,
   suggestPowerCommands,
   readDeviceSettings,
@@ -45,6 +47,7 @@ describe("readDeviceSettings", () => {
   it("reads discrete power, delays and repeats from a cloud-made TV", () => {
     assert.deepEqual(readDeviceSettings(device(LG)), {
       hasPowerFeature: true,
+      irOutput: 7,   // the fixture's ControlPort: all hub outputs
       interKeyDelayMs: 100,
       interDeviceDelayMs: 500,
       repeats: 1,
@@ -261,5 +264,57 @@ describe("inputs", () => {
     after = applyDeviceSettings(after, valid({ power: { type: "toggle", toggle: "Power" }, inputs: { type: "none", delayMs: 0 } }));
     assert.equal(after.DeviceFeatures.some((f) => f.__type === "InputFeature"), false);
     assert.deepEqual(after.DeviceFeatures.find((f) => f.__type === "PowerFeature").PowerOnResetActions, []);
+  });
+});
+
+describe("IR output (Device.ControlPort)", () => {
+  const withPort = (port, transport = 1) => {
+    const entry = device(LG);
+    entry.Device.ControlPort = port;
+    entry.Device.Transport = transport;
+    return entry;
+  };
+
+  it("reads each stock value on an IR device", () => {
+    for (const { value } of IR_OUTPUTS) {
+      assert.equal(readDeviceSettings(withPort(value)).irOutput, value);
+    }
+  });
+
+  it("offers all hub outputs first", () => {
+    assert.equal(IR_OUTPUTS[0].value, 7);
+  });
+
+  it("reads an unknown value as null and leaves it unsent", () => {
+    const s = readDeviceSettings(withPort(3));
+    assert.equal(s.irOutput, null);
+    const body = deviceSettingsRequest(LG, valid({ irOutput: s.irOutput }));
+    assert.equal("irOutput" in body.settings, false);
+    const next = applyDeviceSettings(withPort(3), valid({ irOutput: s.irOutput }));
+    assert.equal(next.Device.ControlPort, 3);
+  });
+
+  it("reads a null or text ControlPort as unknown, not as the remote", () => {
+    for (const stored of [null, "", "7", true]) {
+      assert.equal(readDeviceSettings(withPort(stored)).irOutput, null, String(stored));
+    }
+  });
+
+  it("gives non-IR devices no output", () => {
+    assert.equal(isIrDevice(withPort(7, 32)), false);
+    assert.equal(readDeviceSettings(withPort(1, 32)).irOutput, null);
+  });
+
+  it("rejects values the hub would reject", () => {
+    const names = commandNames(device(LG));
+    for (const bad of [3, 5, 8, -1, 1.5]) {
+      assert.equal(validateDeviceSettings(valid({ irOutput: bad }), names).length, 1, String(bad));
+    }
+    assert.deepEqual(validateDeviceSettings(valid({ irOutput: 4 }), names), []);
+  });
+
+  it("sends and applies a chosen output", () => {
+    assert.equal(deviceSettingsRequest(LG, valid({ irOutput: 2 })).settings.irOutput, 2);
+    assert.equal(applyDeviceSettings(withPort(1), valid({ irOutput: 0 })).Device.ControlPort, 0);
   });
 });

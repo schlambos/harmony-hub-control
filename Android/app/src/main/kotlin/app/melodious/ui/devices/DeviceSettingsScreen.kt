@@ -52,6 +52,7 @@ import androidx.compose.ui.unit.sp
 import app.melodious.MelodiousUiState
 import app.melodious.MelodiousViewModel
 import app.melodious.protocol.model.DeviceSettingsModel
+import app.melodious.protocol.model.IrOutput
 import app.melodious.protocol.model.PowerType
 import app.melodious.ui.components.ConfirmDialog
 import app.melodious.ui.components.DetailPage
@@ -187,6 +188,43 @@ fun DeviceSettingsScreen(state: MelodiousUiState, viewModel: MelodiousViewModel,
                             checked = settings.onBetweenActivities,
                             onCheckedChange = { settings = settings.copy(onBetweenActivities = it) },
                         )
+                    }
+                }
+            }
+
+            if (settings.isIrDevice) {
+                Column {
+                    SectionLabel("IR output")
+                    Text(
+                        "Which IR emitter sends this device's commands.",
+                        fontSize = 13.sp,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        modifier = Modifier.padding(start = 4.dp, bottom = 8.dp),
+                    )
+                    if (settings.irOutput == null && settings.storedControlPort != null) {
+                        Text(
+                            "The hub has this device set to output ${settings.storedControlPort}, which this app " +
+                                "doesn't name. It stays as it is unless you pick one below.",
+                            fontSize = 13.sp,
+                            color = MelodiousColors.Warning,
+                            modifier = Modifier.padding(start = 4.dp, bottom = 8.dp),
+                        )
+                    }
+                    ListGroup {
+                        IrOutput.entries.forEachIndexed { i, output ->
+                            Row(
+                                Modifier
+                                    .fillMaxWidth()
+                                    .clickable(role = Role.RadioButton) { settings = settings.copy(irOutput = output) }
+                                    .heightIn(min = 56.dp)
+                                    .padding(horizontal = 8.dp),
+                                verticalAlignment = Alignment.CenterVertically,
+                            ) {
+                                RadioButton(selected = settings.irOutput == output, onClick = null)
+                                Text(output.label, fontSize = 15.sp, modifier = Modifier.padding(start = 8.dp))
+                            }
+                            if (i < IrOutput.entries.lastIndex) GroupDivider()
+                        }
                     }
                 }
             }

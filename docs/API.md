@@ -295,6 +295,20 @@ The body carries a numeric `deviceId` and a `settings` object (at most
 16 KiB). The settings go to the offline writer as a
 `CommitDeviceSettings` operation after a resource backup.
 
+`settings.irOutput` is optional and picks which IR emitter sends the
+device's commands, stored as the stock `Device.ControlPort`:
+
+| `irOutput` | Emitter |
+| --- | --- |
+| `7` | All Hub outputs: built-in emitters and both external mini-blasters (not the remote) |
+| `0` | The paired remote's IR blaster |
+| `1` | The Hub's built-in emitters |
+| `2` | External mini-blaster 1 |
+| `4` | External mini-blaster 2 |
+
+Any other value, or `irOutput` on a device that is not IR (`Transport` other
+than 1), is refused. When it is absent the stored value is left unchanged.
+
 Writer requests from every route take turns. Each connection is served
 by its own `codex_webui` child, and all of them share one request file
 and one response file, so each request takes an exclusive lock on
