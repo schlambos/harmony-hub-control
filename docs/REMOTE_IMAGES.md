@@ -67,6 +67,26 @@ syncs them for it:
   here; in a plain browser it points to the desktop app, because only the
   app can reach Logitech.
 
+## Adding a second screen remote
+
+With [two-screen mode](TWO_SCREEN_REMOTES.md) on, a second screen remote
+takes the hub's setup, but its images have to come from somewhere. The
+first remote may still show icons and logos it cached while Logitech's
+cloud was reachable; a newly paired remote has none, and with the cloud
+blocked it shows blank tiles.
+
+Remotes never copy anything from each other. Each one fetches the images
+from the hub, so once they are on the hub every screen remote gets them:
+
+1. Turn two-screen on and pair the second remote.
+2. In the desktop app, **Settings**, then **Sync user images from
+   Logitech** (once; skip it when the row already says **Fully synced**).
+3. Sync the new remote (pick it up, or **Sync remote**). It shows the same
+   activity icons and favorite logos as the first one.
+
+Icons set in the activity editor are on the hub already, so they need no
+step 2.
+
 ## How it works
 
 - **What the remote asks for.**
