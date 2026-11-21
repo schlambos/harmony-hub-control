@@ -141,6 +141,10 @@ below explains that screen.
 
 The heading is **Check the buttons**. Scroll through **Volume & channel**,
 **Navigation**, **Playback**, **Colour keys**, and **Numbers**.
+**Numbers** includes **Dash (–)** and **Enter (E)**, the `--` and `E` keys
+either side of 0 on the Smart Control and Companion. The wizard never fills
+these two in for you; pick what they send. Remotes with a screen don't have
+them, so they stay off the Touch and Elite.
 
 ![Buttons step showing the automatically suggested command assignments](screenshots/guides/wizard-buttons-1280.png)
 

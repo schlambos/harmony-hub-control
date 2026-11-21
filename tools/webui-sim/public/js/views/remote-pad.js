@@ -245,7 +245,7 @@ const NUMBERS = [
   ["Number1", "1"], ["Number2", "2"], ["Number3", "3"],
   ["Number4", "4"], ["Number5", "5"], ["Number6", "6"],
   ["Number7", "7"], ["Number8", "8"], ["Number9", "9"],
-  ["Dash", "–"], ["Number0", "0"], ["Enter", "Enter"],
+  ["NumberPlus", "–"], ["Number0", "0"], ["NumberEnter", "Enter"],
 ];
 
 /** "More keys": this activity's on-screen buttons, secondary and colour keys,

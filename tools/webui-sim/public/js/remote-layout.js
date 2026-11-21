@@ -130,4 +130,7 @@ export const BUTTON_KEY_BY_LABEL = {
   8: "Number8",
   9: "Number9",
   0: "Number0",
+  // The keys either side of 0 ("--" and "E"), as hal names them (#234).
+  Dash: "NumberPlus",
+  Enter: "NumberEnter",
 };
