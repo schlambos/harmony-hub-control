@@ -12,6 +12,7 @@ import {
   escapeHtml,
   icon,
   iconTile,
+  imageTile,
   openSheet,
   snackbar,
   spinner,
@@ -22,6 +23,7 @@ import { parseTextStatus } from "./bluetooth-model.js";
 import { offStateSendNote } from "./control-power.js";
 import {
   activityIconName,
+  activityImageUrl,
   activityKeys,
   activityRoles,
   deviceIconName,
@@ -146,7 +148,7 @@ export function createRemoteView(section) {
       ? acts.map((a) => {
           const id = String(a["Id-"]);
           return `<button type="button" class="off-card" data-start="${escapeHtml(id)}" aria-label="Start ${escapeHtml(hub.activityName(a))}">
-              ${iconTile(activityIconName(a), { size: 52, tone: "primary" })}
+              ${imageTile(activityImageUrl(a), activityIconName(a), { size: 52, tone: "primary" })}
               <span class="off-card-text">
                 <span class="off-card-name">${escapeHtml(hub.activityName(a))}</span>
                 <span class="off-card-meta">${escapeHtml(deviceNamesFor(a, devices).join(" · ") || hub.activityTypeLabel(a))}</span>
@@ -321,7 +323,7 @@ export function createRemoteView(section) {
               const id = String(a["Id-"]);
               const isCurrent = id === current;
               return `<button type="button" class="sheet-row${isCurrent ? " is-selected" : ""}" data-switch="${escapeHtml(id)}">
-                  ${iconTile(activityIconName(a), { size: 40 })}
+                  ${imageTile(activityImageUrl(a), activityIconName(a), { size: 40 })}
                   <span class="sheet-row-title">${escapeHtml(hub.activityName(a))}</span>
                   ${isCurrent ? icon("check", { cls: "sheet-row-check", label: "Running" }) : ""}
                 </button>`;

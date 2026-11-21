@@ -194,6 +194,8 @@ public struct HubActivity: Codable, Equatable, Hashable, Identifiable, Sendable 
     public let type: Int
     public let activityOrder: Int
     public let roles: [HubRole]
+    /// The activity's ImageKey ("Activity/<name>.png"), or nil. docs/REMOTE_IMAGES.md
+    public let imageKey: String?
 
     public init(
         id: String,
@@ -201,7 +203,8 @@ public struct HubActivity: Codable, Equatable, Hashable, Identifiable, Sendable 
         displayName: String? = nil,
         type: Int = 1,
         activityOrder: Int = 0,
-        roles: [HubRole] = []
+        roles: [HubRole] = [],
+        imageKey: String? = nil
     ) {
         self.id = id
         self.name = name
@@ -209,6 +212,17 @@ public struct HubActivity: Codable, Equatable, Hashable, Identifiable, Sendable 
         self.type = type
         self.activityOrder = activityOrder
         self.roles = roles
+        self.imageKey = imageKey
+    }
+
+    /// The name the hub stores this activity's own icon under, or nil.
+    public var imageName: String? {
+        guard let key = imageKey, key.hasPrefix("Activity/"), key.hasSuffix(".png") else { return nil }
+        let name = String(key.dropFirst("Activity/".count).dropLast(".png".count))
+        let allowed = CharacterSet(charactersIn: "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789_-")
+        guard (1...96).contains(name.count), !name.hasSuffix("_small"),
+              name.unicodeScalars.allSatisfy({ allowed.contains($0) }) else { return nil }
+        return name
     }
 
     public var typeLabel: String {

@@ -64,10 +64,10 @@ const TEMPLATE = `
             <div class="activity-form-grid">
               <div><label for="activityName">Activity name</label><input id="activityName" maxlength="96"></div>
               <div><label for="activityType">Activity kind</label><select id="activityType"></select></div>
-              <div><label for="activityIcon">Icon key</label><input id="activityIcon" placeholder="Optional firmware icon"></div>
               <div><label for="activityDefaultChannel">Default channel</label><input id="activityDefaultChannel" placeholder="Optional"></div>
               <div><label for="activityDefaultStation">Default station name</label><input id="activityDefaultStation" placeholder="Optional"></div>
             </div>
+            <div id="activityIconField" class="activity-icon-field"></div>
             <div class="activity-section-title">
               <div>
                 <h4>Device roles and input routing</h4>

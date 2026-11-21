@@ -671,4 +671,42 @@ validateGraph();
   assert.equal(savedDevMap.Buttons[0].ButtonState, 0);
 }
 
+// Activity icons (docs/REMOTE_IMAGES.md): the stored name comes from the
+// ImageKey only, the cover crop is centered, and the picker's glyphs are path
+// data only, as Path2D draws them.
+{
+  const { activityImageName, coverRect, ICON_GLYPHS, ICON_BASE_URI } = context.__HARMONY_ACTIVITY_TEST__.api;
+  assert.equal(activityImageName({ ImageKey: "Activity/123_ab-cd.png" }), "123_ab-cd");
+  assert.equal(activityImageName({ ImageKey: "Activity/123_ab-cd_small.png" }), "");
+  assert.equal(activityImageName({ ImageKey: "Activity/../x.png" }), "");
+  assert.equal(activityImageName({ ImageKey: "Other/x.png" }), "");
+  assert.equal(activityImageName({ ImageKey: null, Icon: 5 }), "");
+  assert.deepEqual({ ...coverRect(400, 300) }, { x: 50, y: 0, side: 300 });
+  assert.deepEqual({ ...coverRect(300, 500) }, { x: 0, y: 100, side: 300 });
+  assert.ok(ICON_GLYPHS.length >= 10);
+  for (const glyph of ICON_GLYPHS) {
+    assert.match(glyph.d, /^[MmZzLlHhVvCcSsQqTtAa0-9 .,-]+$/, `${glyph.key} is plain path data`);
+  }
+  assert.match(ICON_BASE_URI, /^https:\/\/[^/]+\/$/);
+}
+
+// User image status: the editor only reports; an old hub (no route, 404)
+// disables setting icons and says to update the hub.
+{
+  const statusContext = { __HARMONY_ACTIVITY_TEST__: {} };
+  vm.createContext(statusContext);
+  vm.runInContext(source, statusContext, { filename: "activity-ui.js" });
+  const { imageStatus, imageStatusHtml } = statusContext.__HARMONY_ACTIVITY_TEST__.api;
+  assert.equal(imageStatusHtml(), "");
+  Object.assign(imageStatus, { checked: true, oldHub: true });
+  assert.match(imageStatusHtml(), /older than this editor: update the hub/);
+  Object.assign(imageStatus, { oldHub: false, missing: 3, total: 17 });
+  assert.match(imageStatusHtml(), /Missing user images: 3 of 17\. Sync them with the Melodious desktop app \(Settings → Logitech account\)\./);
+  assert.doesNotMatch(imageStatusHtml(), /<button/);
+  statusContext.melodiousDesktop = { catalog: {} };
+  assert.match(imageStatusHtml(), /Missing user images: 3 of 17\. Sync them in Settings → Logitech account\./);
+  Object.assign(imageStatus, { missing: 0 });
+  assert.equal(imageStatusHtml(), "");
+}
+
 console.log("activity UI model smoke: ok");

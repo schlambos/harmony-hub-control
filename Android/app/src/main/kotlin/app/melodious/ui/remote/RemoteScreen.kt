@@ -63,6 +63,7 @@ import app.melodious.RemoteTarget
 import app.melodious.ui.components.IconTile
 import app.melodious.ui.components.PowerButton
 import app.melodious.ui.components.StatusDot
+import app.melodious.ui.components.ActivityTile
 import app.melodious.ui.components.activityIcon
 import app.melodious.ui.components.rememberHaptics
 import app.melodious.ui.theme.MelodiousColors
@@ -210,6 +211,7 @@ private fun ActivityRemote(
                     SheetRow(
                         title = other.name,
                         icon = activityIcon(other),
+                        activity = other,
                         selected = isCurrent,
                         onClick = {
                             showSwitcher = false
@@ -340,6 +342,7 @@ private fun SheetRow(
     onClick: () -> Unit,
     selected: Boolean = false,
     destructive: Boolean = false,
+    activity: app.melodious.protocol.model.HubActivity? = null,
 ) {
     Row(
         Modifier
@@ -352,12 +355,21 @@ private fun SheetRow(
         verticalAlignment = Alignment.CenterVertically,
         horizontalArrangement = Arrangement.spacedBy(14.dp),
     ) {
-        IconTile(
-            icon,
-            size = 40,
-            container = if (destructive) MelodiousColors.PowerContainer else MaterialTheme.colorScheme.surfaceContainerHighest,
-            tint = if (destructive) MelodiousColors.OnPowerContainer else androidx.compose.ui.graphics.Color(0xFFC3C8D2),
-        )
+        if (activity != null) {
+            ActivityTile(
+                activity,
+                size = 40,
+                container = MaterialTheme.colorScheme.surfaceContainerHighest,
+                tint = androidx.compose.ui.graphics.Color(0xFFC3C8D2),
+            )
+        } else {
+            IconTile(
+                icon,
+                size = 40,
+                container = if (destructive) MelodiousColors.PowerContainer else MaterialTheme.colorScheme.surfaceContainerHighest,
+                tint = if (destructive) MelodiousColors.OnPowerContainer else androidx.compose.ui.graphics.Color(0xFFC3C8D2),
+            )
+        }
         Text(
             title,
             fontSize = 17.sp,
@@ -400,7 +412,7 @@ private fun OffState(state: MelodiousUiState, onStart: (String) -> Unit) {
                     verticalAlignment = Alignment.CenterVertically,
                     horizontalArrangement = Arrangement.spacedBy(16.dp),
                 ) {
-                    IconTile(activityIcon(activity), size = 52, container = MaterialTheme.colorScheme.primaryContainer, tint = MaterialTheme.colorScheme.onPrimaryContainer)
+                    ActivityTile(activity, size = 52, container = MaterialTheme.colorScheme.primaryContainer, tint = MaterialTheme.colorScheme.onPrimaryContainer)
                     Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(2.dp)) {
                         Text(activity.name, fontSize = 18.sp, fontWeight = FontWeight.Medium)
                         Text(

@@ -318,6 +318,48 @@
         grid-template-columns: 1fr;
       }
     }
+    /* Status badge beside a row title (User images): apart from the muted
+       description below it. */
+    .m-status {
+      display: inline-block;
+      margin-left: var(--space-2);
+      padding: 1px 10px;
+      border-radius: 999px;
+      background: var(--surface-highest);
+      color: var(--on-surface-variant);
+      font-size: 12px;
+      font-weight: 600;
+      line-height: 1.6;
+      vertical-align: middle;
+      white-space: nowrap;
+    }
+    .m-status--warn {
+      background: var(--warning-container);
+      color: var(--warning);
+    }
+    .m-status--ok {
+      background: var(--primary-container);
+      color: var(--on-primary-container);
+    }
+    /* Result of the last action in a row (User images sync): a coloured bar
+       and stronger text, apart from the muted description above it. */
+    .m-result {
+      display: block;
+      margin-top: var(--space-1);
+      padding-left: var(--space-2);
+      border-left: 3px solid var(--primary);
+      color: var(--on-surface);
+      font-size: 13px;
+      font-weight: 500;
+    }
+    .m-result--warn {
+      border-left-color: var(--warning);
+      color: var(--warning);
+    }
+    .m-result--error {
+      border-left-color: var(--error);
+      color: var(--error);
+    }
   </style>
 </head>
 <body>

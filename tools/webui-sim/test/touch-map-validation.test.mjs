@@ -150,7 +150,7 @@ describe("netservicestarter.lua Touch Sync guards (LuaJIT)", () => {
       cwd: new URL("../../../", import.meta.url).pathname,
       encoding: "utf8",
     });
-    assert.match(out, /56\/56 checks passed/);
+    assert.match(out, /66\/66 checks passed/);
   });
 
   it("unblocks a never-activated Harmony Ultimate (skin 100) offline without changing Touch (99) or Elite/950 (111/112) (#219)", (t) => {

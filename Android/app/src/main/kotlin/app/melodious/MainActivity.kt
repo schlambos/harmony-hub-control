@@ -112,7 +112,17 @@ class MainActivity : ComponentActivity() {
         setContent {
             MelodiousTheme {
                 val state by viewModel.uiState.collectAsState()
-                MelodiousApp(state, viewModel, onAddQuickTile = ::requestQuickTile, onAddWidget = ::requestPinWidget)
+                // One loader instance, so tiles don't reload when this scope recomposes.
+                val activityImages = androidx.compose.runtime.remember(viewModel) {
+                    val loader: suspend (app.melodious.protocol.model.HubActivity) -> androidx.compose.ui.graphics.ImageBitmap? =
+                        { activity -> viewModel.activityImage(activity) }
+                    loader
+                }
+                androidx.compose.runtime.CompositionLocalProvider(
+                    app.melodious.ui.components.LocalActivityImages provides activityImages,
+                ) {
+                    MelodiousApp(state, viewModel, onAddQuickTile = ::requestQuickTile, onAddWidget = ::requestPinWidget)
+                }
             }
         }
     }

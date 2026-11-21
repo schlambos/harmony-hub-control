@@ -418,7 +418,8 @@ public enum HubConfigParser {
                     displayName: displayName,
                     type: type,
                     activityOrder: order,
-                    roles: roles
+                    roles: roles,
+                    imageKey: obj["ImageKey"] as? String
                 )
             ))
         }
