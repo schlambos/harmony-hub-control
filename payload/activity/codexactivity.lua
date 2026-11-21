@@ -6,6 +6,14 @@ local log = require("log").logger("auto.p.codexactivity")
 local resources = require("tasks.harmonywebservices.core.resourcemanager")
 local digest = require("tasks.harmonywebservices.core.statedigest"):instance()
 local connect = require("tasks.connectserver.core.utils")
+local bitOk, bit = pcall(require, "bit")
+if not bitOk or type(bit) ~= "table" or
+    type(bit.bxor) ~= "function" or
+    type(bit.lshift) ~= "function" or
+    type(bit.tohex) ~= "function" then
+  bit = nil
+end
+local strByte = string.byte
 
 local REQUEST_FILE = "/var/volatile/codex-activity-request.json"
 local RESPONSE_FILE = "/var/volatile/codex-activity-response.json"
@@ -181,8 +189,21 @@ local function sameValue(left, right, seen)
   return true
 end
 
+-- Keep /var/watchdog/luaworks fresh and give luaworks' cooperative scheduler
+-- a turn between heavy hash/JSON/disk phases so a large save cannot starve
+-- /usr/bin/watchdog (15 s reboot timeout) or stall port-8088 /api/state polls.
+local function keepAlive()
+  if type(system.tiggleWatchDog) == "function" then
+    pcall(system.tiggleWatchDog)
+  end
+  if type(system.yield) == "function" and coroutine.running() ~= nil then
+    system.yield()
+  end
+end
+
 local function resourceSnapshot(name)
   local status, etag, resource = resources.getResource(name)
+  keepAlive()
   if tostring(status or "") ~= "200" or type(resource) ~= "table" then
     return nil, "could not read local " .. tostring(name)
   end
@@ -194,17 +215,21 @@ local function resourceSnapshot(name)
 end
 
 local function saveResource(name, value, etag, hetag)
+  keepAlive()
   local ok, detail = resources.saveResource(
     "application/json", etag, value, name, nil, hetag
   )
+  keepAlive()
   if not ok then
     return nil, tostring(detail or ("could not save local " .. tostring(name)))
   end
   local status, actualEtag, actual = resources.getResource(name)
+  keepAlive()
   if tostring(status or "") ~= "200" or actualEtag ~= etag or
       type(actual) ~= "table" or not sameValue(value, actual) then
     return nil, "local " .. tostring(name) .. " verification failed"
   end
+  keepAlive()
   return true
 end
 
@@ -654,27 +679,88 @@ local function validateGraph(activityList, mapList, functionList, deviceList, ol
   return true
 end
 
-local function fnv1a32(data)
-  local h = 2166136261
-  for i = 1, #data do
-    local b = string.byte(data, i)
-    local lo = h % 256
-    local hi = h - lo
-    local x, p = 0, 1
-    local a, c = lo, b
-    while a > 0 or c > 0 do
-      local ra, rc = a % 2, c % 2
-      if ra ~= rc then
-        x = x + p
+local FNV_BIT_CHUNK_BYTES = 16384
+local FNV_FALLBACK_CHUNK_BYTES = 4096
+local XOR4
+
+local function getXor4()
+  if XOR4 then
+    return XOR4
+  end
+  XOR4 = {}
+  for a = 0, 15 do
+    local row = {}
+    for b = 0, 15 do
+      local x, p, u, v = 0, 1, a, b
+      while u > 0 or v > 0 do
+        local ru, rv = u % 2, v % 2
+        if ru ~= rv then
+          x = x + p
+        end
+        u = (u - ru) / 2
+        v = (v - rv) / 2
+        p = p * 2
       end
-      a = (a - ra) / 2
-      c = (c - rc) / 2
-      p = p * 2
+      row[b] = x
     end
-    h = hi + x
-    local h_lo = h % 65536
-    local h_hi = (h - h_lo) / 65536
-    h = (((h_lo * 256 + h_hi * 403) % 65536) * 65536 + h_lo * 403) % 4294967296
+    XOR4[a] = row
+  end
+  return XOR4
+end
+
+-- FNV-1a 32-bit matching resource_hash() in codex_webui.c.
+-- On the hub (400 MHz MIPS 24Kc without a hardware FPU), luaworks.so embeds
+-- LuaBitOp (`require("bit")`). Using native 32-bit bit ops and yielding every
+-- chunk keeps a 340 KB MapList hash under ~1 s instead of starving
+-- /usr/bin/watchdog (15 s reboot timeout) in a soft-float bit loop (#224).
+local function fnv1a32(data)
+  local n = #data
+  if bit then
+    local bxor = bit.bxor
+    local lshift = bit.lshift
+    local h = -2128831035 -- 2166136261 (0x811c9dc5) as signed 32-bit
+    local i = 1
+    while i <= n do
+      local stop = i + FNV_BIT_CHUNK_BYTES - 1
+      if stop > n then
+        stop = n
+      end
+      for j = i, stop do
+        h = bxor(h, strByte(data, j))
+        -- 16777619 = 2^24 + 403; |h * 403| < 2^40 stays exact in double, and
+        -- LuaBitOp wraps arguments modulo 2^32 on the next bxor/tohex.
+        h = lshift(h, 24) + h * 403
+      end
+      i = stop + 1
+      if i <= n then
+        keepAlive()
+      end
+    end
+    return bit.tohex(h, 8)
+  end
+  local xor4 = getXor4()
+  local h = 2166136261
+  local i = 1
+  while i <= n do
+    local stop = i + FNV_FALLBACK_CHUNK_BYTES - 1
+    if stop > n then
+      stop = n
+    end
+    for j = i, stop do
+      local b = strByte(data, j)
+      local lo = h % 256
+      local hi = h - lo
+      local lo0 = lo % 16
+      local b0 = b % 16
+      h = hi + xor4[(lo - lo0) / 16][(b - b0) / 16] * 16 + xor4[lo0][b0]
+      local h_lo = h % 65536
+      local h_hi = (h - h_lo) / 65536
+      h = (((h_lo * 256 + h_hi * 403) % 65536) * 65536 + h_lo * 403) % 4294967296
+    end
+    i = stop + 1
+    if i <= n then
+      keepAlive()
+    end
   end
   -- The hub's Lua 5.1 converts a %x argument through a 32-bit signed long,
   -- so any h >= 2^31 prints as 7fffffff and never matches the revision
@@ -690,7 +776,13 @@ local function currentActivityRevision()
   if not act or not map or not fn then
     return nil
   end
-  return fnv1a32(act) .. "-" .. fnv1a32(map) .. "-" .. fnv1a32(fn)
+  local actHash = fnv1a32(act)
+  keepAlive()
+  local mapHash = fnv1a32(map)
+  keepAlive()
+  local fnHash = fnv1a32(fn)
+  keepAlive()
+  return actHash .. "-" .. mapHash .. "-" .. fnHash
 end
 
 local function commitActivityResources(request)
@@ -700,18 +792,6 @@ local function commitActivityResources(request)
       localOnly = true,
       error = "offline activity writer refused to run because the cloud blocker is not active"
     }
-  end
-  local oldActivities, activityReadError = resourceSnapshot("ActivityList")
-  if not oldActivities then
-    return {ok = false, localOnly = true, error = activityReadError}
-  end
-  local oldMaps, mapReadError = resourceSnapshot("MapList")
-  if not oldMaps then
-    return {ok = false, localOnly = true, error = mapReadError}
-  end
-  local oldFunctions, functionReadError = resourceSnapshot("FunctionList")
-  if not oldFunctions then
-    return {ok = false, localOnly = true, error = functionReadError}
   end
   if type(request.baseRevision) == "string" and request.baseRevision ~= "" then
     local currentRevision = currentActivityRevision()
@@ -725,6 +805,18 @@ local function commitActivityResources(request)
       }
     end
   end
+  local oldActivities, activityReadError = resourceSnapshot("ActivityList")
+  if not oldActivities then
+    return {ok = false, localOnly = true, error = activityReadError}
+  end
+  local oldMaps, mapReadError = resourceSnapshot("MapList")
+  if not oldMaps then
+    return {ok = false, localOnly = true, error = mapReadError}
+  end
+  local oldFunctions, functionReadError = resourceSnapshot("FunctionList")
+  if not oldFunctions then
+    return {ok = false, localOnly = true, error = functionReadError}
+  end
   local devices, deviceReadError = resourceSnapshot("DeviceList")
   if not devices then
     return {ok = false, localOnly = true, error = deviceReadError}
@@ -736,6 +828,7 @@ local function commitActivityResources(request)
     devices.resource,
     oldMaps.resource
   )
+  keepAlive()
   if not valid then
     return {ok = false, localOnly = true, error = validationError}
   end
@@ -3255,12 +3348,14 @@ local function commitHaDevices(request, family)
     }
   end
   local copied, deviceList = pcall(json.decode, oldText)
+  keepAlive()
   if not copied or type(deviceList) ~= "table" or
       type(deviceList.DevicesWithFeatures) ~= "table" or
       type(oldProtocols.resource.Protocols) ~= "table" then
     return {ok = false, localOnly = true, error = "could not copy the local DeviceList"}
   end
   local refs, refError = haReferences()
+  keepAlive()
   if not refs then
     return {ok = false, localOnly = true, error = refError}
   end
@@ -3636,6 +3731,7 @@ local function commitHaDevices(request, family)
       activities.resource, mapList, functions.resource, deviceList,
       oldMaps.resource
     )
+    keepAlive()
     if not valid then
       return {ok = false, localOnly = true, error = validationError}
     end
@@ -3646,6 +3742,7 @@ local function commitHaDevices(request, family)
   end
 
   local encoded, text = pcall(encodeDeviceList, deviceList)
+  keepAlive()
   if not encoded then
     return {ok = false, localOnly = true, error = "could not encode DeviceList: " .. tostring(text)}
   end
@@ -3702,6 +3799,7 @@ end
 
 local function processRequest(raw)
   local ok, request = pcall(json.decode, raw)
+  keepAlive()
   if not ok or type(request) ~= "table" then
     -- Answer with the id when it can be read, so codex_webui stops waiting.
     return {
