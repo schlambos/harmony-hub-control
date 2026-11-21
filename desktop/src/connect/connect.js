@@ -1127,7 +1127,11 @@
         }
       }
       if (!installRes?.ok) {
-        const failedStage = installRes?.webUiReachable === false ? 4 : wiz.installChecklistStep || 3;
+        const failedAfterInstall =
+          installRes?.webUiReachable === false &&
+          installRes?.exitCode === 0 &&
+          installRes?.verdict === "ALLOWED";
+        const failedStage = failedAfterInstall ? 4 : wiz.installChecklistStep || 3;
         failAtStep(failedStage, installRes?.error || "Melodious installation did not complete.");
         return;
       }

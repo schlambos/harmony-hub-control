@@ -2048,3 +2048,146 @@ test("detectHostKeyChanged, clearKnownHost, installFreshHub, and wizard:install-
   });
   assert.deepEqual(forwarded, [false, true]);
 });
+
+test("Screen 3 Step 3 non-USB failures match the real error instead of blaming the USB cable, while real USB steps keep USB advice", () => {
+  const extractNotice = (html) => {
+    const m = /<div class="notice notice-error" id="wizardErrorNotice"[\s\S]*?<\/div>\s*<\/div>\s*(?=\s*<details)/m.exec(
+      html
+    );
+    assert.ok(m, "expected #wizardErrorNotice in rendered Screen 3 HTML");
+    return m[0];
+  };
+  const renderStepError = ({
+    flowPath = "fresh",
+    provisionedTransport = "xmpp",
+    failedStep = 3,
+    error = "",
+    usbWedgeActive = false,
+  }) => {
+    const st = wizardFlow.createInitialWizardState(4150);
+    st.step = 3;
+    st.flowPath = flowPath;
+    st.provisionedTransport = provisionedTransport;
+    st.installChecklistFailedStep = failedStep;
+    st.error = error;
+    st.usbWedgeActive = usbWedgeActive;
+    st.logLines = ["== step =="];
+    const html = wizardFlow.renderWizardPage(st);
+    return { html, notice: extractNotice(html) };
+  };
+
+  // 1. Older hub zip (missing files required by this app — raw, friendly, or Electron IPC-wrapped)
+  for (const err of [
+    "The hub zip is missing payload/bin/codex_webos, payload/bin/codex_usbeth, payload/bin/busybox-extra.",
+    "Error invoking remote method 'wizard:install-hub': Error: The hub zip is missing payload/bin/codex_webos, payload/bin/codex_usbeth.",
+    "This hub zip is older than this app (or incomplete) and is missing files this version requires: payload/bin/codex_webos. Use a hub zip matching this app's version.",
+  ]) {
+    const { notice } = renderStepError({ failedStep: 3, error: err });
+    assert.match(notice, /older than this app/i);
+    assert.match(notice, /Advanced options → Use a local \.zip file instead/);
+    assert.doesNotMatch(notice, /USB cable/i);
+    assert.doesNotMatch(notice, /codex_webos/, "raw file names stay hidden behind Show technical details");
+  }
+
+  // 2. Newer / mismatched hub zip (contains unknown files)
+  const newerZip = renderStepError({
+    failedStep: 3,
+    error: "The hub zip has payload/bin/codex_future, which this app doesn't know how to install. Update this app first.",
+  });
+  assert.match(newerZip.notice, /Update the Melodious app/i);
+  assert.match(newerZip.notice, /Advanced options → Use a local \.zip file instead/);
+  assert.doesNotMatch(newerZip.notice, /USB cable/i);
+
+  // 3. Download failure (GitHub unreachable + rate limit)
+  const dl = renderStepError({
+    failedStep: 3,
+    error: "Couldn't reach GitHub to look up the latest Melodious hub release.",
+  });
+  assert.match(dl.notice, /download/i);
+  assert.match(dl.notice, /GitHub/i);
+  assert.match(dl.notice, /Advanced options → Use a local \.zip file instead/);
+  assert.doesNotMatch(dl.notice, /USB cable/i);
+
+  const rl = renderStepError({
+    failedStep: 3,
+    error: "GitHub is rate-limiting requests from this network. Try again later or choose a local hub zip.",
+  });
+  assert.match(rl.notice, /rate-limiting/i);
+  assert.match(rl.notice, /Advanced options → Use a local \.zip file instead/);
+  assert.doesNotMatch(rl.notice, /USB cable/i);
+
+  // 4. Checksum verification failure
+  const checksum = renderStepError({
+    failedStep: 3,
+    error: "The download doesn't match the checksum GitHub published for it. Nothing was changed.",
+  });
+  assert.match(checksum.notice, /checksum/i);
+  assert.match(checksum.notice, /Advanced options → Use a local \.zip file instead/);
+  assert.doesNotMatch(checksum.notice, /USB cable/i);
+
+  // 5. Unpack / corrupt / wrong zip / MANIFEST mismatch
+  for (const err of [
+    "That isn't a Melodious hub zip: it has no melodious-hub-<version> folder.",
+    "The hub zip's MANIFEST.txt doesn't match codex_webui.",
+    "ditto: Couldn't read PKZip signature",
+  ]) {
+    const unpack = renderStepError({ failedStep: 3, error: err });
+    assert.match(unpack.notice, /unpack|verify/i);
+    assert.match(unpack.notice, /Advanced options → Use a local \.zip file instead/);
+    assert.doesNotMatch(unpack.notice, /USB cable/i);
+  }
+
+  // 6. Step 3 SSH / LAN / preflight failure — never blames USB even on fresh flow or stale wedge
+  const ssh = renderStepError({
+    failedStep: 3,
+    error: "install_webui.py failed with exit code 1",
+    usbWedgeActive: true,
+  });
+  assert.doesNotMatch(ssh.notice, /USB cable/i);
+  assert.doesNotMatch(ssh.html, /id="wizardUsbWedgeBanner"/);
+  assert.match(ssh.notice, /local network|Wi-Fi/i);
+
+  const cap = renderStepError({
+    failedStep: 3,
+    error: "Installer preflight blocked (BLOCKED_CAPACITY): insufficient free flash",
+  });
+  assert.match(cap.notice, /free space/i);
+  assert.doesNotMatch(cap.notice, /USB cable/i);
+
+  // 7. Step 4 post-install web UI unreachable — never blames USB
+  const step4 = renderStepError({
+    failedStep: 4,
+    error: "Melodious 2.5.0 finished installing, but http://192.168.0.235:8080 did not answer /api/system-status.",
+  });
+  assert.doesNotMatch(step4.notice, /USB cable/i);
+  assert.match(step4.notice, /restarting|Wi-Fi|local network/i);
+
+  // 8. Real USB steps (Steps 1 & 2 on USB path) KEEP USB cable & 15-second wedge advice
+  const step1Usb = renderStepError({
+    failedStep: 1,
+    error: "Could not prepare hub file access over USB.",
+  });
+  assert.match(step1Usb.notice, /Make sure the USB cable is firmly connected/);
+
+  const step2Usb = renderStepError({
+    failedStep: 2,
+    error: "Simulated USB timeout",
+  });
+  assert.match(step2Usb.notice, /Make sure the USB cable is firmly connected/);
+
+  const step1Wedge = renderStepError({
+    failedStep: 1,
+    error: "LTCP hbus error frame FF 08 FF 01 01",
+    usbWedgeActive: true,
+  });
+  assert.match(step1Wedge.notice, /Unplug the USB cable from your computer for 15 seconds/);
+  assert.match(step1Wedge.html, /id="wizardUsbWedgeBanner"/);
+
+  // 9. Local input validation error at Step 1 does NOT blame USB
+  const badHubId = renderStepError({
+    failedStep: 1,
+    error: "Custom Hub ID must be a positive whole number (for example, 20264150).",
+  });
+  assert.match(badHubId.notice, /Custom Hub ID/i);
+  assert.doesNotMatch(badHubId.notice, /USB cable/i);
+});
