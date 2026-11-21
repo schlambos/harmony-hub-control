@@ -19,7 +19,7 @@ Android/
 │   │                       #   Logitech floors 52,944,089 / 1,878,029,713, 16414 + 16420 BT HID map preservation,
 │   │                       #   role-based default button derivation, and action-less button pruning)
 │   ├── ir/                 # IrProtocolTools.kt (Pronto 0000 hex -> Harmony raw F...P...S..., IRDB CSV/pipe parser)
-│   ├── discovery/          # HarmonyHubDiscovery.kt (SSDP UDP 1900 multicast + Android Emulator 10.0.2.2 probes)
+│   ├── discovery/          # HubDiscovery.kt (SSDP UDP 1900 multicast + Android Emulator 10.0.2.2 probes)
 │   ├── hbus/               # HBusWebSocketClient.kt (ws://<hub>:8088 continuous press/hold/release & live push)
 │   └── rest/               # CodexHubRestClient.kt (http://<hub>:8080 REST client for config, IR, BT, exports)
 ├── core-ssh/               # Direct SSH Provisioner & Emergency Recovery (root@<hub>:22 via JSch)
@@ -32,7 +32,7 @@ Android/
     ├── ui/activities/      # Activity roster, 0-buttons warning badge, 4-step Guided Wizard with auto-apply picker
     ├── ui/ir/              # Master-Detail IR Studio: Commands, Learn IR, IRDB/Pronto Import, Batch Sweeper
     ├── ui/admin/           # SSDP LAN scanner, Bluetooth SSP pairing, System Cloud Blocker, SSH Recovery
-    └── system/             # HarmonyQuickTileService.kt (Android Quick Settings Tile for 1-swipe Power Off)
+    └── system/             # PowerOffTileService.kt (Android Quick Settings Tile for 1-swipe Power Off)
 ```
 
 ---
@@ -49,7 +49,7 @@ Android/
 4. **Native Android Keyboard & Voice Dictation to Bluetooth HID:**
    - Type or use Android microphone voice dictation to stream characters directly to `/api/bt-text` (`codex_bthid_keyboard`) on your paired NVIDIA SHIELD, Android TV, or HTPC.
 5. **Android Quick Settings Tile & Deep Links:**
-   - Add the **Harmony Power Off** tile to your Android notification shade for one-tap power off from any app, or trigger `harmony://hub/activity/<id>` and `harmony://hub/poweroff` from NFC tags, Tasker, or Home Assistant.
+   - Add the **Melodious: Turn off** tile to your Android notification shade for one-tap power off from any app, or trigger `melodious://hub/activity/<id>` and `melodious://hub/poweroff` from NFC tags, Tasker, or Home Assistant.
 6. **Direct SSH Lockout Recovery from Phone:**
    - Paste your `harmony_owner_*` key in the **Hub & BT** tab to inspect `/data/codex/bin` or clear a `/data/codex/webui_auth.conf` sign-in lockout directly over SSH (`root@<hub-ip>:22`).
 
@@ -140,4 +140,4 @@ MQTT, Backup and System pages.
    ```
    *(Or start the full MIPS QEMU emulator via `tools/hub-emu/run.sh`)*
 2. Open the `Android/` directory in **Android Studio** (Ladybug / Meerkat or newer) and run the `:app` configuration on an Android Emulator or physical Android device.
-3. On an Android Emulator, `HarmonyHubDiscovery` automatically probes `http://10.0.2.2:8787` (UI simulator) and `http://10.0.2.2:8080` (QEMU hub emulator) and connects automatically on launch. On a physical phone, it broadcasts an SSDP `M-SEARCH` on `239.255.255.250:1900` to find your live Harmony Hub on the LAN.
+3. On an Android Emulator, `HubDiscovery` automatically probes `http://10.0.2.2:8787` (UI simulator) and `http://10.0.2.2:8080` (QEMU hub emulator) and connects automatically on launch. On a physical phone, it broadcasts an SSDP `M-SEARCH` on `239.255.255.250:1900` to find your live Harmony Hub on the LAN.

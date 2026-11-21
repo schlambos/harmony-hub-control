@@ -3,7 +3,9 @@
 The full reference for installing Melodious on a rooted Harmony Hub,
 updating it, turning it off and back on, and rolling back an update.
 The [README](../README.md#install-update-and-roll-back) has the short version;
-the guided desktop Setup Wizard is in [SETUP_GUIDE.md](SETUP_GUIDE.md).
+the guided desktop Setup Wizard is in [SETUP_GUIDE.md](SETUP_GUIDE.md)
+(Windows and Linux Desktop app and Setup Wizard: **Not fully tested, needs
+confirmation**).
 
 ## Before you start
 
@@ -154,8 +156,9 @@ app only tells you a hub update is out; it never holds the hub's SSH
 key.
 
 **Reinstall / repair hub software…** (Settings → Updates, and the
-Melodious menu on a Mac or the File menu on Windows) puts hub software
-back on the hub whatever version it runs:
+Melodious menu on a Mac or the File menu on Windows and Linux — Desktop app
+on Windows and Linux: **Not fully tested, needs confirmation**) puts hub
+software back on the hub whatever version it runs:
 
 - You pick the source: the latest GitHub release, or a
   `melodious-hub-<version>.zip` on your computer. The app shows the hub's

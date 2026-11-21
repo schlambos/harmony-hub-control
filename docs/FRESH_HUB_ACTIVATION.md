@@ -1,7 +1,8 @@
 # Activating a factory-fresh hub (no account, no Logitech cloud)
 
 Melodious supports **Windows, Linux and macOS**. Use the
-[desktop Setup Wizard](SETUP_GUIDE.md) or the bundled CLI described here.
+[desktop Setup Wizard](SETUP_GUIDE.md) (Windows and Linux: **Not fully tested,
+needs confirmation**) or the bundled CLI described here.
 The wizard is on `main`, joining Windows and macOS desktop releases in
 the first release after `v2.1.0`; Linux runs it from source. The CLI in
 [`tools/hub-root/`](../tools/hub-root/README.md), followed by
@@ -48,7 +49,9 @@ hub over USB, check (and, with approval, update) the firmware, reset,
 join Wi-Fi, open the TDE gate, provision the local account, seed the
 starter config, root, install Melodious, and finish ready to pair a
 remote. Windows and macOS releases bundle Python and the USB backend;
-Linux uses the same wizard from source with dependencies installed.
+Linux uses the same wizard from source with dependencies installed
+(Desktop app and Setup Wizard on Windows and Linux: **Not fully tested,
+needs confirmation**).
 The user guide is [SETUP_GUIDE.md](SETUP_GUIDE.md). This runbook is the
 command-line alternative on all three platforms and the historical
 hardware reference for what each wizard step does. Commands use `python3`;
@@ -333,52 +336,68 @@ remote's pairing combo (Smart Control: Menu + Mute ~5 s). Proof: the
 remote's press runs the activity (`activityStatus=2`), and the web UI
 and state digest follow.
 
-**Two wizard gaps on a truly empty hub (found in this run, fixes
-tracked separately):**
+**Never-activated Harmony Ultimate:** after pairing on a fresh offline hub,
+place the Ultimate on its charging cradle before its first sync so
+`setup.account?getProvisionInfo` returns `200`; waking the remote near the
+hub isn't enough on its own.
 
-1. `/api/activity-config` 503s until `DeviceList`, `ActivityList`,
-   `FunctionList` and `MapList` exist. Workaround: create the four empty
-   resources plus `ProtocolList` (SSH or file API) before opening the
-   wizard.
-2. The wizard creates `16414Activity<id>` but not `16414Root`, so the
-   paired remote's activity button does nothing even though the hub
-   receives its presses. Workaround: Settings → Remotes → Activity
-   buttons, assign the activity (writes `16414Root`), then the button
-   works.
+*(Historical note: the initial 2026-11-11 run hit two blank-hub gaps —
+`/api/activity-config` returning `503` on an empty hub and missing
+`<EquadID>Root` maps for no-screen remotes. Both are fixed on `main`:
+`codexactivity.lua` seeds the empty base resources and reloads the engine
+automatically, and the web/desktop activity wizard creates `<EquadID>Root`
+maps with the first activity.)*
 
 ## Troubleshooting (all observed on the run)
 
 | Symptom | Cause / fix |
 |---|---|
-| Hub fast-blinking, absent from USB for many minutes after reset | Erase finished but boot hung, or slow erase. Power-cycle via the USB cable (15 s); expect enumeration in ~10 s. Button-held plug-in is the fallback. |
+| Hub fast-blinking, absent from USB for many minutes after reset | Erase finished but boot hung, or slow erase. Power-cycle via the USB cable (15 s); expect enumeration in ~10–30 s. If USB still doesn't appear after ~3 minutes, unplug for 15 s and replug a second time. Button-held plug-in is the fallback. |
 | `/tde/enable` write accepted, read-back still `"0"`, APIs still 594 | Length byte was `0x00` ("remove marker"). Re-send with length `0x01`. |
 | `jsonfiletransfer?put` → 598 "Failed to decode json" | That API only accepts valid JSON content. Lua source cannot be staged through it; provision/seed with JSON (Steps 5–6) and let the mode-3 log writer stage code. |
 | WebSocket 401 with the correct hub ID after provisioning | `remoteId` was written as a JSON string. Rewrite preferences with a numeric `remoteId`, reboot. |
 | USB HID enumerated but LTCP stops answering after a reboot | Gadget wedge. USB device-control reboot (`0xFF`, arg `0x00`) re-initializes it; `usb-preflight` confirms. If writes "return no bytes" (typically after an `hbus error frame FF 08 FF 01 01`), the reboot can't get through: power-cycle, wait ~5 min, preflight first. |
 | Linux: hub enumerates (`046d:c129`) but no `/dev/hidraw*` | The kernel ignores Harmony HID IDs. Use the venv with `requirements-usb.txt` and `--usb-backend hidapi`. |
-| `lan-root` stops: "TDE gate failed" although `/tde/enable` reads `"1"` | `/etc/tdeenable` exists but is empty. Write it over the WebSocket after provisioning (Step 4). |
+| `lan-root` stops: "TDE gate failed" although `/tde/enable` reads `"1"` | `/etc/tdeenable` exists but is empty. Write it over the WebSocket after provisioning (Step 4), or use `tools/hub-root/wizard_bridge.py --action usb-tde-enable` / the Setup Wizard, which writes the fallback marker automatically. |
 | `lan-root` can't reach port 5222 on a locally provisioned hub | XMPP doesn't start on these. Use `--transport usb` (or `post`). |
 | Flash ends `checksumResult 0x75/'u'`, `committed: false` | Normal boot-updater handoff. Check `current_fw_version` after the reboot. |
-| Remote paired, hub sees presses, activity never starts | Missing `16414Root` map. See wizard gap 2 above. |
+| Remote paired, hub sees presses, activity never starts | Missing `<EquadID>Root` map (for example, if the first activity was created from an older build or the Android app). Open Settings → Remotes → Activity buttons and assign the activity, or save an activity in the web/desktop wizard. |
 | Steady red blink on the fresh hub | Normal "no config yet" indication. Not a fault. |
 
-## Known gaps (tracked, not yet fixed)
+## Known gaps
 
-1. Wizard cannot load on an empty hub (Step 7, gap 1) — installer or API
-   should seed empty resources on first run.
-2. Wizard does not create the root button map (Step 7, gap 2) — wizard
-   should write it with the first activity map.
-3. Steps 5–6 (provisioning write with numeric-ID validation, and the
-   AutomationConfig seed) should become tool commands in
-   `tools/hub-root/` instead of manual operations.
-4. POST-transport full root run is unproven (smoke-tested only).
-5. `usb-factory-reset`'s `/sys/reboot` doesn't reboot the hub; the reset
-   only proceeds after a device-control reboot, and then the hub needs a
-   power-cycle (Step 2). The tool could send the device-control reboot
-   itself and say plainly that a replug will be needed.
-6. `lan-root`'s TDE pre-check could accept an open `/tde/enable` gate, or
-   write the marker itself, instead of failing on an empty
-   `/etc/tdeenable` (Step 4).
+### Still open
+
+1. **POST-transport full root run is unproven** (smoke-tested only; still
+   requires explicit opt-in via `--allow-unproven-post` in `wizard_bridge.py`).
+2. **Standalone `run_harmony_hub_tool.py` CLI parity:** `usb-provision-local`,
+   `usb-seed-automation`, `usb-tde-enable` (with `598` empty-marker fallback),
+   and `usb-factory-reset`'s `0xFF/0x00` device-control reboot + replug
+   guidance are implemented in `tools/hub-root/wizard_bridge.py` (used by the
+   Desktop Setup Wizard), not yet wired as standalone actions in
+   `run_harmony_hub_tool.py`.
+3. **Android blank-hub root map parity:** the web/desktop activity wizard
+   creates `<EquadID>Root` automatically on a blank hub, while Android's
+   `ActivityGraphBuilder.kt` does not yet.
+
+### Fixed on `main` (from the original 2026-11-11 run)
+
+- **Blank-hub resource seeding:** fixed in `payload/activity/codexactivity.lua`
+  (`seedBlankHub()` + `config_new "all"`) and `netservicestarter.lua` boot
+  seeding — `/api/activity-config` no longer 503s on an empty hub.
+- **`<EquadID>Root` map creation:** fixed in the web/desktop activity wizard
+  (`ensureRootMaps()` in `wizard-model.js`) for Smart Control (`16414`) and
+  Companion (`16422`/`16423`).
+- **Automated local provisioning and `AutomationConfig` seeding:** implemented
+  as `usb-provision-local` (with numeric `remoteId` validation) and
+  `usb-seed-automation` in `tools/hub-root/wizard_bridge.py` and the Desktop
+  Setup Wizard.
+- **Factory-reset reboot and replug guidance:** `wizard_bridge.py`'s
+  `usb-factory-reset` now sends the USB device-control reboot (`0xFF/0x00`)
+  after `/sys/reboot` and reports explicit power-cycle/replug instructions.
+- **TDE `598` empty-marker handling:** `wizard_bridge.py`'s `usb-tde-enable`
+  verifies `../../etc/tdeenable` and writes the fallback `"1"` marker
+  automatically when the hub returns `598` (empty file).
 
 ## Hardware seen so far
 
