@@ -2430,86 +2430,28 @@ do
     }
   end
 
-  -- The icon names ("Activity/<name>.png" -> <name>) an ActivityList uses.
-  local function iconNames(activityList)
-    local names = {}
-    if type(activityList) == "table" and type(activityList.Activities) == "table" then
-      for _, activity in ipairs(activityList.Activities) do
-        local key = type(activity) == "table" and activity.ImageKey
-        local name = type(key) == "string" and string.match(key, "^Activity/([%w_%-]+)%.png$")
-        if name then
-          names[name] = true
+  -- After an activity save: delete the stored icon (and thumbnail) of every
+  -- ImageKey the old list used and the new one doesn't.
+  local function pruneActivityIcons(oldList, newList)
+    local function iconNames(activityList)
+      local names = {}
+      if type(activityList) == "table" and type(activityList.Activities) == "table" then
+        for _, activity in ipairs(activityList.Activities) do
+          local key = type(activity) == "table" and activity.ImageKey
+          local name = type(key) == "string" and string.match(key, "^Activity/([%w_%-]+)%.png$")
+          if name then
+            names[name] = true
+          end
         end
       end
+      return names
     end
-    return names
-  end
-
-  -- Delete the stored icon (and thumbnail) of every name in oldNames that
-  -- newList no longer uses.
-  local function pruneIconNames(oldNames, newList)
     local kept = iconNames(newList)
-    for name in pairs(oldNames) do
+    for name in pairs(iconNames(oldList)) do
       if not kept[name] then
         deleteRemoteImage(name .. ".png")
       end
     end
-  end
-
-  -- After an activity save: icons only the old list used can go.
-  local function pruneActivityIcons(oldList, newList)
-    pruneIconNames(iconNames(oldList), newList)
-  end
-
-  -- Put imageKey (nil clears it) on one activity and save ActivityList alone.
-  -- A full activity save sends all three lists through this process, which a
-  -- hub with large lists has no memory for; an icon only needs this small
-  -- one. No engine reload: the remotes read ActivityList from the store, and
-  -- the new etag plus revision makes them fetch it.
-  -- baseImageUri is used when the activity has none (the caller supplies it:
-  -- this file may not name a web address, tools/activity_offline_guard.sh).
-  local function setActivityImageKey(activityId, imageKey, baseImageUri)
-    local snapshot, readError = resourceSnapshot("ActivityList")
-    if not snapshot or type(snapshot.resource.Activities) ~= "table" then
-      return nil, readError or "could not read local ActivityList"
-    end
-    -- A second, untouched copy to restore from if the save fails.
-    local original = resourceSnapshot("ActivityList")
-    if not original then
-      return nil, "could not read local ActivityList"
-    end
-    local list = snapshot.resource
-    local target
-    for _, activity in ipairs(list.Activities) do
-      if type(activity) == "table" and tostring(activity["Id-"]) == tostring(activityId) then
-        target = activity
-      end
-    end
-    if not target then
-      return nil, "that activity isn't on the hub yet; save the activity first"
-    end
-    local oldNames = iconNames(list)
-    if imageKey then
-      target.ImageKey = imageKey
-      if type(target.BaseImageUri) ~= "string" or target.BaseImageUri == "" then
-        if type(baseImageUri) ~= "string" or not string.match(baseImageUri, "^https?://[%w%.%-]+/$") then
-          return nil, "this activity has no image address; send baseImageUri"
-        end
-        target.BaseImageUri = baseImageUri
-      end
-    else
-      target.ImageKey = json.null
-      target.BaseImageUri = json.null
-    end
-    local ok, saveError = saveResource("ActivityList", list, localEtag(), localHetag())
-    if not ok then
-      -- The failed write may have replaced the list: put the old one back.
-      local restored = saveResource("ActivityList", original.resource, original.etag, original.hetag)
-      return nil, saveError, restored and true or false
-    end
-    pruneIconNames(oldNames, list)
-    bumpRevision()
-    return true
   end
 
   local function imageWriterRefusal()
@@ -2576,35 +2518,14 @@ do
     return result
   end
 
-  -- {imageFile, thumbnailFile[, activityId]}: a new 70x70 icon and its 38x38
-  -- thumbnail (Logitech's own sizes), stored under a fresh <account>_<uuid>
-  -- name. With activityId the icon is put on that activity at once
-  -- (setActivityImageKey); without, the caller saves the returned imageKey
-  -- with the activity. {activityId, clear = true} removes an activity's icon.
+  -- {imageFile, thumbnailFile}: a new 70x70 icon and its 38x38 thumbnail (Logitech's own size),
+  -- stored under a fresh <account>_<uuid> name. The editor then saves the
+  -- activity with ImageKey "Activity/<name>.png"; that save publishes the
+  -- revision.
   local function commitActivityIcon(request)
     local refusal = imageWriterRefusal()
     if refusal then
       return refusal
-    end
-    local activityId = request.activityId ~= nil and tostring(request.activityId) or nil
-    if activityId and not string.match(activityId, "^%d+$") then
-      return {ok = false, localOnly = true, error = "activityId must be a number"}
-    end
-    if request.clear == true then
-      if not activityId then
-        return {ok = false, localOnly = true, error = "give the activity whose icon to remove"}
-      end
-      local cleared, clearError, rolledBack = setActivityImageKey(activityId, nil)
-      if not cleared then
-        return {ok = false, localOnly = true, rolledBack = rolledBack, error = clearError}
-      end
-      return {
-        ok = true,
-        localOnly = true,
-        activityId = activityId,
-        cleared = true,
-        configVersion = digest.configVersion
-      }
     end
     local image, imageError = stagedPng(request.imageFile, ACTIVITY_ICON_FILE, ACTIVITY_ICON_SIZE, "icon")
     if not image then
@@ -2625,17 +2546,7 @@ do
       deleteRemoteImage(name .. ".png")
       return {ok = false, localOnly = true, error = saveError}
     end
-    local result = {ok = true, localOnly = true, name = name, imageKey = "Activity/" .. name .. ".png"}
-    if activityId then
-      local set, setError, rolledBack = setActivityImageKey(activityId, result.imageKey, request.baseImageUri)
-      if not set then
-        deleteRemoteImage(name .. ".png")
-        return {ok = false, localOnly = true, rolledBack = rolledBack, error = setError}
-      end
-      result.activityId = activityId
-      result.configVersion = digest.configVersion
-    end
-    return result
+    return {ok = true, localOnly = true, name = name, imageKey = "Activity/" .. name .. ".png"}
   end
 
   remoteImages.status = remoteImagesStatus

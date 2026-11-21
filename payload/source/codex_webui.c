@@ -11796,114 +11796,34 @@ refuse:
     send_image_refusal(fd, msg);
 }
 
-/* The activity revision as /api/activity-config reports it, from the files. */
-static int current_activity_revision(char *out, size_t outlen) {
-    size_t al = 0, ml = 0, fl = 0;
-    char *a = read_file_alloc(ACTIVITY_LIST, MAX_RESOURCE_FILE, &al);
-    char *m = read_file_alloc(MAP_LIST, MAX_RESOURCE_FILE, &ml);
-    char *fn = read_file_alloc(FUNCTION_LIST, MAX_RESOURCE_FILE, &fl);
-    int ok = a && m && fn;
-    if (ok) activity_revision(a, al, m, ml, fn, fl, out, outlen);
-    else if (outlen) out[0] = 0;
-    free(a); free(m); free(fn);
-    return ok ? 0 : -1;
-}
-
 /* POST {"image":<base64 70x70 PNG>,"thumbnail":<base64 38x38 PNG>}: store a
-   new activity icon; the answer's imageKey goes into the activity's ImageKey
-   with the next activity save.
-   With "activityId" the hub puts the icon on that activity itself, saving
-   ActivityList alone ("baseImageUri" is used when the activity has no image
-   address), and the answer carries the new "revision". A full activity save
-   moves all three lists through the hub's small memory; an icon needn't.
-   {"activityId":"<id>","clear":true} removes that activity's icon. */
+   new activity icon. The answer's imageKey goes into the activity's ImageKey
+   with the next activity save. */
 static void render_activity_icon_set_json(int fd, const struct request *req) {
-    char image_file[96], thumb_file[96], request[768], request_id[96], msg[768], reply[2048];
-    char activity_id[24], base_uri[128], revision[64];
-    size_t i, n;
-    int written, rc, clear, staged = 0;
-    FILE *f;
-    msg[0] = reply[0] = activity_id[0] = base_uri[0] = 0;
+    char image_file[96], thumb_file[96], request[512], request_id[96], msg[768], reply[2048];
+    int written, rc;
+    msg[0] = reply[0] = 0;
     if (!req->body || req->body_truncated) {
         send_image_refusal(fd, "Send {\"image\":...,\"thumbnail\":...} as JSON.");
         return;
     }
-    if (json_top_string(req->body, "activityId", activity_id, sizeof(activity_id)) == -1) {
-        send_image_refusal(fd, "activityId must be a string of digits.");
-        return;
-    }
-    for (i = 0; activity_id[i]; i++) {
-        if (!isdigit((unsigned char)activity_id[i])) {
-            send_image_refusal(fd, "activityId must be a string of digits.");
-            return;
-        }
-    }
-    /* https://<host>/ only: letters, digits, dots and dashes in the host. */
-    if (json_top_string(req->body, "baseImageUri", base_uri, sizeof(base_uri)) == 1 && base_uri[0]) {
-        n = strlen(base_uri);
-        if (strncmp(base_uri, "https://", 8) != 0 || n < 10 || base_uri[n - 1] != '/') n = 0;
-        for (i = 8; n && i + 1 < n; i++) {
-            unsigned char c = (unsigned char)base_uri[i];
-            if (!isalnum(c) && c != '.' && c != '-') n = 0;
-        }
-        if (!n) {
-            send_image_refusal(fd, "baseImageUri must be https://<host>/.");
-            return;
-        }
-    }
-    clear = json_top_bool(req->body, "clear", 0);
-    if (clear && !activity_id[0]) {
-        send_image_refusal(fd, "Give the activityId whose icon to remove.");
+    snprintf(image_file, sizeof(image_file), "/var/volatile/codex-activity-icon-%ld.png", (long)getpid());
+    snprintf(thumb_file, sizeof(thumb_file), "/var/volatile/codex-activity-icon-%ld-small.png", (long)getpid());
+    if (stage_remote_png(req, "image", 70, 70, image_file, "icon", msg, sizeof(msg)) != 0 ||
+            stage_remote_png(req, "thumbnail", 38, 38, thumb_file, "icon thumbnail", msg, sizeof(msg)) != 0) {
+        unlink(image_file);
+        unlink(thumb_file);
+        send_image_refusal(fd, msg);
         return;
     }
     snprintf(request_id, sizeof(request_id), "%ld-%ld-%08x",
         (long)getpid(), (long)time(NULL), resource_hash(req->body, req->body_len));
-    if (clear) {
-        written = snprintf(request, sizeof(request),
-            "{\"id\":\"%s\",\"op\":\"CommitActivityIcon\",\"activityId\":\"%s\",\"clear\":true}",
-            request_id, activity_id);
-    } else {
-        snprintf(image_file, sizeof(image_file), "/var/volatile/codex-activity-icon-%ld.png", (long)getpid());
-        snprintf(thumb_file, sizeof(thumb_file), "/var/volatile/codex-activity-icon-%ld-small.png", (long)getpid());
-        staged = 1;
-        if (stage_remote_png(req, "image", 70, 70, image_file, "icon", msg, sizeof(msg)) != 0 ||
-                stage_remote_png(req, "thumbnail", 38, 38, thumb_file, "icon thumbnail", msg, sizeof(msg)) != 0) {
-            unlink(image_file);
-            unlink(thumb_file);
-            send_image_refusal(fd, msg);
-            return;
-        }
-        written = snprintf(request, sizeof(request),
-            "{\"id\":\"%s\",\"op\":\"CommitActivityIcon\",\"imageFile\":\"%s\",\"thumbnailFile\":\"%s\"",
-            request_id, image_file, thumb_file);
-        if (activity_id[0]) {
-            written += snprintf(request + written, sizeof(request) - (size_t)written,
-                ",\"activityId\":\"%s\"", activity_id);
-            if (base_uri[0]) {
-                written += snprintf(request + written, sizeof(request) - (size_t)written,
-                    ",\"baseImageUri\":\"%s\"", base_uri);
-            }
-        }
-        written += snprintf(request + written, sizeof(request) - (size_t)written, "}");
-    }
+    written = snprintf(request, sizeof(request),
+        "{\"id\":\"%s\",\"op\":\"CommitActivityIcon\",\"imageFile\":\"%s\",\"thumbnailFile\":\"%s\"}",
+        request_id, image_file, thumb_file);
     rc = offline_writer_request(request, (size_t)written, request_id, reply, sizeof(reply), msg, sizeof(msg));
-    if (staged) {
-        unlink(image_file);
-        unlink(thumb_file);
-    }
-    /* The activity changed on the hub: hand back the revision an editor needs
-       for its next save. */
-    n = strlen(reply);
-    while (n && isspace((unsigned char)reply[n - 1])) n--;
-    if (rc == 0 && activity_id[0] && n && reply[0] == '{' && reply[n - 1] == '}' &&
-            current_activity_revision(revision, sizeof(revision)) == 0) {
-        f = send_json_start(fd, "200 OK");
-        if (!f) return;
-        fwrite(reply, 1, n - 1, f);
-        fprintf(f, ",\"revision\":\"%s\"}\n", revision);
-        fclose(f);
-        return;
-    }
+    unlink(image_file);
+    unlink(thumb_file);
     send_writer_reply(fd, rc, reply, msg, "The icon was not saved.");
 }
 

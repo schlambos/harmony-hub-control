@@ -1665,51 +1665,35 @@
     });
   }
 
-  // The hub puts the icon on the activity itself (POST /api/activity-icon
-  // with activityId) and saves ActivityList alone. Going through the editor's
-  // Save would send all three lists, which a hub with large lists has no
-  // memory for. The answer's revision keeps a later Save from looking like a
-  // conflict. `body` is {image, thumbnail} or {clear: true}.
-  async function changeActivityIcon(body, doneText) {
+  async function storeActivityIcon(image, thumbnail) {
     const activity = selectedActivity();
     if (!activity) return;
     const id = objectId(activity);
     iconChoice.busy = true;
     renderIconField(activity);
-    markNotice(body.clear ? "Removing the icon on the hub…" : "Storing the icon on the hub…");
+    markNotice("Storing the icon on the hub…");
     try {
       const result = await fetchJson("/api/activity-icon", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ ...body, activityId: id, baseImageUri: ICON_BASE_URI })
+        body: JSON.stringify({ image, thumbnail })
       });
       const target = activities().find((item) => sameId(objectId(item), id));
-      if (!target) throw new Error("The activity is gone from this page; reload.");
-      if (body.clear) {
-        target.ImageKey = null;
-        target.BaseImageUri = null;
-      } else {
-        if (typeof result.imageKey !== "string") throw new Error("The hub didn't return the icon's name.");
-        target.ImageKey = result.imageKey;
-        if (!text(target.BaseImageUri)) target.BaseImageUri = ICON_BASE_URI;
-      }
-      if (result.revision) state.revision = text(result.revision);
+      if (!target || typeof result.imageKey !== "string") throw new Error("The hub didn't return the icon's name.");
+      target.ImageKey = result.imageKey;
+      if (!text(target.BaseImageUri)) target.BaseImageUri = ICON_BASE_URI;
+      touch(target);
       imagesChanged();
-      renderRaw(target);
-      markNotice(doneText);
+      markNotice("Icon stored on the hub. Save the activity, then sync the remote to see it.");
     } catch (error) {
       const hint = error.status === 404
         ? "The hub's software is older than this editor: update the hub to set icons."
         : error.message;
-      markNotice(`The icon wasn't changed: ${hint}`, "error");
+      markNotice(`The icon wasn't stored: ${hint}`, "error");
     } finally {
       iconChoice.busy = false;
       renderIconField(selectedActivity());
     }
-  }
-
-  function storeActivityIcon(image, thumbnail) {
-    return changeActivityIcon({ image, thumbnail }, "Icon saved on the hub. Run Sync remote on the remote to see it.");
   }
 
   function bindIconField() {
@@ -1734,7 +1718,13 @@
         return;
       }
       if (event.target.closest("[data-icon-remove]") && !iconChoice.busy) {
-        changeActivityIcon({ clear: true }, "Icon removed on the hub. Run Sync remote on the remote.");
+        const activity = selectedActivity();
+        if (!activity) return;
+        activity.ImageKey = null;
+        activity.BaseImageUri = null;
+        touch(activity);
+        renderIconField(activity);
+        markNotice("Icon removed. Save the activity to apply it.");
       }
     });
     host.addEventListener("change", async (event) => {
@@ -2724,8 +2714,7 @@
       ICON_GLYPHS,
       ICON_BASE_URI,
       imageStatus,
-      imageStatusHtml,
-      changeActivityIcon
+      imageStatusHtml
     };
     return;
   }
