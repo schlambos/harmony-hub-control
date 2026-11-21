@@ -1167,20 +1167,29 @@ export function buildActivityGraph({ config, draft, editId, remotes = [] }) {
      So each screen or Companion remote the hub has maps for gets one,
      modelled on another of its maps, and the mirror below fills it. A paired
      remote the hub has no map for yet (a fresh hub) starts from the wizard's
-     map. */
+     map. That includes a screen remote on a hub set up offline (#219): no
+     cloud sync ever wrote a 16417 map there, so without this the remote has
+     no map for any activity and the on-screen editor has nothing to open.
+     Such a map takes no surface ids from the Smart Control's map: the hub
+     has none for the screen remote, so they stay null unless another 16417
+     map supplies them. */
   const paired = new Set((Array.isArray(remotes) ? remotes : []).map(String));
   for (const prefix of ["16417", ...COMPANION_REMOTES]) {
     const id = `${prefix}Activity${activityId}`;
     if (mergedMaps.some((m) => String(m?.ButtonMapIdentifier ?? "") === id)) continue;
-    const sibling = mergedMaps.find((m) => String(m?.ButtonMapIdentifier ?? "").startsWith(`${prefix}Activity`))
-      ?? mergedMaps.find((m) => String(m?.ButtonMapIdentifier ?? "").startsWith(prefix))
-      ?? (COMPANION_REMOTES.includes(prefix) && paired.has(prefix) ? wizardMap : null);
+    const own = mergedMaps.find((m) => String(m?.ButtonMapIdentifier ?? "").startsWith(`${prefix}Activity`))
+      ?? mergedMaps.find((m) => String(m?.ButtonMapIdentifier ?? "").startsWith(prefix));
+    const sibling = own ?? (paired.has(prefix) ? wizardMap : null);
     if (!sibling) continue;
-    const made = cloneEmptySurfaceMap(sibling, activityId, alloc, config);
+    const made = cloneEmptySurfaceMap(sibling, activityId, alloc, own || prefix !== "16417" ? config : null);
     made.ButtonMapIdentifier = id;
-    const surf = surfaceTemplate(config, prefix);
-    for (const key of ["ButtonMapSurfaceId-", "RemoteId-", "SurfaceId-"]) {
-      if (made[key] == null && surf[key] != null) made[key] = surf[key];
+    if (!own && prefix === "16417") {
+      for (const key of ["ButtonMapSurfaceId-", "RemoteId-", "SurfaceId-"]) made[key] = null;
+    } else {
+      const surf = surfaceTemplate(config, prefix);
+      for (const key of ["ButtonMapSurfaceId-", "RemoteId-", "SurfaceId-"]) {
+        if (made[key] == null && surf[key] != null) made[key] = surf[key];
+      }
     }
     mergedMaps.push(made);
   }
