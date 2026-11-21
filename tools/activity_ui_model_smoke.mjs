@@ -701,10 +701,10 @@ validateGraph();
   Object.assign(imageStatus, { checked: true, oldHub: true });
   assert.match(imageStatusHtml(), /older than this editor: update the hub/);
   Object.assign(imageStatus, { oldHub: false, missing: 3, total: 17 });
-  assert.match(imageStatusHtml(), /3 of 17 user images .* aren&#39;t on the hub\. Sync them with the Melodious desktop app: Settings → Logitech account → Sync user images from Logitech\./);
+  assert.match(imageStatusHtml(), /Missing user images: 3 of 17\. Sync them with the Melodious desktop app \(Settings → Logitech account\)\./);
   assert.doesNotMatch(imageStatusHtml(), /<button/);
   statusContext.melodiousDesktop = { catalog: {} };
-  assert.match(imageStatusHtml(), /Sync them in Settings → Logitech account/);
+  assert.match(imageStatusHtml(), /Missing user images: 3 of 17\. Sync them in Settings → Logitech account\./);
   Object.assign(imageStatus, { missing: 0 });
   assert.equal(imageStatusHtml(), "");
 }

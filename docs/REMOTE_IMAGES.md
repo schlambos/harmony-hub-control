@@ -37,7 +37,7 @@ syncs them for it:
 1. Update the hub's software to this version (it receives and serves the
    images).
 2. In the desktop app, open **Settings**. Under **Logitech account**, the
-   **User images** row says how many of the hub's images are missing.
+   **User images** row shows **Missing: N of M**, or **Fully synced**.
 3. Choose **Sync user images from Logitech**.
 4. Choose **Sync remote** on each screen remote.
 
@@ -55,6 +55,9 @@ syncs them for it:
 - **Images that are gone.** An image Logitech no longer has is reported
   and skipped; the rest are still synced. Give such an activity a new icon
   in the editor.
+- **Right after a hub restart** the row can stay on "Checking…" for up to
+  two minutes, until the hub has finished starting. Normally it takes under
+  a second.
 - **Once is enough.** Images stay on the hub. Sync again only after adding
   activities or favorites that use Logitech images.
 - The activity editor shows how many user images are missing and points

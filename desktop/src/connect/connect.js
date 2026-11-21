@@ -57,6 +57,7 @@
       : null;
   let userImages = { state: "unknown" };
   let userImagesBusy = false;
+  let userImagesSlow = false;
   let userImagesProgress = "";
   let userImagesMessage = "";
   let connectExistingChosen = false;
@@ -269,36 +270,38 @@
     `;
   }
 
-  function userImagesStatusText() {
-    if (!state.hub) return "Connect to a hub first.";
-    if (userImagesBusy) return userImagesProgress || "Syncing…";
+  // {text, tone} for the status badge: "warn", "ok" or "" (neutral).
+  function userImagesStatus() {
+    if (!state.hub) return { text: "Connect to a hub first", tone: "" };
+    if (userImagesBusy) return { text: userImagesProgress || "Syncing…", tone: "" };
     switch (userImages.state) {
       case "ready":
-        if (userImages.total === 0) return "This hub's activities and favorites use no images.";
+        if (userImages.total === 0) return { text: "No user images in use", tone: "" };
         return userImages.missing > 0
-          ? `${userImages.missing} of ${userImages.total} activity icons and channel logos aren't on the hub.`
-          : `All ${userImages.total} activity icons and channel logos are on the hub.`;
+          ? { text: `Missing: ${userImages.missing} of ${userImages.total}`, tone: "warn" }
+          : { text: "Fully synced", tone: "ok" };
       case "old-hub":
-        return "The hub's software is too old for this. Update the hub first.";
+        return { text: "Update the hub first", tone: "warn" };
       case "error":
-        return `Couldn't check the hub: ${userImages.message}`;
+        return { text: `Check failed: ${userImages.message}`, tone: "warn" };
       default:
-        return "Checking the hub…";
+        return { text: userImagesSlow ? "Checking… the hub may still be starting" : "Checking…", tone: "" };
     }
   }
 
   // Under "Logitech account": a one-off sync of the images Logitech kept.
+  // The status is a badge beside the title, apart from the description.
   function renderUserImagesRow() {
     if (!imageSync) return "";
     const canSync = Boolean(state.hub) && !userImagesBusy &&
       userImages.state === "ready" && userImages.missing > 0;
+    const status = userImagesStatus();
     return `
       <div class="m-list" style="margin-top:var(--space-2)">
         <div class="m-row" id="settingsUserImagesRow">
           <span class="m-row-text">
-            <span class="m-row-title">User images</span>
-            <span class="m-row-sub" id="settingsUserImagesStatus">${escapeHtml(userImagesStatusText())}</span>
-            <span class="m-row-sub">Activity icons and favorite channel logos kept by Logitech. This app downloads them and sends them to the hub, which stays offline. No Logitech sign-in needed.</span>
+            <span class="m-row-title">User images <span class="m-status${status.tone ? ` m-status--${status.tone}` : ""}" id="settingsUserImagesStatus">${escapeHtml(status.text)}</span></span>
+            <span class="m-row-sub">Activity icons and channel logos from Logitech.</span>
             ${userImagesMessage ? `<span class="m-row-sub" id="settingsUserImagesMessage">${escapeHtml(userImagesMessage)}</span>` : ""}
           </span>
           <button type="button" class="btn btn-tonal btn-sm" id="syncUserImagesBtn" ${canSync ? "" : "disabled"}>${
@@ -308,11 +311,24 @@
       </div>`;
   }
 
+  // Half a second normally. Right after a hub restart the hub's activity
+  // plugin isn't up yet and the answer can take a couple of minutes, so say
+  // so once the wait passes 3 seconds.
   async function loadUserImages() {
     if (!imageSync || !state.hub) return;
     userImages = { state: "loading" };
+    userImagesSlow = false;
     if (state.mode === "settings") render();
-    userImages = await imageSync.status();
+    const slowTimer = setTimeout(() => {
+      userImagesSlow = true;
+      if (state.mode === "settings" && userImages.state === "loading") render();
+    }, 3000);
+    try {
+      userImages = await imageSync.status();
+    } finally {
+      clearTimeout(slowTimer);
+      userImagesSlow = false;
+    }
     if (state.mode === "settings") render();
   }
 
@@ -320,18 +336,18 @@
     if (!imageSync || userImagesBusy) return;
     userImagesBusy = true;
     userImagesMessage = "";
-    userImagesProgress = "Asking the hub which images are missing…";
+    userImagesProgress = "Syncing…";
     render();
     try {
       const result = await imageSync.sync(({ done, total }) => {
-        userImagesProgress = `Syncing image ${done} of ${total}…`;
+        userImagesProgress = `Syncing ${done} of ${total}…`;
         const line = document.getElementById("settingsUserImagesStatus");
         if (line) line.textContent = userImagesProgress;
       });
       userImagesMessage = imageSync.summary(result);
       showSnackbar(userImagesMessage, result.failed.size > 0 && result.synced === 0);
     } catch (err) {
-      userImagesMessage = `Syncing images stopped: ${err?.message || err}`;
+      userImagesMessage = `Sync stopped: ${err?.message || err}`;
       showSnackbar(userImagesMessage, true);
     } finally {
       userImagesBusy = false;

@@ -119,13 +119,11 @@
       return { synced, failed };
     }
 
-    /** One line for the user about a finished sync. */
+    /** One short line for the user about a finished sync. */
     function summary({ synced, failed }) {
       const reasons = [...new Set(failed.values())];
-      let text = synced
-        ? `Synced ${synced} image${synced === 1 ? "" : "s"} to the hub. Choose Sync remote on each screen remote to see them.`
-        : "No images were synced.";
-      if (failed.size) text += ` ${failed.size} could not be synced (${reasons.slice(0, 2).join("; ")}).`;
+      let text = synced ? `Synced ${synced}. Run Sync remote on each remote.` : "Nothing synced.";
+      if (failed.size) text += ` ${failed.size} failed: ${reasons.slice(0, 2).join("; ")}.`;
       return text;
     }
 

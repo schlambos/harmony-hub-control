@@ -1614,8 +1614,8 @@
     }
   }
 
-  const SYNC_HINT_DESKTOP = "Sync them in Settings → Logitech account → Sync user images from Logitech.";
-  const SYNC_HINT_BROWSER = "Sync them with the Melodious desktop app: Settings → Logitech account → Sync user images from Logitech.";
+  const SYNC_HINT_DESKTOP = "Sync them in Settings → Logitech account.";
+  const SYNC_HINT_BROWSER = "Sync them with the Melodious desktop app (Settings → Logitech account).";
 
   function imageStatusHtml() {
     if (!imageStatus.checked) return "";
@@ -1623,7 +1623,7 @@
       return `<div class="activity-icon-sync"><span>The hub's software is older than this editor: update the hub to set icons.</span></div>`;
     }
     if (imageStatus.missing <= 0) return "";
-    const what = `${imageStatus.missing} of ${imageStatus.total} user images (activity icons and favorite channel logos) aren't on the hub.`;
+    const what = `Missing user images: ${imageStatus.missing} of ${imageStatus.total}.`;
     return `<div class="activity-icon-sync"><span>${esc(what)} ${esc(inDesktopApp() ? SYNC_HINT_DESKTOP : SYNC_HINT_BROWSER)}</span></div>`;
   }
 

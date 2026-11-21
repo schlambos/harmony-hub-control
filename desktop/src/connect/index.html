@@ -318,6 +318,29 @@
         grid-template-columns: 1fr;
       }
     }
+    /* Status badge beside a row title (User images): apart from the muted
+       description below it. */
+    .m-status {
+      display: inline-block;
+      margin-left: var(--space-2);
+      padding: 1px 10px;
+      border-radius: 999px;
+      background: var(--surface-highest);
+      color: var(--on-surface-variant);
+      font-size: 12px;
+      font-weight: 600;
+      line-height: 1.6;
+      vertical-align: middle;
+      white-space: nowrap;
+    }
+    .m-status--warn {
+      background: var(--warning-container);
+      color: var(--warning);
+    }
+    .m-status--ok {
+      background: var(--primary-container);
+      color: var(--on-primary-container);
+    }
   </style>
 </head>
 <body>
