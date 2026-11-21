@@ -36,6 +36,10 @@ import {
   preferredTimeZone,
   timezoneFormFields,
   timezoneSummary,
+  parseNtpConf,
+  ntpServersError,
+  ntpFormFields,
+  ntpSummary,
 } from "./system-model.js";
 import { TZ_POSIX } from "../tz-posix.js";
 
@@ -52,6 +56,8 @@ export function createSystemView(section) {
   let hubVersionError = null;
   let savedZone; // undefined = not read yet, null = unset, else { zone, posix }
   let zoneError = null;
+  let savedNtp; // undefined = not read yet, else the saved servers ([] = public ones)
+  let ntpError = null;
   const disarms = []; // guard teardowns run on onHide
 
   const els = {};
@@ -119,6 +125,17 @@ export function createSystemView(section) {
     renderTimezone();
   }
 
+  async function loadNtp() {
+    ntpError = null;
+    try {
+      savedNtp = parseNtpConf(await getText("/export/ntp"));
+    } catch (error) {
+      savedNtp = undefined;
+      ntpError = error;
+    }
+    renderNtp();
+  }
+
   async function loadUpdate() {
     const [statusRes, versionRes] = await Promise.allSettled([
       getJson("/api/update-status"),
@@ -135,6 +152,7 @@ export function createSystemView(section) {
     loadProbe();
     loadCloud();
     loadTimezone();
+    loadNtp();
     loadUpdate();
   }
 
@@ -162,6 +180,22 @@ export function createSystemView(section) {
       await loadTimezone();
     } catch (error) {
       setResult(els.zoneResult, "error", `Could not save the time zone: ${error.message}`);
+    }
+  }
+
+  async function saveNtp() {
+    const typed = els.ntpInput.value;
+    const fields = ntpFormFields(typed);
+    if (!fields) {
+      setResult(els.ntpResult, "error", ntpServersError(typed));
+      return;
+    }
+    try {
+      const res = await postHubForm("/system", fields);
+      setResult(els.ntpResult, "ok", res.msg || "Custom NTP server saved.");
+      await loadNtp();
+    } catch (error) {
+      setResult(els.ntpResult, "error", `Could not save the custom NTP server: ${error.message}`);
     }
   }
 
@@ -346,6 +380,19 @@ export function createSystemView(section) {
     els.zoneSelect.value = preferredTimeZone(savedZone, browserTimeZone());
   }
 
+  function renderNtp() {
+    if (ntpError) {
+      els.ntpState.textContent = `Could not read the hub's NTP server setting: ${ntpError.message}`;
+      return;
+    }
+    if (savedNtp === undefined) {
+      els.ntpState.textContent = "Reading the hub's NTP server setting…";
+      return;
+    }
+    els.ntpState.textContent = ntpSummary(savedNtp);
+    els.ntpInput.value = savedNtp.join(", ");
+  }
+
   function renderUpdate() {
     clear(els.versionSummary);
     els.versionSummary.appendChild(el("p", { className: "mini", text: hubVersionSummary(hubVersion, hubVersionError) }));
@@ -453,6 +500,29 @@ export function createSystemView(section) {
       }),
       el("div", { className: "setup-actions", children: [els.zoneSaveBtn] }),
       els.zoneResult,
+    ]),
+  );
+
+  /* Custom NTP server (where the hub sets its clock from) */
+  els.ntpState = el("p", { className: "mini", text: "Reading the hub's NTP server setting…" });
+  els.ntpResult = el("div", { className: "setup-status" });
+  els.ntpInput = el("input", {
+    attrs: { id: "systemNtpServers", type: "text", autocomplete: "off", spellcheck: "false", placeholder: "ntp.example.com" },
+  });
+  els.ntpSaveBtn = el("button", { className: "btn btn-secondary", text: "Save NTP server", attrs: { type: "button" } });
+  els.ntpSaveBtn.addEventListener("click", saveNtp);
+  section.appendChild(
+    panel("Custom NTP server", null, [
+      els.ntpState,
+      el("div", {
+        children: [el("label", { text: "Custom NTP servers", attrs: { for: "systemNtpServers" } }), els.ntpInput],
+      }),
+      el("p", {
+        className: "setup-field-hint",
+        text: "Choose your own NTP servers instead of the default public ones: up to 3 host names or IPv4 addresses, separated by commas. When set, the hub asks only these. Leave empty to use the defaults.",
+      }),
+      el("div", { className: "setup-actions", children: [els.ntpSaveBtn] }),
+      els.ntpResult,
     ]),
   );
 

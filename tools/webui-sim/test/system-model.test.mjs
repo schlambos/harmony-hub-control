@@ -337,6 +337,49 @@ describe("timezoneSummary", () => {
   });
 });
 
+import {
+  NTP_SERVERS_MAX,
+  splitNtpServers,
+  parseNtpConf,
+  ntpServersError,
+  ntpFormFields,
+  ntpSummary,
+} from "../public/js/views/system-model.js";
+
+describe("custom NTP server", () => {
+  it("splits on commas, spaces and new lines", () => {
+    assert.deepEqual(splitNtpServers(" ntp.example.com, 192.168.1.5\nclock.example "), ["ntp.example.com", "192.168.1.5", "clock.example"]);
+    assert.deepEqual(splitNtpServers(""), []);
+    assert.deepEqual(splitNtpServers(null), []);
+  });
+
+  it("reads the stored file, keeping what the hub would use", () => {
+    assert.deepEqual(parseNtpConf("ntp.example.com\n"), ["ntp.example.com"]);
+    assert.deepEqual(parseNtpConf(""), []);
+    assert.deepEqual(parseNtpConf("a.lan\nbad;host\nb.lan\nc.lan\nd.lan\n"), ["a.lan", "b.lan", "c.lan"]);
+  });
+
+  it("refuses what codex_webui refuses", () => {
+    assert.equal(ntpServersError(""), null);
+    assert.equal(ntpServersError("ntp.example.com, 10.0.0.1"), null);
+    assert.match(ntpServersError("ntp.example.com; reboot"), /not a host name/);
+    assert.match(ntpServersError("-ntp.example.com"), /not a host name/);
+    assert.match(ntpServersError("a b c d"), new RegExp(`at most ${NTP_SERVERS_MAX}`));
+    assert.match(ntpServersError("a".repeat(254)), /not a host name/);
+  });
+
+  it("builds the form, an empty list clearing the setting", () => {
+    assert.deepEqual(ntpFormFields(" ntp.example.com\n10.0.0.1 "), { action: "ntp", ntpServers: "ntp.example.com,10.0.0.1" });
+    assert.deepEqual(ntpFormFields(""), { action: "ntp", ntpServers: "" });
+    assert.equal(ntpFormFields("bad/host"), null);
+  });
+
+  it("says which servers the hub uses", () => {
+    assert.match(ntpSummary(["ntp.example.com"]), /Custom NTP server in use: ntp\.example\.com\./);
+    assert.match(ntpSummary([]), /No custom NTP server set/);
+  });
+});
+
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";

@@ -1464,7 +1464,7 @@ the underlying `connect.statedigest?get`.
 
 Every export is a GET handled by `send_file_download()`,
 `send_bundle_download()`, `send_cloud_download()`,
-`send_timezone_download()`, `send_bt_devices_download()` or
+`send_timezone_download()`, `send_ntp_download()`, `send_bt_devices_download()` or
 `send_restrictions_download()`:
 
 ```text
@@ -1479,6 +1479,7 @@ GET /export/mqtt
 GET /export/wifi
 GET /export/cloud
 GET /export/timezone
+GET /export/ntp
 GET /export/bluetooth
 GET /export/restrictions
 ```
@@ -1506,6 +1507,12 @@ network reconnect.
 `/export/timezone` returns the stored time zone as plain text: the IANA
 name on the first line and the POSIX TZ rule on the second. The body is
 empty when no time zone is stored.
+
+`/export/ntp` returns the custom NTP servers chosen in System, one per line
+(`/data/codex/ntp_servers.conf`). The body is empty when none are chosen: the
+hub then sets its clock from the default public servers (`pool.ntp.org`,
+`time.google.com`, `time.cloudflare.com`). When any are chosen, only those
+are asked.
 
 `/export/bluetooth` returns the saved Bluetooth device store as
 `bt-devices.json`; it returns an empty device list when no store exists.
@@ -1590,7 +1597,7 @@ carries.
 | --- | --- | --- | --- | --- |
 | POST | `/mqtt` | `handle_mqtt()` | `enabled`, `haDiscovery`, `host`, `port`, `username`, `password`, `keep_password`, `baseTopic`, `discoveryPrefix`, `clientId`, `name`, `pollSeconds`, `keepAlive` | Saves the MQTT bridge configuration and requests discovery. |
 | POST | `/wifi` | `handle_wifi()` | `ssid`, `password`, `keep_password`, `hidden`, `open`, `apply` | Saves the Wi-Fi configuration; `apply=reboot` reboots. An empty SSID, or a secured network with no password, is refused in the page message. |
-| POST | `/system` | `handle_system()` | `action` plus the fields for that action | `reboot`; `cloud`/`cloud_reboot` with `cloudBlocker`; `auth` with `authEnabled`, `authUsername`, `authPassword`; `timezone` with `timezone`, `tzPosix`; `rediscover`. |
+| POST | `/system` | `handle_system()` | `action` plus the fields for that action | `reboot`; `cloud`/`cloud_reboot` with `cloudBlocker`; `auth` with `authEnabled`, `authUsername`, `authPassword`; `timezone` with `timezone`, `tzPosix`; `ntp` with `ntpServers` (custom NTP servers: up to 3 host names or IPv4 addresses, comma, space or newline separated; empty clears); `rediscover`. |
 | POST | `/import` | `handle_import()` | `target`, `payload` | Imports one target: `bundle`, `devices`, `functions`, `protocols`, `activities`, `maps`, `automation`, `mqtt`, `wifi`, `cloud`, `bluetooth`, `restrictions`. The payload is validated for its target before anything is written. |
 | POST | `/ir/send` | `handle_ir_send()` | `deviceId`, `command` | Sends one saved IR command. |
 | POST | `/ir/device` | `handle_ir_device()` | `deviceId`, `name`, `manufacturer`, `model`, `type` | Updates a device's details. |
