@@ -920,7 +920,8 @@ export function createDeviceSettings({ root, track }) {
       render();
     } else if (t.dataset.radio === "irOutput") {
       draft.irOutput = Number(t.value);
-      changed();
+      saveError = "";
+      render(`irOutput-${t.value}`);
     } else if (t.dataset.radio === "tvmethod" && tv) {
       setMethod(tv.draft, t.value);
       saveError = "";
