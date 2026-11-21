@@ -110,7 +110,36 @@ describe("the first activity on a fresh hub", () => {
   it("a screen remote gets no root map: it has no activity buttons, and Logitech made none", () => {
     assert.ok(!CONFIGURED.mapList.ButtonMaps.some((m) => m.ButtonMapIdentifier === "16417Root"), "Logitech's own setup has none");
     const graph = buildActivityGraph({ config: FRESH.blank, draft: withKeys(), editId: null, remotes: ["16417"] });
+    assert.ok(!graph.mapList.ButtonMaps.some((m) => m.ButtonMapIdentifier === "16417Root"));
+  });
+
+  it("gives a paired screen remote on an offline hub its own activity map (#219)", () => {
+    const graph = buildActivityGraph({ config: FRESH.blank, draft: withKeys(), editId: null, remotes: ["16417"] });
+    const own = mapById(graph, `16417Activity${graph.activityId}`);
+    assert.ok(own, "the screen remote's activity map");
+    assert.equal(own.__type, "ActivityButtonMap");
+    assert.equal(own["ActivityId-"], Number(graph.activityId));
+    // No 16417 map on the hub to take surface ids from, and the Smart Control's are not the screen's.
+    for (const key of ["ButtonMapSurfaceId-", "RemoteId-", "SurfaceId-"]) assert.equal(own[key], null, key);
+    const wizard = graph.mapList.ButtonMaps.find((m) => isWizardOwnedActivityMap(m, graph.activityId));
+    const hard = own.Buttons.filter((b) => b.__type === "HardRemoteButton");
+    assert.deepEqual(hard.map((b) => b.ButtonKey), ["VolumeUp"]);
+    assert.deepEqual(hard[0].ButtonAction, wizard.Buttons[0].ButtonAction);
+    assert.deepEqual(validateMapList(graph.mapList), []);
+  });
+
+  it("a screen remote that isn't paired still gets no maps on an offline hub", () => {
+    const graph = buildActivityGraph({ config: FRESH.blank, draft: withKeys(), editId: null, remotes: ["16414"] });
     assert.ok(!graph.mapList.ButtonMaps.some((m) => String(m.ButtonMapIdentifier).startsWith("16417")));
+  });
+
+  it("re-saving an activity made before the screen remote was paired adds its map", () => {
+    const first = buildActivityGraph({ config: FRESH.blank, draft: withKeys(), editId: null, remotes: [] });
+    const config = { ...FRESH.blank, activityList: first.activityList, mapList: first.mapList, functionList: first.functionList };
+    assert.ok(!first.mapList.ButtonMaps.some((m) => String(m.ButtonMapIdentifier).startsWith("16417")));
+    const again = buildActivityGraph({ config, draft: withKeys(), editId: first.activityId, remotes: ["16417"] });
+    assert.ok(mapById(again, `16417Activity${first.activityId}`), "the screen remote's map after the edit");
+    assert.deepEqual(validateMapList(again.mapList), []);
   });
 
   it("puts the activity on the button named for its kind", () => {
