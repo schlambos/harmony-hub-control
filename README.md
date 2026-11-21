@@ -39,10 +39,10 @@ files you can back up, restore and edit without an account.
 
 New to Melodious? Follow the three guides in order:
 
-1. **[Set up your hub](docs/SETUP_GUIDE.md)** — the cross-platform desktop Setup Wizard roots the
-   hub and installs Melodious over Wi-Fi or USB (Windows and macOS releases after `v2.1.0`; Linux
-   from source), or use the CLI: [`tools/hub-root/`](tools/hub-root/README.md) + `install_webui`
-   ([INSTALL.md](docs/INSTALL.md)).
+1. **[Set up your hub](docs/SETUP_GUIDE.md)** — the desktop Setup Wizard roots the
+   hub and installs Melodious over Wi-Fi or USB (macOS; Windows and Linux: **Not fully tested,
+   needs confirmation** — Windows and macOS releases after `v2.1.0`, Linux from source), or use the
+   CLI: [`tools/hub-root/`](tools/hub-root/README.md) + `install_webui` ([INSTALL.md](docs/INSTALL.md)).
 2. **[Add devices & import IR codes](docs/DEVICES_AND_CODES_GUIDE.md)** — Logitech catalog, IRDB
    and other imports, learning, and the power, input and timing settings activities need.
 3. **[Create activities & customize your remote](docs/ACTIVITIES_GUIDE.md)** — the activity wizard,
@@ -86,9 +86,12 @@ How the pieces fit, and how presses and gestures are timed: [ARCHITECTURE.md](do
 
 ## Requirements and compatibility
 
-- **Harmony Hub** on firmware 4.15.600, rooted by the Setup Wizard or the bundled root tool.
-- **A computer** to install from: Windows, Linux or macOS (Desktop app, PowerShell or Python 3),
-  or Docker/Unraid ([UNRAID.md](UNRAID.md)).
+- **Harmony Hub** on firmware 4.15.600, rooted by the Setup Wizard or the bundled root tool
+  (firmware 4.11.6 compatibility shims are also in `netservicestarter.lua`, **not yet verified on a
+  4.11.6 hub**; see [COMPATIBILITY.md](docs/COMPATIBILITY.md)).
+- **A computer** to install from: macOS, Windows, or Linux (Desktop app — Windows and Linux: **Not
+  fully tested, needs confirmation** — PowerShell, or Python 3), or Docker/Unraid
+  ([UNRAID.md](UNRAID.md)).
 - **A trusted home network:** the web app is plain HTTP ([SECURITY.md](docs/SECURITY.md)).
 - **Home Assistant** (optional), with [HACS](https://hacs.xyz/).
 - **Android 8.0+** or the **Desktop app** (optional).
@@ -108,8 +111,9 @@ One hub, three apps, one design ([DESIGN.md](DESIGN.md)):
 - **Android app** — the release's `melodious-<version>.apk`, adding a touchpad, sleep timer, phone
   extras and catalog lookup: [Android/README.md](Android/README.md) ·
   [ANDROID_CATALOG.md](docs/ANDROID_CATALOG.md).
-- **Desktop app (Windows, Linux, macOS)** — the web app plus the Setup Wizard and Logitech catalog
-  lookup: [DESKTOP_APP.md](docs/DESKTOP_APP.md) · [desktop/README.md](desktop/README.md).
+- **Desktop app (macOS; Windows and Linux: Not fully tested, needs confirmation)** — the web app
+  plus the Setup Wizard and Logitech catalog lookup: [DESKTOP_APP.md](docs/DESKTOP_APP.md) ·
+  [desktop/README.md](desktop/README.md).
 - **iOS / iPadOS app (experimental)** — native SwiftUI remote for iPhone and iPad, sideloaded via
   AltStore/SideStore (`melodious-ios-<version>.ipa`) or Xcode: [IOS_APP.md](docs/IOS_APP.md).
 
@@ -170,10 +174,20 @@ backups.
 reports so far: [@Ripthulhu](https://github.com/Ripthulhu),
 [@s7thamon](https://github.com/s7thamon), [@danielvijge](https://github.com/danielvijge),
 [@Bergasha](https://github.com/Bergasha), [@apnar](https://github.com/apnar),
-[@roosen5](https://github.com/roosen5), [@NemoN](https://github.com/NemoN),
-[@Tezzlicious](https://github.com/Tezzlicious), [@AXEBro](https://github.com/AXEBro),
-[@dramatic-paws](https://github.com/dramatic-paws), [@sumps71](https://github.com/sumps71) and
-[@boomfunks](https://github.com/boomfunks).
+[@Mugga6315](https://github.com/Mugga6315), [@OrganoidSchnitzel](https://github.com/OrganoidSchnitzel),
+[@jupbek](https://github.com/jupbek), [@jrx-code](https://github.com/jrx-code),
+[@mirsadone](https://github.com/mirsadone), [@roosen5](https://github.com/roosen5),
+[@NemoN](https://github.com/NemoN), [@Tezzlicious](https://github.com/Tezzlicious),
+[@AXEBro](https://github.com/AXEBro), [@dramatic-paws](https://github.com/dramatic-paws),
+[@sumps71](https://github.com/sumps71), [@boomfunks](https://github.com/boomfunks),
+[@nohjyk-art](https://github.com/nohjyk-art), [@mfazio11](https://github.com/mfazio11),
+[@StreneSaco](https://github.com/StreneSaco), [@legoleigh](https://github.com/legoleigh),
+[@keanemachine](https://github.com/keanemachine), [@thre3eye](https://github.com/thre3eye),
+[@TOMSTR3](https://github.com/TOMSTR3), [@uefigs139](https://github.com/uefigs139),
+[@jluc2808](https://github.com/jluc2808), [@iranl](https://github.com/iranl),
+[@Triskae](https://github.com/Triskae), [@deluxestyle](https://github.com/deluxestyle),
+[@Thorhammer1967](https://github.com/Thorhammer1967) and
+[@jdeath](https://github.com/jdeath).
 
 **License**: see [LICENSE](LICENSE). Melodious code, meaning every change after this fork's upstream
 commit `d87ceba`, is under the MIT License. Code from the upstream project,

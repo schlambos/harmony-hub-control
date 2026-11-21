@@ -1,8 +1,9 @@
 # Melodious desktop: setup and Logitech catalog lookup
 
-Melodious runs on **Windows, Linux and macOS**: the hub's web UI in a
-desktop window, a guided hub setup, and Logitech catalog lookup. Windows
-and macOS have desktop downloads; Linux runs from source. The built-in
+Melodious runs on **macOS, Windows, and Linux**: the hub's web UI in a
+desktop window, a guided hub setup, and Logitech catalog lookup (Windows and
+Linux Desktop app and Setup Wizard: **Not fully tested, needs confirmation**).
+Windows and macOS have desktop downloads; Linux runs from source. The built-in
 Setup Wizard is on `main`, joining Windows and macOS releases in the first
 release after `v2.1.0`. The bundled [CLI](../tools/hub-root/README.md) and
 `install_webui.py` work on all three platforms now; Windows can also use
@@ -25,7 +26,8 @@ release after `v2.1.0`. The bundled [CLI](../tools/hub-root/README.md) and
 
 - **Install:** choose your platform from the
   [release page](https://github.com/schlambos/harmony-hub-control/releases).
-  - **Windows 10/11 x64:** `Melodious-<version>-win-x64-setup.exe`, or extract
+  - **Windows 10/11 x64 (Not fully tested, needs confirmation):**
+    `Melodious-<version>-win-x64-setup.exe`, or extract
     `Melodious-<version>-win-x64.zip` and run `Melodious.exe`. The app is
     unsigned; SmartScreen may ask **More info → Run anyway**. Windows
     downloads start in the release after `v2.1.0`.
@@ -33,7 +35,7 @@ release after `v2.1.0`. The bundled [CLI](../tools/hub-root/README.md) and
     or `Melodious-<version>-x64.dmg`; drag Melodious to Applications.
     Control-click → Open, or System Settings → Privacy & Security → Open
     Anyway. Choose **Allow** for local-network access.
-  - **Linux:** [run from source](../desktop/README.md#linux-from-source).
+  - **Linux (Not fully tested, needs confirmation):** [run from source](../desktop/README.md#linux-from-source).
     Python, USB dependencies, OpenSSH and `unzip` must be installed; no
     Linux desktop download is published. Don't run Electron as root.
 - **First run.** With no hub saved, the app opens the Setup Wizard's Welcome screen
@@ -42,7 +44,8 @@ release after `v2.1.0`. The bundled [CLI](../tools/hub-root/README.md) and
   SSDP or takes a typed address. This applies to Windows, Linux and macOS.
 - **Setup Wizard later.** File → **Set Up a New Harmony Hub…** on
   Windows/Linux, or Melodious → **Set Up a New Harmony Hub…** on macOS; the
-  **Set up or re-root a hub** card at the top of Settings, or the
+  **Set up or re-root a hub** card in the **Hub setup** section below
+  **Current hub** in Settings, or the
   **Set up a new or unrooted Harmony Hub** card on the connect screen.
 - **Logitech catalog.** Open a device, then Import codes → Logitech
   catalog: (1) **Sign in** — Logitech's sign-in opens in its own

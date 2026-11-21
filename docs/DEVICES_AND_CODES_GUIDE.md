@@ -5,7 +5,8 @@ receiver and players, get their buttons working, and tell activities how
 to turn them on and select an input. **Importing codes alone is not enough:**
 finish the power, input and timing settings before making an activity.
 
-This guide covers the **Desktop app on Windows, Linux and macOS**, the
+This guide covers the **Desktop app on macOS, Windows, and Linux** (Windows
+and Linux Desktop app: **Not fully tested, needs confirmation**), the
 **Web UI in a browser on any of those systems or Android**, and the
 **native Android app**. Click and tap mean the same thing here.
 

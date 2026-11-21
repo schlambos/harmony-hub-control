@@ -35,6 +35,10 @@ editor produces must pass the validation rules below before it is saved.
   unless the answer is 200 or 304. Devices created on the hub have no
   content record, so while the blocker is on the offline guard answers a
   missing one with an empty record.
+- **Never-activated Harmony Ultimate:** Before its first offline sync on a
+  fresh hub, place a never-activated Harmony Ultimate on its charging cradle
+  so `setup.account?getProvisionInfo` returns `200`; waking the remote near
+  the hub isn't enough on its own.
 - **USB tether caveat:** Plugging a USB cable into the Touch puts it on its
   locked `myharmony.com` screen and aborts any in-flight RF sync with error
   554 (`USB cable connected` in `/data/loggly/SyncCounter.json`). Always let

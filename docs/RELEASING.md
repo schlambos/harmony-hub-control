@@ -4,8 +4,10 @@ A release is a GitHub release `v<version>` ("Melodious <major.minor>") with:
 - the hub zip;
 - the Android APK;
 - the four macOS files;
-- the two Windows files (experimental, unsigned);
+- the two Windows files (Not fully tested, needs confirmation; unsigned);
+- the unsigned iOS / iPadOS IPA, `melodious-ios-<v>.ipa` (experimental, sideload-only; see [IOS_APP.md](IOS_APP.md));
 - BusyBox's upstream source tarball, `busybox-<version>.tar.bz2` (hub releases);
+- the GPL-2.0 hub kernel source archive, `Harmony.hub.4.3.48.mips-linux-2.6.31.tar.zip` (hub releases shipping `asix.ko`; see `third_party/linux-2.6.31-harmony/README.md`);
 - `melodious-update.json`;
 - `SHA256SUMS.txt`.
 
@@ -30,17 +32,31 @@ key, so losing that key means users uninstall and reinstall.
      run on the release commit, or from `npm run dist:win` on a Windows PC
      (`desktop/README.md`). Check the two files against the artifact's
      `SHA256SUMS-windows.txt`, then leave that file out of the folder. They
-     are experimental and unsigned, so SmartScreen warns before the first
-     launch; say so in the release notes;
+     are unsigned (Windows Desktop app: Not fully tested, needs confirmation),
+     so SmartScreen warns before the first launch; say so in the release notes;
    - for a hub release, the BusyBox tarball that
      `third_party/busybox-<version>/README.md` names, as downloaded from
      busybox.net (`busybox-1.37.0.tar.bz2` today). `busybox-extra` is GPL-2.0,
-     so its complete source goes out from the same place as the binary.
+     so its complete source goes out from the same place as the binary;
+   - for a hub release shipping `asix.ko`, the GPL-2.0 hub kernel source
+     archive `Harmony.hub.4.3.48.mips-linux-2.6.31.tar.zip` (its origin and
+     pinned SHA-256 are in `third_party/linux-2.6.31-harmony/README.md`), so
+     the complete corresponding kernel source is attached beside the binary;
+   - `melodious-ios-<v>.ipa`, built on macOS with Xcode via
+     `./ios/build-ipa.sh` (unsigned sideload IPA; see [IOS_APP.md](IOS_APP.md)).
 2. **Write the manifest and checksums** (the agent runs this):
 
    ```sh
    python3 tools/releases/release.py manifest <folder> --version <v> --min-hub <oldest hub the apps support>
    ```
+
+   *(Note: `tools/releases/release.py` currently generates `melodious-update.json`
+   and `SHA256SUMS.txt` only for the hub zip, APK, macOS and Windows desktop
+   assets, and the BusyBox tarball, and `verify` rejects extra unlisted files
+   in `<folder>`. Keep `Harmony.hub.4.3.48.mips-linux-2.6.31.tar.zip` and
+   `melodious-ios-<v>.ipa` outside `<folder>` until after `release.py verify`
+   passes, check their SHA-256 separately, and upload them alongside the
+   verified assets in step 4.)*
 
    This writes:
    - `melodious-update.json`: version, the APK's versionCode and certificate,
