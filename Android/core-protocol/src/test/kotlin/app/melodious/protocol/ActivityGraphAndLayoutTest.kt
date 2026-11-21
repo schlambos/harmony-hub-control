@@ -530,6 +530,42 @@ class ActivityGraphAndLayoutTest {
         assertEquals("Home", fix.powerOn?.name)
     }
 
+    @Test
+    fun `device settings read and send the IR output only for IR devices`() {
+        val list = Json.parseToJsonElement(
+            """
+            {"DevicesWithFeatures":[
+              {"Device":{"Id-":1,"Name":"LGTV","Transport":1,"ControlPort":2},"Commands":[]},
+              {"Device":{"Id-":2,"Name":"Mini System","Transport":1,"ControlPort":0},"Commands":[]},
+              {"Device":{"Id-":3,"Name":"Odd","Transport":1,"ControlPort":3},"Commands":[]},
+              {"Device":{"Id-":5,"Name":"Everywhere","Transport":1,"ControlPort":7},"Commands":[]},
+              {"Device":{"Id-":4,"Name":"MediaPC","Transport":32,"ControlPort":7},"Commands":[]}
+            ]}
+            """.trimIndent()
+        ).jsonObject
+        val model = app.melodious.protocol.model.DeviceSettingsModel
+        val (tv, mini, odd, all, pc) = list["DevicesWithFeatures"]!!.jsonArray.map { model.read(it.jsonObject) }
+        fun sent(s: app.melodious.protocol.model.DeviceSettings) =
+            model.requestBody("1", s)["settings"]!!.jsonObject["irOutput"]?.jsonPrimitive?.int
+
+        assertEquals(app.melodious.protocol.model.IrOutput.EXTERNAL_1, tv.irOutput)
+        assertEquals(2, sent(tv))
+        assertEquals(app.melodious.protocol.model.IrOutput.REMOTE, mini.irOutput)
+        assertEquals(0, sent(mini))
+        // An unknown stored value is kept: nothing is sent until one is picked.
+        assertTrue(odd.isIrDevice)
+        assertEquals(null, odd.irOutput)
+        assertEquals(3, odd.storedControlPort)
+        assertEquals(null, sent(odd))
+        assertEquals(4, sent(odd.copy(irOutput = app.melodious.protocol.model.IrOutput.EXTERNAL_2)))
+        assertEquals(app.melodious.protocol.model.IrOutput.ALL, all.irOutput)
+        assertEquals(7, sent(all))
+        assertEquals(app.melodious.protocol.model.IrOutput.ALL, app.melodious.protocol.model.IrOutput.entries.first())
+        // Bluetooth devices have no IR output, even if one is set by mistake.
+        assertFalse(pc.isIrDevice)
+        assertEquals(null, sent(pc.copy(irOutput = app.melodious.protocol.model.IrOutput.HUB)))
+    }
+
     private fun seededFixtureJson(): JsonObject {
         val digits = (0..9).joinToString(",") { """{ "Name": "$it", "FunctionId-": ${20 + it} }""" }
         return Json.parseToJsonElement("""

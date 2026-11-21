@@ -22,6 +22,24 @@ export const INPUT_TYPES = Object.freeze([
   { value: "none", label: "No input switching" },
 ]);
 
+/* Device.ControlPort: which IR emitter sends the device's commands, as stock
+   Harmony stores it. 7 is every hub output; the remote's blaster is never
+   part of it. Other stored values are kept as they are and never sent. */
+export const IR_OUTPUTS = Object.freeze([
+  { value: 7, label: "All hub outputs (built-in, external 1 and 2)" },
+  { value: 1, label: "Hub built-in emitters" },
+  { value: 2, label: "External blaster 1" },
+  { value: 4, label: "External blaster 2" },
+  { value: 0, label: "Remote's IR blaster" },
+]);
+const IR_OUTPUT_VALUES = new Set(IR_OUTPUTS.map((o) => o.value));
+
+/* Only IR devices (Transport 1, the default when missing) have an output. */
+export function isIrDevice(entry) {
+  const transport = entry?.Device?.Transport;
+  return transport === undefined || transport === null || Number(transport) === 1;
+}
+
 export const MAX_INPUTS = 32;
 export const INPUT_DELAY_MAX_MS = 60000;
 
@@ -98,8 +116,12 @@ export function readDeviceSettings(entry) {
   if (feature) type = TYPE_BY_ID[Number(feature.PowerTypeId)] ?? "none";
   else if (suggested.on && suggested.off) type = "discrete";
   else type = suggested.toggle ? "toggle" : "none";
+  // Only a stored number counts: Number(null) would read as 0, the remote.
+  const port = typeof device.ControlPort === "number" ? device.ControlPort : NaN;
   return {
     hasPowerFeature: Boolean(feature),
+    // null: not an IR device, or a stored value this editor does not know.
+    irOutput: isIrDevice(entry) && IR_OUTPUT_VALUES.has(port) ? port : null,
     interKeyDelayMs: wholeNumber(device.InterKeyDelay, 100),
     interDeviceDelayMs: wholeNumber(device.InterDeviceDelay, 500),
     // The engine repeats 3 times when PressMinRepeats is missing.
@@ -240,6 +262,9 @@ export function validateDeviceSettings(settings, names, { wakeOnly = false } = {
   range("Delay between commands (ms)", settings.interKeyDelayMs, SETTINGS_LIMITS.interKeyDelayMs);
   range("Inter-device delay (ms)", settings.interDeviceDelayMs, SETTINGS_LIMITS.interDeviceDelayMs);
   range("Repeats", settings.repeats, SETTINGS_LIMITS.repeats);
+  if (settings.irOutput != null && !IR_OUTPUT_VALUES.has(settings.irOutput)) {
+    errors.push("Choose which IR output sends this device's commands.");
+  }
   const power = settings.power ?? {};
   const [, maxDelay] = SETTINGS_LIMITS.powerOnDelayMs;
   if (!Number.isInteger(power.delayMs) || power.delayMs < 0 || power.delayMs > maxDelay) {
@@ -274,6 +299,7 @@ export function deviceSettingsRequest(deviceId, settings) {
       interKeyDelayMs: settings.interKeyDelayMs,
       interDeviceDelayMs: settings.interDeviceDelayMs,
       repeats: settings.repeats,
+      ...(settings.irOutput != null ? { irOutput: settings.irOutput } : {}),
       power: {
         type: power.type,
         on: power.type === "discrete" ? power.on : null,
@@ -314,6 +340,7 @@ export function applyDeviceSettings(entry, settings) {
   next.Device.InterKeyDelay = settings.interKeyDelayMs;
   next.Device.InterDeviceDelay = settings.interDeviceDelayMs;
   next.Device.PressMinRepeats = settings.repeats;
+  if (settings.irOutput != null) next.Device.ControlPort = settings.irOutput;
   if (!Array.isArray(next.DeviceFeatures)) next.DeviceFeatures = [];
   let feature = powerFeature(next);
   if (!feature) {

@@ -1027,6 +1027,12 @@ end
 
 local SWITCH2_DEVICE_TAG = "melodious-switch2-"
 
+-- Device.ControlPort values as stock Harmony stores them: 7 all of the hub's
+-- outputs (built-in and both external mini-blasters, not the remote), 0 the
+-- remote's IR blaster, 1 the hub's built-in emitters, 2 and 4 the external
+-- mini-blasters.
+local IR_OUTPUTS = {[0] = true, [1] = true, [2] = true, [4] = true, [7] = true}
+
 -- Check one device's power and timing settings against its own commands.
 local function deviceSettingsFrom(entry, settings)
   if type(settings) ~= "table" or type(settings.power) ~= "table" then
@@ -1061,6 +1067,19 @@ local function deviceSettingsFrom(entry, settings)
   end
   out.alwaysOn = power.alwaysOn
   out.onBetweenActivities = power.onBetweenActivities
+  -- Device.ControlPort: which IR emitter sends the device's commands. Optional;
+  -- left alone when absent.
+  if settings.irOutput ~= nil and settings.irOutput ~= json.null then
+    local device = type(entry) == "table" and entry.Device or nil
+    -- A missing Transport means IR, as the editors read it.
+    if type(device) ~= "table" or (device.Transport ~= nil and device.Transport ~= json.null and device.Transport ~= 1) then
+      return nil, "irOutput applies only to IR devices"
+    end
+    if not IR_OUTPUTS[settings.irOutput] then
+      return nil, "irOutput must be 7 (all hub outputs), 1 (hub), 2 (external 1), 4 (external 2) or 0 (remote)"
+    end
+    out.irOutput = settings.irOutput
+  end
   if out.typeId == 1 then
     local device = type(entry) == "table" and entry.Device or nil
     local detected = type(device) == "table" and device.AutoDetectedDevice or nil
@@ -1338,6 +1357,9 @@ local function commitDeviceSettings(request)
   device.InterKeyDelay = settings.interKeyDelay
   device.InterDeviceDelay = settings.interDeviceDelay
   device.PressMinRepeats = settings.repeats
+  if settings.irOutput ~= nil then
+    device.ControlPort = settings.irOutput
+  end
   local feature = powerFeatureOf(entry)
   feature.PowerTypeId = settings.typeId
   feature.PowerOnActions = pressActions(settings.on)

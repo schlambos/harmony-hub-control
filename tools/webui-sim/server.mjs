@@ -16,6 +16,7 @@ import {
   applyDeviceSettings,
   commandNames,
   inputsInUse,
+  isIrDevice,
   validateDeviceSettings,
 } from "./public/js/views/device-settings-model.js";
 import { LIMITS, isSafeLabel } from "./public/js/views/ir-model.js";
@@ -337,6 +338,10 @@ function handleDeviceSettings(res, params) {
   const errors = validateDeviceSettings(settings, commandNames(devices[index]), {
     wakeOnly: isSwitch2Entry(devices[index]),
   });
+  // As the hub does: only IR devices have an IR output.
+  if (settings.irOutput != null && !isIrDevice(devices[index])) {
+    errors.push("irOutput applies only to IR devices");
+  }
   if (settings.inputs && typeof settings.inputs === "object") {
     const kept = settings.inputs.type === "none"
       ? []
