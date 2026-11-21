@@ -11426,7 +11426,7 @@ static void render_remote_background_image(int fd, const struct request *req) {
 }
 
 /* Largest side of an image stored for the remote at any size (activity icons
-   and channel logos synced from where Logitech kept them). */
+   and channel logos the desktop app downloaded from Logitech). */
 #define MAX_REMOTE_IMAGE_SIDE 512UL
 
 /* One base64 PNG (a data: URL is fine), decoded, checked and staged at path.

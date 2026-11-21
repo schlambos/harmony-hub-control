@@ -1279,7 +1279,7 @@ Invoke-RestMethod "http://<hub-ip>:8080/api/remote-images" -Method Post `
 {"ok":true,"localOnly":true,"saved":["ci_<uuid>"],"failed":[],"configVersion":42}
 ```
 
-- Stores images synced from where they were kept before (the hub never
+- Stores images the desktop app downloaded from Logitech (the hub never
   fetches them itself). Only names from the `GET` list are accepted; each PNG
   may be up to 512x512 pixels and 512 KB, at most 64 per request and 1 MB in
   all. `failed` lists each refused image with its reason; `ok` is true when

@@ -226,7 +226,7 @@ export function imageTile(url, fallbackIcon, { size = 44, tone = "" } = {}) {
 
 // A tile image that can't load (not on the hub yet) leaves its icon and is
 // not asked for again until images change (the activity editor says so
-// after it stores or syncs some). Load errors don't bubble, so listen in
+// after it stores an icon). Load errors don't bubble, so listen in
 // the capture phase.
 if (typeof document !== "undefined" && typeof document.addEventListener === "function") {
   document.addEventListener("error", (event) => {

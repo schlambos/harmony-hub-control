@@ -2244,8 +2244,8 @@ end
 --
 -- RemoteImages lists every image the hub's own data asks for and whether
 -- the store holds it; no remote has to sync first. CommitRemoteImages
--- stores images from that list only (synced from where Logitech kept
--- them), and CommitActivityIcon stores a new icon under a fresh name for the
+-- stores images from that list only (downloaded from Logitech by the
+-- desktop app), and CommitActivityIcon stores a new icon under a fresh name for the
 -- editor to put in an activity's ImageKey.
 -- The section lives in remoteImages (declared near the top), which keeps it
 -- to a single main-chunk local (Lua allows 200).
