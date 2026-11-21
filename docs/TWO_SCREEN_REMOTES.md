@@ -246,6 +246,16 @@ mode, gates `100`):
 - The setting is on permanently there and survived a restart with both
   remotes paired.
 
+Confirmed on a second hub (#229, @mirsadone; two Harmony Ultimates, 16417,
+skin 100, and a Companion on one hub, `--two-screen on`, multi-remote off,
+gates `100`):
+
+- Both Ultimates work together and share one setup, with the Companion
+  working alongside them.
+- Each Ultimate's own IR emitter fires only on the remote being pressed.
+- Six hours with no errors (`IO ERROR` and `TIMEOUT` at 0; 1 `MSG SEQ ERROR`
+  in 423 received objects).
+
 Known limitations (Gate C):
 
 - The hub's Lua engine stalled for 60 seconds twice, each time just after
@@ -259,9 +269,8 @@ Known limitations (Gate C):
   against 0 in 109 in a single-Touch baseline capture. Every one was a
   press and a state update crossing on the air, and every one resynced by
   itself.
-- Not yet exercised on the hub: a firmware sync, IR sent through a remote's
-  own emitter, explicit `hot.1N` commands, file sessions, and long uptime
-  (one evening so far).
+- Not yet exercised on the hub: a firmware sync, explicit `hot.1N` commands,
+  file sessions, and long uptime.
 - A pairing started with `delayunpair` still unpairs the older screen remote
   five seconds later. Nothing in the hub or the remotes sends it.
 
