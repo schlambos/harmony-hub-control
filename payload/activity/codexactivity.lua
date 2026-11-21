@@ -676,7 +676,11 @@ local function fnv1a32(data)
     local h_hi = (h - h_lo) / 65536
     h = (((h_lo * 256 + h_hi * 403) % 65536) * 65536 + h_lo * 403) % 4294967296
   end
-  return string.format("%08x", h)
+  -- The hub's Lua 5.1 converts a %x argument through a 32-bit signed long,
+  -- so any h >= 2^31 prints as 7fffffff and never matches the revision
+  -- codex_webui.c computes. Print the two 16-bit halves instead.
+  local lo16 = h % 65536
+  return string.format("%04x%04x", (h - lo16) / 65536, lo16)
 end
 
 local function currentActivityRevision()
