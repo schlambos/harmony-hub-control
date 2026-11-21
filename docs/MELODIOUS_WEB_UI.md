@@ -72,7 +72,7 @@ content centred.
 | `devices/DevicesScreen` DevicesTab | Devices tab: search devices or commands; grouped list with icon, model, command count and IR/Bluetooth badge |
 | DeviceDetailScreen | Device page with Remote and Commands tabs (tap a command to send it; search); ⋮ Make, Rebuild or Remove Touch screen |
 | Learn and Import sheets | Learn a button, Import codes (Find codes, Paste, Type a code) |
-| `devices/DeviceSettingsScreen` | Device settings page: Power, Turning on, Inputs (web-only), Timing |
+| `devices/DeviceSettingsScreen` | Device settings page: Power, Turning on, Inputs (web-only), IR output, Timing |
 | `activities/ActivitiesScreen` | Activities tab: running card, rows with Start and a ⋮ menu (Edit, Set up buttons, Try the buttons, Advanced editor, Move up / down, Delete) |
 | ActivityEditor (5 steps) | Wizard restyled as the app's step screens: Name, Devices, Inputs, Buttons, Review. The app's "Start & end" step is parity item P2, not part of the port. |
 | TouchScreenEditor | — (parity item P3; the advanced editor still covers on-screen buttons) |
