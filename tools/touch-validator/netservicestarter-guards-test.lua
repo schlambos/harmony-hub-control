@@ -54,8 +54,16 @@ local fakeIo = {
   open = function(path)
     if files[path] then
       local body = files[path]
+      local pos = 1
       return {
-        read = function() return body end,
+        read = function(_, fmt)
+          if fmt ~= "*l" then return body end
+          if pos > #body then return nil end
+          local nl = body:find("\n", pos, true)
+          local line = body:sub(pos, (nl or #body + 1) - 1)
+          pos = (nl or #body) + 1
+          return line
+        end,
         seek = function(_, whence) return whence == "end" and #body or 0 end,
         close = noop,
       }
@@ -162,6 +170,16 @@ check("blocker on: the time comes from the hub clock",
   r.code == "200" and type(r.data) == "table" and type(r.data.utcTime) == "table" and
   r.data.utcTime.year == 2026 and r.data.tz == "EST5EDT,M3.2.0,M11.1.0" and #nativeCalls == 0,
   encode(r))
+
+-- Blocker on, a zone saved from the web UI: the remote renders utcTime in it,
+-- not in statedigest's stock EST5EDT that nothing updates offline.
+files["/data/codex/timezone.conf"] = "Europe/Warsaw\nCET-1CEST,M3.5.0,M10.5.0/3"
+blocker, fakeNow, nativeCalls = "1", 1792850000, {}
+r = getTime("harmony.engine?getTime", nil, {})
+check("blocker on, zone saved: the remote gets the saved zone's POSIX rule",
+  r.code == "200" and r.data.tz == "CET-1CEST,M3.5.0,M10.5.0/3" and #nativeCalls == 0,
+  encode(r))
+files["/data/codex/timezone.conf"] = nil
 
 -- Blocker on, clock never set: don't hand the Touch a 1970 date.
 blocker, fakeNow, nativeCalls = "1", 3600, {}
