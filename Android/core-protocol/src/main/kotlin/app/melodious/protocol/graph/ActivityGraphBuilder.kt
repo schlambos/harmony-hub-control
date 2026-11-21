@@ -418,6 +418,20 @@ object ActivityGraphBuilder {
         ).map(::roleDeviceId).firstOrNull { it.isNotEmpty() }.orEmpty()
     }
 
+    /** Assignable remote keys grouped the way people think about a remote. PrevChannel is the
+     *  remote's Back key; NumberPlus and NumberEnter are the "--" and "E" keys either side of 0. */
+    val BUTTON_GROUPS: List<Pair<String, List<String>>> = listOf(
+        "Volume & channel" to listOf("VolumeUp", "VolumeDown", "VolumeMute", "ChannelUp", "ChannelDown"),
+        "Navigation" to listOf("DirectionUp", "DirectionDown", "DirectionLeft", "DirectionRight", "Select", "PrevChannel", "Menu", "Exit", "Guide", "Info", "Dvr"),
+        "Playback" to listOf("Play", "Pause", "Rewind", "FastForward", "Stop", "Record"),
+        "Colour keys" to listOf("Red", "Green", "Yellow", "Blue"),
+        "Numbers" to listOf("Number1", "Number2", "Number3", "Number4", "Number5", "Number6", "Number7", "Number8", "Number9", "NumberPlus", "Number0", "NumberEnter"),
+    )
+
+    /** Keys the wizard never fills in by itself: what "--" and "E" should send differs by
+     *  device, and their aliases also match OK's and the volume keys' commands. */
+    private val NO_DEFAULT_KEYS = setOf("NumberPlus", "NumberEnter")
+
     /**
      * Pure derivation: every assignable wizard key -> mapping when the preferred
      * role device actually has a matching command.
@@ -430,6 +444,7 @@ object ActivityGraphBuilder {
         val out = LinkedHashMap<String, WizardButtonMapping>()
         for (button in RemoteLayout.REMOTE_BUTTONS) {
             val buttonKey = button.canonicalButtonKey ?: continue
+            if (buttonKey in NO_DEFAULT_KEYS) continue
             val deviceId = preferredDeviceForButtonKey(buttonKey, roles)
             if (deviceId.isEmpty()) continue
             val device = byId[deviceId] ?: continue

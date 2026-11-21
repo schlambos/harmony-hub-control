@@ -479,7 +479,7 @@ private val NUMBER_KEYS = listOf(
     "Number1" to "1", "Number2" to "2", "Number3" to "3",
     "Number4" to "4", "Number5" to "5", "Number6" to "6",
     "Number7" to "7", "Number8" to "8", "Number9" to "9",
-    "Dash" to "–", "Number0" to "0", "Enter" to "Enter",
+    "NumberPlus" to "–", "Number0" to "0", "NumberEnter" to "Enter",
 )
 
 @OptIn(ExperimentalMaterial3Api::class)

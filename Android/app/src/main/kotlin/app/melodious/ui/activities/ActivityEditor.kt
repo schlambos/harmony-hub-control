@@ -74,25 +74,21 @@ import app.melodious.ui.components.deviceIcon
 import app.melodious.ui.theme.MelodiousColors
 import app.melodious.protocol.model.HubActivity
 import app.melodious.protocol.model.HubDevice
+import app.melodious.protocol.graph.ActivityGraphBuilder
 import app.melodious.protocol.model.RemoteLayout
 import app.melodious.protocol.model.WizardButtonMapping
 import app.melodious.protocol.model.WizardRoleDraft
 
 private val STEP_NAMES = listOf("Name", "Devices", "Inputs", "Start & end", "Buttons")
 
-/** Assignable remote keys grouped the way people think about a remote. */
-private val BUTTON_GROUPS: List<Pair<String, List<String>>> = listOf(
-    "Volume & channel" to listOf("VolumeUp", "VolumeDown", "VolumeMute", "ChannelUp", "ChannelDown"),
-    "Navigation" to listOf("DirectionUp", "DirectionDown", "DirectionLeft", "DirectionRight", "Select", "PrevChannel", "Menu", "Exit", "Guide", "Info", "Dvr"),
-    "Playback" to listOf("Play", "Pause", "Rewind", "FastForward", "Stop", "Record"),
-    "Colour keys" to listOf("Red", "Green", "Yellow", "Blue"),
-    "Numbers" to listOf("Number1", "Number2", "Number3", "Number4", "Number5", "Number6", "Number7", "Number8", "Number9", "Number0"),
-)
+private val BUTTON_GROUPS = ActivityGraphBuilder.BUTTON_GROUPS
 
 private fun keyLabel(key: String): String = when (key) {
     "Select" -> "OK"
     "Dvr" -> "DVR"
     "VolumeMute" -> "Mute"
+    "NumberPlus" -> "Dash (–)"
+    "NumberEnter" -> "Enter (E)"
     else -> RemoteLayout.LABEL_BY_BUTTON_KEY[key] ?: key
 }
 
