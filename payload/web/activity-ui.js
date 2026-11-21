@@ -1559,19 +1559,20 @@
     return canvas.toDataURL("image/png");
   }
 
+  // Read the file as a data: URL, not a blob: one: the desktop app's
+  // Content-Security-Policy allows only 'self' and data: images.
   function loadImage(file) {
     return new Promise((resolve, reject) => {
-      const url = URL.createObjectURL(file);
-      const image = new Image();
-      image.onload = () => {
-        URL.revokeObjectURL(url);
-        resolve(image);
+      const unreadable = () => reject(new Error("That file isn't an image this browser can open."));
+      const reader = new FileReader();
+      reader.onerror = unreadable;
+      reader.onload = () => {
+        const image = new Image();
+        image.onload = () => resolve(image);
+        image.onerror = unreadable;
+        image.src = String(reader.result || "");
       };
-      image.onerror = () => {
-        URL.revokeObjectURL(url);
-        reject(new Error("That file isn't an image this browser can open."));
-      };
-      image.src = url;
+      reader.readAsDataURL(file);
     });
   }
 
