@@ -203,12 +203,12 @@ public final class HubRestClient: Sendable {
 
     // MARK: - Private HTTP transport
 
-    /// `GET /api/remote-pictures/image?name=`: an activity's own icon as PNG data,
-    /// or nil when the hub doesn't hold it or can't be reached. docs/REMOTE_PICTURES.md
-    public func getRemotePicture(endpoint: HubEndpoint, name: String) async -> Data? {
+    /// `GET /api/remote-images/image?name=`: an activity's own icon as PNG data,
+    /// or nil when the hub doesn't hold it or can't be reached. docs/REMOTE_IMAGES.md
+    public func getRemoteImage(endpoint: HubEndpoint, name: String) async -> Data? {
         let allowed = CharacterSet(charactersIn: "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789_-")
         guard (1...96).contains(name.count), name.unicodeScalars.allSatisfy({ allowed.contains($0) }) else { return nil }
-        guard let data = try? await getRawData(endpoint: endpoint, path: "/api/remote-pictures/image?name=\(name)") else {
+        guard let data = try? await getRawData(endpoint: endpoint, path: "/api/remote-images/image?name=\(name)") else {
             return nil
         }
         let signature: [UInt8] = [0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A]

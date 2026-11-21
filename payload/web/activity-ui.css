@@ -726,7 +726,7 @@
   display: none;
 }
 
-#activityIconField .activity-icon-recover {
+#activityIconField .activity-icon-sync {
   display: flex;
   flex-wrap: wrap;
   gap: 8px 12px;
@@ -738,6 +738,6 @@
   font-size: 13px;
 }
 
-#activityIconField .activity-icon-recover > span {
+#activityIconField .activity-icon-sync > span {
   flex: 1 1 240px;
 }

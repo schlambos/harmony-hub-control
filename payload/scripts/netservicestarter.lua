@@ -837,7 +837,7 @@ end
 -- bytes there, the remote takes the answer and never fetches the picture.
 -- An image the store doesn't hold stays blocked.
 --
--- The same path serves two more picture kinds a screen remote asks for:
+-- The same path serves two more image kinds a screen remote asks for:
 -- * activity icons: <BaseImageUri>Activity/<name>.png and <name>_small.png
 --   (the activity's ImageKey), stored as <name>.png;
 -- * favorite channel logos: content-image://1.0/image/<uuid>.png;maxX=..;maxY=..

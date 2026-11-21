@@ -13,7 +13,7 @@ import {
   escapeHtml,
   icon,
   iconTile,
-  pictureTile,
+  imageTile,
   openMenu,
   screenTitle,
   sectionLabel,
@@ -75,7 +75,7 @@ export function createActivitiesHomeView(section) {
     const turningOff = hub.state.pendingId === "-1";
     return `<section class="run-card" aria-label="Running now">
         <div class="run-card-head">
-          ${pictureTile(activityImageUrl(a), activityIconName(a), { size: 52, tone: "primary" })}
+          ${imageTile(activityImageUrl(a), activityIconName(a), { size: 52, tone: "primary" })}
           <div class="run-card-text">
             <p class="run-card-over">Running now</p>
             <h3 class="run-card-name">${escapeHtml(name)}${restrictedMark(id)}</h3>
@@ -109,7 +109,7 @@ export function createActivitiesHomeView(section) {
       ? `<span class="act-row-busy">${spinner(`Starting ${name}`)}</span>`
       : `<button type="button" class="icon-btn icon-btn-raised" data-start="${escapeHtml(id)}" aria-label="Start ${escapeHtml(name)}" title="Start">${icon("play_arrow")}</button>`;
     return `<div class="act-row">
-        ${pictureTile(activityImageUrl(a), activityIconName(a), { size: 48, tone: "activity" })}
+        ${imageTile(activityImageUrl(a), activityIconName(a), { size: 48, tone: "activity" })}
         <div class="act-row-text">
           <span class="act-row-name">${escapeHtml(name)}${restrictedMark(id)}</span>
           ${meta}

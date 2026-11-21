@@ -72,27 +72,27 @@ public final class HubViewModel: ObservableObject {
 
     public let restClient: HubRestClient
 
-    /// Activity icons the hub stores (docs/REMOTE_PICTURES.md), decoded once per
-    /// name. A new icon always gets a new name, so a cached picture never goes
+    /// Activity icons the hub stores (docs/REMOTE_IMAGES.md), decoded once per
+    /// name. A new icon always gets a new name, so a cached image never goes
     /// stale.
-    private let activityPictures = NSCache<NSString, UIImage>()
-    /// When the hub last didn't have a picture: views redraw often, so a miss
+    private let activityImages = NSCache<NSString, UIImage>()
+    /// When the hub last didn't have an image: views redraw often, so a miss
     /// isn't asked for again for a minute.
-    private var missingActivityPictures: [String: Date] = [:]
+    private var missingActivityImages: [String: Date] = [:]
 
     /// The activity's own icon from the hub, or nil (none, not stored, or unreachable).
-    public func activityPicture(_ activity: HubActivity) async -> UIImage? {
+    public func activityImage(_ activity: HubActivity) async -> UIImage? {
         guard let name = activity.imageName, let endpoint = activeEndpoint else { return nil }
         let key = "\(endpoint.displayAddress)/\(name)" as NSString
-        if let cached = activityPictures.object(forKey: key) { return cached }
-        if let missedAt = missingActivityPictures[key as String], Date().timeIntervalSince(missedAt) < 60 { return nil }
-        guard let data = await restClient.getRemotePicture(endpoint: endpoint, name: name),
+        if let cached = activityImages.object(forKey: key) { return cached }
+        if let missedAt = missingActivityImages[key as String], Date().timeIntervalSince(missedAt) < 60 { return nil }
+        guard let data = await restClient.getRemoteImage(endpoint: endpoint, name: name),
               let image = UIImage(data: data) else {
-            missingActivityPictures[key as String] = Date()
+            missingActivityImages[key as String] = Date()
             return nil
         }
-        missingActivityPictures[key as String] = nil
-        activityPictures.setObject(image, forKey: key)
+        missingActivityImages[key as String] = nil
+        activityImages.setObject(image, forKey: key)
         return image
     }
     public let hbusClient: HBusWebSocketClient

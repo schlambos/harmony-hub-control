@@ -1170,7 +1170,7 @@
     try {
       const config = await fetchJson("/api/activity-config");
       state.config = config;
-      pictureStatus.checked = false;
+      imageStatus.checked = false;
       state.revision = text(config.revision);
       buildCommandCatalog();
       resetIdPool();
@@ -1470,10 +1470,10 @@
     }
   }
 
-  // Activity icon on the remote (docs/REMOTE_PICTURES.md). The remote shows
-  // the picture at <BaseImageUri><ImageKey>; the hub stores it and answers
+  // Activity icon on the remote (docs/REMOTE_IMAGES.md). The remote shows
+  // the image at <BaseImageUri><ImageKey>; the hub stores it and answers
   // that fetch. A new icon is drawn (a Material symbol on a colored tile) or
-  // taken from an uploaded picture, sent to /api/activity-icon as a 70x70 PNG
+  // taken from an uploaded image, sent to /api/activity-icon as a 70x70 PNG
   // and its 38x38 thumbnail, and its ImageKey goes into the activity with the
   // next save. The firmware Icon number is left alone.
   //
@@ -1516,7 +1516,7 @@
     return match && !match[1].endsWith("_small") ? match[1] : "";
   }
 
-  // The square of a width x height picture that fills a tile (centered).
+  // The square of a width x height image that fills a tile (centered).
   function coverRect(width, height) {
     const side = Math.min(width, height);
     return { x: Math.round((width - side) / 2), y: Math.round((height - side) / 2), side };
@@ -1549,7 +1549,7 @@
     return canvas.toDataURL("image/png");
   }
 
-  function picturePng(image, size) {
+  function imagePng(image, size) {
     const canvas = document.createElement("canvas");
     canvas.width = canvas.height = size;
     const g = canvas.getContext("2d");
@@ -1559,7 +1559,7 @@
     return canvas.toDataURL("image/png");
   }
 
-  function loadPicture(file) {
+  function loadImage(file) {
     return new Promise((resolve, reject) => {
       const url = URL.createObjectURL(file);
       const image = new Image();
@@ -1569,150 +1569,62 @@
       };
       image.onerror = () => {
         URL.revokeObjectURL(url);
-        reject(new Error("That file isn't a picture this browser can open."));
+        reject(new Error("That file isn't an image this browser can open."));
       };
       image.src = url;
     });
   }
 
-  // Pictures the hub's activities and favorites use (GET /api/remote-pictures)
-  // and the desktop app's recovery of the ones Logitech kept. Only the desktop
-  // app can reach Logitech (window.melodiousDesktop.catalog.remotePicture);
-  // the hub never fetches them itself.
-  const pictureStatus = { checked: false, checking: false, busy: false, missing: 0, total: 0, message: "" };
+  // Images the hub's activities and favorites use (GET /api/remote-images).
+  // The editor only reports what's missing; syncing them from Logitech is in
+  // the desktop app's Settings (connect/images.js), because only the desktop
+  // app can reach Logitech. A hub without the route (404) runs software older
+  // than this editor, and can't store icons yet.
+  const imageStatus = { checked: false, checking: false, oldHub: false, missing: 0, total: 0 };
 
-  function desktopPictures() {
-    const catalog = globalThis.melodiousDesktop && globalThis.melodiousDesktop.catalog;
-    return catalog && typeof catalog.remotePicture === "function" ? catalog : null;
+  function inDesktopApp() {
+    return Boolean(globalThis.melodiousDesktop && globalThis.melodiousDesktop.catalog);
   }
 
-  async function refreshPictureStatus() {
-    if (pictureStatus.checking) return;
-    pictureStatus.checking = true;
+  async function refreshImageStatus() {
+    if (imageStatus.checking) return;
+    imageStatus.checking = true;
     try {
-      const list = await fetchJson("/api/remote-pictures");
-      pictureStatus.missing = Number(list.missing) || 0;
-      pictureStatus.total = Number(list.total) || 0;
-      pictureStatus.checked = true;
-    } catch (_) {
-      // An older hub without the route: say nothing.
-      pictureStatus.checked = true;
-      pictureStatus.missing = 0;
+      const list = await fetchJson("/api/remote-images");
+      imageStatus.missing = Number(list.missing) || 0;
+      imageStatus.total = Number(list.total) || 0;
+      imageStatus.oldHub = false;
+    } catch (error) {
+      imageStatus.oldHub = error.status === 404;
+      imageStatus.missing = 0;
     } finally {
-      pictureStatus.checking = false;
+      imageStatus.checked = true;
+      imageStatus.checking = false;
       renderIconField(selectedActivity());
     }
   }
 
-  // The shell remembers which activity pictures the hub didn't have; tell it
+  // The shell remembers which activity images the hub didn't have; tell it
   // when that may have changed (ui/shell.js listens).
-  function picturesChanged() {
+  function imagesChanged() {
     try {
-      document.dispatchEvent(new CustomEvent("melodious:pictures-changed"));
+      document.dispatchEvent(new CustomEvent("melodious:images-changed"));
     } catch (_) {
       // No CustomEvent here (tests): nothing listens either.
     }
   }
 
-  // POST pictures to the hub: the names it saved, and why for the others.
-  // The hub refuses a whole request when one picture in it is bad, so a
-  // refused batch is sent again one picture at a time.
-  async function storePictures(batch) {
-    const saved = [];
-    const failed = new Map();
-    try {
-      const result = await fetchJson("/api/remote-pictures", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ pictures: batch })
-      });
-      for (const name of Array.isArray(result.saved) ? result.saved : []) saved.push(name);
-      for (const item of Array.isArray(result.failed) ? result.failed : []) failed.set(item.name, item.error);
-    } catch (error) {
-      const reply = error.response && error.response.reply;
-      if (error.status === 400 && batch.length > 1) {
-        for (const picture of batch) {
-          const one = await storePictures([picture]);
-          saved.push(...one.saved);
-          for (const [name, reason] of one.failed) failed.set(name, reason);
-        }
-      } else if (reply && Array.isArray(reply.failed) && reply.failed.length) {
-        for (const item of reply.failed) failed.set(item.name, item.error);
-      } else {
-        for (const picture of batch) failed.set(picture.name, error.message);
-      }
-    }
-    for (const picture of batch) {
-      if (!saved.includes(picture.name) && !failed.has(picture.name)) failed.set(picture.name, "not saved");
-    }
-    return { saved, failed };
-  }
+  const SYNC_HINT_DESKTOP = "Sync them in Settings → Logitech account → Sync user images from Logitech.";
+  const SYNC_HINT_BROWSER = "Sync them with the Melodious desktop app: Settings → Logitech account → Sync user images from Logitech.";
 
-  // Fetch every missing picture the hub lists through the desktop app and
-  // store them in batches. Missing pictures come first in the hub's list;
-  // asking again with the failures skipped (offset) reaches all of them.
-  async function recoverPictures() {
-    const catalog = desktopPictures();
-    if (!catalog || pictureStatus.busy) return;
-    pictureStatus.busy = true;
-    pictureStatus.message = "";
-    renderIconField(selectedActivity());
-    const failed = new Map();
-    let saved = 0;
-    try {
-      for (let round = 0; round < 200; round += 1) {
-        const list = await fetchJson(`/api/remote-pictures?offset=${failed.size}`);
-        const todo = (Array.isArray(list.pictures) ? list.pictures : [])
-          .filter((picture) => picture && !picture.stored && picture.uri && !failed.has(picture.name));
-        if (!todo.length) break;
-        const batch = [];
-        let size = 0;
-        for (const picture of todo) {
-          markNotice(`Fetching pictures from Logitech… ${saved + failed.size + batch.length + 1} of ${Number(list.missing) + saved || todo.length}`);
-          try {
-            const answer = await catalog.remotePicture({ uri: picture.uri, contentImageHost: list.contentImageHost || null });
-            batch.push({ name: picture.name, image: answer.image });
-            size += answer.image.length;
-          } catch (error) {
-            failed.set(picture.name, error.message);
-          }
-          if (batch.length >= 64 || size > 600 * 1024) break;
-        }
-        if (!batch.length) continue;
-        const stored = await storePictures(batch);
-        saved += stored.saved.length;
-        for (const [name, reason] of stored.failed) failed.set(name, reason);
-      }
-      const reasons = [...new Set(failed.values())];
-      pictureStatus.message = saved
-        ? `Recovered ${saved} picture${saved === 1 ? "" : "s"}. Sync the remote to see them.`
-        : "No pictures were recovered.";
-      if (failed.size) {
-        pictureStatus.message += ` ${failed.size} could not be recovered (${reasons.slice(0, 2).join("; ")}).`;
-      }
-      markNotice(pictureStatus.message, failed.size && !saved ? "warn" : "");
-    } catch (error) {
-      pictureStatus.message = `Recovering pictures stopped: ${error.message}`;
-      markNotice(pictureStatus.message, "error");
-    } finally {
-      pictureStatus.busy = false;
-      pictureStatus.checked = false;
-      picturesChanged();
-      await refreshPictureStatus();
+  function imageStatusHtml() {
+    if (!imageStatus.checked) return "";
+    if (imageStatus.oldHub) {
+      return `<div class="activity-icon-sync"><span>The hub's software is older than this editor: update the hub to set icons.</span></div>`;
     }
-  }
-
-  function pictureStatusHtml() {
-    if (!pictureStatus.checked) return "";
-    const lines = [];
-    if (pictureStatus.missing > 0) {
-      const what = `${pictureStatus.missing} of ${pictureStatus.total} pictures for the remote (activity icons and favorite channel logos) aren't on the hub.`;
-      lines.push(desktopPictures()
-        ? `<span>${esc(what)}</span><button type="button" class="btn btn-secondary secondary" data-icon-recover${pictureStatus.busy ? " disabled" : ""}>${pictureStatus.busy ? "Recovering…" : "Recover from Logitech"}</button>`
-        : `<span>${esc(what)} Open the Melodious desktop app to recover them from Logitech.</span>`);
-    }
-    if (pictureStatus.message) lines.push(`<span>${esc(pictureStatus.message)}</span>`);
-    return lines.length ? `<div class="activity-icon-recover">${lines.join("")}</div>` : "";
+    if (imageStatus.missing <= 0) return "";
+    const what = `${imageStatus.missing} of ${imageStatus.total} user images (activity icons and favorite channel logos) aren't on the hub.`;
+    return `<div class="activity-icon-sync"><span>${esc(what)} ${esc(inDesktopApp() ? SYNC_HINT_DESKTOP : SYNC_HINT_BROWSER)}</span></div>`;
   }
 
   function renderIconField(activity) {
@@ -1724,20 +1636,20 @@
     host.innerHTML = `
       <span class="activity-icon-label">Icon on the remote</span>
       <div class="activity-icon-row">
-        <span class="activity-icon-preview">${name ? `<img src="/api/remote-pictures/image?name=${encodeURIComponent(name)}" alt="Current icon" width="${ICON_SIZE}" height="${ICON_SIZE}">` : ""}<span class="activity-icon-none"${name ? " hidden" : ""}>No icon</span></span>
+        <span class="activity-icon-preview">${name ? `<img src="/api/remote-images/image?name=${encodeURIComponent(name)}" alt="Current icon" width="${ICON_SIZE}" height="${ICON_SIZE}">` : ""}<span class="activity-icon-none"${name ? " hidden" : ""}>No icon</span></span>
         <div class="activity-icon-tools">
           <div class="activity-icon-glyphs" role="group" aria-label="Symbol">${glyphs}</div>
           <div class="activity-icon-colors" role="group" aria-label="Tile color">${colors}</div>
           <div class="activity-icon-actions">
-            <button type="button" class="btn btn-secondary secondary" data-icon-use${iconChoice.busy ? " disabled" : ""}>Use this symbol</button>
-            <label class="btn btn-secondary secondary activity-icon-upload">Upload picture…<input type="file" accept="image/*" data-icon-upload hidden${iconChoice.busy ? " disabled" : ""}></label>
+            <button type="button" class="btn btn-secondary secondary" data-icon-use${iconChoice.busy || imageStatus.oldHub ? " disabled" : ""}>Use this symbol</button>
+            <label class="btn btn-secondary secondary activity-icon-upload">Upload image…<input type="file" accept="image/*" data-icon-upload hidden${iconChoice.busy || imageStatus.oldHub ? " disabled" : ""}></label>
             ${name ? `<button type="button" class="btn btn-secondary secondary" data-icon-remove${iconChoice.busy ? " disabled" : ""}>Remove icon</button>` : ""}
           </div>
           <p class="activity-icon-note" data-icon-note></p>
         </div>
       </div>
-      ${pictureStatusHtml()}`;
-    if (!pictureStatus.checked && !pictureStatus.checking) refreshPictureStatus();
+      ${imageStatusHtml()}`;
+    if (!imageStatus.checked && !imageStatus.checking) refreshImageStatus();
     const preview = host.querySelector(".activity-icon-preview img");
     preview?.addEventListener("error", () => {
       preview.remove();
@@ -1748,7 +1660,7 @@
       }
       const note = host.querySelector("[data-icon-note]");
       if (note) {
-        note.textContent = "This activity's icon was kept by Logitech and isn't on the hub. Recover it in the desktop app, or choose a new one.";
+        note.textContent = `This activity's icon was kept by Logitech and isn't on the hub. ${inDesktopApp() ? SYNC_HINT_DESKTOP : SYNC_HINT_BROWSER} Or choose a new one.`;
       }
     });
   }
@@ -1771,7 +1683,7 @@
       target.ImageKey = result.imageKey;
       if (!text(target.BaseImageUri)) target.BaseImageUri = ICON_BASE_URI;
       touch(target);
-      picturesChanged();
+      imagesChanged();
       markNotice("Icon stored on the hub. Save the activity, then sync the remote to see it.");
     } catch (error) {
       markNotice(`The icon wasn't stored: ${error.message}`, "error");
@@ -1798,12 +1710,8 @@
         });
         return;
       }
-      if (event.target.closest("[data-icon-use]") && !iconChoice.busy) {
+      if (event.target.closest("[data-icon-use]") && !iconChoice.busy && !imageStatus.oldHub) {
         storeActivityIcon(glyphPng(ICON_SIZE), glyphPng(ICON_SMALL_SIZE));
-        return;
-      }
-      if (event.target.closest("[data-icon-recover]")) {
-        recoverPictures();
         return;
       }
       if (event.target.closest("[data-icon-remove]") && !iconChoice.busy) {
@@ -1818,10 +1726,10 @@
     });
     host.addEventListener("change", async (event) => {
       const input = event.target.closest("[data-icon-upload]");
-      if (!input || !input.files || !input.files[0] || iconChoice.busy) return;
+      if (!input || !input.files || !input.files[0] || iconChoice.busy || imageStatus.oldHub) return;
       try {
-        const image = await loadPicture(input.files[0]);
-        await storeActivityIcon(picturePng(image, ICON_SIZE), picturePng(image, ICON_SMALL_SIZE));
+        const image = await loadImage(input.files[0]);
+        await storeActivityIcon(imagePng(image, ICON_SIZE), imagePng(image, ICON_SMALL_SIZE));
       } catch (error) {
         markNotice(error.message, "error");
       }
@@ -2802,7 +2710,8 @@
       coverRect,
       ICON_GLYPHS,
       ICON_BASE_URI,
-      storePictures
+      imageStatus,
+      imageStatusHtml
     };
     return;
   }

@@ -2,7 +2,7 @@
 
 const { isTrustedIpcSender } = require("./security");
 const { redact, CatalogError } = require("./catalog/client");
-const { createPictureFetcher } = require("./catalog/pictures");
+const { createImageFetcher } = require("./catalog/images");
 
 const CATALOG_CHANNELS = Object.freeze({
   status: "catalog:status",
@@ -11,7 +11,7 @@ const CATALOG_CHANNELS = Object.freeze({
   checkModel: "catalog:check-model",
   search: "catalog:search",
   download: "catalog:download",
-  remotePicture: "catalog:remote-picture",
+  remoteImage: "catalog:remote-image",
 });
 
 function validateCatalogString(value, fieldName) {
@@ -91,7 +91,7 @@ function sanitizePackage(pkg) {
   return redact(pkg);
 }
 
-function createCatalogIpcHandlers({ getMainWindow, getCatalogService, pictureFetcher = createPictureFetcher() } = {}) {
+function createCatalogIpcHandlers({ getMainWindow, getCatalogService, imageFetcher = createImageFetcher() } = {}) {
   const ensureTrusted = (event) => {
     const win = typeof getMainWindow === "function" ? getMainWindow() : null;
     if (!isTrustedIpcSender(event, win)) {
@@ -154,19 +154,19 @@ function createCatalogIpcHandlers({ getMainWindow, getCatalogService, pictureFet
       const pkg = await service().download(dlArgs);
       return sanitizePackage(pkg);
     }),
-    // An activity icon or channel logo for the hub (catalog/pictures.js).
+    // An activity icon or channel logo for the hub (catalog/images.js).
     // Needs no Logitech sign-in, so no catalog service either.
-    [CATALOG_CHANNELS.remotePicture]: wrap(async (args) => {
-      const res = await pictureFetcher.fetch(args);
+    [CATALOG_CHANNELS.remoteImage]: wrap(async (args) => {
+      const res = await imageFetcher.fetch(args);
       const image = String(res?.image ?? "");
-      if (!image.startsWith("data:image/png;base64,")) throw new Error("Invalid picture answer");
+      if (!image.startsWith("data:image/png;base64,")) throw new Error("Invalid image answer");
       return { image };
     }),
   };
 }
 
-function registerCatalogIpcHandlers({ ipcMain, getMainWindow, getCatalogService, pictureFetcher } = {}) {
-  const handlers = createCatalogIpcHandlers({ getMainWindow, getCatalogService, pictureFetcher });
+function registerCatalogIpcHandlers({ ipcMain, getMainWindow, getCatalogService, imageFetcher } = {}) {
+  const handlers = createCatalogIpcHandlers({ getMainWindow, getCatalogService, imageFetcher });
   for (const [channel, handler] of Object.entries(handlers)) {
     ipcMain.handle(channel, handler);
   }

@@ -778,7 +778,7 @@ export function roleLabel(roleType) {
 }
 
 /** The name the hub stores an activity's own icon under (from its ImageKey,
-    "Activity/<name>.png"), or "" when it has none. docs/REMOTE_PICTURES.md */
+    "Activity/<name>.png"), or "" when it has none. docs/REMOTE_IMAGES.md */
 export function activityImageName(activity) {
   const m = /^Activity\/([A-Za-z0-9_-]{1,96})\.png$/.exec(String(activity?.ImageKey ?? ""));
   return m && !m[1].endsWith("_small") ? m[1] : "";
@@ -788,7 +788,7 @@ export function activityImageName(activity) {
     (not stored on the hub yet) falls back to activityIconName in the tile. */
 export function activityImageUrl(activity) {
   const name = activityImageName(activity);
-  return name ? `/api/remote-pictures/image?name=${encodeURIComponent(name)}` : "";
+  return name ? `/api/remote-images/image?name=${encodeURIComponent(name)}` : "";
 }
 
 /** Material icon name for an activity (DomainIcons.activityIcon). */

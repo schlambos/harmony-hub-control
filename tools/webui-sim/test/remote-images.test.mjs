@@ -1,4 +1,4 @@
-// Remote pictures: the simulator's /api/remote-pictures and /api/activity-icon
+// Remote images: the simulator's /api/remote-images and /api/activity-icon
 // routes behaving like codex_webui's and codexactivity's.
 import { describe, it, before, after, beforeEach } from "node:test";
 import assert from "node:assert/strict";
@@ -46,26 +46,26 @@ before(async () => {
 after(() => proc?.kill());
 beforeEach(() => post("/api/sim/reset", {}));
 
-describe("simulator remote pictures", () => {
+describe("simulator remote images", () => {
   it("lists activity icons (with _small) and favorite logos, none stored", async () => {
-    const body = await getJson("/api/remote-pictures");
+    const body = await getJson("/api/remote-images");
     assert.equal(body.ok, true);
-    const kinds = new Set(body.pictures.map((p) => p.kind));
+    const kinds = new Set(body.images.map((p) => p.kind));
     assert.ok(kinds.has("activity") && kinds.has("logo"));
-    const icon = body.pictures.find((p) => p.kind === "activity" && !p.name.endsWith("_small"));
-    assert.ok(body.pictures.some((p) => p.name === `${icon.name}_small`));
+    const icon = body.images.find((p) => p.kind === "activity" && !p.name.endsWith("_small"));
+    assert.ok(body.images.some((p) => p.name === `${icon.name}_small`));
     assert.match(icon.uri, new RegExp(`Activity/${icon.name}\\.png$`));
-    const logo = body.pictures.find((p) => p.kind === "logo");
+    const logo = body.images.find((p) => p.kind === "logo");
     assert.match(logo.name, /^ci_[A-Za-z0-9-]+$/);
     assert.equal(logo.uri, `content-image://1.0/image/${logo.name.slice(3)}.png`);
     assert.equal(body.missing, body.total);
     assert.equal(body.truncated, false);
   });
 
-  it("stores listed pictures, refuses unlisted names, and serves what it stored", async () => {
-    const { pictures } = await getJson("/api/remote-pictures");
-    const logo = pictures.find((p) => p.kind === "logo");
-    const res = await post("/api/remote-pictures", { pictures: [
+  it("stores listed images, refuses unlisted names, and serves what it stored", async () => {
+    const { images } = await getJson("/api/remote-images");
+    const logo = images.find((p) => p.kind === "logo");
+    const res = await post("/api/remote-images", { images: [
       { name: logo.name, image: png(54, 50, 7) },
       { name: "Settings", image: png(54, 50) },
     ] });
@@ -73,24 +73,24 @@ describe("simulator remote pictures", () => {
     assert.equal(res.status, 200);
     assert.deepEqual(body.saved, [logo.name]);
     assert.equal(body.failed[0].name, "Settings");
-    const after = await getJson("/api/remote-pictures");
-    assert.equal(after.pictures.find((p) => p.name === logo.name).stored, true);
+    const after = await getJson("/api/remote-images");
+    assert.equal(after.images.find((p) => p.name === logo.name).stored, true);
     assert.equal(after.missing, after.total - 1);
-    const image = await fetch(`${BASE}/api/remote-pictures/image?name=${logo.name}`);
+    const image = await fetch(`${BASE}/api/remote-images/image?name=${logo.name}`);
     assert.equal(image.status, 200);
     assert.equal(image.headers.get("content-type"), "image/png");
     assert.equal(Buffer.from(await image.arrayBuffer())[39], 7);
   });
 
-  it("answers 422 when nothing was saved, 400 for bad pictures", async () => {
-    let res = await post("/api/remote-pictures", { pictures: [{ name: "nobody", image: png(54, 50) }] });
+  it("answers 422 when nothing was saved, 400 for bad images", async () => {
+    let res = await post("/api/remote-images", { images: [{ name: "nobody", image: png(54, 50) }] });
     assert.equal(res.status, 422);
-    res = await post("/api/remote-pictures", { pictures: [{ name: "ci_x", image: png(600, 50) }] });
+    res = await post("/api/remote-images", { images: [{ name: "ci_x", image: png(600, 50) }] });
     assert.equal(res.status, 400);
     assert.match((await res.json()).error, /at most 512x512/);
-    res = await post("/api/remote-pictures", { pictures: [] });
+    res = await post("/api/remote-images", { images: [] });
     assert.equal(res.status, 400);
-    res = await post("/api/remote-pictures", { pictures: [{ name: "../x", image: png(54, 50) }] });
+    res = await post("/api/remote-images", { images: [{ name: "../x", image: png(54, 50) }] });
     assert.equal(res.status, 400);
   });
 
@@ -99,29 +99,29 @@ describe("simulator remote pictures", () => {
     const body = await res.json();
     assert.equal(res.status, 200);
     assert.equal(body.imageKey, `Activity/${body.name}.png`);
-    assert.equal((await fetch(`${BASE}/api/remote-pictures/image?name=${body.name}_small`)).status, 200);
+    assert.equal((await fetch(`${BASE}/api/remote-images/image?name=${body.name}_small`)).status, 200);
     res = await post("/api/activity-icon", { image: png(64, 64), thumbnail: png(38, 38) });
     assert.equal(res.status, 400);
     assert.match((await res.json()).error, /70x70/);
   });
 
-  it("skips missing pictures with ?offset, and lets a stored picture be cached", async () => {
-    const all = await getJson("/api/remote-pictures");
-    const skipped = await getJson("/api/remote-pictures?offset=2");
+  it("skips missing images with ?offset, and lets a stored image be cached", async () => {
+    const all = await getJson("/api/remote-images");
+    const skipped = await getJson("/api/remote-images?offset=2");
     assert.equal(skipped.offset, 2);
     assert.equal(skipped.missing, all.missing);
-    assert.equal(skipped.pictures[0].name, all.pictures[2].name);
-    assert.equal(skipped.pictures.length, all.pictures.length - 2);
-    assert.equal((await getJson("/api/remote-pictures?offset=junk")).pictures.length, all.pictures.length);
-    const logo = all.pictures.find((p) => p.kind === "logo");
-    await post("/api/remote-pictures", { pictures: [{ name: logo.name, image: png(54, 50) }] });
-    const image = await fetch(`${BASE}/api/remote-pictures/image?name=${logo.name}`);
+    assert.equal(skipped.images[0].name, all.images[2].name);
+    assert.equal(skipped.images.length, all.images.length - 2);
+    assert.equal((await getJson("/api/remote-images?offset=junk")).images.length, all.images.length);
+    const logo = all.images.find((p) => p.kind === "logo");
+    await post("/api/remote-images", { images: [{ name: logo.name, image: png(54, 50) }] });
+    const image = await fetch(`${BASE}/api/remote-images/image?name=${logo.name}`);
     assert.equal(image.headers.get("cache-control"), "private, max-age=86400");
-    const missing = await fetch(`${BASE}/api/remote-pictures/image?name=ci_none`);
+    const missing = await fetch(`${BASE}/api/remote-images/image?name=ci_none`);
     assert.equal(missing.headers.get("cache-control"), "no-store");
   });
 
-  it("answers 404 for a picture it doesn't hold", async () => {
-    assert.equal((await fetch(`${BASE}/api/remote-pictures/image?name=ci_none`)).status, 404);
+  it("answers 404 for an image it doesn't hold", async () => {
+    assert.equal((await fetch(`${BASE}/api/remote-images/image?name=ci_none`)).status, 404);
   });
 });

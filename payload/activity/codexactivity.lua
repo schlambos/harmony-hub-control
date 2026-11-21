@@ -208,9 +208,9 @@ local function saveResource(name, value, etag, hetag)
   return true
 end
 
--- Remote pictures (activity icons and favorite logos); filled in further down.
+-- Remote images (activity icons and favorite logos); filled in further down.
 -- Declared here so the activity save can drop icons no activity uses any more.
-local remotePictures = {}
+local remoteImages = {}
 
 local function reloadActivityEngine()
   if not system.isMessageRegistered("config_new") then
@@ -842,7 +842,7 @@ local function commitActivityResources(request)
   end
 
   -- The save is published; icons only the old list used can go.
-  local pruned, pruneError = pcall(remotePictures.pruneActivityIcons, oldActivities.resource, request.activityList)
+  local pruned, pruneError = pcall(remoteImages.pruneActivityIcons, oldActivities.resource, request.activityList)
   if not pruned then
     log.warning("codexactivity: could not remove unused activity icons:", tostring(pruneError))
   end
@@ -2235,34 +2235,34 @@ local function commitRemoteBackground(request)
   return result
 end
 
--- Remote pictures: activity icons and favorite channel logos. A screen remote
+-- Remote images: activity icons and favorite channel logos. A screen remote
 -- fetches an activity's icon from <BaseImageUri><ImageKey> (ImageKey
 -- "Activity/<name>.png") plus <name>_small.png, and a favorite's logo from
 -- content-image://1.0/image/<uuid>.png (the "image" of a dialPositions entry
 -- in a CD_<deviceId> resource). netservicestarter answers both from the
 -- resource store: <name> and <name>_small for icons, ci_<uuid> for logos.
 --
--- RemotePictures lists every picture the hub's own data asks for and whether
--- the store holds it; no remote has to sync first. CommitRemotePictures
--- stores pictures from that list only (recovered from where Logitech kept
+-- RemoteImages lists every image the hub's own data asks for and whether
+-- the store holds it; no remote has to sync first. CommitRemoteImages
+-- stores images from that list only (synced from where Logitech kept
 -- them), and CommitActivityIcon stores a new icon under a fresh name for the
 -- editor to put in an activity's ImageKey.
--- The section lives in remotePictures (declared near the top), which keeps it
+-- The section lives in remoteImages (declared near the top), which keeps it
 -- to a single main-chunk local (Lua allows 200).
 do
-  local REMOTE_PICTURE_FILE = "^/var/volatile/codex%-remote%-picture%-%d+%-%d+%.png$"
+  local REMOTE_IMAGE_FILE = "^/var/volatile/codex%-remote%-image%-%d+%-%d+%.png$"
   local ACTIVITY_ICON_FILE = "^/var/volatile/codex%-activity%-icon%-%d+%.png$"
   local ACTIVITY_ICON_SMALL_FILE = "^/var/volatile/codex%-activity%-icon%-%d+%-small%.png$"
   local ACTIVITY_ICON_SIZE = {width = 70, height = 70}
   local ACTIVITY_ICON_SMALL_SIZE = {width = 38, height = 38}
-  local REMOTE_PICTURE_MAX_SIDE = 512
-  local REMOTE_PICTURES_MAX = 128
-  local REMOTE_PICTURES_LIST_MAX = 100
-  local REMOTE_PICTURES_LIST_BYTES = 24 * 1024
+  local REMOTE_IMAGE_MAX_SIDE = 512
+  local REMOTE_IMAGES_MAX = 128
+  local REMOTE_IMAGES_LIST_MAX = 100
+  local REMOTE_IMAGES_LIST_BYTES = 24 * 1024
   local RESOURCE_INDEX_FILE = "/data/resources/index.json"
   local DISCOVERY_FILE = "/data/discovery/RuntimeConfig.json"
 
-  -- A staged PNG of any size up to REMOTE_PICTURE_MAX_SIDE a side.
+  -- A staged PNG of any size up to REMOTE_IMAGE_MAX_SIDE a side.
   local function stagedPngAnySize(path, pattern, what)
     local data, problem = stagedPng(path, pattern, nil, what)
     if not data then
@@ -2270,14 +2270,14 @@ do
     end
     local width, height = uint32At(data, 17), uint32At(data, 21)
     if not width or not height or width < 1 or height < 1 or
-        width > REMOTE_PICTURE_MAX_SIDE or height > REMOTE_PICTURE_MAX_SIDE then
+        width > REMOTE_IMAGE_MAX_SIDE or height > REMOTE_IMAGE_MAX_SIDE then
       return nil, string.format("the %s must be at most %dx%d", what,
-        REMOTE_PICTURE_MAX_SIDE, REMOTE_PICTURE_MAX_SIDE)
+        REMOTE_IMAGE_MAX_SIDE, REMOTE_IMAGE_MAX_SIDE)
     end
     return data
   end
 
-  local function pictureStored(name)
+  local function imageStored(name)
     local status, _, path = resources.getResource(name)
     return tostring(status or "") == "200" and type(path) == "string" and
       string.sub(path, -4) == ".png"
@@ -2303,14 +2303,14 @@ do
     return names
   end
 
-  -- Every picture the hub's data asks for, in a stable order, without duplicates.
-  local function neededRemotePictures()
-    local pictures, seen = {}, {}
-    local function add(picture)
-      if not seen[picture.name] then
-        seen[picture.name] = true
-        picture.stored = pictureStored(picture.name)
-        pictures[#pictures + 1] = picture
+  -- Every image the hub's data asks for, in a stable order, without duplicates.
+  local function neededRemoteImages()
+    local images, seen = {}, {}
+    local function add(image)
+      if not seen[image.name] then
+        seen[image.name] = true
+        image.stored = imageStored(image.name)
+        images[#images + 1] = image
       end
     end
     local activities = resourceSnapshot("ActivityList")
@@ -2363,7 +2363,7 @@ do
         end
       end
     end
-    return pictures
+    return images
   end
 
   -- Where the hub's discovery data says channel logos live
@@ -2385,47 +2385,47 @@ do
   end
 
   -- codex_webui reads the answer file up to 32 KB and waits (120 s) on a
-  -- larger one, so the list stops at REMOTE_PICTURES_LIST_BYTES of entries or
-  -- REMOTE_PICTURES_LIST_MAX of them (truncated = true). Missing pictures come
+  -- larger one, so the list stops at REMOTE_IMAGES_LIST_BYTES of entries or
+  -- REMOTE_IMAGES_LIST_MAX of them (truncated = true). Missing images come
   -- first; request.offset skips that many of them, so a caller can get past
-  -- ones it could not recover.
-  local function remotePicturesStatus(request)
-    local pictures = neededRemotePictures()
+  -- ones it could not sync.
+  local function remoteImagesStatus(request)
+    local images = neededRemoteImages()
     local offset = math.max(0, math.floor(tonumber(request and request.offset) or 0))
     local missing, listed, bytes, full = 0, {}, 0, false
-    local function list(picture)
+    local function list(image)
       if full then
         return
       end
-      local size = #json.encode(picture) + 1
-      if #listed >= REMOTE_PICTURES_LIST_MAX or bytes + size > REMOTE_PICTURES_LIST_BYTES then
+      local size = #json.encode(image) + 1
+      if #listed >= REMOTE_IMAGES_LIST_MAX or bytes + size > REMOTE_IMAGES_LIST_BYTES then
         full = true
         return
       end
       bytes = bytes + size
-      listed[#listed + 1] = picture
+      listed[#listed + 1] = image
     end
-    for _, picture in ipairs(pictures) do
-      if not picture.stored then
+    for _, image in ipairs(images) do
+      if not image.stored then
         missing = missing + 1
         if missing > offset then
-          list(picture)
+          list(image)
         end
       end
     end
-    for _, picture in ipairs(pictures) do
-      if picture.stored then
-        list(picture)
+    for _, image in ipairs(images) do
+      if image.stored then
+        list(image)
       end
     end
     return {
       ok = true,
       localOnly = true,
-      pictures = listed,
-      total = #pictures,
+      images = listed,
+      total = #images,
       missing = missing,
       offset = offset,
-      truncated = #listed < #pictures,
+      truncated = #listed < #images,
       contentImageHost = contentImageHost()
     }
   end
@@ -2454,12 +2454,12 @@ do
     end
   end
 
-  local function pictureWriterRefusal()
+  local function imageWriterRefusal()
     if not blockerActive() then
       return {
         ok = false,
         localOnly = true,
-        error = "offline picture writer refused to run because the cloud blocker is not active"
+        error = "offline image writer refused to run because the cloud blocker is not active"
       }
     end
     if resources.isAnySyncInProgress() then
@@ -2468,31 +2468,31 @@ do
     return nil
   end
 
-  -- {pictures = [{name, file}]}: store each listed, still needed picture.
+  -- {images = [{name, file}]}: store each listed, still needed image.
   -- One revision afterwards, so the screen remotes sync and fetch them again.
-  local function commitRemotePictures(request)
-    local refusal = pictureWriterRefusal()
+  local function commitRemoteImages(request)
+    local refusal = imageWriterRefusal()
     if refusal then
       return refusal
     end
-    if type(request.pictures) ~= "table" or #request.pictures == 0 then
-      return {ok = false, localOnly = true, error = "no pictures were sent"}
+    if type(request.images) ~= "table" or #request.images == 0 then
+      return {ok = false, localOnly = true, error = "no images were sent"}
     end
-    if #request.pictures > REMOTE_PICTURES_MAX then
-      return {ok = false, localOnly = true, error = "too many pictures in one request"}
+    if #request.images > REMOTE_IMAGES_MAX then
+      return {ok = false, localOnly = true, error = "too many images in one request"}
     end
     local needed = {}
-    for _, picture in ipairs(neededRemotePictures()) do
-      needed[picture.name] = true
+    for _, image in ipairs(neededRemoteImages()) do
+      needed[image.name] = true
     end
     local saved, failed = {}, {}
-    for _, picture in ipairs(request.pictures) do
-      local name = type(picture) == "table" and picture.name
+    for _, image in ipairs(request.images) do
+      local name = type(image) == "table" and image.name
       local problem
       if type(name) ~= "string" or not needed[name] then
-        problem = "not a picture this hub's activities or favorites use"
+        problem = "not an image this hub's activities or favorites use"
       else
-        local data, dataProblem = stagedPngAnySize(picture.file, REMOTE_PICTURE_FILE, "picture")
+        local data, dataProblem = stagedPngAnySize(image.file, REMOTE_IMAGE_FILE, "image")
         if not data then
           problem = dataProblem
         else
@@ -2523,7 +2523,7 @@ do
   -- activity with ImageKey "Activity/<name>.png"; that save publishes the
   -- revision.
   local function commitActivityIcon(request)
-    local refusal = pictureWriterRefusal()
+    local refusal = imageWriterRefusal()
     if refusal then
       return refusal
     end
@@ -2549,10 +2549,10 @@ do
     return {ok = true, localOnly = true, name = name, imageKey = "Activity/" .. name .. ".png"}
   end
 
-  remotePictures.status = remotePicturesStatus
-  remotePictures.pruneActivityIcons = pruneActivityIcons
-  remotePictures.commit = commitRemotePictures
-  remotePictures.commitIcon = commitActivityIcon
+  remoteImages.status = remoteImagesStatus
+  remoteImages.pruneActivityIcons = pruneActivityIcons
+  remoteImages.commit = commitRemoteImages
+  remoteImages.commitIcon = commitActivityIcon
 end
 
 -- Home Assistant devices. Each entity the HA integration exposes becomes an
@@ -4056,12 +4056,12 @@ local function processRequest(raw)
     response = commitDeviceScreen(request)
   elseif request.op == "CommitRemoteBackground" then
     response = commitRemoteBackground(request)
-  elseif request.op == "RemotePictures" then
-    response = remotePictures.status(request)
-  elseif request.op == "CommitRemotePictures" then
-    response = remotePictures.commit(request)
+  elseif request.op == "RemoteImages" then
+    response = remoteImages.status(request)
+  elseif request.op == "CommitRemoteImages" then
+    response = remoteImages.commit(request)
   elseif request.op == "CommitActivityIcon" then
-    response = remotePictures.commitIcon(request)
+    response = remoteImages.commitIcon(request)
   elseif request.op == "Status" then
     response = statusResponse()
   elseif request.op == "SimulateGesture" then

@@ -1,11 +1,11 @@
 "use strict";
 
-// Recover the pictures a screen remote shows (activity icons and favorite
+// Sync the images a screen remote shows (activity icons and favorite
 // channel logos) from where Logitech kept them, so the web UI can store them
-// on the hub (docs/REMOTE_PICTURES.md). The hub never fetches them itself:
+// on the hub (docs/REMOTE_IMAGES.md). The hub never fetches them itself:
 // its cloud access is blocked.
 //
-// The page passes the address the hub listed for a picture. Only two shapes
+// The page passes the address the hub listed for an image. Only two shapes
 // are fetched, so the page can't make the desktop fetch anything else:
 // - an activity icon: https://<host>.myharmony.com/Activity/<name>.png
 // - a channel logo: content-image://<version>/image/<id>.png, mapped onto the
@@ -15,20 +15,20 @@
 
 const { CatalogError } = require("./oauth");
 
-const PICTURE_MAX_BYTES = 512 * 1024;
-const PICTURE_TIMEOUT_MS = 15000;
+const IMAGE_MAX_BYTES = 512 * 1024;
+const IMAGE_TIMEOUT_MS = 15000;
 const LOGO_SIZE_HINT = ";maxX=54;maxY=54";
 const DEFAULT_LOGO_HOST = "https://d1tk8oqnnsddt5.cloudfront.net";
-const ACTIVITY_PICTURE = /^https:\/\/(?:[a-z0-9-]+\.)+myharmony\.com\/Activity\/[A-Za-z0-9_-]{1,96}\.png$/i;
-const CONTENT_PICTURE = /^content-image:\/\/([0-9]{1,3}(?:\.[0-9]{1,3}){0,2})\/image\/([A-Za-z0-9-]{1,64})\.png$/;
+const ACTIVITY_IMAGE = /^https:\/\/(?:[a-z0-9-]+\.)+myharmony\.com\/Activity\/[A-Za-z0-9_-]{1,96}\.png$/i;
+const CONTENT_IMAGE = /^content-image:\/\/([0-9]{1,3}(?:\.[0-9]{1,3}){0,2})\/image\/([A-Za-z0-9-]{1,64})\.png$/;
 const LOGO_HOST = /^https:\/\/(?:[a-z0-9-]+\.)+(?:cloudfront\.net|myharmony\.com)$/i;
 const PNG_SIGNATURE = Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]);
 
-/** The https address to fetch for a picture the hub listed, or null. */
-function pictureSourceUrl(uri, contentImageHost) {
+/** The https address to fetch for an image the hub listed, or null. */
+function imageSourceUrl(uri, contentImageHost) {
   if (typeof uri !== "string" || uri.length > 300) return null;
-  if (ACTIVITY_PICTURE.test(uri)) return uri;
-  const logo = CONTENT_PICTURE.exec(uri);
+  if (ACTIVITY_IMAGE.test(uri)) return uri;
+  const logo = CONTENT_IMAGE.exec(uri);
   if (!logo) return null;
   const host = typeof contentImageHost === "string" && LOGO_HOST.test(contentImageHost)
     ? contentImageHost
@@ -36,12 +36,12 @@ function pictureSourceUrl(uri, contentImageHost) {
   return `${host}/${logo[1]}/image/${logo[2]}.png${LOGO_SIZE_HINT}`;
 }
 
-/** The body as a Buffer, stopping as soon as it passes PICTURE_MAX_BYTES. */
+/** The body as a Buffer, stopping as soon as it passes IMAGE_MAX_BYTES. */
 async function readCapped(response) {
   const reader = response.body?.getReader?.();
   if (!reader) {
     const whole = Buffer.from(await response.arrayBuffer());
-    if (whole.length > PICTURE_MAX_BYTES) throw new CatalogError("The picture is larger than 512 KB");
+    if (whole.length > IMAGE_MAX_BYTES) throw new CatalogError("The image is larger than 512 KB");
     return whole;
   }
   const chunks = [];
@@ -50,9 +50,9 @@ async function readCapped(response) {
     const { done, value } = await reader.read();
     if (done) break;
     total += value.byteLength;
-    if (total > PICTURE_MAX_BYTES) {
+    if (total > IMAGE_MAX_BYTES) {
       await reader.cancel().catch(() => {});
-      throw new CatalogError("The picture is larger than 512 KB");
+      throw new CatalogError("The image is larger than 512 KB");
     }
     chunks.push(Buffer.from(value.buffer, value.byteOffset, value.byteLength));
   }
@@ -60,7 +60,7 @@ async function readCapped(response) {
 }
 
 /** The PNG at url as a Buffer; a CatalogError with a plain message otherwise. */
-async function fetchPicture(url, { fetchImpl = globalThis.fetch, timeoutMs = PICTURE_TIMEOUT_MS } = {}) {
+async function fetchImage(url, { fetchImpl = globalThis.fetch, timeoutMs = IMAGE_TIMEOUT_MS } = {}) {
   const host = new URL(url).hostname;
   let response;
   try {
@@ -74,54 +74,54 @@ async function fetchPicture(url, { fetchImpl = globalThis.fetch, timeoutMs = PIC
     throw new CatalogError(`Could not reach ${host}; try again`);
   }
   if (response.status === 404 || response.status === 403) {
-    throw new CatalogError("Logitech no longer has this picture");
+    throw new CatalogError("Logitech no longer has this image");
   }
   if (response.status !== 200) {
     throw new CatalogError(`${host} answered ${response.status}`);
   }
   const declared = Number(response.headers?.get?.("content-length"));
-  if (Number.isFinite(declared) && declared > PICTURE_MAX_BYTES) {
-    throw new CatalogError("The picture is larger than 512 KB");
+  if (Number.isFinite(declared) && declared > IMAGE_MAX_BYTES) {
+    throw new CatalogError("The image is larger than 512 KB");
   }
   const bytes = await readCapped(response);
   if (bytes.length < 24 || !bytes.subarray(0, 8).equals(PNG_SIGNATURE) || bytes.toString("latin1", 12, 16) !== "IHDR") {
-    throw new CatalogError("The answer isn't a PNG picture");
+    throw new CatalogError("The answer isn't a PNG image");
   }
   return bytes;
 }
 
-function validatePictureArgs(args) {
+function validateImageArgs(args) {
   if (!args || typeof args !== "object" || Array.isArray(args)) {
-    throw new Error("Invalid picture arguments");
+    throw new Error("Invalid image arguments");
   }
   if (Object.keys(args).some((k) => !["uri", "contentImageHost"].includes(k))) {
-    throw new Error("Invalid picture arguments");
+    throw new Error("Invalid image arguments");
   }
   if (args.contentImageHost !== undefined && args.contentImageHost !== null &&
       (typeof args.contentImageHost !== "string" || args.contentImageHost.length > 100)) {
-    throw new Error("Invalid picture arguments");
+    throw new Error("Invalid image arguments");
   }
-  const url = pictureSourceUrl(args.uri, args.contentImageHost);
-  if (!url) throw new Error("Invalid picture address");
+  const url = imageSourceUrl(args.uri, args.contentImageHost);
+  if (!url) throw new Error("Invalid image address");
   return url;
 }
 
-function createPictureFetcher({ fetchImpl = globalThis.fetch } = {}) {
+function createImageFetcher({ fetchImpl = globalThis.fetch } = {}) {
   return {
     /** {uri, contentImageHost?} -> {image: "data:image/png;base64,..."} */
     async fetch(args) {
-      const url = validatePictureArgs(args);
-      const bytes = await fetchPicture(url, { fetchImpl });
+      const url = validateImageArgs(args);
+      const bytes = await fetchImage(url, { fetchImpl });
       return { image: `data:image/png;base64,${bytes.toString("base64")}` };
     },
   };
 }
 
 module.exports = {
-  PICTURE_MAX_BYTES,
+  IMAGE_MAX_BYTES,
   DEFAULT_LOGO_HOST,
-  pictureSourceUrl,
-  fetchPicture,
-  validatePictureArgs,
-  createPictureFetcher,
+  imageSourceUrl,
+  fetchImage,
+  validateImageArgs,
+  createImageFetcher,
 };

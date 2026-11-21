@@ -47,6 +47,18 @@
   let updatesBusy = false;
   let hubStep = "";
   let lastWizardViewKey = "";
+  // Sync user images from Logitech (connect/images.js, docs/REMOTE_IMAGES.md).
+  const imageSync =
+    window.melodiousImageSync && catalogBridge && typeof catalogBridge.remoteImage === "function"
+      ? window.melodiousImageSync.createImageSync({
+          fetchImpl: (path, options) => fetch(path, options),
+          remoteImage: (args) => catalogBridge.remoteImage(args),
+        })
+      : null;
+  let userImages = { state: "unknown" };
+  let userImagesBusy = false;
+  let userImagesProgress = "";
+  let userImagesMessage = "";
   let connectExistingChosen = false;
 
   let wiz = wizardFlow
@@ -257,6 +269,77 @@
     `;
   }
 
+  function userImagesStatusText() {
+    if (!state.hub) return "Connect to a hub first.";
+    if (userImagesBusy) return userImagesProgress || "Syncing…";
+    switch (userImages.state) {
+      case "ready":
+        if (userImages.total === 0) return "This hub's activities and favorites use no images.";
+        return userImages.missing > 0
+          ? `${userImages.missing} of ${userImages.total} activity icons and channel logos aren't on the hub.`
+          : `All ${userImages.total} activity icons and channel logos are on the hub.`;
+      case "old-hub":
+        return "The hub's software is too old for this. Update the hub first.";
+      case "error":
+        return `Couldn't check the hub: ${userImages.message}`;
+      default:
+        return "Checking the hub…";
+    }
+  }
+
+  // Under "Logitech account": a one-off sync of the images Logitech kept.
+  function renderUserImagesRow() {
+    if (!imageSync) return "";
+    const canSync = Boolean(state.hub) && !userImagesBusy &&
+      userImages.state === "ready" && userImages.missing > 0;
+    return `
+      <div class="m-list" style="margin-top:var(--space-2)">
+        <div class="m-row" id="settingsUserImagesRow">
+          <span class="m-row-text">
+            <span class="m-row-title">User images</span>
+            <span class="m-row-sub" id="settingsUserImagesStatus">${escapeHtml(userImagesStatusText())}</span>
+            <span class="m-row-sub">Activity icons and favorite channel logos kept by Logitech. This app downloads them and sends them to the hub, which stays offline. No Logitech sign-in needed.</span>
+            ${userImagesMessage ? `<span class="m-row-sub" id="settingsUserImagesMessage">${escapeHtml(userImagesMessage)}</span>` : ""}
+          </span>
+          <button type="button" class="btn btn-tonal btn-sm" id="syncUserImagesBtn" ${canSync ? "" : "disabled"}>${
+            userImagesBusy ? "Syncing…" : "Sync user images from Logitech"
+          }</button>
+        </div>
+      </div>`;
+  }
+
+  async function loadUserImages() {
+    if (!imageSync || !state.hub) return;
+    userImages = { state: "loading" };
+    if (state.mode === "settings") render();
+    userImages = await imageSync.status();
+    if (state.mode === "settings") render();
+  }
+
+  async function syncUserImages() {
+    if (!imageSync || userImagesBusy) return;
+    userImagesBusy = true;
+    userImagesMessage = "";
+    userImagesProgress = "Asking the hub which images are missing…";
+    render();
+    try {
+      const result = await imageSync.sync(({ done, total }) => {
+        userImagesProgress = `Syncing image ${done} of ${total}…`;
+        const line = document.getElementById("settingsUserImagesStatus");
+        if (line) line.textContent = userImagesProgress;
+      });
+      userImagesMessage = imageSync.summary(result);
+      showSnackbar(userImagesMessage, result.failed.size > 0 && result.synced === 0);
+    } catch (err) {
+      userImagesMessage = `Syncing images stopped: ${err?.message || err}`;
+      showSnackbar(userImagesMessage, true);
+    } finally {
+      userImagesBusy = false;
+      await loadUserImages();
+      render();
+    }
+  }
+
   function renderSettingsSections() {
     const savedHubText = state.hub
       ? `${state.hub.host}:${state.hub.port}`
@@ -338,6 +421,8 @@
           }
         </div>
       </div>
+
+      ${renderUserImagesRow()}
 
       ${renderUpdatesSection()}
 
@@ -1736,6 +1821,10 @@
       render();
       return;
     }
+    if (target.closest("#syncUserImagesBtn")) {
+      await syncUserImages();
+      return;
+    }
     if (target.closest("#settingsLogitechSignOutBtn") && catalogBridge) {
       try {
         await catalogBridge.signOut();
@@ -1903,7 +1992,10 @@
       }
     }
     render();
-    if (state.mode === "settings") loadUpdates();
+    if (state.mode === "settings") {
+      loadUpdates();
+      loadUserImages();
+    }
     runDiscovery();
   }
 

@@ -732,8 +732,8 @@ function handleRemoteBackgroundImage(res, params) {
   res.end(bytes);
 }
 
-/* Remote pictures (GET/POST /api/remote-pictures, GET
-   /api/remote-pictures/image, POST /api/activity-icon). Like codexactivity:
+/* Remote images (GET/POST /api/remote-images, GET
+   /api/remote-images/image, POST /api/activity-icon). Like codexactivity:
    the list comes from the activities' ImageKey (plus _small) and the
    favorites' logos (ci_<uuid>), only listed names are stored (any PNG up to
    512x512), and a new icon is a 70x70 PNG with a 38x38 thumbnail under a
@@ -745,16 +745,16 @@ const SIM_FAVORITES = {
     { number: "5", image: "00000000-0000-4000-8000-00000000c002.png", name: "News 24" },
   ],
 };
-const simPictures = new Map(); // name -> PNG bytes
+const simImages = new Map(); // name -> PNG bytes
 let simIconNext = 1;
 
-function simNeededPictures() {
+function simNeededImages() {
   const out = [];
   const seen = new Set();
   const add = (p) => {
     if (seen.has(p.name)) return;
     seen.add(p.name);
-    out.push({ ...p, stored: simPictures.has(p.name) });
+    out.push({ ...p, stored: simImages.has(p.name) });
   };
   for (const a of activities()) {
     const m = typeof a?.ImageKey === "string" ? /^Activity\/([A-Za-z0-9_-]+)\.png$/.exec(a.ImageKey) : null;
@@ -776,7 +776,7 @@ function simNeededPictures() {
 }
 
 /* width 0: any size up to 512x512, as codex_webui's stage_png_text(). */
-function simPicturePng(text, width, height, what) {
+function simImagePng(text, width, height, what) {
   if (width) return simBgPng(text, width, height, what);
   const b64 = String(text ?? "").replace(/^data:[^,]*,/, "");
   const bytes = Buffer.from(b64, "base64");
@@ -790,55 +790,55 @@ function simPicturePng(text, width, height, what) {
   return simBgPng(text, 1, 1, what); // reports missing / not base64 / not a PNG
 }
 
-function handleRemotePicturesGet(res, params) {
-  const pictures = simNeededPictures();
+function handleRemoteImagesGet(res, params) {
+  const images = simNeededImages();
   // Missing first, as codexactivity lists them; ?offset=N skips N of those.
   const parsed = Math.floor(Number(params?.offset));
   const offset = Number.isFinite(parsed) && parsed > 0 ? parsed : 0;
-  const missing = pictures.filter((p) => !p.stored);
-  const listed = [...missing.slice(offset), ...pictures.filter((p) => p.stored)].slice(0, 100);
-  sendJson(res, 200, { ok: true, localOnly: true, pictures: listed, total: pictures.length,
-    missing: missing.length, offset, truncated: listed.length < pictures.length,
+  const missing = images.filter((p) => !p.stored);
+  const listed = [...missing.slice(offset), ...images.filter((p) => p.stored)].slice(0, 100);
+  sendJson(res, 200, { ok: true, localOnly: true, images: listed, total: images.length,
+    missing: missing.length, offset, truncated: listed.length < images.length,
     contentImageHost: "https://logos.example.invalid" });
 }
 
-function handleRemotePicturesSet(res, params) {
-  const list = Array.isArray(params.pictures) ? params.pictures : null;
+function handleRemoteImagesSet(res, params) {
+  const list = Array.isArray(params.images) ? params.images : null;
   if (!list) {
-    sendJson(res, 400, { ok: false, error: "Send {\"pictures\":[{\"name\":...,\"image\":...}]} as JSON." });
+    sendJson(res, 400, { ok: false, error: "Send {\"images\":[{\"name\":...,\"image\":...}]} as JSON." });
     return;
   }
   if (list.length === 0) {
-    sendJson(res, 400, { ok: false, error: "No pictures were sent." });
+    sendJson(res, 400, { ok: false, error: "No images were sent." });
     return;
   }
   if (list.length > 64) {
-    sendJson(res, 400, { ok: false, error: "At most 64 pictures in one request." });
+    sendJson(res, 400, { ok: false, error: "At most 64 images in one request." });
     return;
   }
   const staged = [];
   for (const [i, p] of list.entries()) {
     const name = typeof p?.name === "string" ? p.name : "";
     if (!/^[A-Za-z0-9_-]{1,96}$/.test(name)) {
-      sendJson(res, 400, { ok: false, error: `Picture ${i + 1}: a name is letters, digits, _ and -.` });
+      sendJson(res, 400, { ok: false, error: `Image ${i + 1}: a name is letters, digits, _ and -.` });
       return;
     }
-    const png = simPicturePng(p.image, 0, 0, name);
+    const png = simImagePng(p.image, 0, 0, name);
     if (png.error) {
       sendJson(res, 400, { ok: false, error: png.error });
       return;
     }
     staged.push({ name, bytes: png.bytes });
   }
-  const needed = new Set(simNeededPictures().map((p) => p.name));
+  const needed = new Set(simNeededImages().map((p) => p.name));
   const saved = [];
   const failed = [];
   for (const { name, bytes } of staged) {
     if (needed.has(name)) {
-      simPictures.set(name, bytes);
+      simImages.set(name, bytes);
       saved.push(name);
     } else {
-      failed.push({ name, error: "not a picture this hub's activities or favorites use" });
+      failed.push({ name, error: "not an image this hub's activities or favorites use" });
     }
   }
   if (!saved.length) {
@@ -846,35 +846,35 @@ function handleRemotePicturesSet(res, params) {
       reply: { ok: false, localOnly: true, saved, failed } });
     return;
   }
-  logEvent({ kind: "remote-pictures", message: `${saved.length} picture(s) saved` });
+  logEvent({ kind: "remote-images", message: `${saved.length} image(s) saved` });
   sendJson(res, 200, { ok: true, localOnly: true, saved, failed });
 }
 
 function handleActivityIconSet(res, params) {
-  const image = simPicturePng(params.image, 70, 70, "icon");
-  const small = image.error ? null : simPicturePng(params.thumbnail, 38, 38, "icon thumbnail");
+  const image = simImagePng(params.image, 70, 70, "icon");
+  const small = image.error ? null : simImagePng(params.thumbnail, 38, 38, "icon thumbnail");
   const error = image.error || small.error;
   if (error) {
     sendJson(res, 400, { ok: false, error });
     return;
   }
   const name = `00000000-0000-4000-8000-${String(simIconNext++).padStart(12, "0")}`;
-  simPictures.set(name, image.bytes);
-  simPictures.set(`${name}_small`, small.bytes);
+  simImages.set(name, image.bytes);
+  simImages.set(`${name}_small`, small.bytes);
   sendJson(res, 200, { ok: true, localOnly: true, name, imageKey: `Activity/${name}.png` });
 }
 
-function handleRemotePictureImage(res, params) {
+function handleRemoteImageFile(res, params) {
   const name = String(params.name ?? "");
   if (!/^[A-Za-z0-9_-]{1,96}$/.test(name)) {
     res.writeHead(400, { "Content-Type": "text/plain", "Cache-Control": "no-store" });
-    res.end("Give a picture name: letters, digits, _ and -.\n");
+    res.end("Give an image name: letters, digits, _ and -.\n");
     return;
   }
-  const bytes = simPictures.get(name);
+  const bytes = simImages.get(name);
   if (!bytes) {
     res.writeHead(404, { "Content-Type": "text/plain", "Cache-Control": "no-store" });
-    res.end("That picture isn't saved on this hub.\n");
+    res.end("That image isn't saved on this hub.\n");
     return;
   }
   res.writeHead(200, { "Content-Type": "image/png", "Content-Length": bytes.length, "Cache-Control": "private, max-age=86400" });
@@ -2680,7 +2680,7 @@ function handleExport(res, pathname) {
 /* Like codex_webui's request_same_origin_json(): the routes that change the
    radio or reboot the hub take only application/json, and a browser's Origin,
    when sent, must be this host. */
-const SAME_ORIGIN_JSON_ROUTES = new Set(["POST /api/multi-remote", "POST /api/remote-unpair", "POST /api/remote-background", "POST /api/remote-pictures", "POST /api/activity-icon", "POST /api/usb-eth", "POST /api/activity-restrictions"]);
+const SAME_ORIGIN_JSON_ROUTES = new Set(["POST /api/multi-remote", "POST /api/remote-unpair", "POST /api/remote-background", "POST /api/remote-images", "POST /api/activity-icon", "POST /api/usb-eth", "POST /api/activity-restrictions"]);
 const SAME_ORIGIN_JSON_ERROR =
   "This change takes a JSON request (Content-Type: application/json) from the hub's own web app.";
 
@@ -2759,7 +2759,7 @@ async function handleApi(req, res, pathname, url) {
         loadFixture();
         resetSimRemotes();
         resetSimBackground();
-        simPictures.clear();
+        simImages.clear();
         simIconNext = 1;
         state.events.length = 0;
         captureArmed = false;
@@ -2946,14 +2946,14 @@ async function handleApi(req, res, pathname, url) {
     case "POST /api/remote-background":
       handleRemoteBackgroundSet(res, params);
       return;
-    case "GET /api/remote-pictures":
-      handleRemotePicturesGet(res, params);
+    case "GET /api/remote-images":
+      handleRemoteImagesGet(res, params);
       return;
-    case "GET /api/remote-pictures/image":
-      handleRemotePictureImage(res, params);
+    case "GET /api/remote-images/image":
+      handleRemoteImageFile(res, params);
       return;
-    case "POST /api/remote-pictures":
-      handleRemotePicturesSet(res, params);
+    case "POST /api/remote-images":
+      handleRemoteImagesSet(res, params);
       return;
     case "POST /api/activity-icon":
       handleActivityIconSet(res, params);
@@ -3101,7 +3101,7 @@ async function handleApi(req, res, pathname, url) {
         features: [
           "activity-save", "activity-sync", "catalog-import", "device-commands",
           "androidtv-devices", "androidtv-inputs", "device-screen", "device-settings", "ha-devices", "ha-devices-v2",
-          "ha-state", "irdb-import", "remote-background", "remote-pair", "remote-pictures", "switch2-wake"
+          "ha-state", "irdb-import", "remote-background", "remote-pair", "remote-images", "switch2-wake"
         ]
       });
       return;

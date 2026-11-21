@@ -65,15 +65,15 @@ public struct LiveStatusDot: View {
 }
 
 /// An activity's tile: its own icon when the hub holds one, else the symbol
-/// for its kind (also while the picture loads). docs/REMOTE_PICTURES.md
+/// for its kind (also while the image loads). docs/REMOTE_IMAGES.md
 public struct ActivityTileView: View {
     public let activity: HubActivity
-    /// Not observed: the tile only asks it for the picture, and shouldn't redraw
+    /// Not observed: the tile only asks it for the image, and shouldn't redraw
     /// on every change the view model publishes.
     public let viewModel: HubViewModel
     public let isActive: Bool
     public let size: CGFloat
-    @State private var picture: UIImage?
+    @State private var image: UIImage?
 
     public init(activity: HubActivity, viewModel: HubViewModel, isActive: Bool = false, size: CGFloat = 44) {
         self.activity = activity
@@ -84,8 +84,8 @@ public struct ActivityTileView: View {
 
     public var body: some View {
         Group {
-            if let picture = picture {
-                Image(uiImage: picture)
+            if let image = image {
+                Image(uiImage: image)
                     .resizable()
                     .scaledToFill()
                     .frame(width: size, height: size)
@@ -95,7 +95,7 @@ public struct ActivityTileView: View {
             }
         }
         .task(id: activity.imageName) {
-            picture = await viewModel.activityPicture(activity)
+            image = await viewModel.activityImage(activity)
         }
     }
 }

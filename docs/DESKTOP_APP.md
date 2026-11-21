@@ -15,10 +15,11 @@ release after `v2.1.0`. The bundled [CLI](../tools/hub-root/README.md) and
   tab gets Sign in, a brand and model search, a results list and Download.
   The downloaded package goes through the existing preview and
   `/api/catalog-import`. No Python helper, no terminal, no file to copy.
-- **Remote pictures.** In the activity editor, **Recover from Logitech**
-  downloads the activity icons and favorite channel logos that Logitech
-  kept and stores them on the hub, so screen remotes show them again
-  ([REMOTE_PICTURES.md](REMOTE_PICTURES.md)). No sign-in needed.
+- **User images.** **Settings → Logitech account → Sync user images from
+  Logitech** downloads the activity icons and favorite channel logos that
+  Logitech kept and sends them to the hub, which stays offline, so screen
+  remotes show them again ([REMOTE_IMAGES.md](REMOTE_IMAGES.md)). No
+  Logitech sign-in needed.
 - **Setup Wizard.** Takes a hub from the Harmony app's setup, or
   from new, factory reset or second-hand, to rooted and running Melodious,
   over Wi-Fi or USB, with no commands. It's on `main` and ships in the

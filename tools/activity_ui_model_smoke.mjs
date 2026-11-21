@@ -671,7 +671,7 @@ validateGraph();
   assert.equal(savedDevMap.Buttons[0].ButtonState, 0);
 }
 
-// Activity icons (docs/REMOTE_PICTURES.md): the stored name comes from the
+// Activity icons (docs/REMOTE_IMAGES.md): the stored name comes from the
 // ImageKey only, the cover crop is centered, and the picker's glyphs are path
 // data only, as Path2D draws them.
 {
@@ -690,38 +690,23 @@ validateGraph();
   assert.match(ICON_BASE_URI, /^https:\/\/[^/]+\/$/);
 }
 
-// Storing recovered pictures: the hub refuses a whole batch for one bad
-// picture, so a refused batch is resent one picture at a time.
+// User image status: the editor only reports; an old hub (no route, 404)
+// disables setting icons and says to update the hub.
 {
-  const posts = [];
-  const pictureContext = {
-    __HARMONY_ACTIVITY_TEST__: {},
-    fetch: async (path, options) => {
-      const { pictures } = JSON.parse(options.body);
-      posts.push(pictures.map((p) => p.name));
-      const bad = pictures.some((p) => p.name === "bad");
-      const body = bad
-        ? { ok: false, error: "The bad must be at most 512x512 pixels." }
-        : pictures[0].name === "unlisted"
-          ? { ok: false, error: "x", reply: { ok: false, saved: [], failed: [{ name: "unlisted", error: "not a picture this hub uses" }] } }
-          : { ok: true, saved: pictures.map((p) => p.name), failed: [] };
-      const status = bad ? 400 : body.ok ? 200 : 422;
-      return { ok: status === 200, status, text: async () => JSON.stringify(body) };
-    }
-  };
-  vm.createContext(pictureContext);
-  vm.runInContext(source, pictureContext, { filename: "activity-ui.js" });
-  const { storePictures } = pictureContext.__HARMONY_ACTIVITY_TEST__.api;
-  const result = await storePictures([{ name: "a", image: "x" }, { name: "bad", image: "x" }, { name: "unlisted", image: "x" }, { name: "b", image: "x" }]);
-  assert.deepEqual([...result.saved], ["a", "b"]);
-  assert.deepEqual([...result.failed.keys()], ["bad", "unlisted"]);
-  assert.match(result.failed.get("bad"), /512x512/);
-  assert.match(result.failed.get("unlisted"), /not a picture/);
-  assert.deepEqual(posts, [["a", "bad", "unlisted", "b"], ["a"], ["bad"], ["unlisted"], ["b"]]);
-  posts.length = 0;
-  const clean = await storePictures([{ name: "a", image: "x" }, { name: "b", image: "x" }]);
-  assert.deepEqual([...clean.saved], ["a", "b"]);
-  assert.equal(posts.length, 1);
+  const statusContext = { __HARMONY_ACTIVITY_TEST__: {} };
+  vm.createContext(statusContext);
+  vm.runInContext(source, statusContext, { filename: "activity-ui.js" });
+  const { imageStatus, imageStatusHtml } = statusContext.__HARMONY_ACTIVITY_TEST__.api;
+  assert.equal(imageStatusHtml(), "");
+  Object.assign(imageStatus, { checked: true, oldHub: true });
+  assert.match(imageStatusHtml(), /older than this editor: update the hub/);
+  Object.assign(imageStatus, { oldHub: false, missing: 3, total: 17 });
+  assert.match(imageStatusHtml(), /3 of 17 user images .* aren&#39;t on the hub\. Sync them with the Melodious desktop app: Settings → Logitech account → Sync user images from Logitech\./);
+  assert.doesNotMatch(imageStatusHtml(), /<button/);
+  statusContext.melodiousDesktop = { catalog: {} };
+  assert.match(imageStatusHtml(), /Sync them in Settings → Logitech account/);
+  Object.assign(imageStatus, { missing: 0 });
+  assert.equal(imageStatusHtml(), "");
 }
 
 console.log("activity UI model smoke: ok");

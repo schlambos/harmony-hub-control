@@ -212,32 +212,32 @@ export function iconTile(name, { size = 44, tone = "" } = {}) {
   return `<span class="m-tile${tone ? ` m-tile--${tone}` : ""}" style="--tile:${size}px">${icon(name, { size: Math.round(size * 0.5) })}</span>`;
 }
 
-// Activity pictures the hub didn't have this session. The screens rebuild
+// Activity images the hub didn't have this session. The screens rebuild
 // their HTML on every state poll; without this each rebuild would ask the hub
-// for the same missing picture again.
-const missingPictures = new Set();
+// for the same missing image again.
+const missingImages = new Set();
 
-/** An icon tile with a picture over it (an activity's own icon). The icon
-    shows while the picture loads, and stays if the picture fails. */
-export function pictureTile(url, fallbackIcon, { size = 44, tone = "" } = {}) {
-  if (!url || missingPictures.has(url)) return iconTile(fallbackIcon, { size, tone });
-  return `<span class="m-tile m-tile--picture${tone ? ` m-tile--${tone}` : ""}" style="--tile:${size}px">${icon(fallbackIcon, { size: Math.round(size * 0.5) })}<img class="m-tile-img" src="${escapeHtml(url)}" alt="" loading="lazy" decoding="async"></span>`;
+/** An icon tile with an image over it (an activity's own icon). The icon
+    shows while the image loads, and stays if the image fails. */
+export function imageTile(url, fallbackIcon, { size = 44, tone = "" } = {}) {
+  if (!url || missingImages.has(url)) return iconTile(fallbackIcon, { size, tone });
+  return `<span class="m-tile m-tile--image${tone ? ` m-tile--${tone}` : ""}" style="--tile:${size}px">${icon(fallbackIcon, { size: Math.round(size * 0.5) })}<img class="m-tile-img" src="${escapeHtml(url)}" alt="" loading="lazy" decoding="async"></span>`;
 }
 
-// A tile picture that can't load (not on the hub yet) leaves its icon and is
-// not asked for again until pictures change (the activity editor says so
-// after it stores or recovers some). Load errors don't bubble, so listen in
+// A tile image that can't load (not on the hub yet) leaves its icon and is
+// not asked for again until images change (the activity editor says so
+// after it stores or syncs some). Load errors don't bubble, so listen in
 // the capture phase.
 if (typeof document !== "undefined" && typeof document.addEventListener === "function") {
   document.addEventListener("error", (event) => {
     const target = event.target;
     if (target?.tagName === "IMG" && target.classList?.contains("m-tile-img")) {
       const src = target.getAttribute("src");
-      if (src) missingPictures.add(src);
+      if (src) missingImages.add(src);
       target.remove();
     }
   }, true);
-  document.addEventListener("melodious:pictures-changed", () => missingPictures.clear());
+  document.addEventListener("melodious:images-changed", () => missingImages.clear());
 }
 
 export function statusDot(live) {

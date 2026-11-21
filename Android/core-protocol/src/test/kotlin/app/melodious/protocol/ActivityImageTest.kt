@@ -8,7 +8,7 @@ import org.junit.Assert.assertEquals
 import org.junit.Assert.assertNull
 import org.junit.Test
 
-/** An activity's own icon (docs/REMOTE_PICTURES.md): ImageKey is read, and only its plain form names a picture. */
+/** An activity's own icon (docs/REMOTE_IMAGES.md): ImageKey is read, and only its plain form names an image. */
 class ActivityImageTest {
     @Test
     fun parsesImageKeyAndNull() {
@@ -28,7 +28,7 @@ class ActivityImageTest {
     }
 
     @Test
-    fun onlyPlainActivityKeysNameAPicture() {
+    fun onlyPlainActivityKeysNameAnImage() {
         fun name(key: String?) = HubActivity("1", "A", "A", imageKey = key).imageName
         assertEquals("1_x", name("Activity/1_x.png"))
         assertNull(name("Activity/1_x_small.png"))

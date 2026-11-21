@@ -174,7 +174,7 @@ describe("icons", () => {
 
   it("finds an activity's own icon on the hub from its ImageKey", () => {
     assert.equal(activityImageName({ ImageKey: "Activity/123_ab-cd.png" }), "123_ab-cd");
-    assert.equal(activityImageUrl({ ImageKey: "Activity/123_ab-cd.png" }), "/api/remote-pictures/image?name=123_ab-cd");
+    assert.equal(activityImageUrl({ ImageKey: "Activity/123_ab-cd.png" }), "/api/remote-images/image?name=123_ab-cd");
     for (const key of [null, undefined, "", "Activity/x_small.png", "Activity/../x.png", "UserImages/x.png", "Activity/x.jpg"]) {
       assert.equal(activityImageUrl({ ImageKey: key }), "", String(key));
     }

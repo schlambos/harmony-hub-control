@@ -42,15 +42,15 @@ fun activityIcon(activity: HubActivity): ImageVector {
 }
 
 /**
- * Loads an activity's own icon from the hub (docs/REMOTE_PICTURES.md); provided
- * at the app root by MelodiousViewModel.activityPicture. Without a provider,
+ * Loads an activity's own icon from the hub (docs/REMOTE_IMAGES.md); provided
+ * at the app root by MelodiousViewModel.activityImage. Without a provider,
  * tiles show the symbol for the activity's kind.
  */
-val LocalActivityPictures = staticCompositionLocalOf<suspend (HubActivity) -> ImageBitmap?> { { null } }
+val LocalActivityImages = staticCompositionLocalOf<suspend (HubActivity) -> ImageBitmap?> { { null } }
 
 /**
  * An activity's tile: its own icon when the hub holds one, else the symbol
- * from [activityIcon] (also while the picture loads).
+ * from [activityIcon] (also while the image loads).
  */
 @Composable
 fun ActivityTile(
@@ -60,12 +60,12 @@ fun ActivityTile(
     size: Int,
     modifier: Modifier = Modifier,
 ) {
-    val loader = LocalActivityPictures.current
+    val loader = LocalActivityImages.current
     val name = activity.imageName
-    val picture by produceState<ImageBitmap?>(initialValue = null, name, loader) {
+    val image by produceState<ImageBitmap?>(initialValue = null, name, loader) {
         value = if (name == null) null else runCatching { loader(activity) }.getOrNull()
     }
-    val bitmap = picture
+    val bitmap = image
     if (bitmap == null) {
         IconTile(activityIcon(activity), modifier = modifier, container = container, tint = tint, size = size)
     } else {

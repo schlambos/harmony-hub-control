@@ -194,7 +194,7 @@ public struct HubActivity: Codable, Equatable, Hashable, Identifiable, Sendable 
     public let type: Int
     public let activityOrder: Int
     public let roles: [HubRole]
-    /// The activity's ImageKey ("Activity/<name>.png"), or nil. docs/REMOTE_PICTURES.md
+    /// The activity's ImageKey ("Activity/<name>.png"), or nil. docs/REMOTE_IMAGES.md
     public let imageKey: String?
 
     public init(

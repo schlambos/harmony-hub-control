@@ -18,9 +18,9 @@ test("preload exposes version 1 and exactly seven fixed catalog invoke channels 
     require: () => ({ ipcRenderer, contextBridge: { exposeInMainWorld(name, value) { assert.equal(name, "melodiousDesktop"); bridge = value; } } }),
   });
   assert.equal(bridge.version, 1);
-  assert.deepEqual(Object.keys(bridge.catalog), ["status", "signIn", "signOut", "checkModel", "search", "download", "remotePicture"]);
+  assert.deepEqual(Object.keys(bridge.catalog), ["status", "signIn", "signOut", "checkModel", "search", "download", "remoteImage"]);
   for (const key of Object.keys(bridge.catalog)) await bridge.catalog[key]({ id: 1, manufacturer: "Sony", model: "Fixture" });
-  assert.deepEqual(calls.map(([channel]) => channel), ["catalog:status", "catalog:sign-in", "catalog:sign-out", "catalog:check-model", "catalog:search", "catalog:download", "catalog:remote-picture"]);
+  assert.deepEqual(calls.map(([channel]) => channel), ["catalog:status", "catalog:sign-in", "catalog:sign-out", "catalog:check-model", "catalog:search", "catalog:download", "catalog:remote-image"]);
   await assert.rejects(bridge.catalog.search({ manufacturer: "Sony", model: "FAIL" }), /^Error: Sign in to Logitech first$/);
   assert.deepEqual(Object.keys(bridge.hub), ["getState", "discover", "connect", "saveHubAuth", "clearHubAuth", "forgetHub", "saveClientId", "openShell", "openConnect", "openSettings", "openWizard"]);
   await bridge.hub.openWizard();

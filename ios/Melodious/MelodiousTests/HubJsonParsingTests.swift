@@ -274,7 +274,7 @@ final class HubJsonParsingTests: XCTestCase {
         XCTAssertEqual(extras.map(\.label), ["Home", "Aspect"])
     }
 
-    /// An activity's own icon (docs/REMOTE_PICTURES.md): only the plain ImageKey form names a picture.
+    /// An activity's own icon (docs/REMOTE_IMAGES.md): only the plain ImageKey form names an image.
     func testActivityImageName() {
         func name(_ key: String?) -> String? { HubActivity(id: "1", name: "A", imageKey: key).imageName }
         XCTAssertEqual(name("Activity/123_ab-cd.png"), "123_ab-cd")

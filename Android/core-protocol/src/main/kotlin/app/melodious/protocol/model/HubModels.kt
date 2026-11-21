@@ -39,7 +39,7 @@ data class HubActivity(
     val type: Int = 1,
     val activityOrder: Int = 0,
     val roles: List<HubRole> = emptyList(),
-    /** The activity's ImageKey ("Activity/<name>.png"), or null. docs/REMOTE_PICTURES.md */
+    /** The activity's ImageKey ("Activity/<name>.png"), or null. docs/REMOTE_IMAGES.md */
     val imageKey: String? = null,
 ) {
     val typeLabel: String

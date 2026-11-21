@@ -1,8 +1,8 @@
--- LuaJIT tests for remote pictures in payload/activity/codexactivity.lua:
--- RemotePictures lists the activity icons (ImageKey and its _small) and
+-- LuaJIT tests for remote images in payload/activity/codexactivity.lua:
+-- RemoteImages lists the activity icons (ImageKey and its _small) and
 -- favorite channel logos (CD_<deviceId> dialPositions) the hub's data asks
--- for and whether the store holds them; CommitRemotePictures stores only
--- pictures from that list and publishes one revision; CommitActivityIcon
+-- for and whether the store holds them; CommitRemoteImages stores only
+-- images from that list and publishes one revision; CommitActivityIcon
 -- stores a new 70x70 icon and 38x38 thumbnail under a fresh name.
 --
 -- Same loading pattern as codexactivity-remote-background-test.lua: stub the
@@ -10,7 +10,7 @@
 -- the resources in an in-memory fake. No hub is contacted, nothing is written.
 --
 -- Run from the repo root:
---   luajit tools/touch-validator/codexactivity-remote-pictures-test.lua
+--   luajit tools/touch-validator/codexactivity-remote-images-test.lua
 
 local scriptDir = debug.getinfo(1, "S").source:match("^@(.*/)") or "./"
 local repoRoot = scriptDir .. "../.."
@@ -233,7 +233,7 @@ end
 
 -- codex_webui stages uploads under its own process id; the store's index
 -- lists every resource by name.
-local function pictureFile(i) return "/var/volatile/codex-remote-picture-4242-" .. i .. ".png" end
+local function imageFile(i) return "/var/volatile/codex-remote-image-4242-" .. i .. ".png" end
 local ICON = "/var/volatile/codex-activity-icon-4242.png"
 local ICON_SMALL = "/var/volatile/codex-activity-icon-4242-small.png"
 local realOpen = io.open
@@ -301,9 +301,9 @@ local function call(op, fields)
   for key, value in pairs(fields or {}) do raw[key] = value end
   return processRequest(encodeJson(raw))
 end
-local function byName(pictures)
+local function byName(images)
   local out = {}
-  for _, p in ipairs(pictures or {}) do out[p.name] = p end
+  for _, p in ipairs(images or {}) do out[p.name] = p end
   return out
 end
 
@@ -326,23 +326,23 @@ local function seed()
   })
 end
 
--- RemotePictures: the list comes from the hub's own data.
+-- RemoteImages: the list comes from the hub's own data.
 seed()
-local r = call("RemotePictures")
-local list = byName(r.pictures)
+local r = call("RemoteImages")
+local list = byName(r.images)
 check("list: ok, icon + thumbnail per activity icon, one per distinct logo, no duplicates",
-  r.ok == true and #r.pictures == 4 and r.missing == 4, encodeJson(r))
+  r.ok == true and #r.images == 4 and r.missing == 4, encodeJson(r))
 check("list: the activity icon and its _small, with the address the remote asks for",
   list["1_aaaa-01"] and list["1_aaaa-01"].kind == "activity" and
   list["1_aaaa-01"].uri == BASE .. "Activity/1_aaaa-01.png" and list["1_aaaa-01"].activityId == "100" and
   list["1_aaaa-01"].activityName == "Watch TV" and
   list["1_aaaa-01_small"] and list["1_aaaa-01_small"].uri == BASE .. "Activity/1_aaaa-01_small.png",
-  encodeJson(r.pictures))
+  encodeJson(r.images))
 check("list: favorite logos as ci_<uuid> with their content-image address",
   list["ci_cccc-02"] and list["ci_cccc-02"].kind == "logo" and list["ci_cccc-02"].deviceId == "555" and
   list["ci_cccc-02"].channel == "Kids" and list["ci_cccc-02"].number == "2" and
   list["ci_cccc-02"].uri == "content-image://1.0/image/cccc-02.png" and list["ci_dddd-03"] ~= nil,
-  encodeJson(r.pictures))
+  encodeJson(r.images))
 check("list: nothing stored yet", not list["1_aaaa-01"].stored and not list["ci_cccc-02"].stored)
 check("list: read-only, nothing published", hub.published == 0)
 check("list: total and not truncated", r.total == 4 and r.truncated == false, encodeJson(r))
@@ -351,84 +351,84 @@ check("list: total and not truncated", r.total == 4 and r.truncated == false, en
 local many = {}
 for i = 1, 150 do many[i] = { number = tostring(i), image = string.format("eeee-%04d.png", i), name = "C" .. i } end
 resetHub({ ActivityList = { Activities = {} }, CD_777 = { services = { ["{s}"] = { dialPositions = many } } } })
-r = call("RemotePictures")
+r = call("RemoteImages")
 check("list over 100 entries: truncated to 100, total and missing still count all",
-  #r.pictures == 100 and r.total == 150 and r.missing == 150 and r.truncated == true and
-  #encodeJson(r) < 32 * 1024, string.format("%d %s %s %d", #r.pictures, tostring(r.total), tostring(r.missing), #encodeJson(r)))
+  #r.images == 100 and r.total == 150 and r.missing == 150 and r.truncated == true and
+  #encodeJson(r) < 32 * 1024, string.format("%d %s %s %d", #r.images, tostring(r.total), tostring(r.missing), #encodeJson(r)))
 seed()
 
--- CommitRemotePictures: stores what the list asks for, then one revision.
-hub.staged[pictureFile(1)] = png(70, 70, "icon")
-hub.staged[pictureFile(2)] = png(54, 50, "logo")
+-- CommitRemoteImages: stores what the list asks for, then one revision.
+hub.staged[imageFile(1)] = png(70, 70, "icon")
+hub.staged[imageFile(2)] = png(54, 50, "logo")
 local before = digest.configVersion
-r = call("CommitRemotePictures", { pictures = {
-  { name = "1_aaaa-01", file = pictureFile(1) },
-  { name = "ci_cccc-02", file = pictureFile(2) },
+r = call("CommitRemoteImages", { images = {
+  { name = "1_aaaa-01", file = imageFile(1) },
+  { name = "ci_cccc-02", file = imageFile(2) },
 } })
-check("recover: both saved, nothing failed", r.ok == true and #r.saved == 2 and #r.failed == 0, encodeJson(r))
-check("recover: the bytes are in the store under those names",
+check("sync: both saved, nothing failed", r.ok == true and #r.saved == 2 and #r.failed == 0, encodeJson(r))
+check("sync: the bytes are in the store under those names",
   hub.files["1_aaaa-01"].image and hub.files["1_aaaa-01"].bytes == png(70, 70, "icon") and
   hub.files["ci_cccc-02"].bytes == png(54, 50, "logo"))
-check("recover: one revision published", hub.published == 1 and digest.configVersion == before + 1 and
+check("sync: one revision published", hub.published == 1 and digest.configVersion == before + 1 and
   r.configVersion == digest.configVersion)
-r = call("RemotePictures")
-list = byName(r.pictures)
-check("list after recover: stored flags and the missing count follow",
+r = call("RemoteImages")
+list = byName(r.images)
+check("list after sync: stored flags and the missing count follow",
   list["1_aaaa-01"].stored == true and list["ci_cccc-02"].stored == true and
   not list["1_aaaa-01_small"].stored and r.missing == 2, encodeJson(r))
-check("list after recover: missing pictures come first, stored ones after",
-  r.pictures[1].stored == false and r.pictures[2].stored == false and
-  r.pictures[3].stored == true and r.pictures[4].stored == true, encodeJson(r.pictures))
+check("list after sync: missing images come first, stored ones after",
+  r.images[1].stored == false and r.images[2].stored == false and
+  r.images[3].stored == true and r.images[4].stored == true, encodeJson(r.images))
 check("list without discovery data: no logo host", r.contentImageHost == nil, encodeJson(r))
 hub.discovery = encodeJson({ discoveryUrls = {
   { Identifier = "ContentService/config", Address = "https://other.example.invalid/1.0/config" },
   { Identifier = "ContentImageService/Image", Address = "https://logos.example.invalid/1.0/station/{stationId}/image;maxX=40" },
 } })
-r = call("RemotePictures")
+r = call("RemoteImages")
 check("list: the logo host from the hub's discovery data", r.contentImageHost == "https://logos.example.invalid",
   tostring(r.contentImageHost))
 hub.discovery = "not json"
-r = call("RemotePictures")
+r = call("RemoteImages")
 check("list with broken discovery data: still answers, no logo host", r.ok == true and r.contentImageHost == nil)
 
--- Only pictures from the list; bad files are reported per picture.
+-- Only images from the list; bad files are reported per image.
 seed()
-hub.staged[pictureFile(1)] = png(70, 70)
-hub.staged[pictureFile(2)] = "GIF89a" .. string.rep("x", 40)
-hub.staged[pictureFile(3)] = png(600, 70)
+hub.staged[imageFile(1)] = png(70, 70)
+hub.staged[imageFile(2)] = "GIF89a" .. string.rep("x", 40)
+hub.staged[imageFile(3)] = png(600, 70)
 hub.staged["/var/volatile/other.png"] = png(70, 70)
-r = call("CommitRemotePictures", { pictures = {
-  { name = "1_aaaa-01", file = pictureFile(1) },
-  { name = "Settings", file = pictureFile(1) },
-  { name = "someone_else", file = pictureFile(1) },
-  { name = "ci_cccc-02", file = pictureFile(2) },
-  { name = "ci_dddd-03", file = pictureFile(3) },
+r = call("CommitRemoteImages", { images = {
+  { name = "1_aaaa-01", file = imageFile(1) },
+  { name = "Settings", file = imageFile(1) },
+  { name = "someone_else", file = imageFile(1) },
+  { name = "ci_cccc-02", file = imageFile(2) },
+  { name = "ci_dddd-03", file = imageFile(3) },
   { name = "1_aaaa-01_small", file = "/var/volatile/other.png" },
 } })
 local failedNames = {}
 for _, f in ipairs(r.failed or {}) do failedNames[f.name] = f.error end
-check("recover mix: only the good, listed picture is saved", r.ok == true and #r.saved == 1 and
+check("sync mix: only the good, listed image is saved", r.ok == true and #r.saved == 1 and
   r.saved[1] == "1_aaaa-01" and #r.failed == 5, encodeJson(r))
-check("recover mix: a resource name that isn't a needed picture is refused (Settings untouched)",
-  failedNames.Settings and failedNames.Settings:find("not a picture", 1, true) and
+check("sync mix: a resource name that isn't a needed image is refused (Settings untouched)",
+  failedNames.Settings and failedNames.Settings:find("not an image", 1, true) and
   not hub.files.Settings.image and failedNames.someone_else ~= nil and hub.files.someone_else == nil)
-check("recover mix: not a PNG, too large and a foreign staging path are refused",
+check("sync mix: not a PNG, too large and a foreign staging path are refused",
   failedNames["ci_cccc-02"]:find("isn't a PNG", 1, true) and failedNames["ci_dddd-03"]:find("at most", 1, true) and
   failedNames["1_aaaa-01_small"]:find("wasn't received", 1, true), encodeJson(failedNames))
 
 seed()
-hub.staged[pictureFile(1)] = "nope"
-r = call("CommitRemotePictures", { pictures = { { name = "1_aaaa-01", file = pictureFile(1) } } })
-check("recover with nothing saved: not ok, says why, nothing published",
+hub.staged[imageFile(1)] = "nope"
+r = call("CommitRemoteImages", { images = { { name = "1_aaaa-01", file = imageFile(1) } } })
+check("sync with nothing saved: not ok, says why, nothing published",
   r.ok == false and type(r.error) == "string" and hub.published == 0, encodeJson(r))
-r = call("CommitRemotePictures", { pictures = {} })
-check("recover with an empty list: refused", r.ok == false and hub.published == 0, encodeJson(r))
+r = call("CommitRemoteImages", { images = {} })
+check("sync with an empty list: refused", r.ok == false and hub.published == 0, encodeJson(r))
 
 seed()
 hub.blocker = "0\n"
-hub.staged[pictureFile(1)] = png(70, 70)
-r = call("CommitRemotePictures", { pictures = { { name = "1_aaaa-01", file = pictureFile(1) } } })
-check("recover with the cloud blocker off: refused", r.ok == false and r.error:find("cloud blocker", 1, true) and
+hub.staged[imageFile(1)] = png(70, 70)
+r = call("CommitRemoteImages", { images = { { name = "1_aaaa-01", file = imageFile(1) } } })
+check("sync with the cloud blocker off: refused", r.ok == false and r.error:find("cloud blocker", 1, true) and
   not hub.files["1_aaaa-01"], encodeJson(r))
 
 -- CommitActivityIcon: a new 70x70 icon and 38x38 thumbnail under a fresh name.
@@ -477,32 +477,32 @@ for i = 1, 100 do
   long[i] = { number = tostring(i), image = string.format("ffff-%04d.png", i), name = string.rep("n", 300) }
 end
 resetHub({ ActivityList = { Activities = {} }, CD_888 = { services = { ["{s}"] = { dialPositions = long } } } })
-r = call("RemotePictures")
+r = call("RemoteImages")
 check("list with long names: cut by size, well under 32 KB, counts whole",
-  #r.pictures < 100 and #r.pictures > 10 and r.truncated == true and r.total == 100 and r.missing == 100 and
-  #encodeJson(r) < 28 * 1024, string.format("%d entries, %d bytes", #r.pictures, #encodeJson(r)))
+  #r.images < 100 and #r.images > 10 and r.truncated == true and r.total == 100 and r.missing == 100 and
+  #encodeJson(r) < 28 * 1024, string.format("%d entries, %d bytes", #r.images, #encodeJson(r)))
 
--- offset skips that many missing pictures, so a caller gets past failures.
+-- offset skips that many missing images, so a caller gets past failures.
 seed()
-r = call("RemotePictures")
-local first, third = r.pictures[1].name, r.pictures[3].name
-r = call("RemotePictures", { offset = 2 })
-check("list with offset 2: starts at the third missing picture, counts unchanged",
-  r.pictures[1].name == third and r.pictures[1].name ~= first and #r.pictures == 2 and
+r = call("RemoteImages")
+local first, third = r.images[1].name, r.images[3].name
+r = call("RemoteImages", { offset = 2 })
+check("list with offset 2: starts at the third missing image, counts unchanged",
+  r.images[1].name == third and r.images[1].name ~= first and #r.images == 2 and
   r.missing == 4 and r.total == 4 and r.offset == 2, encodeJson(r))
-r = call("RemotePictures", { offset = 99 })
-check("list with an offset past the end: no missing entries listed", #r.pictures == 0 and r.missing == 4, encodeJson(r))
-r = call("RemotePictures", { offset = "junk" })
-check("list with a bad offset: treated as 0", #r.pictures == 4 and r.offset == 0, encodeJson(r))
+r = call("RemoteImages", { offset = 99 })
+check("list with an offset past the end: no missing entries listed", #r.images == 0 and r.missing == 4, encodeJson(r))
+r = call("RemoteImages", { offset = "junk" })
+check("list with a bad offset: treated as 0", #r.images == 4 and r.offset == 0, encodeJson(r))
 
 -- After an activity save, icons only the old list used are deleted.
-local pictures = findUpvalue(plugin.discover, "remotePictures")
-check("the picture section is reachable", type(pictures) == "table" and type(pictures.pruneActivityIcons) == "function")
+local images = findUpvalue(plugin.discover, "remoteImages")
+check("the image section is reachable", type(images) == "table" and type(images.pruneActivityIcons) == "function")
 seed()
 for _, name in ipairs({ "old-1", "old-1_small", "keep-2", "keep-2_small", "bg_9" }) do
   hub.files[name] = { bytes = "x", etag = '"e"', hetag = "1", image = true }
 end
-pictures.pruneActivityIcons(
+images.pruneActivityIcons(
   { Activities = {
     { ["Id-"] = 1, ImageKey = "Activity/old-1.png" },
     { ["Id-"] = 2, ImageKey = "Activity/keep-2.png" },
@@ -514,15 +514,15 @@ pictures.pruneActivityIcons(
     { ["Id-"] = 3, ImageKey = "Activity/keep-2.png" },
   } })
 table.sort(hub.deleted)
-check("prune: the replaced icon and its thumbnail go, a still used one and other pictures stay",
+check("prune: the replaced icon and its thumbnail go, a still used one and other images stay",
   encodeJson(hub.deleted) == '["old-1","old-1_small"]', encodeJson(hub.deleted))
 hub.deleted = {}
-pictures.pruneActivityIcons({ Activities = { { ImageKey = "Activity/keep-2.png" } } }, { Activities = {} })
+images.pruneActivityIcons({ Activities = { { ImageKey = "Activity/keep-2.png" } } }, { Activities = {} })
 table.sort(hub.deleted)
 check("prune: a removed activity's icon goes", encodeJson(hub.deleted) == '["keep-2","keep-2_small"]', encodeJson(hub.deleted))
 hub.deleted = {}
-pictures.pruneActivityIcons(nil, { Activities = {} })
-pictures.pruneActivityIcons({ Activities = { { ImageKey = "Activity/../x.png" }, "junk" } }, nil)
+images.pruneActivityIcons(nil, { Activities = {} })
+images.pruneActivityIcons({ Activities = { { ImageKey = "Activity/../x.png" }, "junk" } }, nil)
 check("prune: odd input deletes nothing", #hub.deleted == 0, encodeJson(hub.deleted))
 
 print(string.format("%d/%d checks passed", count - failures, count))
