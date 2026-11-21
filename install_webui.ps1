@@ -72,6 +72,11 @@
   fallback mode that serves one remote's message at a time; 'off' (or
   'force-off', which is the same here: nothing is asked of the radio) restores
   the stock hal. Omitted: unchanged. See docs/TWO_SCREEN_REMOTES.md.
+.PARAMETER NtpServer
+  Custom NTP servers the hub sets its clock from, instead of the default public
+  ones: up to 3 host names or IPv4 addresses, comma separated (e.g.
+  ntp.example.com). When set, only these are asked. "" goes back to the
+  defaults. Omitted: unchanged.
 #>
 param(
     [Alias("Host")]
@@ -105,6 +110,8 @@ param(
     # -TwoScreen on|once|serial|serial-once|off|force-off: let the hub keep and serve two remotes with a screen at once (experimental); once runs it for the next boot only; serial / serial-once use the fallback mode; off / force-off restores the stock hal; omitted leaves it unchanged (docs/TWO_SCREEN_REMOTES.md)
     [ValidateSet("on", "once", "serial", "serial-once", "off", "force-off")]
     [string]$TwoScreen,
+    # -NtpServer <host[,host]>: custom NTP servers the hub sets its clock from instead of the default public ones (up to 3); when set only these are asked; "" goes back to the defaults; omitted leaves it unchanged
+    [string]$NtpServer,
     # -TurnOff: turn Melodious off via /etc/melodious-off and give the hub back to Logitech's cloud
     [switch]$TurnOff,
     # -TurnOn: remove /etc/melodious-off and turn Melodious back on
@@ -232,6 +239,13 @@ $TwoScreenConf = "/data/codex/two_screen.conf"
 $HalRemotesTries = "/data/codex/hal_remotes.tries"
 $HalGates = "/var/run/codex_hal_gates"
 $HalRemotesPatchFile = "helpers/hal_remotes_patch.json"
+# Custom NTP servers the hub's clock sync asks instead of the default public
+# ones, one per line (netservicestarter.lua; System -> Custom NTP server in the
+# web app). An empty file means the defaults again. Same rules as codex_webui.
+$NtpServersConf = "/data/codex/ntp_servers.conf"
+$NtpServersMax = 3
+# $null when -NtpServer is omitted, else the list (empty = public servers).
+$script:NtpServers = $null
 $TwoScreenSettings = [ordered]@{
     "on" = "1"
     "once" = "once"
@@ -1598,6 +1612,11 @@ function Build-Inventory() {
         # rcS.local deletes the copy at the next boot.
         Add-Candidate (New-Candidate $TwoScreenConf "644" "config" -Text "0`n")
     }
+    # Custom NTP servers: only when asked; an empty file means the defaults.
+    if ($null -ne $script:NtpServers) {
+        $ntpText = ($script:NtpServers | ForEach-Object { "$_`n" }) -join ""
+        Add-Candidate (New-Candidate $NtpServersConf "644" "config" -Text $ntpText)
+    }
     if ($CleanInstall -or (Test-MqttExplicit)) {
         Add-Candidate (New-Candidate "/data/codexmqtt/config.json" "600" "config" -Text (Build-MqttConfig) -Sensitive)
     }
@@ -2122,6 +2141,9 @@ function Show-PreflightReport() {
         $suffix = if ($TwoScreen.EndsWith("once")) { ", for that boot only." } else { "." }
         Info "Two remotes with a screen: $HalRemotesDest is the hub's own hal (md5 $($remotesPatch.stock_md5)) with the link to screen remotes kept per radio slot (md5 $($remotesPatch.patched_md5)); rcS.local runs it from the next boot$suffix"
     }
+    if ($null -eq $script:NtpServers) { KV "ntp_servers=unchanged" }
+    elseif ($script:NtpServers.Count -eq 0) { KV "ntp_servers=public" }
+    else { KV ("ntp_servers=" + ($script:NtpServers -join ",")) }
     KV "candidate_count=$($Candidates.Count)"
     KV "changed_count=$((Get-ActiveCandidates).Count)"
     Info "Candidate destinations and nonsensitive expected MD5 hashes (sensitive values redacted):"
@@ -2986,6 +3008,14 @@ function Invoke-TurnOn() {
 if ($TurnOff -and $TurnOn) { throw "-TurnOff and -TurnOn cannot be used together" }
 if ($Force -and -not $TurnOff) { throw "-Force can only be used with -TurnOff" }
 if ($IUnderstandExperimental -and -not ($TurnOff -or $TurnOn)) { throw "-IUnderstandExperimental can only be used with -TurnOff or -TurnOn" }
+if ($PSBoundParameters.ContainsKey("NtpServer")) {
+    $ntpHosts = @(([string]$NtpServer).Trim() -split '[\s,]+' | Where-Object { $_ })
+    if ($ntpHosts.Count -gt $NtpServersMax) { throw "-NtpServer takes at most $NtpServersMax NTP servers" }
+    foreach ($ntpHost in $ntpHosts) {
+        if ($ntpHost -notmatch '^[A-Za-z0-9][A-Za-z0-9.-]{0,252}$') { throw "-NtpServer: '$ntpHost' is not a host name or IPv4 address" }
+    }
+    $script:NtpServers = $ntpHosts
+}
 if ($TurnOff -or $TurnOn) {
     $modeFlag = if ($TurnOff) { "-TurnOff" } else { "-TurnOn" }
     if ($CleanInstall) { throw "$modeFlag cannot be combined with -CleanInstall" }

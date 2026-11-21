@@ -2505,6 +2505,16 @@ function handleExport(res, pathname) {
     res.end(body);
     return;
   }
+  if (pathname === "/export/ntp") {
+    // No custom NTP server set: the hub uses the default public ones.
+    res.writeHead(200, {
+      "Content-Type": "text/plain; charset=utf-8",
+      "Content-Length": 0,
+      "Cache-Control": "no-store"
+    });
+    res.end("");
+    return;
+  }
   if (pathname === "/export/bundle") {
     sendJson(res, 200, {
       format: "harmony-owner-bundle-v2",

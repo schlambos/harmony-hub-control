@@ -194,8 +194,8 @@ on Apple, Segoe on Windows. That costs 0 bytes. Sizes follow the app:
   - Wi-Fi;
   - MQTT;
   - Backup: owner bundle, single exports, restore with typed guards;
-  - System: status, logs, cloud blocker, time zone, sign-in, software
-    update, HA rediscovery, reboot.
+  - System: status, logs, cloud blocker, time zone, custom NTP server, sign-in,
+    software update, HA rediscovery, reboot.
 - **IR tools:**
   - add, edit and delete devices;
   - add, edit and delete commands, including signal details;
@@ -306,9 +306,9 @@ such as `#devices/<id>`, so you can bookmark it.
 - **Wi-Fi**: the network the hub joins. Changes take effect after a
   reboot.
 - **Backup**: downloads and restore.
-- **System**: status and logs, the cloud blocker, the time zone,
-  sign-in, the hub's software version, Home Assistant discovery and
-  reboot.
+- **System**: status and logs, the cloud blocker, the time zone, the
+  custom NTP server, sign-in, the hub's software version, Home Assistant
+  discovery and reboot.
 
 <table>
 <tr><td align="center"><img src="screenshots/web/remotes-pairing.png" alt="Remotes page with paired Smart Control and Touch, showing the pairing UI" width="200"><br><sub>Remotes</sub></td><td align="center"><img src="screenshots/web/onscreen-buttons.png" alt="The on-screen buttons editor for Touch" width="200"><br><sub>On-screen buttons</sub></td><td align="center"><img src="screenshots/web/hold-command-picker.png" alt="The hold-command picker with device chips and command search" width="200"><br><sub>Hold command</sub></td><td></td></tr>

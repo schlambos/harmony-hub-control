@@ -249,6 +249,23 @@ HAL_REMOTES_PATCH_FILE = PAYLOAD / "helpers" / "hal_remotes_patch.json"
 # it binds the copy, so the next boot of any kind is back on the stock hal;
 # "serial" serves one remote's object at a time (the fallback mode).
 TWO_SCREEN_SETTINGS = {"on": "1", "once": "once", "serial": "serial", "serial-once": "serial-once"}
+# Custom NTP servers the hub's clock sync asks instead of the default public
+# ones, one per line (netservicestarter.lua; System -> Custom NTP server in the
+# web app). An empty file means the defaults again. Same rules as codex_webui.
+NTP_SERVERS_CONF = "/data/codex/ntp_servers.conf"
+NTP_SERVERS_MAX = 3
+NTP_HOST_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9.-]{0,252}$")
+
+
+def parse_ntp_servers(value: str) -> list[str]:
+    """--ntp-server: hosts or IPv4 addresses split by commas or spaces; "" clears."""
+    hosts = [h for h in re.split(r"[\s,]+", value.strip()) if h]
+    if len(hosts) > NTP_SERVERS_MAX:
+        raise RuntimeError(f"--ntp-server takes at most {NTP_SERVERS_MAX} NTP servers")
+    for host in hosts:
+        if not NTP_HOST_RE.match(host):
+            raise RuntimeError(f"--ntp-server: {host!r} is not a host name or IPv4 address")
+    return hosts
 
 
 def load_hal_remotes_patch(path: Path = HAL_REMOTES_PATCH_FILE) -> tuple[str, list[tuple[int, bytes | None, bytes]]]:
@@ -1713,6 +1730,11 @@ class Installer:
         elif self.args.two_screen == "off":
             # rcS.local deletes the copy at the next boot.
             candidates.append(Candidate(TWO_SCREEN_CONF, "644", "config", text="0\n"))
+        # Custom NTP servers: only when asked; an empty file means the defaults.
+        if self.args.ntp_servers is not None:
+            candidates.append(
+                Candidate(NTP_SERVERS_CONF, "644", "config", text="".join(h + "\n" for h in self.args.ntp_servers))
+            )
         if clean or self.mqtt_explicit():
             candidates.append(
                 Candidate(
@@ -2055,6 +2077,10 @@ class Installer:
                 f"(md5 {HAL_REMOTES_MD5}); rcS.local runs it from the next boot"
                 + (", for that boot only." if self.args.two_screen.endswith("once") else ".")
             )
+        if self.args.ntp_servers is None:
+            kv("ntp_servers=unchanged")
+        else:
+            kv(f"ntp_servers={','.join(self.args.ntp_servers) or 'public'}")
         kv(f"candidate_count={len(self.candidates)}")
         kv(f"changed_count={len(self.active_candidates())}")
         info(
@@ -3345,6 +3371,15 @@ def parse_args(argv: list[str]) -> argparse.Namespace:
             "See docs/TWO_SCREEN_REMOTES.md"
         ),
     )
+    parser.add_argument(
+        "--ntp-server",
+        default=None,
+        help=(
+            "Custom NTP servers the hub sets its clock from, instead of the default public ones: "
+            "up to 3 host names or IPv4 addresses, comma separated (e.g. ntp.example.com). When "
+            "set, only these are asked. \"\" goes back to the defaults. Omitted: unchanged"
+        ),
+    )
     parser.add_argument("--no-prompt", action="store_true", help="Fail instead of asking for missing required values")
     parser.add_argument(
         "--remove-root-tool-leftovers",
@@ -3391,6 +3426,7 @@ def parse_args(argv: list[str]) -> argparse.Namespace:
         args.multi_remote = "off"
     if args.two_screen == "force-off":
         args.two_screen = "off"
+    args.ntp_servers = None if args.ntp_server is None else parse_ntp_servers(args.ntp_server)
     return args
 
 

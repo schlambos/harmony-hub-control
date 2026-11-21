@@ -86,6 +86,7 @@ lua-guards|luajit $LUA/netservicestarter-guards-test.lua
 lua-ultimate-sync|luajit $LUA/netservicestarter-ultimate-test.lua
 lua-restrictions|luajit $LUA/netservicestarter-restrictions-test.lua
 lua-lan-advertise|luajit $LUA/netservicestarter-lan-advertise-test.lua
+lua-ntp|luajit $LUA/netservicestarter-ntp-test.lua
 lua-mqtt|luajit $LUA/codexmqtt-test.lua
 "
 

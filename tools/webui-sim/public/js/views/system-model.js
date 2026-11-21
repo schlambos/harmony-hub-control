@@ -236,3 +236,45 @@ export function timezoneSummary(saved) {
     ? `Hub time zone: ${saved.zone}`
     : "No time zone set: schedules and sunrise/sunset triggers cannot run until one is saved.";
 }
+
+/* ---- custom NTP server --------------------------------------------------------
+   codex_webui stores the list (action=ntp) in /data/codex/ntp_servers.conf,
+   one per line; netservicestarter.lua asks only those servers when the list
+   has any, and the public ones otherwise. Same rules on both sides. */
+
+export const NTP_SERVERS_MAX = 3;
+const NTP_HOST = /^[A-Za-z0-9][A-Za-z0-9.-]{0,252}$/;
+
+/** Split a typed or stored list (commas, spaces or new lines between). */
+export function splitNtpServers(text) {
+  return String(text ?? "")
+    .split(/[\s,]+/)
+    .map((s) => s.trim())
+    .filter(Boolean);
+}
+
+/** Parse GET /export/ntp; [] when unset (the public servers). */
+export function parseNtpConf(text) {
+  return splitNtpServers(text).filter((host) => NTP_HOST.test(host)).slice(0, NTP_SERVERS_MAX);
+}
+
+/** Why the typed list can't be saved, or null when it can (empty clears). */
+export function ntpServersError(text) {
+  const hosts = splitNtpServers(text);
+  if (hosts.length > NTP_SERVERS_MAX) return `Use at most ${NTP_SERVERS_MAX} NTP servers.`;
+  const bad = hosts.find((host) => !NTP_HOST.test(host));
+  return bad ? `"${bad}" is not a host name or IPv4 address.` : null;
+}
+
+/** Form fields for POST /system; null when the list isn't valid. */
+export function ntpFormFields(text) {
+  if (ntpServersError(text)) return null;
+  return { action: "ntp", ntpServers: splitNtpServers(text).join(",") };
+}
+
+/** One-line description of the saved setting. */
+export function ntpSummary(servers) {
+  return servers && servers.length
+    ? `Custom NTP server in use: ${servers.join(", ")}. The default public servers are not asked.`
+    : "No custom NTP server set: the hub sets its clock from the default public servers (pool.ntp.org, Google, Cloudflare).";
+}
