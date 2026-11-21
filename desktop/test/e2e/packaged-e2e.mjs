@@ -284,7 +284,7 @@ for (const { arch, dir } of APPS) {
         node: typeof window.require,
       }));
       assert.equal(bridge.version, 1);
-      assert.deepEqual(bridge.catalog, ["checkModel", "download", "search", "signIn", "signOut", "status"]);
+      assert.deepEqual(bridge.catalog, ["checkModel", "download", "remoteImage", "search", "signIn", "signOut", "status"]);
       assert.equal(bridge.node, "undefined");
 
       // The stub catalog service the source e2e uses must be ignored here.
