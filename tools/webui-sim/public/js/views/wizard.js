@@ -9,6 +9,7 @@ import { getRemotes } from "../api.js";
 import { parseRfInfo } from "./remotes-model.js";
 import {
   ACTIVITY_TYPES,
+  BUTTON_GROUPS,
   BUTTON_SOURCE,
   ROLE_TYPES,
   activitySnapshot,
@@ -59,15 +60,6 @@ const STEPS = [
 ];
 const BUTTONS_STEP = 3;
 
-/* The keys the wizard maps, grouped the way people think about a remote
-   (the app's BUTTON_GROUPS). PrevChannel is the remote's Back key. */
-const BUTTON_GROUPS = [
-  ["Volume & channel", ["VolumeUp", "VolumeDown", "VolumeMute", "ChannelUp", "ChannelDown"]],
-  ["Navigation", ["DirectionUp", "DirectionDown", "DirectionLeft", "DirectionRight", "Select", "PrevChannel", "Menu", "Exit", "Guide", "Info", "Dvr"]],
-  ["Playback", ["Play", "Pause", "Rewind", "FastForward", "Stop", "Record"]],
-  ["Colour keys", ["Red", "Green", "Yellow", "Blue"]],
-  ["Numbers", ["Number1", "Number2", "Number3", "Number4", "Number5", "Number6", "Number7", "Number8", "Number9", "Number0"]],
-];
 const ALL_KEYS = BUTTON_GROUPS.flatMap(([, keys]) => keys);
 
 /* The wait after a device turns on steps by half a second, up to 30 s. */

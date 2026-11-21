@@ -103,6 +103,22 @@ export const BUTTON_SOURCE = {
   existing: "existing",
 };
 
+/* The keys the wizard maps, grouped the way people think about a remote
+   (the app's BUTTON_GROUPS). PrevChannel is the remote's Back key;
+   NumberPlus and NumberEnter are the "--" and "E" keys either side of 0. */
+export const BUTTON_GROUPS = [
+  ["Volume & channel", ["VolumeUp", "VolumeDown", "VolumeMute", "ChannelUp", "ChannelDown"]],
+  ["Navigation", ["DirectionUp", "DirectionDown", "DirectionLeft", "DirectionRight", "Select", "PrevChannel", "Menu", "Exit", "Guide", "Info", "Dvr"]],
+  ["Playback", ["Play", "Pause", "Rewind", "FastForward", "Stop", "Record"]],
+  ["Colour keys", ["Red", "Green", "Yellow", "Blue"]],
+  ["Numbers", ["Number1", "Number2", "Number3", "Number4", "Number5", "Number6", "Number7", "Number8", "Number9", "NumberPlus", "Number0", "NumberEnter"]],
+];
+
+/* Keys the wizard never fills in by itself: what "--" and "E" should send
+   differs by device, and their aliases also match OK's and the volume keys'
+   commands. */
+const NO_DEFAULT_KEYS = new Set(["NumberPlus", "NumberEnter"]);
+
 /* Draft mappings for the keys an existing activity's wizard-owned map already
    has. The wizard edits press and hold only; a double-press action has no
    wizard control, so it rides along untouched instead of being lost on save. */
@@ -173,7 +189,7 @@ export function deriveDefaultButtons(roles, devices) {
   const out = {};
   for (const button of REMOTE_BUTTONS) {
     const buttonKey = BUTTON_KEY_BY_LABEL[button.label];
-    if (!buttonKey) continue;
+    if (!buttonKey || NO_DEFAULT_KEYS.has(buttonKey)) continue;
     const deviceId = preferredDeviceForButtonKey(buttonKey, roles);
     if (!deviceId) continue;
     const device = byId.get(deviceId);

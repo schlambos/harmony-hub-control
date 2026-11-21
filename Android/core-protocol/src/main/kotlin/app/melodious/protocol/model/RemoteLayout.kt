@@ -99,6 +99,9 @@ object RemoteLayout {
         "8" to "Number8",
         "9" to "Number9",
         "0" to "Number0",
+        // The keys either side of 0 ("--" and "E"), as hal names them (#234).
+        "Dash" to "NumberPlus",
+        "Enter" to "NumberEnter",
     )
 
     val LABEL_BY_BUTTON_KEY: Map<String, String> =

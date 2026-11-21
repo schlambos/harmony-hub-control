@@ -34,8 +34,8 @@ describe("wizard Back key", () => {
     assert.equal(deriveDefaultButtons(roles("2"), [returner]).PrevChannel?.command?.name, "Return");
   });
 
-  it("counts Back among the 36 assignable keys", () => {
-    assert.equal(wizardButtonStats({}).assignable, 36);
+  it("counts Back among the 38 assignable keys", () => {
+    assert.equal(wizardButtonStats({}).assignable, 38);
   });
 
   it("keeps an activity's own Back mapping over the suggestion", () => {

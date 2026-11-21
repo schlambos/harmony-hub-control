@@ -41,12 +41,14 @@ export const TOUCH_HARD_KEYS = Object.freeze([
 
 /** Hard keys a remote without a screen answers in an activity, as Logitech's
     16414 maps name them; its three activity buttons live in its root map,
-    not here. hal names every such remote's keys from one table. */
+    not here. hal names every such remote's keys from one table, where the
+    "--" and "E" keys either side of 0 are NumberPlus and NumberEnter. */
 export const SMART_CONTROL_HARD_KEYS = Object.freeze([
   "Blue", "ChannelDown", "ChannelUp", "DirectionDown", "DirectionLeft",
   "DirectionRight", "DirectionUp", "Dvr", "Exit", "FastForward", "Green",
   "Guide", "Info", "Menu", "Number0", "Number1", "Number2", "Number3",
-  "Number4", "Number5", "Number6", "Number7", "Number8", "Number9", "Pause",
+  "Number4", "Number5", "Number6", "Number7", "Number8", "Number9",
+  "NumberEnter", "NumberPlus", "Pause",
   "Play", "PrevChannel", "Record", "Red", "Rewind", "Select", "Stop",
   "VolumeDown", "VolumeMute", "VolumeUp", "Yellow",
 ]);

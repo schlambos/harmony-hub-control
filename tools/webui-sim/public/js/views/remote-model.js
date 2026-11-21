@@ -456,11 +456,18 @@ export const KEY_LABELS = Object.freeze({
   Number8: "8",
   Number9: "9",
   Number0: "0",
-  Dash: "–",
-  Enter: "Enter",
+  // The keys either side of 0, "--" and "E" on the remotes (#234).
+  NumberPlus: "Dash (–)",
+  NumberEnter: "Enter (E)",
 });
 
-const CANONICAL = new Map(Object.keys(KEY_LABELS).map((k) => [k.toLowerCase(), k]));
+/* The keypad's -- and Enter keys were "Dash" and "Enter" before they took
+   hal's names; keyboard maps (16420) still call their OK key "Enter". */
+const CANONICAL = new Map([
+  ["dash", "NumberPlus"],
+  ["enter", "NumberEnter"],
+  ...Object.keys(KEY_LABELS).map((k) => [k.toLowerCase(), k]),
+]);
 
 /** Stored ButtonKey -> keypad key ("DVR" and "Dvr" both appear in real maps). */
 export function canonicalKey(buttonKey) {
@@ -710,14 +717,12 @@ export function activityKeys(config, activityId) {
 /* Keypad keys for driving one device directly, matched by command name
    through the remote-layout aliases, as the hub's own IR page does, except
    that an exact name wins (see matchCommand). */
-const DEVICE_KEY_BY_LABEL = { ...BUTTON_KEY_BY_LABEL, Dash: "Dash", Enter: "Enter" };
-
 /** key -> { key, label, press } for a device from state.devices(). */
 export function deviceKeys(device) {
   const keys = new Map();
   if (!device) return keys;
   for (const hotspot of REMOTE_BUTTONS) {
-    const key = DEVICE_KEY_BY_LABEL[hotspot.label];
+    const key = BUTTON_KEY_BY_LABEL[hotspot.label];
     if (!key || keys.has(key)) continue;
     const command = matchCommand(device.commands, hotspot.aliases);
     if (!command) continue;
