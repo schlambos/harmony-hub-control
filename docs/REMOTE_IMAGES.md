@@ -14,7 +14,9 @@ images on the hub instead, the same way it keeps
    - choose a symbol and a tile color, then **Use this symbol**; or
    - **Upload image…** and pick any image your browser can open. The
      middle square of it is used.
-3. **Save** the activity, then choose **Sync remote** on the remote.
+3. **Save** the activity. Each screen remote shows the new icon after its
+   next sync: picking it up is usually enough. If one doesn't, choose
+   **Sync remote** on it.
 
 **Remove icon** clears it (save afterwards). The browser draws and scales the
 icon, so the hub only receives a 70x70 PNG and its 38x38 thumbnail.
@@ -39,7 +41,8 @@ syncs them for it:
 2. In the desktop app, open **Settings**. Under **Logitech account**, the
    **User images** row shows **Missing: N of M**, or **Fully synced**.
 3. Choose **Sync user images from Logitech**.
-4. Choose **Sync remote** on each screen remote.
+4. Pick up each screen remote. Its next sync fetches the images. A remote
+   that doesn't show them needs **Sync remote** once.
 
 - **The hub stays offline.** The desktop app downloads each image from
   Logitech and sends it to the hub over your network. The hub needs no
@@ -89,10 +92,17 @@ syncs them for it:
 - **Storing images.** `codexactivity` stores them:
   - `CommitRemoteImages` takes images for names on that list only, as
     PNGs up to 512x512 and 512 KB, then publishes one revision so the remotes
-    sync again.
+    sync again, and fetch the images.
   - `CommitActivityIcon` stores a new 70x70 icon and its 38x38 thumbnail
     under a fresh `<account id>_<uuid>` name. The activity editor puts
     `Activity/<name>.png` in the activity's `ImageKey` with its next save.
+- **Telling the remotes.** A screen remote's quick sync, when it wakes,
+  fetches the lists but fetches images only when the hub's
+  `contentVersion` (in the state digest) moves, as the stock
+  `setup.sync?contentchanged` handler does. Storing synced images, and an
+  activity save that changes an icon, move it together with
+  `configVersion`. Other saves leave it alone, so a remote doesn't fetch
+  every image again after each change.
 - **Cleaning up.** When an activity is saved with another icon, without
   one, or is removed, the hub deletes the old icon and its thumbnail unless
   another activity still uses it.
@@ -106,7 +116,11 @@ The API is in [API.md](API.md#remote-images-activity-icons-and-favorite-logos).
 
 - Every screen remote on the hub reads the same activities and favorites, so
   an image stored once shows on all of them after their next sync.
-- The remote only fetches images when it syncs. Choose **Sync remote** on
-  the remote, or wake it after a change.
+- The remote only fetches images when it syncs. Waking it is usually
+  enough after an icon change or an image sync. With two screen remotes
+  woken one after the other, one has been seen to skip that sync; choose
+  **Sync remote** on it.
+- A remote keeps an image it already has when the hub can't answer for it,
+  so an image missing on the hub isn't always visible as a blank tile.
 - Editing favorites (adding, removing or reordering channels) is not part of
   this; only their logos are.
