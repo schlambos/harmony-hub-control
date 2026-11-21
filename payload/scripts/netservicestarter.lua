@@ -74,6 +74,11 @@ local packagemgr
 local timeSyncTask
 
 local NTP_SERVERS = {"pool.ntp.org", "time.google.com", "time.cloudflare.com"}
+-- Custom NTP servers set in System (codex_webui) or with --ntp-server: one host or
+-- IPv4 address per line. When it names any, only those are asked.
+local NTP_SERVERS_CONF = "/data/codex/ntp_servers.conf"
+local NTP_SERVERS_MAX = 3
+local NTP_WAIT_STEP_SECONDS = 30
 local NTP_EPOCH_OFFSET = 2208988800 -- seconds from 1900 (NTP) to 1970 (Unix)
 local NTP_MIN_VALID = 1767225600 -- 2026-01-01; anything older is a bad reply
 local NTP_RESYNC_SECONDS = 6 * 60 * 60
@@ -588,6 +593,99 @@ local function isIpv4(value)
   return type(value) == "string" and string.match(value, "^%d+%.%d+%.%d+%.%d+$") ~= nil
 end
 
+local function bitAnd8(a, b)
+  local r, bit = 0, 128
+  while bit >= 1 do
+    if a >= bit and b >= bit then
+      r = r + bit
+    end
+    if a >= bit then a = a - bit end
+    if b >= bit then b = b - bit end
+    bit = bit / 2
+  end
+  return r
+end
+
+-- /proc/net/route prints addresses as the kernel's 32-bit words in host
+-- order. The hub is big-endian MIPS, so "C0A80100" is 192.168.1.0.
+local function routeBytes(hex)
+  local a, b, c, d = string.match(hex or "", "^(%x%x)(%x%x)(%x%x)(%x%x)$")
+  if not a then
+    return nil
+  end
+  return {tonumber(a, 16), tonumber(b, 16), tonumber(c, 16), tonumber(d, 16)}
+end
+
+-- True when a route other than the default one covers ip: a LAN address, or
+-- one of the private ranges the egress guard keeps. Such a server is asked
+-- directly, with no temporary host route through the gateway.
+local function hasRouteTo(ip)
+  local a, b, c, d = string.match(tostring(ip), "^(%d+)%.(%d+)%.(%d+)%.(%d+)$")
+  if not a then
+    return false
+  end
+  local want = {tonumber(a), tonumber(b), tonumber(c), tonumber(d)}
+  local f = io.open("/proc/net/route", "r")
+  if not f then
+    return false
+  end
+  local found = false
+  for line in f:lines() do
+    local dest, mask = string.match(line, "^%S+%s+(%x+)%s+%x+%s+%x+%s+%S+%s+%S+%s+%S+%s+(%x+)")
+    local db, mb = routeBytes(dest), routeBytes(mask)
+    if db and mb and (mb[1] + mb[2] + mb[3] + mb[4]) > 0 then
+      local match = true
+      for i = 1, 4 do
+        if bitAnd8(want[i], mb[i]) ~= db[i] then
+          match = false
+          break
+        end
+      end
+      if match then
+        found = true
+        break
+      end
+    end
+  end
+  f:close()
+  return found
+end
+
+-- Hosts from NTP_SERVERS_CONF, in order (at most NTP_SERVERS_MAX), and
+-- whether the file named any. Lines may also be split by commas or spaces;
+-- "#" starts a comment; anything that isn't a host name or address is skipped.
+local function configuredNtpServers()
+  local f = io.open(NTP_SERVERS_CONF, "r")
+  if not f then
+    return {}, ""
+  end
+  local text = f:read("*a") or ""
+  f:close()
+  local list = {}
+  for line in string.gmatch(text .. "\n", "([^\n]*)\n") do
+    line = string.gsub(line, "#.*$", "")
+    for host in string.gmatch(line, "[^%s,]+") do
+      if #list < NTP_SERVERS_MAX and #host <= 253 and string.match(host, "^[%w][%w%.%-]*$") then
+        list[#list + 1] = host
+      end
+    end
+  end
+  return list, text
+end
+
+local function ntpServers()
+  local list = configuredNtpServers()
+  if #list > 0 then
+    return list
+  end
+  return NTP_SERVERS
+end
+
+local function ntpConfKey()
+  local _, text = configuredNtpServers()
+  return text
+end
+
 local function ntpQuery(ip)
   local udp = socket.udp()
   if not udp then
@@ -627,7 +725,7 @@ end
 -- host route to just this NTP server through the saved gateway for the
 -- length of one query.
 local function ntpQueryRouted(ip)
-  if hasDefaultRoute() then
+  if hasDefaultRoute() or hasRouteTo(ip) then
     return ntpQuery(ip)
   end
   local gateway = readFirstLine(GATEWAY_STATE)
@@ -648,8 +746,8 @@ local function ntpQueryRouted(ip)
 end
 
 local function syncClockOnce()
-  for _, server in ipairs(NTP_SERVERS) do
-    local ip = socket.dns.toip(server, 10000)
+  for _, server in ipairs(ntpServers()) do
+    local ip = isIpv4(server) and server or socket.dns.toip(server, 10000)
     if isIpv4(ip) then
       local seconds, err = ntpQueryRouted(ip)
       if seconds then
@@ -712,15 +810,34 @@ local function startTimeSync()
   if timeSyncTask and system.taskStatus(timeSyncTask) ~= "dead" then
     return
   end
+  -- Waits in steps, so servers saved in System are asked within a step
+  -- instead of after the next 6-hour resync or 15-minute retry.
+  local function waitOrConfChange(seconds, key)
+    local waited = 0
+    while waited < seconds do
+      local step = math.min(NTP_WAIT_STEP_SECONDS, seconds - waited)
+      system.sleep(step * 1000)
+      waited = waited + step
+      if ntpConfKey() ~= key then
+        log.notice("codex time sync: custom NTP servers changed")
+        return true
+      end
+    end
+    return false
+  end
   timeSyncTask = system.addTask("codex time sync", function()
     local retry = 30
     while true do
+      local key = ntpConfKey()
       if syncClockOnce() then
         retry = 30
-        system.sleep(NTP_RESYNC_SECONDS * 1000)
+        waitOrConfChange(NTP_RESYNC_SECONDS, key)
       else
-        system.sleep(retry * 1000)
-        retry = math.min(retry * 2, 900)
+        if waitOrConfChange(retry, key) then
+          retry = 30
+        else
+          retry = math.min(retry * 2, 900)
+        end
       end
     end
   end)

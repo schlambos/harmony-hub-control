@@ -35,7 +35,9 @@ details. A simulated successful send is not a hardware compatibility test.
 
 Have the original remotes nearby, write down each device's brand and full
 model number, and note where every HDMI cable goes. Put the hub or its IR
-mini-blaster where the equipment can see its signal. Make a backup before
+mini-blaster where the equipment can see its signal. Each IR device has an
+**IR output** setting on its settings page: all Hub outputs together, the
+Hub's built-in emitters, external blaster 1 or 2, or the remote's IR blaster. Make a backup before
 large changes: **Settings → Backup** in Web/Desktop.
 
 | What you want to control | Start here |

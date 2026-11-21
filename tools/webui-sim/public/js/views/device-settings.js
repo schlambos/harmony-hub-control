@@ -21,12 +21,14 @@ import { isSafeLabel } from "./ir-model.js";   // the network TV writer takes 1-
 import {
   INPUT_DELAY_MAX_MS,
   INPUT_TYPES,
+  IR_OUTPUTS,
   MAX_INPUTS,
   POWER_TYPES,
   SETTINGS_LIMITS,
   commandNames,
   deviceSettingsRequest,
   inputsInUse,
+  isIrDevice,
   readDeviceSettings,
   readInputSettings,
   validateDeviceSettings,
@@ -138,6 +140,9 @@ export function createDeviceSettings({ root, track }) {
      codex_androidtv instead of with the device settings. */
   let tv = null;
   let switch2 = false;
+  /* An IR device and its stored Device.ControlPort (the IR output). */
+  let irDevice = false;
+  let storedPort = null;
 
   /* -- the draft ---------------------------------------------------------------- */
 
@@ -147,8 +152,11 @@ export function createDeviceSettings({ root, track }) {
     hasPower = s.hasPowerFeature;
     hasInputs = i.hasInputFeature;
     suggested = i.suggested;
+    irDevice = isIrDevice(entry);
+    storedPort = entry?.Device?.ControlPort ?? null;
     return {
       power: { ...s.power },
+      irOutput: s.irOutput,
       interKeyDelayMs: s.interKeyDelayMs,
       interDeviceDelayMs: s.interDeviceDelayMs,
       repeats: s.repeats,
@@ -182,6 +190,7 @@ export function createDeviceSettings({ root, track }) {
       repeats: draft.repeats,
       power: { ...draft.power },
     };
+    if (irDevice && draft.irOutput != null) settings.irOutput = draft.irOutput;
     if (withInputs) {
       const i = draft.inputs;
       settings.inputs = {
@@ -290,6 +299,18 @@ export function createDeviceSettings({ root, track }) {
       </label>`).join("")}</div>`;
   }
 
+  /* Which IR emitter sends this device's commands (Device.ControlPort). */
+  function irOutputMarkup() {
+    if (!irDevice || tv) return "";
+    const unknown = draft.irOutput == null && storedPort != null
+      ? `<p class="ds-note">The hub has this device set to output ${escapeHtml(String(storedPort))}, which this page doesn't name. It stays as it is unless you pick one below.</p>`
+      : "";
+    return `${sectionLabel("IR output")}
+        <p class="ds-hint">Which IR emitter sends this device's commands.</p>
+        ${unknown}
+        ${radioGroup("irOutput", "IR output", IR_OUTPUTS, draft.irOutput)}`;
+  }
+
   function pickRow(key, value) {
     const pick = PICKS[key];
     const empty = pick.none ?? "Choose…";
@@ -376,6 +397,7 @@ export function createDeviceSettings({ root, track }) {
             ${switchRow("onBetweenActivities", "Keep on between activities", "Stays on when you switch to an activity that doesn't use it", p.onBetweenActivities)}
           </div>`}
         ${inputsMarkup()}
+        ${irOutputMarkup()}
         ${sectionLabel("Timing")}
         <p class="ds-hint">Raise these if the device misses commands or responds to only some presses.</p>
         <div class="m-list">${stepper("interKey")}${stepper("interDevice")}${stepper("repeats")}</div>
@@ -896,6 +918,10 @@ export function createDeviceSettings({ root, track }) {
       draft.power.type = t.value;
       saveError = "";
       render();
+    } else if (t.dataset.radio === "irOutput") {
+      draft.irOutput = Number(t.value);
+      saveError = "";
+      render(`irOutput-${t.value}`);
     } else if (t.dataset.radio === "tvmethod" && tv) {
       setMethod(tv.draft, t.value);
       saveError = "";

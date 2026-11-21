@@ -72,7 +72,7 @@ content centred.
 | `devices/DevicesScreen` DevicesTab | Devices tab: search devices or commands; grouped list with icon, model, command count and IR/Bluetooth badge |
 | DeviceDetailScreen | Device page with Remote and Commands tabs (tap a command to send it; search); ⋮ Make, Rebuild or Remove Touch screen |
 | Learn and Import sheets | Learn a button, Import codes (Find codes, Paste, Type a code) |
-| `devices/DeviceSettingsScreen` | Device settings page: Power, Turning on, Inputs (web-only), Timing |
+| `devices/DeviceSettingsScreen` | Device settings page: Power, Turning on, Inputs (web-only), IR output, Timing |
 | `activities/ActivitiesScreen` | Activities tab: running card, rows with Start and a ⋮ menu (Edit, Set up buttons, Try the buttons, Advanced editor, Move up / down, Delete) |
 | ActivityEditor (5 steps) | Wizard restyled as the app's step screens: Name, Devices, Inputs, Buttons, Review. The app's "Start & end" step is parity item P2, not part of the port. |
 | TouchScreenEditor | — (parity item P3; the advanced editor still covers on-screen buttons) |
@@ -194,8 +194,8 @@ on Apple, Segoe on Windows. That costs 0 bytes. Sizes follow the app:
   - Wi-Fi;
   - MQTT;
   - Backup: owner bundle, single exports, restore with typed guards;
-  - System: status, logs, cloud blocker, time zone, sign-in, software
-    update, HA rediscovery, reboot.
+  - System: status, logs, cloud blocker, time zone, custom NTP server, sign-in,
+    software update, HA rediscovery, reboot.
 - **IR tools:**
   - add, edit and delete devices;
   - add, edit and delete commands, including signal details;
@@ -306,9 +306,9 @@ such as `#devices/<id>`, so you can bookmark it.
 - **Wi-Fi**: the network the hub joins. Changes take effect after a
   reboot.
 - **Backup**: downloads and restore.
-- **System**: status and logs, the cloud blocker, the time zone,
-  sign-in, the hub's software version, Home Assistant discovery and
-  reboot.
+- **System**: status and logs, the cloud blocker, the time zone, the
+  custom NTP server, sign-in, the hub's software version, Home Assistant
+  discovery and reboot.
 
 <table>
 <tr><td align="center"><img src="screenshots/web/remotes-pairing.png" alt="Remotes page with paired Smart Control and Touch, showing the pairing UI" width="200"><br><sub>Remotes</sub></td><td align="center"><img src="screenshots/web/onscreen-buttons.png" alt="The on-screen buttons editor for Touch" width="200"><br><sub>On-screen buttons</sub></td><td align="center"><img src="screenshots/web/hold-command-picker.png" alt="The hold-command picker with device chips and command search" width="200"><br><sub>Hold command</sub></td><td></td></tr>

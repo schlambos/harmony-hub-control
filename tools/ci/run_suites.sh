@@ -76,6 +76,7 @@ lua-fresh-hub|luajit $LUA/codexactivity-fresh-hub-test.lua
 lua-device-screens|luajit $LUA/codexactivity-device-screens-test.lua
 lua-ha-devices|luajit $LUA/codexactivity-ha-devices-test.lua
 lua-androidtv-devices|luajit $LUA/codexactivity-androidtv-devices-test.lua
+lua-ir-output|luajit $LUA/codexactivity-ir-output-test.lua
 lua-switch2-devices|luajit $LUA/codexactivity-switch2-devices-test.lua
 lua-webos-devices|luajit $LUA/codexactivity-webos-devices-test.lua
 lua-home-buttons|luajit $LUA/codexactivity-home-buttons-test.lua
@@ -87,6 +88,7 @@ lua-guards|luajit $LUA/netservicestarter-guards-test.lua
 lua-ultimate-sync|luajit $LUA/netservicestarter-ultimate-test.lua
 lua-restrictions|luajit $LUA/netservicestarter-restrictions-test.lua
 lua-lan-advertise|luajit $LUA/netservicestarter-lan-advertise-test.lua
+lua-ntp|luajit $LUA/netservicestarter-ntp-test.lua
 lua-mqtt|luajit $LUA/codexmqtt-test.lua
 "
 

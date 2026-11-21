@@ -394,7 +394,7 @@ python3 tools/busybox_links_smoke.py              # init.sh's BusyBox applet lin
 python3 tools/build_hal_remotes.py --check        # the two-screen hal edits are what their source builds (needs Zig 0.16.0)
 HAL_STOCK=<stock hal> python3 tools/hal_remotes/test_hal_remotes.py   # hal's own HOT code, patched, under Unicorn (needs unicorn, pyelftools)
 python3 -m unittest discover -s docker/tests      # the Docker manager
-for t in barrier device-screens ha-devices androidtv-devices bt-devices touch-controls; do
+for t in barrier device-screens ha-devices androidtv-devices bt-devices touch-controls ir-output; do
   luajit tools/touch-validator/codexactivity-$t-test.lua
 done                                              # the hub's writer: barrier, screens, Home Assistant, network TVs, Bluetooth keyboards, press modes
 sh tools/bluetooth_hid_smoke.sh                   # Bluetooth HID guards (authenticated links, local pairing, GET_REPORT, keyboard self-test)

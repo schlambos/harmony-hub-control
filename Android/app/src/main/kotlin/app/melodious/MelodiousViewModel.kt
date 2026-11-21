@@ -1728,13 +1728,16 @@ class MelodiousViewModel(application: Application) : AndroidViewModel(applicatio
         val snapshot = state.configSnapshot ?: return
         val endpoint = state.activeEndpoint ?: return
         if (state.wizardSaving) return
-        val built = ActivityGraphBuilder.buildActivityGraph(snapshot, state.wizardDraft)
+        val draft = state.wizardDraft
         _uiState.update { it.copy(wizardSaving = true) }
         viewModelScope.launch {
             runCatching {
+                val remotes = runCatching { restClient.getPairedRemoteEquadIds(endpoint) }.getOrDefault(emptyList())
+                val built = ActivityGraphBuilder.buildActivityGraph(snapshot, draft, remotes = remotes)
                 restClient.saveActivityGraph(endpoint, snapshot.revision, built, syncRemote = true)
                 reloadConfig(endpoint)
-            }.onSuccess {
+                built
+            }.onSuccess { built ->
                 _uiState.update { it.copy(wizardOpen = false, wizardSaving = false) }
                 showMessage("Saved “${built.name}”")
             }.onFailure { err ->

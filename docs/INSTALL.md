@@ -109,6 +109,7 @@ Each run:
 | `--skip-flash-check` | `-SkipFlashCheck` | Installs even when the measured free flash looks too small. If flash really runs out, the install still stops with nothing in use changed. |
 | `--multi-remote on` / `off` / `force-off` | `-MultiRemote on` / `off` / `force-off` | Lets the hub keep more than one remote without a screen of the same model, such as two Smart Controls; they share one button setup. `off` restores the stock one-per-model rule. It's refused while two remotes of one model are paired (unpair the extra ones first), and together with `--no-apply-cloud-restart` while the multi-remote `hal` runs. `force-off` (`-MultiRemote force-off`) turns it off without asking the radio, for a radio that stopped answering. The installer reboots when the files change or the running `hal` isn't the one asked for, then checks it. The web app's Settings → Experimental switch does the same. Without it, an upgrade leaves the setting as it is. See [MULTI_REMOTE.md](MULTI_REMOTE.md). |
 | `--two-screen on` / `once` / `serial` / `serial-once` / `off` / `force-off` | `-TwoScreen on` / `once` / `serial` / `serial-once` / `off` / `force-off` | Lets the hub keep two remotes with a screen and serve both at once; they share one setup. `once` runs it for the next boot only, which is the way to try it. `serial` is the fallback mode. `off` (or `force-off`) restores the stock `hal`; remotes already paired stay paired, so unpair all but one afterwards. The installer reboots when the setting or the running `hal` changes, then checks it. See [TWO_SCREEN_REMOTES.md](TWO_SCREEN_REMOTES.md). |
+| `--ntp-server <host[,host]>` | `-NtpServer <host[,host]>` | Chooses custom NTP servers for the hub's clock, instead of the default public ones (up to 3 host names or IPv4 addresses, e.g. `ntp.example.com`). When set, only these are asked. `""` goes back to the defaults. Omitted: unchanged. The same setting is in System -> Custom NTP server. |
 
 `python3 install_webui.py --help` lists every option.
 
@@ -231,7 +232,7 @@ top of the boot script (`rcS.local`) and the Lua network starter
 (`netservicestarter.lua`), with defense-in-depth guards in every service
 script and `/pkg` plugin. None of your Melodious settings
 (`cloud_blocker.conf`, `two_screen.conf`, `multi_remote.conf`,
-`usb_eth.conf`, `timezone.conf`, `activity-restrictions.json`), `/pkg`
+`usb_eth.conf`, `timezone.conf`, `ntp_servers.conf`, `activity-restrictions.json`), `/pkg`
 plugins, or patched `hal` copies are deleted or edited.
 
 1. **Preflight safety gates (before any write):**

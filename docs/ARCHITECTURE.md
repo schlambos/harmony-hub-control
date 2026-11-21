@@ -61,6 +61,8 @@ code, a Bluetooth key and a Home Assistant action are all ordinary device comman
 - **Syncs finish offline:** the connectivity, time and device-content checks along the way are all
   answered locally.
 - **The hub keeps its own time** over NTP (temporary route per query); set the time zone in System.
+  You can choose a custom NTP server instead of the default public ones (System -> Custom NTP
+  server, or `--ntp-server <host>`); then only that server is asked.
 - **Local edits are protected:** System → Cloud egress turns the blocker on (there's no off
   control), and activity/device edits are refused while it's off.
 

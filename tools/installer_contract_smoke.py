@@ -1293,6 +1293,63 @@ class PythonInstallerFirstInstall(unittest.TestCase):
         self.assertNotIn(self.BLOCKER, self.hub.fs)
 
 
+class PythonInstallerNtpServers(unittest.TestCase):
+    """[PYTHON BEHAVIORAL] --ntp-server writes the custom NTP servers the hub's clock
+    sync asks (netservicestarter.lua), clears them with "", refuses what the
+    hub would refuse, and leaves the file alone when omitted."""
+
+    CONF = "/data/codex/ntp_servers.conf"
+
+    def setUp(self):
+        self.hub = FakeHub()
+        self.harness = InstallerHarness(self.hub)
+        self.addCleanup(self.harness.close)
+        prime_upgrade_hub(self.hub)
+
+    def writes(self):
+        return [e[1] for e in self.hub.events if e[0] == "persistent_write"]
+
+    def test_sets_the_servers_one_per_line(self):
+        code, stdout, stderr = self.harness.run(self.harness.base_argv("--ntp-server", "ntp.example.com, 10.0.0.5"))
+        self.assertEqual(code, 0, stderr or stdout)
+        self.assertEqual(kv_value(stdout, "ntp_servers"), "ntp.example.com,10.0.0.5")
+        self.assertEqual(self.hub.fs[self.CONF]["data"], b"ntp.example.com\n10.0.0.5\n")
+        self.assertEqual(self.hub.fs[self.CONF]["mode"], "644")
+
+    def test_empty_value_goes_back_to_the_public_servers(self):
+        self.hub.fs[self.CONF] = {"data": b"ntp.example.com\n", "mode": "644"}
+        code, stdout, stderr = self.harness.run(self.harness.base_argv("--ntp-server", ""))
+        self.assertEqual(code, 0, stderr or stdout)
+        self.assertEqual(kv_value(stdout, "ntp_servers"), "public")
+        self.assertEqual(self.hub.fs[self.CONF]["data"], b"")
+
+    def test_omitted_leaves_the_setting_alone(self):
+        self.hub.fs[self.CONF] = {"data": b"ntp.example.com\n", "mode": "644"}
+        code, stdout, stderr = self.harness.run(self.harness.base_argv())
+        self.assertEqual(code, 0, stderr or stdout)
+        self.assertEqual(kv_value(stdout, "ntp_servers"), "unchanged")
+        self.assertEqual(self.hub.fs[self.CONF]["data"], b"ntp.example.com\n")
+        self.assertNotIn(f"dest={self.CONF} ", stdout)
+
+    def test_bad_values_are_refused_before_anything_is_written(self):
+        for value in ("ntp.example.com;reboot", "-x", "a,b,c,d", "a" * 254):
+            with self.subTest(value=value):
+                self.hub.events.clear()
+                code, stdout, stderr = self.harness.run(self.harness.base_argv("--ntp-server", value))
+                self.assertNotEqual(code, 0, stdout)
+                self.assertIn("--ntp-server", stderr + stdout)
+                self.assertEqual(self.writes(), [])
+
+    def test_preflight_writes_nothing(self):
+        code, stdout, stderr = self.harness.run(self.harness.base_argv("--preflight-only", "--ntp-server", "ntp.example.com"))
+        self.assertEqual(code, 0, stderr or stdout)
+        line = [l for l in stdout.splitlines() if l.startswith("candidate ") and f"dest={self.CONF} " in l]
+        self.assertEqual(len(line), 1, stdout)
+        self.assertIn("action=create", line[0])
+        self.assertEqual(self.writes(), [])
+        self.assertNotIn(self.CONF, self.hub.fs)
+
+
 ROOT_TOOL_WRAPPER = b'#!/bin/sh\nexec /data/rootssh/bin/dropbear -s -g -K 300 "$@"\n'
 
 

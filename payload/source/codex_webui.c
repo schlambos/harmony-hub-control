@@ -43,6 +43,13 @@
 #endif
 #define CLOUD_BLOCKER_CONFIG "/data/codex/cloud_blocker.conf"
 #define TIMEZONE_CONFIG "/data/codex/timezone.conf"
+/* Custom NTP servers the clock sync in netservicestarter.lua asks instead of
+   the default public ones: one host or IPv4 address per line. */
+#ifndef NTP_SERVERS_CONFIG
+#define NTP_SERVERS_CONFIG "/data/codex/ntp_servers.conf"
+#endif
+#define NTP_SERVERS_MAX 3
+#define NTP_HOST_MAX 253
 /* Activity time restrictions, read by netservicestarter.lua (see
    restriction_entry for the shape). */
 #ifndef ACTIVITY_RESTRICTIONS
@@ -1038,6 +1045,59 @@ static int save_timezone(const char *zone, const char *posix) {
 static void send_timezone_download(int fd) {
     char hdr[512], body[192];
     if (read_text(TIMEZONE_CONFIG, body, sizeof(body)) <= 0) body[0] = 0;
+    snprintf(hdr, sizeof(hdr),
+        "HTTP/1.1 200 OK\r\nContent-Type: text/plain\r\nContent-Length: %lu\r\n"
+        "Cache-Control: no-store\r\nConnection: close\r\n\r\n",
+        (unsigned long)strlen(body));
+    send_all(fd, hdr, strlen(hdr));
+    send_all(fd, body, strlen(body));
+}
+
+/* Splits a list of custom NTP servers (commas, spaces or new lines between them)
+   into out, one per line. Each is a host name or IPv4 address: a letter or
+   digit, then letters, digits, dots and dashes, as netservicestarter.lua
+   accepts. Returns the number of servers (0 for an empty list), or -1 when
+   one isn't valid or there are more than NTP_SERVERS_MAX. */
+static int normalize_ntp_servers(const char *in, char *out, size_t out_size) {
+    size_t used = 0;
+    int count = 0;
+    out[0] = 0;
+    while (*in) {
+        const char *start;
+        size_t n, i;
+        while (*in == ',' || isspace((unsigned char)*in)) in++;
+        if (!*in) break;
+        start = in;
+        while (*in && *in != ',' && !isspace((unsigned char)*in)) in++;
+        n = (size_t)(in - start);
+        if (n > NTP_HOST_MAX || !isalnum((unsigned char)start[0])) return -1;
+        for (i = 1; i < n; i++) {
+            unsigned char ch = (unsigned char)start[i];
+            if (!isalnum(ch) && ch != '.' && ch != '-') return -1;
+        }
+        if (++count > NTP_SERVERS_MAX || used + n + 2 > out_size) return -1;
+        memcpy(out + used, start, n);
+        used += n;
+        out[used++] = '\n';
+        out[used] = 0;
+    }
+    return count;
+}
+
+/* An empty list removes the file: the default public servers again. */
+static int save_ntp_servers(const char *servers) {
+    if (!servers[0]) {
+        if (unlink(NTP_SERVERS_CONFIG) != 0 && errno != ENOENT) return -1;
+        return 0;
+    }
+    if (write_file_atomic(NTP_SERVERS_CONFIG, servers, strlen(servers)) != 0) return -1;
+    chmod(NTP_SERVERS_CONFIG, 0644);
+    return 0;
+}
+
+static void send_ntp_download(int fd) {
+    char hdr[512], body[NTP_SERVERS_MAX * (NTP_HOST_MAX + 1) + 64];
+    if (read_text(NTP_SERVERS_CONFIG, body, sizeof(body)) <= 0) body[0] = 0;
     snprintf(hdr, sizeof(hdr),
         "HTTP/1.1 200 OK\r\nContent-Type: text/plain\r\nContent-Length: %lu\r\n"
         "Cache-Control: no-store\r\nConnection: close\r\n\r\n",
@@ -9235,6 +9295,21 @@ static void handle_system(int fd, const struct request *req) {
             return;
         }
         render_page(fd, zone[0] ? "Time zone saved. Schedules and sunrise/sunset use it within a minute." : "Time zone cleared.");
+    } else if (strcmp(action, "ntp") == 0) {
+        char input[1024], servers[NTP_SERVERS_MAX * (NTP_HOST_MAX + 1) + 1];
+        int n;
+        form_value(req->body, "ntpServers", input, sizeof(input));
+        /* A full buffer was cut short by form_value: refuse it, don't save a part. */
+        n = strlen(input) >= sizeof(input) - 1 ? -1 : normalize_ntp_servers(input, servers, sizeof(servers));
+        if (n < 0) {
+            render_page(fd, "That NTP server is not valid. Use up to 3 host names or IPv4 addresses.");
+            return;
+        }
+        if (save_ntp_servers(servers) != 0) {
+            render_page(fd, "Failed to save the custom NTP server.");
+            return;
+        }
+        render_page(fd, n ? "Custom NTP server saved. The hub asks it within a minute." : "Custom NTP server cleared. The hub uses the default public NTP servers.");
     } else if (strcmp(action, "rediscover") == 0) {
         trigger_mqtt_discover();
         render_page(fd, "MQTT discovery reload requested.");
@@ -14906,6 +14981,8 @@ static void handle_client(int client) {
         send_cloud_download(client);
     } else if (strcmp(req.method, "GET") == 0 && strcmp(req.path, "/export/timezone") == 0) {
         send_timezone_download(client);
+    } else if (strcmp(req.method, "GET") == 0 && strcmp(req.path, "/export/ntp") == 0) {
+        send_ntp_download(client);
     } else if (strcmp(req.method, "GET") == 0 && strcmp(req.path, "/export/bluetooth") == 0) {
         send_bt_devices_download(client);
     } else if (strcmp(req.method, "GET") == 0 && strcmp(req.path, "/export/restrictions") == 0) {

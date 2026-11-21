@@ -20,6 +20,23 @@ enum class PowerType(val wire: String, val label: String) {
     NONE("none", "No power control (always on, or switched by hand)"),
 }
 
+/**
+ * Device.ControlPort: which IR emitter sends the device's commands, as stock Harmony stores it.
+ * 7 is every hub output; the remote's blaster is never part of it. Other stored values are kept
+ * as they are and never sent.
+ */
+enum class IrOutput(val wire: Int, val label: String) {
+    ALL(7, "All hub outputs (built-in, external 1 and 2)"),
+    HUB(1, "Hub built-in emitters"),
+    EXTERNAL_1(2, "External blaster 1"),
+    EXTERNAL_2(4, "External blaster 2"),
+    REMOTE(0, "Remote's IR blaster");
+
+    companion object {
+        fun of(wire: Int?): IrOutput? = entries.firstOrNull { it.wire == wire }
+    }
+}
+
 data class DeviceSettings(
     val hasPowerFeature: Boolean,
     val interKeyDelayMs: Int,
@@ -32,6 +49,12 @@ data class DeviceSettings(
     val powerOnDelayMs: Int,
     val alwaysOn: Boolean,
     val onBetweenActivities: Boolean,
+    /** Only IR devices (Transport 1, the default when missing) have an IR output. */
+    val isIrDevice: Boolean = false,
+    /** The stored Device.ControlPort, known or not. */
+    val storedControlPort: Int? = null,
+    /** Null: not an IR device, or a stored value this editor does not name. Sent only when set. */
+    val irOutput: IrOutput? = null,
 )
 
 object DeviceSettingsModel {
@@ -95,7 +118,13 @@ object DeviceSettingsModel {
         }
         val isDisplay = Regex("television|projector", RegexOption.IGNORE_CASE)
             .containsMatchIn((device["DeviceTypeDisplayName"] as? JsonPrimitive)?.contentOrNull.orEmpty())
+        val transport = (device["Transport"] as? JsonPrimitive)?.doubleOrNull
+        val isIr = transport == null || transport == 1.0
+        val port = (device["ControlPort"] as? JsonPrimitive)?.doubleOrNull?.takeIf { it == Math.floor(it) }?.toInt()
         return DeviceSettings(
+            isIrDevice = isIr,
+            storedControlPort = port,
+            irOutput = if (isIr) IrOutput.of(port) else null,
             hasPowerFeature = feature != null,
             interKeyDelayMs = wholeNumber(device["InterKeyDelay"], 100),
             interDeviceDelayMs = wholeNumber(device["InterDeviceDelay"], 500),
@@ -145,10 +174,11 @@ object DeviceSettingsModel {
         linkedMapOf(
             "deviceId" to JsonPrimitive(deviceId),
             "settings" to JsonObject(
-                mapOf(
+                listOfNotNull(
                     "interKeyDelayMs" to JsonPrimitive(s.interKeyDelayMs),
                     "interDeviceDelayMs" to JsonPrimitive(s.interDeviceDelayMs),
                     "repeats" to JsonPrimitive(s.repeats),
+                    s.irOutput?.takeIf { s.isIrDevice }?.let { "irOutput" to JsonPrimitive(it.wire) },
                     "power" to JsonObject(
                         mapOf(
                             "type" to JsonPrimitive(s.powerType.wire),
@@ -160,7 +190,7 @@ object DeviceSettingsModel {
                             "onBetweenActivities" to JsonPrimitive(s.onBetweenActivities),
                         )
                     ),
-                )
+                ).toMap()
             ),
         )
     )

@@ -16,6 +16,7 @@ import {
   applyDeviceSettings,
   commandNames,
   inputsInUse,
+  isIrDevice,
   validateDeviceSettings,
 } from "./public/js/views/device-settings-model.js";
 import { LIMITS, isSafeLabel } from "./public/js/views/ir-model.js";
@@ -337,6 +338,10 @@ function handleDeviceSettings(res, params) {
   const errors = validateDeviceSettings(settings, commandNames(devices[index]), {
     wakeOnly: isSwitch2Entry(devices[index]),
   });
+  // As the hub does: only IR devices have an IR output.
+  if (settings.irOutput != null && !isIrDevice(devices[index])) {
+    errors.push("irOutput applies only to IR devices");
+  }
   if (settings.inputs && typeof settings.inputs === "object") {
     const kept = settings.inputs.type === "none"
       ? []
@@ -2652,6 +2657,16 @@ function handleExport(res, pathname) {
       "Cache-Control": "no-store"
     });
     res.end(body);
+    return;
+  }
+  if (pathname === "/export/ntp") {
+    // No custom NTP server set: the hub uses the default public ones.
+    res.writeHead(200, {
+      "Content-Type": "text/plain; charset=utf-8",
+      "Content-Length": 0,
+      "Cache-Control": "no-store"
+    });
+    res.end("");
     return;
   }
   if (pathname === "/export/bundle") {
