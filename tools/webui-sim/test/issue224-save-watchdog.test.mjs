@@ -23,7 +23,9 @@
 import { describe, it } from "node:test";
 import assert from "node:assert/strict";
 import { execFileSync } from "node:child_process";
-import { readFileSync } from "node:fs";
+import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 
 const luaPath = new URL("../../../payload/activity/codexactivity.lua", import.meta.url).pathname;
 const seedDir = new URL("../../hub-emu/seed/resources/", import.meta.url).pathname;
@@ -39,6 +41,19 @@ function cHash(text) {
 
 function readSeed(name) {
   return readFileSync(`${seedDir}${name}`, "utf8");
+}
+
+// The probe scripts embed ~340 KB of seed resources. Pass them to luajit as a
+// script file, not `-e`: Linux caps a single argv string at 128 KB (E2BIG).
+function runLuajit(script) {
+  const dir = mkdtempSync(join(tmpdir(), "issue224-"));
+  try {
+    const scriptPath = join(dir, "probe.lua");
+    writeFileSync(scriptPath, script);
+    return execFileSync("luajit", ["-joff", scriptPath], { encoding: "utf8" });
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
 }
 
 function runLuaProbe({ disableBit = false, mode = "revision", files, staleBase = false }) {
@@ -223,7 +238,7 @@ function runLuaProbe({ disableBit = false, mode = "revision", files, staleBase =
     ))
   `;
 
-  const out = execFileSync("luajit", ["-joff", "-e", script], { encoding: "utf8" });
+  const out = runLuajit(script);
   const parsed = {};
   for (const line of out.trim().split("\n")) {
     const idx = line.indexOf("=");
@@ -275,7 +290,7 @@ describe("issue #224: codexactivity save revision hash & watchdog liveness", () 
     }
     const expected256Hex = expected256.toString(16).padStart(8, "0");
     for (const disableBit of [false, true]) {
-      const out = execFileSync("luajit", ["-joff", "-e", `
+      const out = runLuajit(`
         if ${disableBit ? "true" : "false"} then
           package.loaded["bit"] = nil
           package.preload["bit"] = function() error("no bit") end
@@ -302,7 +317,7 @@ describe("issue #224: codexactivity save revision hash & watchdog liveness", () 
         local chunk = assert(loadstring((src:gsub("local function currentActivityRevision", "function currentActivityRevision"))))
         chunk("codexactivity")
         io.write(_G.codexactivity.currentActivityRevision())
-      `], { encoding: "utf8" }).trim();
+      `).trim();
       assert.equal(out, `${expected256Hex}-${expected256Hex}-${expected256Hex}`);
     }
   });
