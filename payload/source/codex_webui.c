@@ -11544,6 +11544,13 @@ static int stage_remote_png(
         snprintf(msg, msg_len, "The %s must be %lux%lu pixels, not %lux%lu.", what, want_w, want_h, w, h);
         goto out;
     }
+    /* IHDR bit depth and colour type: a Harmony Ultimate fetches an 8-bit RGB
+       PNG (colour type 2) and shows nothing; the 8-bit RGBA one a browser
+       canvas writes (colour type 6) shows. */
+    if (((const unsigned char *)bytes)[24] != 8 || ((const unsigned char *)bytes)[25] != 6) {
+        snprintf(msg, msg_len, "The %s must be an 8-bit RGBA PNG.", what);
+        goto out;
+    }
     if (write_file_atomic(path, bytes, (size_t)n) != 0) {
         snprintf(msg, msg_len, "The hub couldn't hold the %s for saving.", what);
         goto out;

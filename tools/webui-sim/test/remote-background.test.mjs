@@ -136,14 +136,17 @@ const post = (path, body, headers = {}) => fetch(`${BASE}${path}`, {
 });
 const getJson = async (path) => (await fetch(`${BASE}${path}`)).json();
 
-// The header the hub checks: signature, IHDR, width, height.
-function png(width, height) {
+// The header the hub checks: signature, IHDR, width, height, bit depth and
+// colour type (6 = RGBA, what a browser canvas writes).
+function png(width, height, colourType = 6) {
   const b = Buffer.alloc(40);
   Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]).copy(b, 0);
   b.writeUInt32BE(13, 8);
   b.write("IHDR", 12, "latin1");
   b.writeUInt32BE(width, 16);
   b.writeUInt32BE(height, 20);
+  b[24] = 8;
+  b[25] = colourType;
   return `data:image/png;base64,${b.toString("base64")}`;
 }
 const upload = () => post("/api/remote-background", uploadRequest(png(240, 320), png(60, 80)));
@@ -214,6 +217,9 @@ describe("simulator remote background", () => {
     assert.match((await wrong.json()).error, /must be 240x320/);
     const thumb = await post("/api/remote-background", uploadRequest(png(240, 320), png(80, 60)));
     assert.match((await thumb.json()).error, /must be 60x80/);
+    const rgb = await post("/api/remote-background", uploadRequest(png(240, 320, 2), png(60, 80)));
+    assert.equal(rgb.status, 400);
+    assert.match((await rgb.json()).error, /8-bit RGBA PNG/);
     const notPng = await post("/api/remote-background", uploadRequest("data:image/png;base64,R0lGODlh", png(60, 80)));
     assert.match((await notPng.json()).error, /isn't a PNG|isn't base64/);
     assert.equal((await post("/api/remote-background", { action: "select", image: "nope.png" })).status, 422);

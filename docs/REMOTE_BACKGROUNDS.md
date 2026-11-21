@@ -30,8 +30,10 @@ large photo never leaves your phone or computer at full size.
   settings in its `Settings` resource: the background (`BackgroundImage`), the
   pictures saved for it (`UserImages`, newest first, at most five), screen
   brightness and so on. The remote reads them during every sync.
-- **Saving a picture.** `codex_webui` checks the upload (a PNG of exactly
-  240×320, and its 60×80 thumbnail) and hands it to `codexactivity`
+- **Saving a picture.** `codex_webui` checks the upload (an 8-bit RGBA PNG of
+  exactly 240×320, and its 60×80 thumbnail; a Harmony Ultimate fetches an RGB
+  PNG but shows nothing, while the RGBA PNG a browser canvas writes shows) and
+  hands it to `codexactivity`
   (`CommitRemoteBackground`), which saves both as images in the hub's resource
   store (`<name>.png`, `<name>_small.png`), makes the picture the background,
   puts it first in `UserImages` and publishes a new revision. A picture that

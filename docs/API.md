@@ -1231,7 +1231,8 @@ Invoke-RestMethod "http://<hub-ip>:8080/api/remote-background" -Method Post `
 ```
 
 - `{"action":"upload","image":<PNG>,"thumbnail":<PNG>}`: base64 or `data:`
-  URLs of a 240x320 PNG and its 60x80 thumbnail, at most 512 KB each. The hub
+  URLs of a 240x320 PNG and its 60x80 thumbnail, at most 512 KB each, both
+  8-bit RGBA (colour type 6, what a browser canvas writes). The hub
   checks both, saves them as `<name>.png` and `<name>_small.png`, makes the
   picture the background and puts it first in `UserImages`; a picture that
   drops off the list (past `MaxCount`) is deleted.
@@ -1241,8 +1242,8 @@ Invoke-RestMethod "http://<hub-ip>:8080/api/remote-background" -Method Post `
 - The change is a `CommitRemoteBackground` transaction in codexactivity and
   publishes a new revision. Choose **Sync remote** in the remote's own
   settings to see it.
-- `400` for a bad body (a picture of the wrong size or not a PNG, an unknown
-  action), `422` when the writer refuses (no remote settings on the hub yet, a
+- `400` for a bad body (a picture of the wrong size, not a PNG or not 8-bit
+  RGBA, an unknown action), `422` when the writer refuses (no remote settings on the hub yet, a
   picture that isn't in the list, the cloud blocker off), `503` when the
   writer doesn't answer. `403` as for `/api/remote-unpair`.
 

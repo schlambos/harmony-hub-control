@@ -672,6 +672,8 @@ function simBgPng(text, width, height, what) {
   }
   const w = bytes.readUInt32BE(16), h = bytes.readUInt32BE(20);
   if (w !== width || h !== height) return { error: `The ${what} must be ${width}x${height} pixels, not ${w}x${h}.` };
+  // Like codex_webui: only 8-bit RGBA (an Ultimate shows nothing for RGB).
+  if (bytes[24] !== 8 || bytes[25] !== 6) return { error: `The ${what} must be an 8-bit RGBA PNG.` };
   return { bytes };
 }
 
