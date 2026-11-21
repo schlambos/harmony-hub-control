@@ -104,7 +104,7 @@ test("packaged Melodious for Windows: contents, launch against webui-sim, catalo
       node: typeof window.require,
     }));
     assert.equal(bridge.version, 1);
-    assert.deepEqual(bridge.catalog, ["checkModel", "download", "search", "signIn", "signOut", "status"]);
+    assert.deepEqual(bridge.catalog, ["checkModel", "download", "remoteImage", "search", "signIn", "signOut", "status"]);
     assert.equal(bridge.node, "undefined");
     assert.deepEqual(await page.evaluate(() => window.melodiousDesktop.catalog.status()), { signedIn: false });
 
