@@ -120,7 +120,7 @@ export function openDeviceSheet({ device = null, onDone } = {}) {
             chevron: true,
             attrs: 'data-act="androidtv"',
           })}${listRow({
-            title: "LG webOS TV on the network",
+            title: "LG webOS TV on the network (experimental)",
             subtitle: "Direct LAN control (SSAP + Wake-on-LAN), no Home Assistant",
             leading: iconTile("tv", { size: 40 }),
             chevron: true,

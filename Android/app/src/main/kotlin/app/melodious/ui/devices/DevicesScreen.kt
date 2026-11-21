@@ -340,7 +340,7 @@ private fun CommandsList(
                 )
             } else if (device.isWebOsTv) {
                 Text(
-                    "LG webOS TV — commands run directly over your LAN (Power On uses Wake-on-LAN when a MAC is configured). Add or re-pair LG webOS TVs from the Web or Desktop app.",
+                    "LG webOS TV — commands run directly over your LAN (Power On uses Wake-on-LAN when a MAC is configured). Add or re-pair LG webOS TVs from the Web or Desktop app. Experimental: known to have problems on some newer LG TVs.",
                     fontSize = 13.sp,
                     lineHeight = 19.sp,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
