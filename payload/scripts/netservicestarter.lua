@@ -795,9 +795,21 @@ local function startTimezoneWatch()
           -- one-off task: an error here must not stop the watcher
           system.addTask("codex timezone apply", function()
             local timeMgr = require("tasks.activityengine.core.timemanager")
-            context.timezoneid = context.timezoneid or conf.zone
+            -- The saved zone wins over one seeded into Context before any
+            -- zone was chosen (ensureMinimalOfflineSetup's america/new_york).
+            context.timezoneid = conf.zone
             timeMgr.updateTimezone(context, true)
             timeMgr.updateSunTimes(context)
+            local digest = require("tasks.harmonywebservices.core.statedigest"):instance()
+            if type(digest) == "table" and digest.tz ~= conf.posix then
+              digest.tz = conf.posix
+              digest.stateVersion = (tonumber(digest.stateVersion) or 0) + 1
+              if type(digest.saveStateDigest) == "function" then
+                pcall(function()
+                  digest:saveStateDigest()
+                end)
+              end
+            end
             log.notice("codex timezone applied:", conf.zone, conf.posix)
           end)
         end
@@ -1601,10 +1613,13 @@ local function offlineGetTime(cmd, verb, params)
     return native.processCmdGetTime(cmd, verb, params)
   end
   local localDigest = require("tasks.harmonywebservices.core.statedigest"):instance()
+  -- The remote renders utcTime in this zone. Offline nothing ever updates
+  -- statedigest.tz from its stock default (EST5EDT), so a saved zone wins.
+  local conf = readTimezoneConf()
   log.notice("codex offline guard answered the time from the hub clock", cmd)
   return connectUtils.createResponse(cmd, "200", "OK", {
     utcTime = os.date("!*t"),
-    tz = localDigest.tz
+    tz = conf and conf.posix or localDigest.tz
   })
 end
 
