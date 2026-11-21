@@ -732,6 +732,155 @@ function handleRemoteBackgroundImage(res, params) {
   res.end(bytes);
 }
 
+/* Remote pictures (GET/POST /api/remote-pictures, GET
+   /api/remote-pictures/image, POST /api/activity-icon). Like codexactivity:
+   the list comes from the activities' ImageKey (plus _small) and the
+   favorites' logos (ci_<uuid>), only listed names are stored (any PNG up to
+   512x512), and a new icon is a 70x70 PNG with a 38x38 thumbnail under a
+   fresh name. The sim's favorites are made up. */
+const SIM_FAVORITES = {
+  deviceId: "90000001",
+  dialPositions: [
+    { number: "2", image: "00000000-0000-4000-8000-00000000c001.png", name: "Kids Channel" },
+    { number: "5", image: "00000000-0000-4000-8000-00000000c002.png", name: "News 24" },
+  ],
+};
+const simPictures = new Map(); // name -> PNG bytes
+let simIconNext = 1;
+
+function simNeededPictures() {
+  const out = [];
+  const seen = new Set();
+  const add = (p) => {
+    if (seen.has(p.name)) return;
+    seen.add(p.name);
+    out.push({ ...p, stored: simPictures.has(p.name) });
+  };
+  for (const a of activities()) {
+    const m = typeof a?.ImageKey === "string" ? /^Activity\/([A-Za-z0-9_-]+)\.png$/.exec(a.ImageKey) : null;
+    if (!m || m[1].endsWith("_small")) continue;
+    const base = typeof a.BaseImageUri === "string" ? a.BaseImageUri : "";
+    for (const name of [m[1], `${m[1]}_small`]) {
+      add({ kind: "activity", name, activityId: String(a["Id-"]), activityName: a.Name,
+        uri: base ? `${base}Activity/${name}.png` : undefined });
+    }
+  }
+  for (const pos of SIM_FAVORITES.dialPositions) {
+    const uuid = /^([A-Za-z0-9-]+)\.png$/.exec(pos.image)?.[1];
+    if (uuid) {
+      add({ kind: "logo", name: `ci_${uuid}`, deviceId: SIM_FAVORITES.deviceId, channel: pos.name,
+        number: pos.number, uri: `content-image://1.0/image/${uuid}.png` });
+    }
+  }
+  return out;
+}
+
+/* width 0: any size up to 512x512, as codex_webui's stage_png_text(). */
+function simPicturePng(text, width, height, what) {
+  if (width) return simBgPng(text, width, height, what);
+  const b64 = String(text ?? "").replace(/^data:[^,]*,/, "");
+  const bytes = Buffer.from(b64, "base64");
+  if (bytes.length >= 24 && bytes.toString("latin1", 12, 16) === "IHDR") {
+    const w = bytes.readUInt32BE(16), h = bytes.readUInt32BE(20);
+    if (w < 1 || h < 1 || w > 512 || h > 512) {
+      return { error: `The ${what} must be at most 512x512 pixels, not ${w}x${h}.` };
+    }
+    return simBgPng(text, w, h, what);
+  }
+  return simBgPng(text, 1, 1, what); // reports missing / not base64 / not a PNG
+}
+
+function handleRemotePicturesGet(res, params) {
+  const pictures = simNeededPictures();
+  // Missing first, as codexactivity lists them; ?offset=N skips N of those.
+  const parsed = Math.floor(Number(params?.offset));
+  const offset = Number.isFinite(parsed) && parsed > 0 ? parsed : 0;
+  const missing = pictures.filter((p) => !p.stored);
+  const listed = [...missing.slice(offset), ...pictures.filter((p) => p.stored)].slice(0, 100);
+  sendJson(res, 200, { ok: true, localOnly: true, pictures: listed, total: pictures.length,
+    missing: missing.length, offset, truncated: listed.length < pictures.length,
+    contentImageHost: "https://logos.example.invalid" });
+}
+
+function handleRemotePicturesSet(res, params) {
+  const list = Array.isArray(params.pictures) ? params.pictures : null;
+  if (!list) {
+    sendJson(res, 400, { ok: false, error: "Send {\"pictures\":[{\"name\":...,\"image\":...}]} as JSON." });
+    return;
+  }
+  if (list.length === 0) {
+    sendJson(res, 400, { ok: false, error: "No pictures were sent." });
+    return;
+  }
+  if (list.length > 64) {
+    sendJson(res, 400, { ok: false, error: "At most 64 pictures in one request." });
+    return;
+  }
+  const staged = [];
+  for (const [i, p] of list.entries()) {
+    const name = typeof p?.name === "string" ? p.name : "";
+    if (!/^[A-Za-z0-9_-]{1,96}$/.test(name)) {
+      sendJson(res, 400, { ok: false, error: `Picture ${i + 1}: a name is letters, digits, _ and -.` });
+      return;
+    }
+    const png = simPicturePng(p.image, 0, 0, name);
+    if (png.error) {
+      sendJson(res, 400, { ok: false, error: png.error });
+      return;
+    }
+    staged.push({ name, bytes: png.bytes });
+  }
+  const needed = new Set(simNeededPictures().map((p) => p.name));
+  const saved = [];
+  const failed = [];
+  for (const { name, bytes } of staged) {
+    if (needed.has(name)) {
+      simPictures.set(name, bytes);
+      saved.push(name);
+    } else {
+      failed.push({ name, error: "not a picture this hub's activities or favorites use" });
+    }
+  }
+  if (!saved.length) {
+    sendJson(res, 422, { ok: false, localOnly: true, error: failed[0].error,
+      reply: { ok: false, localOnly: true, saved, failed } });
+    return;
+  }
+  logEvent({ kind: "remote-pictures", message: `${saved.length} picture(s) saved` });
+  sendJson(res, 200, { ok: true, localOnly: true, saved, failed });
+}
+
+function handleActivityIconSet(res, params) {
+  const image = simPicturePng(params.image, 70, 70, "icon");
+  const small = image.error ? null : simPicturePng(params.thumbnail, 38, 38, "icon thumbnail");
+  const error = image.error || small.error;
+  if (error) {
+    sendJson(res, 400, { ok: false, error });
+    return;
+  }
+  const name = `00000000-0000-4000-8000-${String(simIconNext++).padStart(12, "0")}`;
+  simPictures.set(name, image.bytes);
+  simPictures.set(`${name}_small`, small.bytes);
+  sendJson(res, 200, { ok: true, localOnly: true, name, imageKey: `Activity/${name}.png` });
+}
+
+function handleRemotePictureImage(res, params) {
+  const name = String(params.name ?? "");
+  if (!/^[A-Za-z0-9_-]{1,96}$/.test(name)) {
+    res.writeHead(400, { "Content-Type": "text/plain", "Cache-Control": "no-store" });
+    res.end("Give a picture name: letters, digits, _ and -.\n");
+    return;
+  }
+  const bytes = simPictures.get(name);
+  if (!bytes) {
+    res.writeHead(404, { "Content-Type": "text/plain", "Cache-Control": "no-store" });
+    res.end("That picture isn't saved on this hub.\n");
+    return;
+  }
+  res.writeHead(200, { "Content-Type": "image/png", "Content-Length": bytes.length, "Cache-Control": "private, max-age=86400" });
+  res.end(bytes);
+}
+
 const SIM_PAIR_MS = 3000;
 const SIM_RF_SLOTS = 6;
 let simRemotes = [];
@@ -2531,7 +2680,7 @@ function handleExport(res, pathname) {
 /* Like codex_webui's request_same_origin_json(): the routes that change the
    radio or reboot the hub take only application/json, and a browser's Origin,
    when sent, must be this host. */
-const SAME_ORIGIN_JSON_ROUTES = new Set(["POST /api/multi-remote", "POST /api/remote-unpair", "POST /api/remote-background", "POST /api/usb-eth", "POST /api/activity-restrictions"]);
+const SAME_ORIGIN_JSON_ROUTES = new Set(["POST /api/multi-remote", "POST /api/remote-unpair", "POST /api/remote-background", "POST /api/remote-pictures", "POST /api/activity-icon", "POST /api/usb-eth", "POST /api/activity-restrictions"]);
 const SAME_ORIGIN_JSON_ERROR =
   "This change takes a JSON request (Content-Type: application/json) from the hub's own web app.";
 
@@ -2610,6 +2759,8 @@ async function handleApi(req, res, pathname, url) {
         loadFixture();
         resetSimRemotes();
         resetSimBackground();
+        simPictures.clear();
+        simIconNext = 1;
         state.events.length = 0;
         captureArmed = false;
         canceledRuns.clear();
@@ -2795,6 +2946,18 @@ async function handleApi(req, res, pathname, url) {
     case "POST /api/remote-background":
       handleRemoteBackgroundSet(res, params);
       return;
+    case "GET /api/remote-pictures":
+      handleRemotePicturesGet(res, params);
+      return;
+    case "GET /api/remote-pictures/image":
+      handleRemotePictureImage(res, params);
+      return;
+    case "POST /api/remote-pictures":
+      handleRemotePicturesSet(res, params);
+      return;
+    case "POST /api/activity-icon":
+      handleActivityIconSet(res, params);
+      return;
     case "POST /api/remote-unpair": {
       // Like codex_webui's json_top_int(): the top-level token must be a plain
       // integer, so "2", 1.5, 1e1, 2e0 and 2.0 are all refused.
@@ -2938,7 +3101,7 @@ async function handleApi(req, res, pathname, url) {
         features: [
           "activity-save", "activity-sync", "catalog-import", "device-commands",
           "androidtv-devices", "androidtv-inputs", "device-screen", "device-settings", "ha-devices", "ha-devices-v2",
-          "ha-state", "irdb-import", "remote-background", "remote-pair", "switch2-wake"
+          "ha-state", "irdb-import", "remote-background", "remote-pair", "remote-pictures", "switch2-wake"
         ]
       });
       return;

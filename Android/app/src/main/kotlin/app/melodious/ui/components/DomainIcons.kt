@@ -12,7 +12,20 @@ import androidx.compose.material.icons.filled.SportsEsports
 import androidx.compose.material.icons.filled.Speaker
 import androidx.compose.material.icons.filled.Tv
 import androidx.compose.material.icons.filled.Videocam
+import androidx.compose.foundation.Image
+import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.runtime.Composable
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.produceState
+import androidx.compose.runtime.staticCompositionLocalOf
+import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clip
+import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.ImageBitmap
 import androidx.compose.ui.graphics.vector.ImageVector
+import androidx.compose.ui.layout.ContentScale
+import androidx.compose.ui.unit.dp
 import app.melodious.protocol.model.HubActivity
 import app.melodious.protocol.model.HubDevice
 
@@ -25,6 +38,43 @@ fun activityIcon(activity: HubActivity): ImageVector {
         activity.type == 3 -> Icons.Filled.SportsEsports
         activity.type == 4 -> Icons.Filled.MusicNote
         else -> Icons.Filled.PlayArrow
+    }
+}
+
+/**
+ * Loads an activity's own icon from the hub (docs/REMOTE_PICTURES.md); provided
+ * at the app root by MelodiousViewModel.activityPicture. Without a provider,
+ * tiles show the symbol for the activity's kind.
+ */
+val LocalActivityPictures = staticCompositionLocalOf<suspend (HubActivity) -> ImageBitmap?> { { null } }
+
+/**
+ * An activity's tile: its own icon when the hub holds one, else the symbol
+ * from [activityIcon] (also while the picture loads).
+ */
+@Composable
+fun ActivityTile(
+    activity: HubActivity,
+    container: Color,
+    tint: Color,
+    size: Int,
+    modifier: Modifier = Modifier,
+) {
+    val loader = LocalActivityPictures.current
+    val name = activity.imageName
+    val picture by produceState<ImageBitmap?>(initialValue = null, name, loader) {
+        value = if (name == null) null else runCatching { loader(activity) }.getOrNull()
+    }
+    val bitmap = picture
+    if (bitmap == null) {
+        IconTile(activityIcon(activity), modifier = modifier, container = container, tint = tint, size = size)
+    } else {
+        Image(
+            bitmap = bitmap,
+            contentDescription = null,
+            contentScale = ContentScale.Crop,
+            modifier = modifier.size(size.dp).clip(RoundedCornerShape((size * 0.28f).dp)),
+        )
     }
 }
 

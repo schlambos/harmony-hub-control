@@ -1232,6 +1232,76 @@ Invoke-RestMethod "http://<hub-ip>:8080/api/remote-background" -Method Post `
   picture that isn't in the list, the cloud blocker off), `503` when the
   writer doesn't answer. `403` as for `/api/remote-unpair`.
 
+### Remote pictures (activity icons and favorite logos)
+
+A screen remote shows an icon per activity (the activity's `ImageKey`) and a
+logo per favorite channel (`dialPositions` in a `CD_<deviceId>` resource). It
+fetches both through the hub, which answers from its own store. See
+[REMOTE_PICTURES.md](REMOTE_PICTURES.md).
+
+```powershell
+Invoke-RestMethod "http://<hub-ip>:8080/api/remote-pictures"
+```
+
+```json
+{"ok":true,"localOnly":true,"total":4,"missing":3,"offset":0,"truncated":false,
+ "contentImageHost":"https://<logo host>","pictures":[
+  {"kind":"activity","name":"<name>_small","activityId":"<id>","activityName":"Watch TV",
+   "uri":"<BaseImageUri>Activity/<name>_small.png","stored":false},
+  {"kind":"logo","name":"ci_<uuid>","deviceId":"<id>","channel":"News","number":"3",
+   "uri":"content-image://1.0/image/<uuid>.png","stored":false},
+  {"kind":"activity","name":"<name>","activityId":"<id>","activityName":"Watch TV",
+   "uri":"<BaseImageUri>Activity/<name>.png","stored":true}]}
+```
+
+- The list comes from the hub's own data (ActivityList and every `CD_*`
+  resource), so no remote has to sync first. `uri` is the address the remote
+  asks for; `stored` says whether the hub holds the picture.
+- `pictures` lists missing pictures first and stops at 100 entries or about
+  24 KB (`truncated`); `total` and `missing` count all of them. Store some
+  and ask again to reach the rest.
+- `?offset=N` skips the first N missing pictures, to get past ones that
+  could not be recovered; the answer repeats it as `offset`.
+- `contentImageHost` is the scheme and host of the logo address in the hub's
+  discovery data (`ContentImageService/Image`), which stands in for
+  `content-image://` when fetching a logo; absent when the hub has none.
+- `GET /api/remote-pictures/image?name=<name>` answers a stored picture
+  (`image/png`), as `/api/remote-background/image` does, but lets the browser
+  keep it for a day (`Cache-Control: private, max-age=86400`): a name never
+  gets other content. A `404` is not cached.
+
+```powershell
+Invoke-RestMethod "http://<hub-ip>:8080/api/remote-pictures" -Method Post `
+  -ContentType "application/json" -Body '{"pictures":[{"name":"ci_<uuid>","image":"<base64 PNG>"}]}'
+```
+
+```json
+{"ok":true,"localOnly":true,"saved":["ci_<uuid>"],"failed":[],"configVersion":42}
+```
+
+- Stores pictures recovered from where they were kept before (the hub never
+  fetches them itself). Only names from the `GET` list are accepted; each PNG
+  may be up to 512x512 pixels and 512 KB, at most 64 per request and 1 MB in
+  all. `failed` lists each refused picture with its reason; `ok` is true when
+  at least one was saved. One revision follows, so the remotes sync again.
+  One bad picture (not a PNG, over 512 pixels a side) refuses the whole
+  request with `400`; send the others again without it.
+- `400` for a bad body, `422` when nothing was saved, `503` when the writer
+  doesn't answer. `403` as for `/api/remote-unpair`.
+
+```powershell
+Invoke-RestMethod "http://<hub-ip>:8080/api/activity-icon" -Method Post `
+  -ContentType "application/json" -Body '{"image":"<base64 70x70 PNG>","thumbnail":"<base64 38x38 PNG>"}'
+```
+
+```json
+{"ok":true,"localOnly":true,"name":"<name>","imageKey":"Activity/<name>.png"}
+```
+
+- Stores a new activity icon and its thumbnail under a fresh name. Put
+  `imageKey` in the activity's `ImageKey` (and a `BaseImageUri` if it has
+  none) with the next `/api/activity-save`; that save publishes the revision.
+
 ### Multiple remotes of one model (experimental)
 
 The Settings switch for [MULTI_REMOTE.md](MULTI_REMOTE.md)
@@ -1532,7 +1602,7 @@ Invoke-RestMethod "http://<hub-ip>:8080/api/version"
 {"ok":true,"product":"melodious","version":"1.3.0","api":1,"update":{"protocol":0},
  "features":["activity-save","activity-sync","androidtv-devices","androidtv-inputs","catalog-import","device-commands",
              "device-screen","device-settings","ha-devices","ha-devices-v2",
-             "ha-state","irdb-import","remote-background","remote-pair"]}
+             "ha-state","irdb-import","remote-background","remote-pair","remote-pictures"]}
 ```
 
 - `version` is the release the hub software belongs to (`MELODIOUS_VERSION`).
@@ -1638,6 +1708,9 @@ carries.
 | POST | `/api/remote-pair` | `render_remote_pair_json()` |
 | GET, POST | `/api/remote-background` | `render_remote_background_json()`, `render_remote_background_set_json()` |
 | GET | `/api/remote-background/image` | `render_remote_background_image()` |
+| GET, POST | `/api/remote-pictures` | `render_remote_pictures_json()`, `render_remote_pictures_set_json()` |
+| GET | `/api/remote-pictures/image` | `render_remote_background_image()` |
+| POST | `/api/activity-icon` | `render_activity_icon_set_json()` |
 | GET, POST | `/api/usb-eth` | `render_usb_eth_json()`, `render_usb_eth_set_json()` |
 | GET | `/api/network-overview` | `render_network_overview_json()` |
 | POST | `/api/ir-test-learned` | `render_ir_test_learned_json()` |

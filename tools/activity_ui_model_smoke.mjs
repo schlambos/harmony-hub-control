@@ -671,4 +671,57 @@ validateGraph();
   assert.equal(savedDevMap.Buttons[0].ButtonState, 0);
 }
 
+// Activity icons (docs/REMOTE_PICTURES.md): the stored name comes from the
+// ImageKey only, the cover crop is centered, and the picker's glyphs are path
+// data only, as Path2D draws them.
+{
+  const { activityImageName, coverRect, ICON_GLYPHS, ICON_BASE_URI } = context.__HARMONY_ACTIVITY_TEST__.api;
+  assert.equal(activityImageName({ ImageKey: "Activity/123_ab-cd.png" }), "123_ab-cd");
+  assert.equal(activityImageName({ ImageKey: "Activity/123_ab-cd_small.png" }), "");
+  assert.equal(activityImageName({ ImageKey: "Activity/../x.png" }), "");
+  assert.equal(activityImageName({ ImageKey: "Other/x.png" }), "");
+  assert.equal(activityImageName({ ImageKey: null, Icon: 5 }), "");
+  assert.deepEqual({ ...coverRect(400, 300) }, { x: 50, y: 0, side: 300 });
+  assert.deepEqual({ ...coverRect(300, 500) }, { x: 0, y: 100, side: 300 });
+  assert.ok(ICON_GLYPHS.length >= 10);
+  for (const glyph of ICON_GLYPHS) {
+    assert.match(glyph.d, /^[MmZzLlHhVvCcSsQqTtAa0-9 .,-]+$/, `${glyph.key} is plain path data`);
+  }
+  assert.match(ICON_BASE_URI, /^https:\/\/[^/]+\/$/);
+}
+
+// Storing recovered pictures: the hub refuses a whole batch for one bad
+// picture, so a refused batch is resent one picture at a time.
+{
+  const posts = [];
+  const pictureContext = {
+    __HARMONY_ACTIVITY_TEST__: {},
+    fetch: async (path, options) => {
+      const { pictures } = JSON.parse(options.body);
+      posts.push(pictures.map((p) => p.name));
+      const bad = pictures.some((p) => p.name === "bad");
+      const body = bad
+        ? { ok: false, error: "The bad must be at most 512x512 pixels." }
+        : pictures[0].name === "unlisted"
+          ? { ok: false, error: "x", reply: { ok: false, saved: [], failed: [{ name: "unlisted", error: "not a picture this hub uses" }] } }
+          : { ok: true, saved: pictures.map((p) => p.name), failed: [] };
+      const status = bad ? 400 : body.ok ? 200 : 422;
+      return { ok: status === 200, status, text: async () => JSON.stringify(body) };
+    }
+  };
+  vm.createContext(pictureContext);
+  vm.runInContext(source, pictureContext, { filename: "activity-ui.js" });
+  const { storePictures } = pictureContext.__HARMONY_ACTIVITY_TEST__.api;
+  const result = await storePictures([{ name: "a", image: "x" }, { name: "bad", image: "x" }, { name: "unlisted", image: "x" }, { name: "b", image: "x" }]);
+  assert.deepEqual([...result.saved], ["a", "b"]);
+  assert.deepEqual([...result.failed.keys()], ["bad", "unlisted"]);
+  assert.match(result.failed.get("bad"), /512x512/);
+  assert.match(result.failed.get("unlisted"), /not a picture/);
+  assert.deepEqual(posts, [["a", "bad", "unlisted", "b"], ["a"], ["bad"], ["unlisted"], ["b"]]);
+  posts.length = 0;
+  const clean = await storePictures([{ name: "a", image: "x" }, { name: "b", image: "x" }]);
+  assert.deepEqual([...clean.saved], ["a", "b"]);
+  assert.equal(posts.length, 1);
+}
+
 console.log("activity UI model smoke: ok");

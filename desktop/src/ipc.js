@@ -2,6 +2,7 @@
 
 const { isTrustedIpcSender } = require("./security");
 const { redact, CatalogError } = require("./catalog/client");
+const { createPictureFetcher } = require("./catalog/pictures");
 
 const CATALOG_CHANNELS = Object.freeze({
   status: "catalog:status",
@@ -10,6 +11,7 @@ const CATALOG_CHANNELS = Object.freeze({
   checkModel: "catalog:check-model",
   search: "catalog:search",
   download: "catalog:download",
+  remotePicture: "catalog:remote-picture",
 });
 
 function validateCatalogString(value, fieldName) {
@@ -89,7 +91,7 @@ function sanitizePackage(pkg) {
   return redact(pkg);
 }
 
-function createCatalogIpcHandlers({ getMainWindow, getCatalogService } = {}) {
+function createCatalogIpcHandlers({ getMainWindow, getCatalogService, pictureFetcher = createPictureFetcher() } = {}) {
   const ensureTrusted = (event) => {
     const win = typeof getMainWindow === "function" ? getMainWindow() : null;
     if (!isTrustedIpcSender(event, win)) {
@@ -152,11 +154,19 @@ function createCatalogIpcHandlers({ getMainWindow, getCatalogService } = {}) {
       const pkg = await service().download(dlArgs);
       return sanitizePackage(pkg);
     }),
+    // An activity icon or channel logo for the hub (catalog/pictures.js).
+    // Needs no Logitech sign-in, so no catalog service either.
+    [CATALOG_CHANNELS.remotePicture]: wrap(async (args) => {
+      const res = await pictureFetcher.fetch(args);
+      const image = String(res?.image ?? "");
+      if (!image.startsWith("data:image/png;base64,")) throw new Error("Invalid picture answer");
+      return { image };
+    }),
   };
 }
 
-function registerCatalogIpcHandlers({ ipcMain, getMainWindow, getCatalogService } = {}) {
-  const handlers = createCatalogIpcHandlers({ getMainWindow, getCatalogService });
+function registerCatalogIpcHandlers({ ipcMain, getMainWindow, getCatalogService, pictureFetcher } = {}) {
+  const handlers = createCatalogIpcHandlers({ getMainWindow, getCatalogService, pictureFetcher });
   for (const [channel, handler] of Object.entries(handlers)) {
     ipcMain.handle(channel, handler);
   }

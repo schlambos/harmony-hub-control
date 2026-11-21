@@ -39,11 +39,20 @@ data class HubActivity(
     val type: Int = 1,
     val activityOrder: Int = 0,
     val roles: List<HubRole> = emptyList(),
+    /** The activity's ImageKey ("Activity/<name>.png"), or null. docs/REMOTE_PICTURES.md */
+    val imageKey: String? = null,
 ) {
     val typeLabel: String
         get() = ACTIVITY_TYPE_LABELS[type] ?: "Activity"
 
+    /** The name the hub stores this activity's own icon under, or null. */
+    val imageName: String?
+        get() = imageKey?.let { ACTIVITY_IMAGE_KEY.matchEntire(it)?.groupValues?.get(1) }
+            ?.takeUnless { it.endsWith("_small") }
+
     companion object {
+        private val ACTIVITY_IMAGE_KEY = Regex("""Activity/([A-Za-z0-9_-]{1,96})\.png""")
+
         val ACTIVITY_TYPE_LABELS = mapOf(
             1 to "Watch TV",
             2 to "Watch a movie",

@@ -145,7 +145,7 @@ public struct RemoteView: View {
                     ForEach(viewModel.activities) { activity in
                         let devicesText = viewModel.configSnapshot?.deviceNames(for: activity).joined(separator: " · ") ?? activity.typeLabel
                         HStack(spacing: 14) {
-                            IconTileView(systemName: activity.systemIconName, isActive: false, size: 48)
+                            ActivityTileView(activity: activity, viewModel: viewModel, isActive: false, size: 48)
                             VStack(alignment: .leading, spacing: 3) {
                                 Text(activity.name)
                                     .font(.system(size: 17, weight: .medium))

@@ -7753,9 +7753,9 @@ static void activity_panel(FILE *f) {
         "<div class='activity-tab-panel active' data-activity-tab-panel='setup'>"
         "<div class='activity-form-grid'><div><label for='activityName'>Activity name</label><input id='activityName' maxlength='96'></div>"
         "<div><label for='activityType'>Activity kind</label><select id='activityType'></select></div>"
-        "<div><label for='activityIcon'>Icon key</label><input id='activityIcon' placeholder='Optional firmware icon'></div>"
         "<div><label for='activityDefaultChannel'>Default channel</label><input id='activityDefaultChannel' placeholder='Optional'></div>"
         "<div><label for='activityDefaultStation'>Default station name</label><input id='activityDefaultStation' placeholder='Optional'></div></div>"
+        "<div id='activityIconField' class='activity-icon-field'></div>"
         "<div class='activity-section-title'><div><h4>Device roles and input routing</h4>"
         "<div class='help'>Roles tell Harmony which device supplies picture, volume, channels, playback, or keyboard input.</div></div>"
         "<button id='activityAddRole' type='button' class='secondary'>Add device role</button></div>"
@@ -11393,8 +11393,10 @@ static void render_remote_background_json(int fd) {
     free(settings);
 }
 
-/* GET ?name=<name>: one picture saved on the hub, for the web app's previews. */
-static void render_remote_background_image(int fd, const struct request *req) {
+/* GET ?name=<name>: one picture saved on the hub, for the web app's previews.
+   cacheable: let the browser keep it for a day (a remote picture's name never
+   gets other content); a missing picture is never cached. */
+static void render_remote_image(int fd, const struct request *req, int cacheable) {
     char name[128], path[192], hdr[256];
     char *data;
     size_t len = 0;
@@ -11412,17 +11414,26 @@ static void render_remote_background_image(int fd, const struct request *req) {
     }
     snprintf(hdr, sizeof(hdr),
         "HTTP/1.1 200 OK\r\nContent-Type: image/png\r\nContent-Length: %lu\r\n"
-        "Cache-Control: no-store\r\nConnection: close\r\n\r\n", (unsigned long)len);
+        "Cache-Control: %s\r\nConnection: close\r\n\r\n", (unsigned long)len,
+        cacheable ? "private, max-age=86400" : "no-store");
     send_all(fd, hdr, strlen(hdr));
     send_all(fd, data, len);
     free(data);
 }
 
-/* One base64 PNG member of the request (a data: URL is fine), decoded,
-   checked for its exact size and staged at path. 0, or -1 with msg set. */
-static int stage_remote_png(
-    const struct request *req,
-    const char *key,
+static void render_remote_background_image(int fd, const struct request *req) {
+    render_remote_image(fd, req, 0);
+}
+
+/* Largest side of a picture stored for the remote at any size (activity icons
+   and channel logos recovered from where Logitech kept them). */
+#define MAX_REMOTE_PICTURE_SIDE 512UL
+
+/* One base64 PNG (a data: URL is fine), decoded, checked and staged at path.
+   want_w/want_h 0: any size up to MAX_REMOTE_PICTURE_SIDE a side.
+   0, or -1 with msg set. */
+static int stage_png_text(
+    const char *text,
     unsigned long want_w,
     unsigned long want_h,
     const char *path,
@@ -11430,16 +11441,15 @@ static int stage_remote_png(
     char *msg,
     size_t msg_len
 ) {
-    char *text = (char *)malloc(req->body_len + 1);
     char *bytes = (char *)malloc(MAX_REMOTE_BACKGROUND + 2);
     const char *b64;
     unsigned long w = 0, h = 0;
     int n, rc = -1;
-    if (!text || !bytes) {
+    if (!bytes) {
         snprintf(msg, msg_len, "Not enough memory on the hub for the %s.", what);
         goto out;
     }
-    if (json_top_string(req->body, key, text, req->body_len + 1) != 1 || !text[0]) {
+    if (!text || !text[0]) {
         snprintf(msg, msg_len, "The %s is missing.", what);
         goto out;
     }
@@ -11465,8 +11475,13 @@ static int stage_remote_png(
         snprintf(msg, msg_len, "The %s isn't a PNG.", what);
         goto out;
     }
-    if (w != want_w || h != want_h) {
+    if (want_w && (w != want_w || h != want_h)) {
         snprintf(msg, msg_len, "The %s must be %lux%lu pixels, not %lux%lu.", what, want_w, want_h, w, h);
+        goto out;
+    }
+    if (!want_w && (w < 1 || h < 1 || w > MAX_REMOTE_PICTURE_SIDE || h > MAX_REMOTE_PICTURE_SIDE)) {
+        snprintf(msg, msg_len, "The %s must be at most %lux%lu pixels, not %lux%lu.", what,
+            MAX_REMOTE_PICTURE_SIDE, MAX_REMOTE_PICTURE_SIDE, w, h);
         goto out;
     }
     if (write_file_atomic(path, bytes, (size_t)n) != 0) {
@@ -11476,8 +11491,31 @@ static int stage_remote_png(
     chmod(path, 0600);
     rc = 0;
 out:
-    free(text);
     free(bytes);
+    return rc;
+}
+
+/* One base64 PNG top-level member of the request, staged like
+   stage_png_text(). */
+static int stage_remote_png(
+    const struct request *req,
+    const char *key,
+    unsigned long want_w,
+    unsigned long want_h,
+    const char *path,
+    const char *what,
+    char *msg,
+    size_t msg_len
+) {
+    char *text = (char *)malloc(req->body_len + 1);
+    int rc;
+    if (!text) {
+        snprintf(msg, msg_len, "Not enough memory on the hub for the %s.", what);
+        return -1;
+    }
+    if (json_top_string(req->body, key, text, req->body_len + 1) != 1) text[0] = 0;
+    rc = stage_png_text(text, want_w, want_h, path, what, msg, msg_len);
+    free(text);
     return rc;
 }
 
@@ -11570,6 +11608,216 @@ refuse:
     json_write_string(f, msg);
     fputs("}\n", f);
     fclose(f);
+}
+
+/* Remote pictures (docs/REMOTE_PICTURES.md): activity icons and favorite
+ * channel logos a screen remote fetches through the hub. codexactivity lists
+ * the ones the hub's own data asks for (RemotePictures), stores recovered ones
+ * from that list (CommitRemotePictures) and stores a new activity icon under a
+ * fresh name (CommitActivityIcon); netservicestarter.lua answers the remote's
+ * fetches from the resource store. The hub never fetches a picture itself. */
+#define REMOTE_PICTURE_REPLY 32768
+#define MAX_REMOTE_PICTURES_PER_REQUEST 64
+
+static void send_writer_reply(int fd, int rc, const char *reply, const char *msg, const char *fallback) {
+    const char *status = rc == 0 ? "200 OK" : (reply[0] ? "422 Unprocessable Entity" : "503 Service Unavailable");
+    FILE *f = send_json_start(fd, status);
+    if (!f) return;
+    if (rc == 0 && reply[0] == '{') {
+        fputs(reply, f);
+        fputc('\n', f);
+    } else {
+        fputs("{\"ok\":false,\"localOnly\":true,\"error\":", f);
+        json_write_string(f, msg[0] ? msg : fallback);
+        fputs(",\"reply\":", f);
+        if (reply[0] == '{') fputs(reply, f);
+        else fputs("null", f);
+        fputs("}\n", f);
+    }
+    fclose(f);
+}
+
+static void send_picture_refusal(int fd, const char *msg) {
+    FILE *f = send_json_start(fd, "400 Bad Request");
+    if (!f) return;
+    fputs("{\"ok\":false,\"error\":", f);
+    json_write_string(f, msg);
+    fputs("}\n", f);
+    fclose(f);
+}
+
+/* GET: every picture the hub's activities and favorites use, and which ones
+   the hub holds: {"ok","pictures":[{kind,name,uri,stored,...}],"missing",
+   "total","truncated","offset","contentImageHost"}. */
+static void render_remote_pictures_json(int fd, const struct request *req) {
+    char request[192], request_id[96], msg[512], offset_text[16];
+    char *reply = (char *)malloc(REMOTE_PICTURE_REPLY);
+    int written, rc, offset;
+    msg[0] = 0;
+    /* ?offset=N skips the first N missing pictures (ones a caller could not
+       recover), so it can reach the ones after them. */
+    query_value(req->path, "offset", offset_text, sizeof(offset_text));
+    offset = atoi(offset_text);
+    if (offset < 0 || offset > 100000) offset = 0;
+    if (!reply) {
+        send_text(fd, "503 Service Unavailable", "Not enough memory on the hub.\n");
+        return;
+    }
+    reply[0] = 0;
+    snprintf(request_id, sizeof(request_id), "%ld-%ld-pictures", (long)getpid(), (long)time(NULL));
+    written = snprintf(request, sizeof(request), "{\"id\":\"%s\",\"op\":\"RemotePictures\",\"offset\":%d}",
+        request_id, offset);
+    rc = offline_writer_request(request, (size_t)written, request_id,
+        reply, REMOTE_PICTURE_REPLY, msg, sizeof(msg));
+    send_writer_reply(fd, rc, reply, msg, "The hub couldn't list its pictures.");
+    free(reply);
+}
+
+/* The extent of the JSON string value of key inside [start, end): 1 with
+   *v (after the opening quote) and *v_end (the closing quote); 0 otherwise.
+   Only plain strings (no escapes) count: names and base64 never need any. */
+static int json_plain_string_in(const char *start, const char *end, const char *key,
+        const char **v, const char **v_end) {
+    const char *p = find_key_range(start, end, key);
+    if (!p) return 0;
+    p = strchr(p + strlen(key) + 2, ':');
+    if (!p || p >= end) return 0;
+    for (p++; p < end && isspace((unsigned char)*p); p++) {}
+    if (p >= end || *p != '"') return 0;
+    *v = ++p;
+    for (; p < end && *p != '"'; p++) {
+        if (*p == '\\') return 0;
+    }
+    if (p >= end) return 0;
+    *v_end = p;
+    return 1;
+}
+
+/* POST {"pictures":[{"name":"<name>","image":<base64 PNG>},...]}: store
+   recovered pictures. Only names from the GET list are accepted (codexactivity
+   checks); each PNG may be up to 512x512 and 512 KB. One revision follows. */
+static void render_remote_pictures_set_json(int fd, const struct request *req) {
+    char files[MAX_REMOTE_PICTURES_PER_REQUEST][96];
+    char name[128], msg[768], request_id[96];
+    char *request = NULL, *reply = NULL, *text = NULL;
+    const char *p, *end, *obj, *obj_end, *v, *v_end;
+    size_t used = 0, cap = 64 + MAX_REMOTE_PICTURES_PER_REQUEST * 256;
+    int count = 0, i, rc, depth;
+    msg[0] = 0;
+    if (!req->body || req->body_truncated) {
+        send_picture_refusal(fd, "Send {\"pictures\":[{\"name\":...,\"image\":...}]} as JSON, at most 1 MB.");
+        return;
+    }
+    p = json_top_member(req->body, "pictures");
+    if (!p || *p != '[') {
+        send_picture_refusal(fd, "Send {\"pictures\":[{\"name\":...,\"image\":...}]} as JSON.");
+        return;
+    }
+    end = req->body + req->body_len;
+    request = (char *)malloc(cap);
+    reply = (char *)malloc(REMOTE_PICTURE_REPLY);
+    text = (char *)malloc(req->body_len + 1);
+    if (!request || !reply || !text) {
+        snprintf(msg, sizeof(msg), "Not enough memory on the hub for the pictures.");
+        goto refuse;
+    }
+    reply[0] = 0;
+    snprintf(request_id, sizeof(request_id), "%ld-%ld-%08x",
+        (long)getpid(), (long)time(NULL), resource_hash(req->body, req->body_len));
+    used = (size_t)snprintf(request, cap,
+        "{\"id\":\"%s\",\"op\":\"CommitRemotePictures\",\"pictures\":[", request_id);
+    /* Walk the array's objects. Names and base64 hold no braces or quotes,
+       so the next '}' ends the object. */
+    for (p++; p < end; p++) {
+        if (*p == ']') break;
+        if (*p != '{') continue;
+        obj = p;
+        for (depth = 0, obj_end = p; obj_end < end; obj_end++) {
+            if (*obj_end == '{') depth++;
+            else if (*obj_end == '}' && --depth == 0) break;
+        }
+        if (obj_end >= end) break;
+        if (count >= MAX_REMOTE_PICTURES_PER_REQUEST) {
+            snprintf(msg, sizeof(msg), "At most %d pictures in one request.", MAX_REMOTE_PICTURES_PER_REQUEST);
+            goto refuse;
+        }
+        if (!json_plain_string_in(obj, obj_end, "name", &v, &v_end) ||
+                (size_t)(v_end - v) >= sizeof(name)) {
+            snprintf(msg, sizeof(msg), "Picture %d has no name.", count + 1);
+            goto refuse;
+        }
+        memcpy(name, v, (size_t)(v_end - v));
+        name[v_end - v] = 0;
+        if (!remote_image_name_ok(name)) {
+            snprintf(msg, sizeof(msg), "Picture %d: a name is letters, digits, _ and -.", count + 1);
+            goto refuse;
+        }
+        if (!json_plain_string_in(obj, obj_end, "image", &v, &v_end)) {
+            snprintf(msg, sizeof(msg), "Picture %s has no image.", name);
+            goto refuse;
+        }
+        memcpy(text, v, (size_t)(v_end - v));
+        text[v_end - v] = 0;
+        snprintf(files[count], sizeof(files[count]), "/var/volatile/codex-remote-picture-%ld-%d.png",
+            (long)getpid(), count);
+        if (stage_png_text(text, 0, 0, files[count], "picture", msg, sizeof(msg)) != 0) {
+            count++; /* staging may have left a partial file */
+            goto refuse;
+        }
+        count++;
+        used += (size_t)snprintf(request + used, cap - used, "%s{\"name\":\"%s\",\"file\":\"%s\"}",
+            count > 1 ? "," : "", name, files[count - 1]);
+        p = obj_end;
+    }
+    if (count == 0) {
+        snprintf(msg, sizeof(msg), "No pictures were sent.");
+        goto refuse;
+    }
+    used += (size_t)snprintf(request + used, cap - used, "]}");
+    rc = offline_writer_request(request, used, request_id, reply, REMOTE_PICTURE_REPLY, msg, sizeof(msg));
+    for (i = 0; i < count; i++) unlink(files[i]);
+    send_writer_reply(fd, rc, reply, msg, "The pictures were not saved.");
+    free(request);
+    free(reply);
+    free(text);
+    return;
+refuse:
+    for (i = 0; i < count; i++) unlink(files[i]);
+    free(request);
+    free(reply);
+    free(text);
+    send_picture_refusal(fd, msg);
+}
+
+/* POST {"image":<base64 70x70 PNG>,"thumbnail":<base64 38x38 PNG>}: store a
+   new activity icon. The answer's imageKey goes into the activity's ImageKey
+   with the next activity save. */
+static void render_activity_icon_set_json(int fd, const struct request *req) {
+    char image_file[96], thumb_file[96], request[512], request_id[96], msg[768], reply[2048];
+    int written, rc;
+    msg[0] = reply[0] = 0;
+    if (!req->body || req->body_truncated) {
+        send_picture_refusal(fd, "Send {\"image\":...,\"thumbnail\":...} as JSON.");
+        return;
+    }
+    snprintf(image_file, sizeof(image_file), "/var/volatile/codex-activity-icon-%ld.png", (long)getpid());
+    snprintf(thumb_file, sizeof(thumb_file), "/var/volatile/codex-activity-icon-%ld-small.png", (long)getpid());
+    if (stage_remote_png(req, "image", 70, 70, image_file, "icon", msg, sizeof(msg)) != 0 ||
+            stage_remote_png(req, "thumbnail", 38, 38, thumb_file, "icon thumbnail", msg, sizeof(msg)) != 0) {
+        unlink(image_file);
+        unlink(thumb_file);
+        send_picture_refusal(fd, msg);
+        return;
+    }
+    snprintf(request_id, sizeof(request_id), "%ld-%ld-%08x",
+        (long)getpid(), (long)time(NULL), resource_hash(req->body, req->body_len));
+    written = snprintf(request, sizeof(request),
+        "{\"id\":\"%s\",\"op\":\"CommitActivityIcon\",\"imageFile\":\"%s\",\"thumbnailFile\":\"%s\"}",
+        request_id, image_file, thumb_file);
+    rc = offline_writer_request(request, (size_t)written, request_id, reply, sizeof(reply), msg, sizeof(msg));
+    unlink(image_file);
+    unlink(thumb_file);
+    send_writer_reply(fd, rc, reply, msg, "The icon was not saved.");
 }
 
 /* Cheap state poll.  connect.statedigest?get returns 304 unless the hub's
@@ -12844,6 +13092,7 @@ static void render_version_json(int fd) {
         "irdb-import",
         "remote-background",
         "remote-pair",
+        "remote-pictures",
         "switch2-wake"
     };
     FILE *f = send_json_start(fd, "200 OK");
@@ -14575,6 +14824,18 @@ static void handle_client(int client) {
     } else if (strcmp(req.method, "POST") == 0 && strcmp(req.path, "/api/remote-background") == 0) {
         if (request_same_origin_json(&req)) render_remote_background_set_json(client, &req);
         else send_cross_site_refused(client);
+    } else if (strcmp(req.method, "GET") == 0 && strncmp(req.path, "/api/remote-pictures", 20) == 0 &&
+        (req.path[20] == 0 || req.path[20] == '?')) {
+        render_remote_pictures_json(client, &req);
+    } else if (strcmp(req.method, "GET") == 0 && strncmp(req.path, "/api/remote-pictures/image", 26) == 0 &&
+        (req.path[26] == 0 || req.path[26] == '?')) {
+        render_remote_image(client, &req, 1);
+    } else if (strcmp(req.method, "POST") == 0 && strcmp(req.path, "/api/remote-pictures") == 0) {
+        if (request_same_origin_json(&req)) render_remote_pictures_set_json(client, &req);
+        else send_cross_site_refused(client);
+    } else if (strcmp(req.method, "POST") == 0 && strcmp(req.path, "/api/activity-icon") == 0) {
+        if (request_same_origin_json(&req)) render_activity_icon_set_json(client, &req);
+        else send_cross_site_refused(client);
     } else if (strcmp(req.method, "GET") == 0 && strcmp(req.path, "/api/activity-restrictions") == 0) {
         render_activity_restrictions_json(client);
     } else if (strcmp(req.method, "POST") == 0 && strcmp(req.path, "/api/activity-restrictions") == 0) {
@@ -14793,6 +15054,64 @@ static int semantic_test_case(
     return 0;
 }
 
+/* Remote pictures: the plain-string scanner the batch upload walks with, and
+   PNG staging at an exact size or any size up to 512x512. */
+static int remote_pictures_cases(void) {
+    const char *obj = "{\"name\":\"ci_ab-01\",\"image\":\"data:image/png;base64,QUJD\",\"esc\":\"a\\\"b\"}";
+    const char *end = obj + strlen(obj);
+    const char *v = NULL, *v_end = NULL;
+    char dir[] = "/tmp/codex-pictures-XXXXXX", path[96], msg[256];
+    int failures = 0;
+    if (!json_plain_string_in(obj, end, "name", &v, &v_end) || v_end - v != 8 || strncmp(v, "ci_ab-01", 8) != 0) {
+        fputs("FAIL remote pictures: name is read from an array object\n", stderr);
+        failures++;
+    }
+    if (!json_plain_string_in(obj, end, "image", &v, &v_end) || strncmp(v, "data:image/png;base64,QUJD", 26) != 0) {
+        fputs("FAIL remote pictures: image is read as a data URL\n", stderr);
+        failures++;
+    }
+    if (json_plain_string_in(obj, end, "esc", &v, &v_end) || json_plain_string_in(obj, end, "missing", &v, &v_end) ||
+            json_plain_string_in(obj, obj + 10, "image", &v, &v_end)) {
+        fputs("FAIL remote pictures: escaped, missing or out-of-range values are refused\n", stderr);
+        failures++;
+    }
+    if (!mkdtemp(dir)) {
+        fputs("FAIL remote pictures: no temporary directory\n", stderr);
+        return failures + 1;
+    }
+    snprintf(path, sizeof(path), "%s/p.png", dir);
+    if (stage_png_text("iVBORw0KGgoAAAANSUhEUgAAAEYAAABGCAYAAAA=", 70, 70, path, "icon", msg, sizeof(msg)) != 0 ||
+            access(path, F_OK) != 0) {
+        fprintf(stderr, "FAIL remote pictures: a 70x70 icon is staged (%s)\n", msg);
+        failures++;
+    }
+    unlink(path);
+    if (stage_png_text("iVBORw0KGgoAAAANSUhEUgAAACMAAAAjCAYAAAA=", 70, 70, path, "icon", msg, sizeof(msg)) == 0 ||
+            !strstr(msg, "must be 70x70")) {
+        fputs("FAIL remote pictures: a wrong icon size is refused\n", stderr);
+        failures++;
+    }
+    if (stage_png_text("data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAADYAAAAyCAYAAAA=", 0, 0, path, "logo",
+            msg, sizeof(msg)) != 0) {
+        fprintf(stderr, "FAIL remote pictures: a 54x50 logo is staged at any size (%s)\n", msg);
+        failures++;
+    }
+    unlink(path);
+    if (stage_png_text("iVBORw0KGgoAAAANSUhEUgAAAlgAAABGCAYAAAA=", 0, 0, path, "logo", msg, sizeof(msg)) == 0 ||
+            !strstr(msg, "at most 512x512")) {
+        fputs("FAIL remote pictures: a picture over 512 a side is refused\n", stderr);
+        failures++;
+    }
+    if (stage_png_text("R0lGODlheHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4", 0, 0, path, "logo", msg, sizeof(msg)) == 0 ||
+            !strstr(msg, "isn't a PNG") || stage_png_text("", 0, 0, path, "logo", msg, sizeof(msg)) == 0) {
+        fputs("FAIL remote pictures: not a PNG, or nothing, is refused\n", stderr);
+        failures++;
+    }
+    unlink(path);
+    rmdir(dir);
+    return failures;
+}
+
 int main(void) {
     const char *ordered =
         "{\"b\":[1,{\"path\":\"a\\/b\",\"face\":\"\\uD83D\\uDE00\"}],"
@@ -14856,8 +15175,9 @@ int main(void) {
             failures++;
         }
     }
+    failures += remote_pictures_cases();
     if (failures) return 1;
-    puts("PASS semantic JSON, resource backup, Bluetooth native response and Touch sync probe hosts validation");
+    puts("PASS semantic JSON, resource backup, Bluetooth native response, Touch sync probe hosts and remote pictures validation");
     return 0;
 }
 #else

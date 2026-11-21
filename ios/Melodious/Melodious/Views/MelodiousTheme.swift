@@ -64,6 +64,42 @@ public struct LiveStatusDot: View {
     }
 }
 
+/// An activity's tile: its own icon when the hub holds one, else the symbol
+/// for its kind (also while the picture loads). docs/REMOTE_PICTURES.md
+public struct ActivityTileView: View {
+    public let activity: HubActivity
+    /// Not observed: the tile only asks it for the picture, and shouldn't redraw
+    /// on every change the view model publishes.
+    public let viewModel: HubViewModel
+    public let isActive: Bool
+    public let size: CGFloat
+    @State private var picture: UIImage?
+
+    public init(activity: HubActivity, viewModel: HubViewModel, isActive: Bool = false, size: CGFloat = 44) {
+        self.activity = activity
+        self.viewModel = viewModel
+        self.isActive = isActive
+        self.size = size
+    }
+
+    public var body: some View {
+        Group {
+            if let picture = picture {
+                Image(uiImage: picture)
+                    .resizable()
+                    .scaledToFill()
+                    .frame(width: size, height: size)
+                    .clipShape(RoundedRectangle(cornerRadius: size * 0.32, style: .continuous))
+            } else {
+                IconTileView(systemName: activity.systemIconName, isActive: isActive, size: size)
+            }
+        }
+        .task(id: activity.imageName) {
+            picture = await viewModel.activityPicture(activity)
+        }
+    }
+}
+
 public struct IconTileView: View {
     public let systemName: String
     public let isActive: Bool

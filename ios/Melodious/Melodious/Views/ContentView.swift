@@ -260,7 +260,7 @@ public struct ContentView: View {
                 selectedTab = .remote
             } label: {
                 HStack(spacing: 10) {
-                    IconTileView(systemName: activity.systemIconName, isActive: isRunning, size: 36)
+                    ActivityTileView(activity: activity, viewModel: viewModel, isActive: isRunning, size: 36)
                     VStack(alignment: .leading, spacing: 2) {
                         HStack(spacing: 5) {
                             Text(activity.name)

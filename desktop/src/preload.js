@@ -54,6 +54,7 @@ contextBridge.exposeInMainWorld("melodiousDesktop", {
     checkModel: (args) => invokeCatalog("catalog:check-model", args),
     search: (args) => invokeCatalog("catalog:search", args),
     download: (args) => invokeCatalog("catalog:download", args),
+    remotePicture: (args) => invokeCatalog("catalog:remote-picture", args),
   },
   wizard: {
     detectAndClassify: (args) => ipcRenderer.invoke("wizard:detect-classify", args),

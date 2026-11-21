@@ -76,7 +76,7 @@ public struct ActivitiesView: View {
         let devicesText = viewModel.configSnapshot?.deviceNames(for: activity).joined(separator: " · ") ?? activity.typeLabel
         return VStack(alignment: .leading, spacing: 12) {
             HStack(spacing: 12) {
-                IconTileView(systemName: activity.systemIconName, isActive: true, size: 48)
+                ActivityTileView(activity: activity, viewModel: viewModel, isActive: true, size: 48)
                 VStack(alignment: .leading, spacing: 3) {
                     HStack(spacing: 6) {
                         LiveStatusDot(isLive: true)
@@ -166,7 +166,7 @@ public struct ActivitiesView: View {
         let keyCount = viewModel.configSnapshot?.resolvedKeyMap(forActivityId: activity.id).count ?? 0
 
         return HStack(spacing: 14) {
-            IconTileView(systemName: activity.systemIconName, isActive: isRunning, size: 46)
+            ActivityTileView(activity: activity, viewModel: viewModel, isActive: isRunning, size: 46)
 
             VStack(alignment: .leading, spacing: 3) {
                 HStack(spacing: 6) {

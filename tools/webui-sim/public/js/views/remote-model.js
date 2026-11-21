@@ -777,6 +777,20 @@ export function roleLabel(roleType) {
   return ROLE_LABELS[roleType] ?? String(roleType ?? "").replace(/ActivityRole$/, "");
 }
 
+/** The name the hub stores an activity's own icon under (from its ImageKey,
+    "Activity/<name>.png"), or "" when it has none. docs/REMOTE_PICTURES.md */
+export function activityImageName(activity) {
+  const m = /^Activity\/([A-Za-z0-9_-]{1,96})\.png$/.exec(String(activity?.ImageKey ?? ""));
+  return m && !m[1].endsWith("_small") ? m[1] : "";
+}
+
+/** Where the hub serves an activity's icon, or "" when it has none. A 404
+    (not stored on the hub yet) falls back to activityIconName in the tile. */
+export function activityImageUrl(activity) {
+  const name = activityImageName(activity);
+  return name ? `/api/remote-pictures/image?name=${encodeURIComponent(name)}` : "";
+}
+
 /** Material icon name for an activity (DomainIcons.activityIcon). */
 export function activityIconName(activity) {
   const name = String(activity?.Name ?? "").toLowerCase();

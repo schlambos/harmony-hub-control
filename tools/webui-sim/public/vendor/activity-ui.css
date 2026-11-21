@@ -595,3 +595,149 @@
     flex-direction: column;
   }
 }
+
+/* Activity icon on the remote (activity-ui.js renderIconField). The picker's
+   buttons are tiles, not text buttons: the selectors carry an id and an
+   attribute so the shell's "#view-activities button" styles don't apply. */
+#activityIconField.activity-icon-field {
+  margin-top: 14px;
+}
+
+#activityIconField .activity-icon-label {
+  display: block;
+  margin-bottom: 6px;
+  font-weight: 600;
+}
+
+#activityIconField .activity-icon-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 14px;
+  align-items: flex-start;
+}
+
+#activityIconField .activity-icon-preview {
+  display: grid;
+  flex: none;
+  place-items: center;
+  width: 70px;
+  height: 70px;
+  border: 1px dashed var(--line, #8884);
+  border-radius: 15px;
+  overflow: hidden;
+}
+
+#activityIconField .activity-icon-preview img {
+  display: block;
+  width: 70px;
+  height: 70px;
+}
+
+#activityIconField .activity-icon-none {
+  padding: 4px;
+  color: var(--muted, #888);
+  font-size: 12px;
+  text-align: center;
+}
+
+#activityIconField .activity-icon-tools {
+  display: grid;
+  flex: 1 1 260px;
+  gap: 10px;
+  min-width: 0;
+}
+
+#activityIconField .activity-icon-glyphs,
+#activityIconField .activity-icon-colors,
+#activityIconField .activity-icon-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  align-items: center;
+}
+
+#activityIconField .activity-icon-glyphs button.activity-icon-glyph[data-icon-glyph] {
+  display: grid !important;
+  place-items: center;
+  flex: none;
+  width: 38px !important;
+  min-width: 0 !important;
+  height: 38px !important;
+  min-height: 0 !important;
+  padding: 0 !important;
+  border: 1px solid var(--line, #8884) !important;
+  border-radius: 9px !important;
+  background: transparent !important;
+  color: inherit !important;
+  box-shadow: none;
+  cursor: pointer;
+}
+
+#activityIconField .activity-icon-glyphs button.activity-icon-glyph[data-icon-glyph] svg {
+  display: block;
+  flex: none;
+  width: 22px !important;
+  height: 22px !important;
+  fill: currentColor;
+}
+
+#activityIconField .activity-icon-glyphs button.activity-icon-glyph[aria-pressed="true"] {
+  border-color: var(--accent, #1e88e5) !important;
+  box-shadow: 0 0 0 2px var(--accent, #1e88e5);
+}
+
+#activityIconField .activity-icon-colors button.activity-icon-color[data-icon-color] {
+  flex: none;
+  width: 28px !important;
+  min-width: 0 !important;
+  height: 28px !important;
+  min-height: 0 !important;
+  padding: 0 !important;
+  border: 3px solid transparent !important;
+  border-radius: 50% !important;
+  background: var(--swatch) !important;
+  box-shadow: none;
+  cursor: pointer;
+}
+
+#activityIconField .activity-icon-colors button.activity-icon-color[aria-pressed="true"] {
+  border-color: var(--fg, #fff) !important;
+  box-shadow: 0 0 0 1px var(--line, #8884);
+}
+
+#activityIconField .activity-icon-actions > * {
+  flex: none;
+  width: auto;
+}
+
+#activityIconField .activity-icon-upload {
+  display: inline-flex;
+  align-items: center;
+  cursor: pointer;
+}
+
+#activityIconField .activity-icon-note {
+  margin: 0;
+  color: var(--muted, #888);
+  font-size: 13px;
+}
+
+#activityIconField .activity-icon-note:empty {
+  display: none;
+}
+
+#activityIconField .activity-icon-recover {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px 12px;
+  align-items: center;
+  margin-top: 12px;
+  padding: 10px 12px;
+  border: 1px solid var(--line, #8884);
+  border-radius: 10px;
+  font-size: 13px;
+}
+
+#activityIconField .activity-icon-recover > span {
+  flex: 1 1 240px;
+}

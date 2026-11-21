@@ -208,6 +208,10 @@ local function saveResource(name, value, etag, hetag)
   return true
 end
 
+-- Remote pictures (activity icons and favorite logos); filled in further down.
+-- Declared here so the activity save can drop icons no activity uses any more.
+local remotePictures = {}
+
 local function reloadActivityEngine()
   if not system.isMessageRegistered("config_new") then
     return nil, "Harmony activity engine reload handler is unavailable"
@@ -835,6 +839,12 @@ local function commitActivityResources(request)
       error = "could not publish the local configuration revision: " ..
         tostring(digestError)
     }
+  end
+
+  -- The save is published; icons only the old list used can go.
+  local pruned, pruneError = pcall(remotePictures.pruneActivityIcons, oldActivities.resource, request.activityList)
+  if not pruned then
+    log.warning("codexactivity: could not remove unused activity icons:", tostring(pruneError))
   end
 
   return {
@@ -2024,7 +2034,7 @@ local function stagedPng(path, pattern, size, what)
   if string.sub(data, 1, 8) ~= "\137PNG\r\n\26\n" or string.sub(data, 13, 16) ~= "IHDR" then
     return nil, "the " .. what .. " isn't a PNG"
   end
-  if uint32At(data, 17) ~= size.width or uint32At(data, 21) ~= size.height then
+  if size and (uint32At(data, 17) ~= size.width or uint32At(data, 21) ~= size.height) then
     return nil, string.format("the %s must be %dx%d", what, size.width, size.height)
   end
   return data
@@ -2223,6 +2233,326 @@ local function commitRemoteBackground(request)
   result.configVersion = digest.configVersion
   result.settingsEtag = settingsEtag
   return result
+end
+
+-- Remote pictures: activity icons and favorite channel logos. A screen remote
+-- fetches an activity's icon from <BaseImageUri><ImageKey> (ImageKey
+-- "Activity/<name>.png") plus <name>_small.png, and a favorite's logo from
+-- content-image://1.0/image/<uuid>.png (the "image" of a dialPositions entry
+-- in a CD_<deviceId> resource). netservicestarter answers both from the
+-- resource store: <name> and <name>_small for icons, ci_<uuid> for logos.
+--
+-- RemotePictures lists every picture the hub's own data asks for and whether
+-- the store holds it; no remote has to sync first. CommitRemotePictures
+-- stores pictures from that list only (recovered from where Logitech kept
+-- them), and CommitActivityIcon stores a new icon under a fresh name for the
+-- editor to put in an activity's ImageKey.
+-- The section lives in remotePictures (declared near the top), which keeps it
+-- to a single main-chunk local (Lua allows 200).
+do
+  local REMOTE_PICTURE_FILE = "^/var/volatile/codex%-remote%-picture%-%d+%-%d+%.png$"
+  local ACTIVITY_ICON_FILE = "^/var/volatile/codex%-activity%-icon%-%d+%.png$"
+  local ACTIVITY_ICON_SMALL_FILE = "^/var/volatile/codex%-activity%-icon%-%d+%-small%.png$"
+  local ACTIVITY_ICON_SIZE = {width = 70, height = 70}
+  local ACTIVITY_ICON_SMALL_SIZE = {width = 38, height = 38}
+  local REMOTE_PICTURE_MAX_SIDE = 512
+  local REMOTE_PICTURES_MAX = 128
+  local REMOTE_PICTURES_LIST_MAX = 100
+  local REMOTE_PICTURES_LIST_BYTES = 24 * 1024
+  local RESOURCE_INDEX_FILE = "/data/resources/index.json"
+  local DISCOVERY_FILE = "/data/discovery/RuntimeConfig.json"
+
+  -- A staged PNG of any size up to REMOTE_PICTURE_MAX_SIDE a side.
+  local function stagedPngAnySize(path, pattern, what)
+    local data, problem = stagedPng(path, pattern, nil, what)
+    if not data then
+      return nil, problem
+    end
+    local width, height = uint32At(data, 17), uint32At(data, 21)
+    if not width or not height or width < 1 or height < 1 or
+        width > REMOTE_PICTURE_MAX_SIDE or height > REMOTE_PICTURE_MAX_SIDE then
+      return nil, string.format("the %s must be at most %dx%d", what,
+        REMOTE_PICTURE_MAX_SIDE, REMOTE_PICTURE_MAX_SIDE)
+    end
+    return data
+  end
+
+  local function pictureStored(name)
+    local status, _, path = resources.getResource(name)
+    return tostring(status or "") == "200" and type(path) == "string" and
+      string.sub(path, -4) == ".png"
+  end
+
+  -- Names of the CD_<deviceId> resources (favorites) in the store's index.
+  local function favoriteResourceNames()
+    local names = {}
+    local text = readFile(RESOURCE_INDEX_FILE)
+    if not text then
+      return names
+    end
+    local ok, index = pcall(json.decode, text)
+    if not ok or type(index) ~= "table" then
+      return names
+    end
+    for name in pairs(index) do
+      if type(name) == "string" and string.match(name, "^CD_%d+$") then
+        names[#names + 1] = name
+      end
+    end
+    table.sort(names)
+    return names
+  end
+
+  -- Every picture the hub's data asks for, in a stable order, without duplicates.
+  local function neededRemotePictures()
+    local pictures, seen = {}, {}
+    local function add(picture)
+      if not seen[picture.name] then
+        seen[picture.name] = true
+        picture.stored = pictureStored(picture.name)
+        pictures[#pictures + 1] = picture
+      end
+    end
+    local activities = resourceSnapshot("ActivityList")
+    if activities and type(activities.resource.Activities) == "table" then
+      for _, activity in ipairs(activities.resource.Activities) do
+        local key = type(activity) == "table" and activity.ImageKey
+        local name = type(key) == "string" and string.match(key, "^Activity/([%w_%-]+)%.png$")
+        if name and not string.match(name, "_small$") then
+          local base = type(activity.BaseImageUri) == "string" and activity.BaseImageUri or ""
+          for _, variant in ipairs({name, name .. "_small"}) do
+            add({
+              kind = "activity",
+              name = variant,
+              activityId = activity["Id-"] ~= nil and tostring(activity["Id-"]) or nil,
+              activityName = type(activity.Name) == "string" and activity.Name or nil,
+              uri = base ~= "" and (base .. "Activity/" .. variant .. ".png") or nil
+            })
+          end
+        end
+      end
+    end
+    for _, resourceName in ipairs(favoriteResourceNames()) do
+      local favorites = resourceSnapshot(resourceName)
+      local services = favorites and favorites.resource.services
+      if type(services) == "table" then
+        local serviceIds = {}
+        for serviceId in pairs(services) do
+          serviceIds[#serviceIds + 1] = serviceId
+        end
+        table.sort(serviceIds)
+        for _, serviceId in ipairs(serviceIds) do
+          local service = services[serviceId]
+          local positions = type(service) == "table" and service.dialPositions
+          if type(positions) == "table" then
+            for _, position in ipairs(positions) do
+              local image = type(position) == "table" and position.image
+              local uuid = type(image) == "string" and string.match(image, "^([%w%-]+)%.png$")
+              if uuid then
+                add({
+                  kind = "logo",
+                  name = "ci_" .. uuid,
+                  deviceId = string.match(resourceName, "^CD_(%d+)$"),
+                  channel = type(position.name) == "string" and position.name or nil,
+                  number = type(position.number) == "string" and position.number or nil,
+                  uri = "content-image://1.0/image/" .. uuid .. ".png"
+                })
+              end
+            end
+          end
+        end
+      end
+    end
+    return pictures
+  end
+
+  -- Where the hub's discovery data says channel logos live
+  -- (ContentImageService/Image): its scheme and host, which stand in for
+  -- content-image:// in a logo's uri. nil when the hub has no such entry.
+  local function contentImageHost()
+    local text = readFile(DISCOVERY_FILE)
+    local ok, discovery = pcall(json.decode, text or "")
+    if not ok or type(discovery) ~= "table" or type(discovery.discoveryUrls) ~= "table" then
+      return nil
+    end
+    for _, entry in ipairs(discovery.discoveryUrls) do
+      if type(entry) == "table" and entry.Identifier == "ContentImageService/Image" and
+          type(entry.Address) == "string" then
+        return string.match(entry.Address, "^(https?://[%w%.%-]+)/")
+      end
+    end
+    return nil
+  end
+
+  -- codex_webui reads the answer file up to 32 KB and waits (120 s) on a
+  -- larger one, so the list stops at REMOTE_PICTURES_LIST_BYTES of entries or
+  -- REMOTE_PICTURES_LIST_MAX of them (truncated = true). Missing pictures come
+  -- first; request.offset skips that many of them, so a caller can get past
+  -- ones it could not recover.
+  local function remotePicturesStatus(request)
+    local pictures = neededRemotePictures()
+    local offset = math.max(0, math.floor(tonumber(request and request.offset) or 0))
+    local missing, listed, bytes, full = 0, {}, 0, false
+    local function list(picture)
+      if full then
+        return
+      end
+      local size = #json.encode(picture) + 1
+      if #listed >= REMOTE_PICTURES_LIST_MAX or bytes + size > REMOTE_PICTURES_LIST_BYTES then
+        full = true
+        return
+      end
+      bytes = bytes + size
+      listed[#listed + 1] = picture
+    end
+    for _, picture in ipairs(pictures) do
+      if not picture.stored then
+        missing = missing + 1
+        if missing > offset then
+          list(picture)
+        end
+      end
+    end
+    for _, picture in ipairs(pictures) do
+      if picture.stored then
+        list(picture)
+      end
+    end
+    return {
+      ok = true,
+      localOnly = true,
+      pictures = listed,
+      total = #pictures,
+      missing = missing,
+      offset = offset,
+      truncated = #listed < #pictures,
+      contentImageHost = contentImageHost()
+    }
+  end
+
+  -- After an activity save: delete the stored icon (and thumbnail) of every
+  -- ImageKey the old list used and the new one doesn't.
+  local function pruneActivityIcons(oldList, newList)
+    local function iconNames(activityList)
+      local names = {}
+      if type(activityList) == "table" and type(activityList.Activities) == "table" then
+        for _, activity in ipairs(activityList.Activities) do
+          local key = type(activity) == "table" and activity.ImageKey
+          local name = type(key) == "string" and string.match(key, "^Activity/([%w_%-]+)%.png$")
+          if name then
+            names[name] = true
+          end
+        end
+      end
+      return names
+    end
+    local kept = iconNames(newList)
+    for name in pairs(iconNames(oldList)) do
+      if not kept[name] then
+        deleteRemoteImage(name .. ".png")
+      end
+    end
+  end
+
+  local function pictureWriterRefusal()
+    if not blockerActive() then
+      return {
+        ok = false,
+        localOnly = true,
+        error = "offline picture writer refused to run because the cloud blocker is not active"
+      }
+    end
+    if resources.isAnySyncInProgress() then
+      return {ok = false, localOnly = true, error = "a Harmony sync is in progress; try again when it finishes"}
+    end
+    return nil
+  end
+
+  -- {pictures = [{name, file}]}: store each listed, still needed picture.
+  -- One revision afterwards, so the screen remotes sync and fetch them again.
+  local function commitRemotePictures(request)
+    local refusal = pictureWriterRefusal()
+    if refusal then
+      return refusal
+    end
+    if type(request.pictures) ~= "table" or #request.pictures == 0 then
+      return {ok = false, localOnly = true, error = "no pictures were sent"}
+    end
+    if #request.pictures > REMOTE_PICTURES_MAX then
+      return {ok = false, localOnly = true, error = "too many pictures in one request"}
+    end
+    local needed = {}
+    for _, picture in ipairs(neededRemotePictures()) do
+      needed[picture.name] = true
+    end
+    local saved, failed = {}, {}
+    for _, picture in ipairs(request.pictures) do
+      local name = type(picture) == "table" and picture.name
+      local problem
+      if type(name) ~= "string" or not needed[name] then
+        problem = "not a picture this hub's activities or favorites use"
+      else
+        local data, dataProblem = stagedPngAnySize(picture.file, REMOTE_PICTURE_FILE, "picture")
+        if not data then
+          problem = dataProblem
+        else
+          local ok, saveError = saveRemoteImage(name, data)
+          if ok then
+            saved[#saved + 1] = name
+          else
+            problem = saveError
+          end
+        end
+      end
+      if problem then
+        failed[#failed + 1] = {name = type(name) == "string" and name or "", error = problem}
+      end
+    end
+    local result = {ok = #saved > 0, localOnly = true, saved = saved, failed = failed}
+    if #saved == 0 then
+      result.error = failed[1] and failed[1].error or "nothing was saved"
+      return result
+    end
+    bumpRevision()
+    result.configVersion = digest.configVersion
+    return result
+  end
+
+  -- {imageFile, thumbnailFile}: a new 70x70 icon and its 38x38 thumbnail (Logitech's own size),
+  -- stored under a fresh <account>_<uuid> name. The editor then saves the
+  -- activity with ImageKey "Activity/<name>.png"; that save publishes the
+  -- revision.
+  local function commitActivityIcon(request)
+    local refusal = pictureWriterRefusal()
+    if refusal then
+      return refusal
+    end
+    local image, imageError = stagedPng(request.imageFile, ACTIVITY_ICON_FILE, ACTIVITY_ICON_SIZE, "icon")
+    if not image then
+      return {ok = false, localOnly = true, error = imageError}
+    end
+    local small, smallError = stagedPng(
+      request.thumbnailFile, ACTIVITY_ICON_SMALL_FILE, ACTIVITY_ICON_SMALL_SIZE, "icon thumbnail"
+    )
+    if not small then
+      return {ok = false, localOnly = true, error = smallError}
+    end
+    local name = newRemoteImageName()
+    local ok, saveError = saveRemoteImage(name, image)
+    if ok then
+      ok, saveError = saveRemoteImage(name .. "_small", small)
+    end
+    if not ok then
+      deleteRemoteImage(name .. ".png")
+      return {ok = false, localOnly = true, error = saveError}
+    end
+    return {ok = true, localOnly = true, name = name, imageKey = "Activity/" .. name .. ".png"}
+  end
+
+  remotePictures.status = remotePicturesStatus
+  remotePictures.pruneActivityIcons = pruneActivityIcons
+  remotePictures.commit = commitRemotePictures
+  remotePictures.commitIcon = commitActivityIcon
 end
 
 -- Home Assistant devices. Each entity the HA integration exposes becomes an
@@ -3726,6 +4056,12 @@ local function processRequest(raw)
     response = commitDeviceScreen(request)
   elseif request.op == "CommitRemoteBackground" then
     response = commitRemoteBackground(request)
+  elseif request.op == "RemotePictures" then
+    response = remotePictures.status(request)
+  elseif request.op == "CommitRemotePictures" then
+    response = remotePictures.commit(request)
+  elseif request.op == "CommitActivityIcon" then
+    response = remotePictures.commitIcon(request)
   elseif request.op == "Status" then
     response = statusResponse()
   elseif request.op == "SimulateGesture" then

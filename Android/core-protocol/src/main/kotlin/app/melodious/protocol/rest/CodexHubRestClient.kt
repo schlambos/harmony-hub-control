@@ -82,6 +82,9 @@ class CodexHubRestClient(
 
     companion object {
         private val JSON_MEDIA_TYPE = "application/json; charset=utf-8".toMediaType()
+        private val REMOTE_PICTURE_NAME = Regex("[A-Za-z0-9_-]{1,96}")
+        private const val REMOTE_PICTURE_MAX_BYTES = 512 * 1024
+        private val PNG_SIGNATURE = byteArrayOf(0x89.toByte(), 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a)
         private val ACTIVITY_ID_REGEX = Regex(""""(?:current)?activityId"\s*:\s*"?(-?\d+)"?""", RegexOption.IGNORE_CASE)
         private val RESULT_ID_REGEX = Regex(""""result"\s*:\s*"?(-?\d+)"?""", RegexOption.IGNORE_CASE)
         private val ACTIVITY_STATUS_REGEX = Regex(""""activityStatus"\s*:\s*"?(\d+)""", RegexOption.IGNORE_CASE)
@@ -555,6 +558,35 @@ class CodexHubRestClient(
             throw e
         }
     }
+
+    /**
+     * A picture the hub stores for the remote (an activity's own icon), as PNG
+     * bytes; null when the hub doesn't hold it (404) or the name isn't one.
+     * docs/REMOTE_PICTURES.md
+     */
+    suspend fun getRemotePicture(endpoint: HubEndpoint, name: String): ByteArray? = withContext(Dispatchers.IO) {
+        if (!REMOTE_PICTURE_NAME.matches(name)) return@withContext null
+        val request = Request.Builder()
+            .url("${endpoint.baseUrl}/api/remote-pictures/image?name=$name")
+            .apply {
+                endpoint.basicAuthHeader?.let { header("Authorization", it) }
+            }
+            .get()
+            .build()
+        httpClient.newCall(request).execute().use { response ->
+            if (response.code == 404) return@withContext null
+            if (!response.isSuccessful) {
+                throw HubApiException("Picture $name: HTTP ${response.code}", response.code)
+            }
+            val body = response.body ?: return@withContext null
+            if (body.contentLength() > REMOTE_PICTURE_MAX_BYTES) return@withContext null
+            val bytes = body.bytes()
+            if (bytes.size > REMOTE_PICTURE_MAX_BYTES || !isPng(bytes)) null else bytes
+        }
+    }
+
+    private fun isPng(bytes: ByteArray): Boolean =
+        bytes.size >= 8 && PNG_SIGNATURE.indices.all { bytes[it] == PNG_SIGNATURE[it] }
 
     private fun getRawText(endpoint: HubEndpoint, path: String): String {
         val request = Request.Builder()

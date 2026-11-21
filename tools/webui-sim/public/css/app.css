@@ -542,6 +542,21 @@ button.m-row:focus-visible {
   color: var(--tile-fg, var(--on-tile));
 }
 
+/* A picture over the tile's icon (pictureTile): the activity's own icon,
+   drawn with its own background, so it fills the tile. */
+.m-tile--picture {
+  position: relative;
+  overflow: hidden;
+}
+
+.m-tile-img {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+}
+
 .m-tile--primary {
   --tile-bg: var(--primary-container);
   --tile-fg: var(--on-primary-container);

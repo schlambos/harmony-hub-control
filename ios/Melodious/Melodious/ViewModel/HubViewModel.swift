@@ -1,5 +1,6 @@
 import Foundation
 import SwiftUI
+import UIKit
 
 public enum HubConnectionStatus: Equatable, Sendable {
     case disconnected
@@ -70,6 +71,30 @@ public final class HubViewModel: ObservableObject {
     @Published public var sendLog: [SendLogItem] = []
 
     public let restClient: HubRestClient
+
+    /// Activity icons the hub stores (docs/REMOTE_PICTURES.md), decoded once per
+    /// name. A new icon always gets a new name, so a cached picture never goes
+    /// stale.
+    private let activityPictures = NSCache<NSString, UIImage>()
+    /// When the hub last didn't have a picture: views redraw often, so a miss
+    /// isn't asked for again for a minute.
+    private var missingActivityPictures: [String: Date] = [:]
+
+    /// The activity's own icon from the hub, or nil (none, not stored, or unreachable).
+    public func activityPicture(_ activity: HubActivity) async -> UIImage? {
+        guard let name = activity.imageName, let endpoint = activeEndpoint else { return nil }
+        let key = "\(endpoint.displayAddress)/\(name)" as NSString
+        if let cached = activityPictures.object(forKey: key) { return cached }
+        if let missedAt = missingActivityPictures[key as String], Date().timeIntervalSince(missedAt) < 60 { return nil }
+        guard let data = await restClient.getRemotePicture(endpoint: endpoint, name: name),
+              let image = UIImage(data: data) else {
+            missingActivityPictures[key as String] = Date()
+            return nil
+        }
+        missingActivityPictures[key as String] = nil
+        activityPictures.setObject(image, forKey: key)
+        return image
+    }
     public let hbusClient: HBusWebSocketClient
     public let savedHubStore: SavedHubStore
 
