@@ -1316,6 +1316,60 @@ Invoke-RestMethod "http://<hub-ip>:8080/api/activity-icon" -Method Post `
   `imageKey` in the activity's `ImageKey` (and a `BaseImageUri` if it has
   none) with the next `/api/activity-save`; that save publishes the revision.
 
+### Favorite channels
+
+A screen remote lists favorite channels for an activity that has a channel
+changing device. They belong to that device (`dialPositions` in its
+`CD_<deviceId>` resource), each with a channel number, a name and a logo;
+pressing one sends the number as a channel change. See
+[REMOTE_IMAGES.md](REMOTE_IMAGES.md).
+
+```powershell
+Invoke-RestMethod "http://<hub-ip>:8080/api/favorites?deviceId=<id>"
+```
+
+```json
+{"ok":true,"localOnly":true,"deviceId":"<id>","exists":true,"canCreate":true,
+ "serviceId":"{<lineup id>}","etag":"\"<etag>\"","count":2,"max":64,"positions":[
+  {"number":"2","name":"Kids","station":"<uuid>","image":"<uuid>.png","logo":"ci_<uuid>","stored":true},
+  {"number":"3","name":"News","station":"<uuid>"}]}
+```
+
+- `positions` is in the remote's order and is left out when the device has
+  no favorites (`count` is 0). `logo` is the name to ask
+  `/api/remote-images/image` for; `stored` says whether the hub holds it. An
+  entry without a logo has neither `image` nor `logo`.
+- `exists` is false for a device with no favorites resource yet. `canCreate`
+  then says whether the first save can make one; `reason` says why not (a
+  device made on the hub has no channel list, an id the hub doesn't know).
+- `400` for a `deviceId` that isn't 1 to 12 digits.
+
+```powershell
+Invoke-RestMethod "http://<hub-ip>:8080/api/favorites" -Method Post -ContentType "application/json" `
+  -Body '{"deviceId":"<id>","etag":"\"<etag>\"","logos":["<base64 PNG>"],"positions":[
+    {"number":"3","name":"News","station":"<uuid>","logo":0},
+    {"number":"2","name":"Kids","station":"<uuid>","image":"<uuid>.png"},
+    {"number":"12-1","name":"Sport"}]}'
+```
+
+- Replaces the device's whole list, in the order sent; the answer is the new
+  list, as from `GET`, plus `configVersion`.
+- An entry with a `station` from the list keeps that favorite (and anything
+  else the hub stores with it); one without is new. `image` keeps the logo
+  the entry names, which must be one this device's favorites use; `logo` is a
+  place (from 0) in `logos` and stores that PNG as a new logo under a fresh
+  name; with neither, the favorite has no logo.
+- `number` is 1 to 8 characters of digits, `.` and `-`; `name` is 1 to 64
+  bytes without control characters. At most 64 favorites, and 64 new logos
+  of up to 512x512 pixels and 512 KB each (1 MB for the whole request).
+- `etag`, when sent, must be the one from `GET`: a list that changed since
+  is refused. Logos no favorite uses any more are deleted. One revision
+  follows, so the remotes sync again and fetch the new logos.
+- `400` for a bad body or logo, `422` when the writer refuses (a stale
+  `etag`, a bad entry, a device that can't have favorites, the cloud blocker
+  off), `503` when the writer doesn't answer. `403` as for
+  `/api/remote-unpair`.
+
 ### Multiple remotes of one model (experimental)
 
 The Settings switch for [MULTI_REMOTE.md](MULTI_REMOTE.md)
@@ -1622,7 +1676,7 @@ Invoke-RestMethod "http://<hub-ip>:8080/api/version"
 ```json
 {"ok":true,"product":"melodious","version":"1.3.0","api":1,"update":{"protocol":0},
  "features":["activity-save","activity-sync","androidtv-devices","androidtv-inputs","catalog-import","device-commands",
-             "device-screen","device-settings","ha-devices","ha-devices-v2",
+             "device-screen","device-settings","favorites","ha-devices","ha-devices-v2",
              "ha-state","irdb-import","remote-background","remote-pair","remote-images"]}
 ```
 
@@ -1732,6 +1786,7 @@ carries.
 | GET, POST | `/api/remote-images` | `render_remote_images_json()`, `render_remote_images_set_json()` |
 | GET | `/api/remote-images/image` | `render_remote_image()` |
 | POST | `/api/activity-icon` | `render_activity_icon_set_json()` |
+| GET, POST | `/api/favorites` | `render_favorites_json()`, `render_favorites_set_json()` |
 | GET, POST | `/api/usb-eth` | `render_usb_eth_json()`, `render_usb_eth_set_json()` |
 | GET | `/api/network-overview` | `render_network_overview_json()` |
 | POST | `/api/ir-test-learned` | `render_ir_test_learned_json()` |

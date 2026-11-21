@@ -260,8 +260,11 @@ such as `#devices/<id>`, so you can bookmark it.
 
 - The running activity's card has On-screen buttons, Open remote and
   Turn off. Each other activity's row has Start and a ⋮ menu: Edit, Set
-  up buttons, On-screen buttons, Try the buttons (its remote, without
-  starting it), Advanced editor, Move up, Move down and Delete.
+  up buttons, On-screen buttons, Favorite channels (only for an activity
+  that changes channels on a device; see
+  [REMOTE_IMAGES.md](REMOTE_IMAGES.md#edit-favorite-channels)), Try the
+  buttons (its remote, without starting it), Advanced editor, Move up, Move
+  down and Delete.
 - **+** opens the setup wizard.
 
 <table>

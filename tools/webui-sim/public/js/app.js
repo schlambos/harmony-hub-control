@@ -6,6 +6,7 @@ import { createActivitiesHomeView } from "./views/activities-home.js";
 import { createActivitiesView } from "./views/activities.js";
 import { createWizardView } from "./views/wizard.js";
 import { createTouchScreenView } from "./views/touch-screen.js";
+import { createFavoritesView } from "./views/favorites.js";
 import { createHomeButtonsView } from "./views/home-buttons.js";
 import { createDevicesView } from "./views/devices.js";
 import { createSettingsView } from "./views/settings.js";
@@ -33,6 +34,7 @@ const ROUTES = {
   wizard: { parent: "activities", section: "view-wizard", factory: createWizardView, title: "Activity setup" },
   editor: { parent: "activities", section: "view-activities", factory: createActivitiesView, title: "Advanced editor" },
   touch: { parent: "activities", section: "view-touch", factory: createTouchScreenView, title: "On-screen buttons" },
+  favorites: { parent: "activities", section: "view-favorites", factory: createFavoritesView, title: "Favorite channels" },
   devices: { section: "view-devices", factory: createDevicesView, title: "Devices" },
   settings: { section: "view-settings", factory: createSettingsView, title: "Settings" },
   remotes: { parent: "settings", section: "view-remotes", factory: createRemotesView, title: "Remotes" },

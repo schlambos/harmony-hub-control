@@ -1,7 +1,8 @@
 /* Activities tab (#activities): the app's ActivitiesScreen. The running
    activity sits in a card with On-screen buttons, Open remote and Turn off;
    every other activity is a row with Start and a ⋮ menu (edit, set up
-   buttons, the Touch's on-screen buttons, try the buttons, time
+   buttons, the Touch's on-screen buttons, favorite channels when the
+   activity changes channels on a device, try the buttons, time
    restrictions, the advanced editor, reorder, delete). Setup goes through
    the wizard (#wizard). */
 
@@ -22,6 +23,7 @@ import {
   statusDot,
   vibrate,
 } from "../ui/shell.js";
+import { channelDeviceId } from "./favorites-model.js";
 import { activityIconName, activityImageUrl, activityKeys, deviceNamesFor } from "./remote-model.js";
 import { describeRestrictions, isRestrictableId, startFailureText } from "./restrictions-model.js";
 import { openRestrictionsSheet } from "./restrictions-sheet.js";
@@ -82,6 +84,7 @@ export function createActivitiesHomeView(section) {
             <p class="run-card-meta">${escapeHtml(deviceNamesFor(a, devices).join(" · "))}</p>
           </div>
           <a class="icon-btn" href="#touch/${encodeURIComponent(id)}" aria-label="On-screen buttons for ${escapeHtml(name)}" title="On-screen buttons">${icon("tune_outlined")}</a>
+          ${channelDeviceId(a) ? `<a class="icon-btn" href="#favorites/${encodeURIComponent(id)}" aria-label="Favorite channels for ${escapeHtml(name)}" title="Favorite channels">${icon("star_outlined")}</a>` : ""}
           <a class="icon-btn" href="#wizard/${encodeURIComponent(id)}" aria-label="Edit ${escapeHtml(name)}" title="Edit">${icon("edit_outlined")}</a>
         </div>
         <div class="run-card-actions">
@@ -272,6 +275,8 @@ export function createActivitiesHomeView(section) {
         { id: "edit", label: "Edit", icon: "edit_outlined" },
         { id: "buttons", label: "Set up buttons", icon: "tune_outlined" },
         { id: "touch", label: "On-screen buttons", icon: "tune_outlined" },
+        // As on the remote: favorites only where the activity changes channels.
+        ...(channelDeviceId(hub.activityById(id)) ? [{ id: "favorites", label: "Favorite channels", icon: "star_outlined" }] : []),
         { id: "try", label: "Try the buttons", icon: "settings_remote_outlined" },
         { id: "restrictions", label: "Time restrictions", icon: "schedule", disabled: !isRestrictableId(id) },
         { id: "editor", label: "Advanced editor", icon: "build_outlined" },
@@ -283,6 +288,7 @@ export function createActivitiesHomeView(section) {
         if (choice === "edit") location.hash = `#wizard/${path}`;
         else if (choice === "buttons") location.hash = `#wizard/${path}/buttons`;
         else if (choice === "touch") location.hash = `#touch/${path}`;
+        else if (choice === "favorites") location.hash = `#favorites/${path}`;
         else if (choice === "try") location.hash = `#remote/${path}`;
         else if (choice === "restrictions") editRestrictions(id, name);
         else if (choice === "editor") location.hash = "#editor";

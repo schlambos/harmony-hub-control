@@ -29,6 +29,34 @@ The Melodious apps show the same icon in their activity lists, and fall back
 to a symbol for the activity's kind when it has none or the hub doesn't hold
 it.
 
+## Edit favorite channels
+
+A screen remote lists favorite channels in an activity that has a device for
+changing channels. Each favorite has a channel number, a name and a logo;
+choosing one sends the number to that device.
+
+1. On **Activities**, open the activity's **⋮** menu and choose **Favorite
+   channels** (the running activity's card has a star button for it). An
+   activity with no channel changing device has no such entry, as it has no
+   favorites on the remote.
+2. **Add a favorite**, or choose one to edit its name, channel number and
+   logo. The arrows reorder the list; the bin deletes a favorite.
+3. **Upload logo…** takes any image your browser can open. It is scaled to
+   fit a 108x108 square, nothing is cropped, and transparent parts stay
+   transparent. **Remove logo** leaves the favorite without one.
+4. **Save to hub**. Each screen remote shows the list after its next sync.
+
+- **The list belongs to the device, not the activity.** Every activity that
+  changes channels on the same device shows the same favorites; the page
+  names them.
+- **Logos are only uploaded.** There are no built-in symbols for channels.
+  Logos Logitech's app set up stay as they are until you replace them, and
+  can be synced from Logitech (below).
+- **A device made on the hub** has no channel list from Logitech, so it
+  can't have favorites.
+- The channel number may have digits, `.` and `-` (up to 8 characters); a
+  device can have 64 favorites.
+
 ## Sync user images from Logitech
 
 Activities and favorites set up with Logitech's app point at images in
@@ -126,11 +154,28 @@ step 2.
 - **Cleaning up.** When an activity is saved with another icon, without
   one, or is removed, the hub deletes the old icon and its thumbnail unless
   another activity still uses it.
+- **Favorites.** `Favorites` reads a device's list and `CommitFavorites`
+  replaces it:
+  - The list is the `dialPositions` of the first service in `CD_<deviceId>`.
+    A kept entry is named by its `station` and keeps its other fields; a new
+    one gets a fresh `station`.
+  - An uploaded logo is stored as `ci_<fresh uuid>.png`, so a remote asks
+    for it under a name it has never cached. Logos no favorite of any device
+    uses any more are deleted.
+  - The station ids are repeated, in order, in the `ContentUser` resource
+    (`preferences.<deviceId>.<service>.stations`), as Logitech kept them. A
+    hub without that resource gets none.
+  - Both resources are written as text: an empty list has to stay a JSON
+    array, which the hub's JSON encoder can't promise.
+  - A device with no `CD_` resource gets one on the first save, under the
+    lineup id the hub's other favorites use, with the device's own profile
+    address. One revision follows, with `contentVersion`.
 - **The hub never fetches an image from the internet.** Syncing images
   that only existed in Logitech's cloud is done by the desktop app, which
   downloads them and sends them to the hub.
 
-The API is in [API.md](API.md#remote-images-activity-icons-and-favorite-logos).
+The API is in [API.md](API.md#remote-images-activity-icons-and-favorite-logos)
+and [API.md](API.md#favorite-channels).
 
 ## Notes
 
@@ -142,5 +187,3 @@ The API is in [API.md](API.md#remote-images-activity-icons-and-favorite-logos).
   **Sync remote** on it.
 - A remote keeps an image it already has when the hub can't answer for it,
   so an image missing on the hub isn't always visible as a blank tile.
-- Editing favorites (adding, removing or reordering channels) is not part of
-  this; only their logos are.

@@ -647,3 +647,76 @@
 .home-buttons .wiz-foot [data-act="save"] {
   flex: 2;
 }
+
+/* -- Favorite channels (#favorites) ----------------------------------------- */
+
+.favorites .btn-block {
+  margin-top: var(--space-3);
+}
+
+.fav-row {
+  gap: var(--space-1);
+  padding-right: var(--space-2);
+}
+
+/* The row's main part opens the favorite; the buttons after it move or
+   delete it. */
+.fav-main {
+  display: flex;
+  flex: 1;
+  align-items: center;
+  gap: var(--space-3);
+  min-width: 0;
+  padding: 0;
+  border: 0;
+  background: none;
+  color: inherit;
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+
+.fav-main:focus-visible {
+  outline: 2px solid var(--primary);
+  outline-offset: 4px;
+  border-radius: var(--shape-md);
+}
+
+/* A logo keeps its shape and its transparent parts, unlike an activity
+   icon, which fills its tile. */
+.fav-logo {
+  display: inline-flex;
+  flex: none;
+}
+
+.fav-logo .m-tile-img {
+  inset: 10%;
+  width: 80%;
+  height: 80%;
+  object-fit: contain;
+}
+
+.fav-logo .m-tile--image:has(.m-tile-img) > .ic {
+  visibility: hidden;
+}
+
+.fav-logo-field {
+  display: flex;
+  align-items: center;
+  gap: var(--space-4);
+}
+
+.fav-logo-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-2);
+}
+
+.m-field-hint.is-error {
+  color: var(--error);
+}
+
+.favorites .m-list,
+.favorites .list-note {
+  margin-top: var(--space-4);
+}

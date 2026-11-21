@@ -2714,6 +2714,483 @@ do
     return {ok = true, localOnly = true, name = name, imageKey = "Activity/" .. name .. ".png"}
   end
 
+  -- Favorite channels. A screen remote shows, for an activity with a channel
+  -- changing device, that device's favorites: the dialPositions of the first
+  -- service in its CD_<deviceId> resource, each {number, name, image, station,
+  -- added}. Pressing one sends its number as a channel change. The station
+  -- ids are repeated, in order, in ContentUser preferences.
+  -- Favorites {deviceId} lists them; CommitFavorites {deviceId, etag,
+  -- logoFiles = [path], positions = [{number, name, station?, image?, logo?}]}
+  -- replaces the list. "station" and "image" keep what an entry already had;
+  -- "logo" counts from 0 into logoFiles, the PNGs codex_webui staged, and is
+  -- stored as a new logo under a fresh name, so a remote fetches it again.
+  local FAVORITE_LOGO_FILE = "^/var/volatile/codex%-favorite%-logo%-%d+%-%d+%.png$"
+  local FAVORITES_MAX = 64
+  local FAVORITE_NAME_BYTES = 64
+  local FAVORITE_NUMBER_BYTES = 8
+  local FAVORITE_ARRAYS = {dialPositions = true, stations = true}
+
+  -- json.encode can't tell an empty array from an empty object, and a list
+  -- with no favorites left must stay a list, so these two resources are
+  -- written as text: a table is an array when its key says so or it has a
+  -- first element, else an object with sorted keys.
+  local function favoritesJson(value, key)
+    if value == nil or value == json.null then
+      return "null"
+    end
+    local kind = type(value)
+    if kind == "boolean" then
+      return value and "true" or "false"
+    end
+    if kind == "number" then
+      if value == math.floor(value) and math.abs(value) < 1e15 then
+        return string.format("%d", value)
+      end
+      return string.format("%.14g", value)
+    end
+    if kind == "string" then
+      return '"' .. string.gsub(value, '[%c"\\]', function(char)
+        if char == '"' or char == "\\" then
+          return "\\" .. char
+        end
+        return string.format("\\u%04x", string.byte(char))
+      end) .. '"'
+    end
+    if kind ~= "table" then
+      return "null"
+    end
+    local parts = {}
+    if FAVORITE_ARRAYS[key] or value[1] ~= nil then
+      for _, item in ipairs(value) do
+        parts[#parts + 1] = favoritesJson(item)
+      end
+      return "[" .. table.concat(parts, ",") .. "]"
+    end
+    local keys = {}
+    for name in pairs(value) do
+      keys[#keys + 1] = tostring(name)
+    end
+    table.sort(keys)
+    for _, name in ipairs(keys) do
+      local item = value[name]
+      if item == nil then
+        item = value[tonumber(name)]
+      end
+      parts[#parts + 1] = favoritesJson(name) .. ":" .. favoritesJson(item, name)
+    end
+    return "{" .. table.concat(parts, ",") .. "}"
+  end
+
+  local function saveFavoritesResource(name, value, etag, hetag)
+    local text = favoritesJson(value)
+    local decoded, expected = pcall(json.decode, text)
+    if not decoded or type(expected) ~= "table" then
+      return nil, "could not write local " .. name
+    end
+    keepAlive()
+    local ok, detail = resources.saveResource("application/json", etag, text, name, nil, hetag)
+    keepAlive()
+    if not ok then
+      return nil, tostring(detail or ("could not save local " .. name))
+    end
+    local status, actualEtag, actual = resources.getResource(name)
+    if tostring(status or "") ~= "200" or actualEtag ~= etag or
+        type(actual) ~= "table" or not sameValue(expected, actual) then
+      return nil, "local " .. name .. " verification failed"
+    end
+    return true
+  end
+
+  local function freshUuid()
+    local id = string.match(nextToken(), "^([%da-fA-F]+%-%x+%-%x+%-%x+%-%x+)") or
+      string.format("%08x-0000-4000-8000-%012d", os.time() or 0, tokenCounter)
+    return string.lower(id)
+  end
+
+  local function favoriteDeviceId(value)
+    local id = (type(value) == "string" or type(value) == "number") and tostring(value) or ""
+    if string.match(id, "^%d+$") and #id <= 12 then
+      return id
+    end
+    return nil
+  end
+
+  -- The service whose dialPositions are the device's favorites: the first
+  -- one, by id, that has a list.
+  local function favoriteService(content)
+    local services = type(content) == "table" and content.services
+    if type(services) ~= "table" then
+      return nil
+    end
+    local ids = {}
+    for id in pairs(services) do
+      if type(id) == "string" and type(services[id]) == "table" and
+          type(services[id].dialPositions) == "table" then
+        ids[#ids + 1] = id
+      end
+    end
+    table.sort(ids)
+    return ids[1]
+  end
+
+  local function logoUuid(image)
+    return type(image) == "string" and string.match(image, "^([%w%-]+)%.png$") or nil
+  end
+
+  -- Why this device can't be given a favorites resource, or nil and the
+  -- profile address the resource names. A device made on this hub has none.
+  local function favoritesProfile(deviceId)
+    local devices = resourceSnapshot("DeviceList")
+    local list = devices and devices.resource.DevicesWithFeatures
+    if type(list) == "table" then
+      for _, entry in ipairs(list) do
+        local device = type(entry) == "table" and entry.Device
+        if type(device) == "table" and tostring(device["Id-"]) == deviceId then
+          local key = device.ContentProfileKey
+          if key ~= nil and key ~= json.null and tostring(key) ~= deviceId then
+            return "this device keeps its favorites under another device's name"
+          end
+          local profile = device.DeviceProfileUri
+          if type(profile) ~= "string" or profile == "" then
+            return "this device was made on the hub and has no channel list to add favorites to"
+          end
+          return nil, profile
+        end
+      end
+    end
+    return "that device isn't on this hub"
+  end
+
+  -- {deviceId}: the device's favorites as the remote shows them.
+  local function favoritesStatus(request)
+    local deviceId = favoriteDeviceId(request and request.deviceId)
+    if not deviceId then
+      return {ok = false, localOnly = true, error = "deviceId must be a device's number"}
+    end
+    local result = {ok = true, localOnly = true, deviceId = deviceId, max = FAVORITES_MAX, count = 0}
+    local snapshot = resourceSnapshot("CD_" .. deviceId)
+    if not snapshot then
+      local problem = favoritesProfile(deviceId)
+      result.exists = false
+      result.canCreate = problem == nil
+      result.reason = problem
+      return result
+    end
+    result.exists = true
+    result.canCreate = true
+    result.etag = snapshot.etag
+    local serviceId = favoriteService(snapshot.resource)
+    result.serviceId = serviceId
+    if serviceId then
+      -- An empty list is left out: json.encode would send it as an object.
+      local positions = {}
+      for _, position in ipairs(snapshot.resource.services[serviceId].dialPositions) do
+        if type(position) == "table" then
+          local uuid = logoUuid(position.image)
+          local listed = {
+            number = type(position.number) == "string" and position.number or
+              (type(position.number) == "number" and tostring(position.number) or ""),
+            name = type(position.name) == "string" and position.name or "",
+            station = type(position.station) == "string" and position.station or nil
+          }
+          if uuid then
+            listed.image = position.image
+            listed.logo = "ci_" .. uuid
+            listed.stored = imageStored("ci_" .. uuid)
+          end
+          positions[#positions + 1] = listed
+        end
+      end
+      result.count = #positions
+      if #positions > 0 then
+        result.positions = positions
+      end
+    end
+    return result
+  end
+
+  -- The lineup id a device's first favorites go under: the one its
+  -- preferences already name, else the household's (any other device's),
+  -- else a new one.
+  local function favoriteLineupId(deviceId, contentUser)
+    local preferences = contentUser and contentUser.resource.preferences
+    if type(preferences) == "table" then
+      local function firstKey(entry)
+        local ids = {}
+        if type(entry) == "table" then
+          for id in pairs(entry) do
+            if type(id) == "string" then
+              ids[#ids + 1] = id
+            end
+          end
+        end
+        table.sort(ids)
+        return ids[1]
+      end
+      local own = firstKey(preferences[deviceId])
+      if own then
+        return own
+      end
+      local devices = {}
+      for id in pairs(preferences) do
+        devices[#devices + 1] = tostring(id)
+      end
+      table.sort(devices)
+      for _, id in ipairs(devices) do
+        local other = firstKey(preferences[id])
+        if other then
+          return other
+        end
+      end
+    end
+    for _, resourceName in ipairs(favoriteResourceNames()) do
+      local other = resourceSnapshot(resourceName)
+      local id = other and favoriteService(other.resource)
+      if id then
+        return id
+      end
+    end
+    return "{" .. freshUuid() .. "}"
+  end
+
+  -- Logo files (uuid.png) every device's favorites use.
+  local function favoriteLogosInUse()
+    local used = {}
+    for _, resourceName in ipairs(favoriteResourceNames()) do
+      local content = resourceSnapshot(resourceName)
+      local services = content and content.resource.services
+      if type(services) == "table" then
+        for _, service in pairs(services) do
+          local positions = type(service) == "table" and service.dialPositions
+          if type(positions) == "table" then
+            for _, position in ipairs(positions) do
+              local uuid = type(position) == "table" and logoUuid(position.image)
+              if uuid then
+                used[uuid] = true
+              end
+            end
+          end
+        end
+      end
+    end
+    return used
+  end
+
+  local function commitFavorites(request)
+    local refusal = imageWriterRefusal()
+    if refusal then
+      return refusal
+    end
+    local function refuse(message)
+      return {ok = false, localOnly = true, error = message}
+    end
+    local deviceId = favoriteDeviceId(request.deviceId)
+    if not deviceId then
+      return refuse("deviceId must be a device's number")
+    end
+    -- A request with no favorites left has no positions, or an empty table.
+    local wanted = request.positions
+    if wanted == nil or wanted == json.null then
+      wanted = {}
+    end
+    if type(wanted) ~= "table" then
+      return refuse("positions must be a list")
+    end
+    local logoFiles = type(request.logoFiles) == "table" and request.logoFiles or {}
+    if #wanted > FAVORITES_MAX then
+      return refuse("a device can have at most " .. FAVORITES_MAX .. " favorites")
+    end
+
+    local resourceName = "CD_" .. deviceId
+    local snapshot = resourceSnapshot(resourceName)
+    local content, serviceId
+    if snapshot then
+      if request.etag ~= nil and request.etag ~= json.null and request.etag ~= snapshot.etag then
+        return refuse("the favorites changed on the hub; reload and try again")
+      end
+      content = snapshot.resource
+      serviceId = favoriteService(content)
+    else
+      local problem, profile = favoritesProfile(deviceId)
+      if problem then
+        return refuse(problem)
+      end
+      content = {id = freshUuid(), device_profile_uri = profile, services = {}}
+    end
+    local contentUser = resourceSnapshot("ContentUser")
+    if type(content.services) ~= "table" then
+      content.services = {}
+    end
+    if not serviceId then
+      serviceId = favoriteLineupId(deviceId, contentUser)
+      if type(content.services[serviceId]) ~= "table" then
+        content.services[serviceId] = {}
+      end
+    end
+    local service = content.services[serviceId]
+    local oldPositions = type(service.dialPositions) == "table" and service.dialPositions or {}
+
+    local oldByStation, oldImages = {}, {}
+    for _, position in ipairs(oldPositions) do
+      if type(position) == "table" then
+        if type(position.station) == "string" and not oldByStation[position.station] then
+          oldByStation[position.station] = position
+        end
+        if logoUuid(position.image) then
+          oldImages[position.image] = true
+        end
+      end
+    end
+
+    -- Check everything before anything is stored.
+    local entries, usedStations = {}, {}
+    for index, item in ipairs(wanted) do
+      local label = "favorite " .. index
+      if type(item) ~= "table" then
+        return refuse(label .. " isn't an entry")
+      end
+      local number = type(item.number) == "number" and tostring(item.number) or item.number
+      if type(number) ~= "string" or not string.match(number, "^[%d%.%-]+$") or
+          #number > FAVORITE_NUMBER_BYTES then
+        return refuse(label .. ": the channel number may only have digits, '.' and '-' (at most " ..
+          FAVORITE_NUMBER_BYTES .. " characters)")
+      end
+      local name = type(item.name) == "string" and string.match(item.name, "^%s*(.-)%s*$") or ""
+      if name == "" or #name > FAVORITE_NAME_BYTES or string.find(name, "%c") then
+        return refuse(label .. ": the name must be 1 to " .. FAVORITE_NAME_BYTES .. " bytes of plain text")
+      end
+      local entry = {}
+      local station = item.station
+      if station ~= nil and station ~= json.null then
+        if type(station) ~= "string" or not oldByStation[station] or usedStations[station] then
+          return refuse(label .. ": that isn't one of this device's favorites")
+        end
+        for key, value in pairs(oldByStation[station]) do
+          entry[key] = value
+        end
+        usedStations[station] = true
+      end
+      entry.number = number
+      entry.name = name
+      entry.image = nil
+      local data
+      if item.logo ~= nil and item.logo ~= json.null then
+        local problem
+        local file = type(item.logo) == "number" and logoFiles[item.logo + 1] or nil
+        data, problem = stagedPngAnySize(file, FAVORITE_LOGO_FILE, "logo")
+        if not data then
+          return refuse(label .. ": " .. problem)
+        end
+      elseif item.image ~= nil and item.image ~= json.null then
+        if type(item.image) ~= "string" or not oldImages[item.image] then
+          return refuse(label .. ": that logo isn't one of this device's logos")
+        end
+        entry.image = item.image
+      end
+      entries[#entries + 1] = {entry = entry, data = data}
+    end
+
+    -- New logos first: a list never names a logo the hub doesn't hold.
+    local newLogos = {}
+    local function dropNewLogos()
+      for _, uuid in ipairs(newLogos) do
+        deleteRemoteImage("ci_" .. uuid .. ".png")
+      end
+    end
+    local positions = {}
+    for _, item in ipairs(entries) do
+      local entry = item.entry
+      if item.data then
+        local uuid = freshUuid()
+        newLogos[#newLogos + 1] = uuid
+        local ok, saveError = saveRemoteImage("ci_" .. uuid, item.data)
+        if not ok then
+          dropNewLogos()
+          return refuse(saveError)
+        end
+        entry.image = uuid .. ".png"
+      end
+      if type(entry.station) ~= "string" then
+        entry.station = freshUuid()
+        entry.added = true
+      end
+      positions[#positions + 1] = entry
+    end
+
+    local previous = snapshot and favoritesJson(snapshot.resource)
+    local function restoreContent()
+      if not snapshot then
+        return false
+      end
+      local ok = resources.saveResource(
+        "application/json", snapshot.etag, previous, resourceName, nil, snapshot.hetag
+      )
+      return ok and true or false
+    end
+    service.dialPositions = positions
+    local etag = localEtag()
+    local ok, saveError = saveFavoritesResource(resourceName, content, etag, localHetag())
+    if not ok then
+      local restored = restoreContent()
+      dropNewLogos()
+      return {ok = false, localOnly = true, rolledBack = restored, error = saveError}
+    end
+
+    -- The user record repeats the station ids, in order. A hub set up
+    -- without Logitech has no such record and gets none.
+    if contentUser then
+      local user = contentUser.resource
+      local previousUser = favoritesJson(user)
+      if type(user.preferences) ~= "table" then
+        user.preferences = {}
+      end
+      if type(user.preferences[deviceId]) ~= "table" then
+        user.preferences[deviceId] = {}
+      end
+      local stations = {}
+      for _, position in ipairs(positions) do
+        stations[#stations + 1] = {id = position.station}
+      end
+      local preference = user.preferences[deviceId][serviceId]
+      if type(preference) ~= "table" then
+        preference = {}
+        user.preferences[deviceId][serviceId] = preference
+      end
+      preference.stations = stations
+      ok, saveError = saveFavoritesResource("ContentUser", user, localEtag(), localHetag())
+      if not ok then
+        resources.saveResource(
+          "application/json", contentUser.etag, previousUser, "ContentUser", nil, contentUser.hetag
+        )
+        local restored = restoreContent()
+        dropNewLogos()
+        return {ok = false, localOnly = true, rolledBack = restored, error = saveError}
+      end
+    end
+
+    -- Logos this device used before and no favorite uses now.
+    local pruned = pcall(function()
+      local used = favoriteLogosInUse()
+      for image in pairs(oldImages) do
+        local uuid = logoUuid(image)
+        if uuid and not used[uuid] then
+          deleteRemoteImage("ci_" .. uuid .. ".png")
+        end
+      end
+    end)
+    if not pruned then
+      log.warning("codexactivity: could not remove unused favorite logos")
+    end
+
+    bumpRevision(true)
+    local result = favoritesStatus({deviceId = deviceId})
+    result.configVersion = digest.configVersion
+    return result
+  end
+
+  remoteImages.favorites = favoritesStatus
+  remoteImages.commitFavorites = commitFavorites
+
   remoteImages.status = remoteImagesStatus
   remoteImages.pruneActivityIcons = pruneActivityIcons
   remoteImages.activityIconsChanged = activityIconsChanged
@@ -4233,6 +4710,10 @@ local function processRequest(raw)
     response = remoteImages.commit(request)
   elseif request.op == "CommitActivityIcon" then
     response = remoteImages.commitIcon(request)
+  elseif request.op == "Favorites" then
+    response = remoteImages.favorites(request)
+  elseif request.op == "CommitFavorites" then
+    response = remoteImages.commitFavorites(request)
   elseif request.op == "Status" then
     response = statusResponse()
   elseif request.op == "SimulateGesture" then

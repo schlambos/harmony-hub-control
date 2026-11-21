@@ -11902,6 +11902,196 @@ static void render_activity_icon_set_json(int fd, const struct request *req) {
     send_writer_reply(fd, rc, reply, msg, "The icon was not saved.");
 }
 
+/* Favorite channels (docs/REMOTE_IMAGES.md): the channels a screen remote
+ * lists for an activity's channel changing device, each with a number, a
+ * name and a logo. codexactivity reads and replaces a device's list
+ * (Favorites, CommitFavorites); logos are remote images named ci_<uuid>. */
+#define MAX_FAVORITE_LOGOS 64
+#define MAX_FAVORITE_POSITIONS_TEXT (48 * 1024)
+#define FAVORITE_LOGO_FILE_FORMAT "/var/volatile/codex-favorite-logo-%ld-%d.png"
+
+/* A device id as the hub writes it: 1 to 12 digits. */
+static int favorites_device_ok(const char *id) {
+    size_t n = 0;
+    if (!id) return 0;
+    for (; id[n]; n++) {
+        if (!isdigit((unsigned char)id[n]) || n >= 12) return 0;
+    }
+    return n > 0;
+}
+
+/* The closing quote of the JSON string that opens at p, or NULL. */
+static const char *json_string_close(const char *p) {
+    if (!p || *p != '"') return NULL;
+    for (p++; *p && *p != '"'; p++) {
+        if (*p == '\\') {
+            if (!p[1]) return NULL;
+            p++;
+        }
+    }
+    return *p == '"' ? p : NULL;
+}
+
+/* The request a favorites POST becomes for codexactivity: deviceId, the
+   etag and positions exactly as sent, and the staged logo files. Returns the
+   length written, or -1 with msg when the body isn't a favorites request.
+   *logos is set to the body's logos array, or NULL when it has none. */
+static int favorites_commit_request(const char *body, const char *request_id,
+        long pid, int logo_count,
+        char *out, size_t outlen, char *msg, size_t msg_len) {
+    char device[16];
+    const char *etag = json_top_member(body, "etag");
+    const char *etag_end = NULL;
+    const char *positions = json_top_member(body, "positions");
+    const char *positions_end;
+    size_t used;
+    int i;
+    if (json_top_string(body, "deviceId", device, sizeof(device)) != 1 || !favorites_device_ok(device)) {
+        snprintf(msg, msg_len, "deviceId must be a device's number, as a string.");
+        return -1;
+    }
+    if (!positions || *positions != '[' || !(positions_end = find_matching_json(positions, '[', ']'))) {
+        snprintf(msg, msg_len, "Send {\"deviceId\":...,\"positions\":[...]} as JSON.");
+        return -1;
+    }
+    if ((size_t)(positions_end - positions) > MAX_FAVORITE_POSITIONS_TEXT) {
+        snprintf(msg, msg_len, "The list of favorites is too long.");
+        return -1;
+    }
+    if (etag && *etag == '"') {
+        etag_end = json_string_close(etag);
+        if (!etag_end || etag_end - etag > 160) {
+            snprintf(msg, msg_len, "etag must be the one the hub gave with the list.");
+            return -1;
+        }
+    }
+    used = (size_t)snprintf(out, outlen, "{\"id\":\"%s\",\"op\":\"CommitFavorites\",\"deviceId\":\"%s\"",
+        request_id, device);
+    if (etag_end && used < outlen) {
+        used += (size_t)snprintf(out + used, outlen - used, ",\"etag\":%.*s", (int)(etag_end - etag + 1), etag);
+    }
+    if (used < outlen) used += (size_t)snprintf(out + used, outlen - used, ",\"logoFiles\":[");
+    for (i = 0; i < logo_count && used < outlen; i++) {
+        used += (size_t)snprintf(out + used, outlen - used, "%s\"", i ? "," : "");
+        if (used < outlen) used += (size_t)snprintf(out + used, outlen - used, FAVORITE_LOGO_FILE_FORMAT, pid, i);
+        if (used < outlen) used += (size_t)snprintf(out + used, outlen - used, "\"");
+    }
+    if (used < outlen) {
+        used += (size_t)snprintf(out + used, outlen - used, "],\"positions\":%.*s}",
+            (int)(positions_end - positions + 1), positions);
+    }
+    if (used >= outlen) {
+        snprintf(msg, msg_len, "The list of favorites is too long.");
+        return -1;
+    }
+    return (int)used;
+}
+
+/* GET ?deviceId=<id>: {"ok","deviceId","exists","canCreate","reason",
+   "serviceId","etag","count","max","positions":[{number,name,station,image,
+   logo,stored}]}. positions is left out when the device has no favorites. */
+static void render_favorites_json(int fd, const struct request *req) {
+    char request[192], request_id[96], msg[512], device[32];
+    char *reply;
+    int written, rc;
+    msg[0] = 0;
+    query_value(req->path, "deviceId", device, sizeof(device));
+    if (!favorites_device_ok(device)) {
+        send_image_refusal(fd, "deviceId must be a device's number.");
+        return;
+    }
+    reply = (char *)malloc(REMOTE_IMAGE_REPLY);
+    if (!reply) {
+        send_text(fd, "503 Service Unavailable", "Not enough memory on the hub.\n");
+        return;
+    }
+    reply[0] = 0;
+    snprintf(request_id, sizeof(request_id), "%ld-%ld-favorites", (long)getpid(), (long)time(NULL));
+    written = snprintf(request, sizeof(request), "{\"id\":\"%s\",\"op\":\"Favorites\",\"deviceId\":\"%s\"}",
+        request_id, device);
+    rc = offline_writer_request(request, (size_t)written, request_id,
+        reply, REMOTE_IMAGE_REPLY, msg, sizeof(msg));
+    send_writer_reply(fd, rc, reply, msg, "The hub couldn't list the favorites.");
+    free(reply);
+}
+
+/* POST {"deviceId":"<id>","etag":<from GET>,"positions":[{"number","name",
+   "station"?,"image"?,"logo"?}],"logos":[<base64 PNG>,...]}: replace the
+   device's favorites. "station" and "image" keep an entry and its logo;
+   "logo" is a place (from 0) in logos, an uploaded PNG of up to 512x512 and
+   512 KB that is stored under a fresh name. The answer is the new list. */
+static void render_favorites_set_json(int fd, const struct request *req) {
+    char file[96], msg[768], request_id[96];
+    char *request = NULL, *reply = NULL, *text = NULL;
+    const char *p, *close;
+    size_t cap;
+    int count = 0, i, rc, used;
+    msg[0] = 0;
+    if (!req->body || req->body_truncated) {
+        send_image_refusal(fd, "Send {\"deviceId\":...,\"positions\":[...]} as JSON, at most 1 MB.");
+        return;
+    }
+    cap = 512 + MAX_FAVORITE_POSITIONS_TEXT + MAX_FAVORITE_LOGOS * 96;
+    request = (char *)malloc(cap);
+    reply = (char *)malloc(REMOTE_IMAGE_REPLY);
+    text = (char *)malloc(req->body_len + 1);
+    if (!request || !reply || !text) {
+        snprintf(msg, sizeof(msg), "Not enough memory on the hub for the favorites.");
+        goto refuse;
+    }
+    reply[0] = 0;
+    /* Stage the logos: plain base64 strings, so a quote ends each one. */
+    p = json_top_member(req->body, "logos");
+    if (p && *p == '[') {
+        for (p++; *p && *p != ']'; p++) {
+            if (*p != '"') {
+                if (*p == ',' || isspace((unsigned char)*p)) continue;
+                snprintf(msg, sizeof(msg), "logos must be a list of PNG images.");
+                goto refuse;
+            }
+            close = strchr(p + 1, '"');
+            if (!close || memchr(p + 1, '\\', (size_t)(close - p - 1))) {
+                snprintf(msg, sizeof(msg), "Logo %d isn't an image.", count + 1);
+                goto refuse;
+            }
+            if (count >= MAX_FAVORITE_LOGOS) {
+                snprintf(msg, sizeof(msg), "At most %d new logos in one request.", MAX_FAVORITE_LOGOS);
+                goto refuse;
+            }
+            memcpy(text, p + 1, (size_t)(close - p - 1));
+            text[close - p - 1] = 0;
+            snprintf(file, sizeof(file), FAVORITE_LOGO_FILE_FORMAT, (long)getpid(), count);
+            count++; /* counted first: staging may leave a partial file */
+            if (stage_png_text(text, 0, 0, file, "logo", msg, sizeof(msg)) != 0) goto refuse;
+            p = close;
+        }
+    }
+    snprintf(request_id, sizeof(request_id), "%ld-%ld-%08x",
+        (long)getpid(), (long)time(NULL), resource_hash(req->body, req->body_len));
+    used = favorites_commit_request(req->body, request_id, (long)getpid(), count,
+        request, cap, msg, sizeof(msg));
+    if (used < 0) goto refuse;
+    rc = offline_writer_request(request, (size_t)used, request_id, reply, REMOTE_IMAGE_REPLY, msg, sizeof(msg));
+    for (i = 0; i < count; i++) {
+        snprintf(file, sizeof(file), FAVORITE_LOGO_FILE_FORMAT, (long)getpid(), i);
+        unlink(file);
+    }
+    send_writer_reply(fd, rc, reply, msg, "The favorites were not saved.");
+    free(request);
+    free(reply);
+    free(text);
+    return;
+refuse:
+    for (i = 0; i < count; i++) {
+        snprintf(file, sizeof(file), FAVORITE_LOGO_FILE_FORMAT, (long)getpid(), i);
+        unlink(file);
+    }
+    free(request);
+    free(reply);
+    free(text);
+    send_image_refusal(fd, msg);
+}
+
 /* Cheap state poll.  connect.statedigest?get returns 304 unless the hub's
  * stateVersion has moved past the client's current_version, so the UI can poll
  * this often without a full engine round-trip and re-pull detail only when the
@@ -13168,6 +13358,7 @@ static void render_version_json(int fd) {
         "device-commands",
         "device-screen",
         "device-settings",
+        "favorites",
         "ha-devices",
         "ha-devices-v2",
         "ha-state",
@@ -14916,6 +15107,11 @@ static void handle_client(int client) {
     } else if (strcmp(req.method, "POST") == 0 && strcmp(req.path, "/api/activity-icon") == 0) {
         if (request_same_origin_json(&req)) render_activity_icon_set_json(client, &req);
         else send_cross_site_refused(client);
+    } else if (strcmp(req.method, "GET") == 0 && path_is(req.path, "/api/favorites")) {
+        render_favorites_json(client, &req);
+    } else if (strcmp(req.method, "POST") == 0 && strcmp(req.path, "/api/favorites") == 0) {
+        if (request_same_origin_json(&req)) render_favorites_set_json(client, &req);
+        else send_cross_site_refused(client);
     } else if (strcmp(req.method, "GET") == 0 && strcmp(req.path, "/api/activity-restrictions") == 0) {
         render_activity_restrictions_json(client);
     } else if (strcmp(req.method, "POST") == 0 && strcmp(req.path, "/api/activity-restrictions") == 0) {
@@ -15194,6 +15390,61 @@ static int remote_images_cases(void) {
     return failures;
 }
 
+/* Favorite channels: the device id check and the request a POST becomes. */
+static int favorites_cases(void) {
+    char out[1024], small[64], msg[256];
+    const char *body =
+        "{\"logos\":[\"QUJD\"],\"etag\":\"\\\"e-1\\\"\",\"deviceId\":\"555\","
+        "\"positions\":[{\"number\":\"2\",\"name\":\"a \\\"b\\\" ] }\",\"logo\":0},{\"number\":\"3\",\"name\":\"c\"}]}";
+    const char *want =
+        "{\"id\":\"r1\",\"op\":\"CommitFavorites\",\"deviceId\":\"555\",\"etag\":\"\\\"e-1\\\"\","
+        "\"logoFiles\":[\"/var/volatile/codex-favorite-logo-7-0.png\",\"/var/volatile/codex-favorite-logo-7-1.png\"],"
+        "\"positions\":[{\"number\":\"2\",\"name\":\"a \\\"b\\\" ] }\",\"logo\":0},{\"number\":\"3\",\"name\":\"c\"}]}";
+    int failures = 0, n;
+    if (!favorites_device_ok("555") || !favorites_device_ok("123456789012") || favorites_device_ok("") ||
+            favorites_device_ok("1234567890123") || favorites_device_ok("5a") || favorites_device_ok("../5") ||
+            favorites_device_ok(NULL)) {
+        fputs("FAIL favorites: device ids are 1 to 12 digits\n", stderr);
+        failures++;
+    }
+    n = favorites_commit_request(body, "r1", 7L, 2, out, sizeof(out), msg, sizeof(msg));
+    if (n != (int)strlen(want) || strcmp(out, want) != 0) {
+        fprintf(stderr, "FAIL favorites: the request keeps etag and positions as sent (%s)\n", out);
+        failures++;
+    }
+    n = favorites_commit_request("{\"deviceId\":\"555\",\"positions\":[]}", "r2", 7L, 0,
+        out, sizeof(out), msg, sizeof(msg));
+    if (n < 0 || strcmp(out, "{\"id\":\"r2\",\"op\":\"CommitFavorites\",\"deviceId\":\"555\","
+            "\"logoFiles\":[],\"positions\":[]}") != 0) {
+        fprintf(stderr, "FAIL favorites: no etag and no favorites is a request too (%s)\n", out);
+        failures++;
+    }
+    if (favorites_commit_request("{\"deviceId\":555,\"positions\":[]}", "r", 7L, 0,
+                out, sizeof(out), msg, sizeof(msg)) != -1 ||
+            favorites_commit_request("{\"deviceId\":\"5x\",\"positions\":[]}", "r", 7L, 0,
+                out, sizeof(out), msg, sizeof(msg)) != -1 ||
+            favorites_commit_request("{\"deviceId\":\"555\"}", "r", 7L, 0,
+                out, sizeof(out), msg, sizeof(msg)) != -1 ||
+            favorites_commit_request("{\"deviceId\":\"555\",\"positions\":{}}", "r", 7L, 0,
+                out, sizeof(out), msg, sizeof(msg)) != -1 ||
+            favorites_commit_request("{\"deviceId\":\"555\",\"positions\":[{\"name\":\"x\"}", "r", 7L, 0,
+                out, sizeof(out), msg, sizeof(msg)) != -1 ||
+            favorites_commit_request("{\"deviceId\":\"555\",\"etag\":\"open,\\\"positions\\\":[]}", "r",
+                7L, 0, out, sizeof(out), msg, sizeof(msg)) != -1) {
+        fputs("FAIL favorites: a bad device id, missing, odd or unfinished positions are refused\n", stderr);
+        failures++;
+    }
+    if (favorites_commit_request(body, "r1", 7L, 2, small, sizeof(small), msg, sizeof(msg)) != -1) {
+        fputs("FAIL favorites: a request that doesn't fit is refused\n", stderr);
+        failures++;
+    }
+    if (!path_is("/api/favorites?deviceId=5", "/api/favorites") || path_is("/api/favoritesX", "/api/favorites")) {
+        fputs("FAIL favorites: route matching\n", stderr);
+        failures++;
+    }
+    return failures;
+}
+
 int main(void) {
     const char *ordered =
         "{\"b\":[1,{\"path\":\"a\\/b\",\"face\":\"\\uD83D\\uDE00\"}],"
@@ -15258,6 +15509,7 @@ int main(void) {
         }
     }
     failures += remote_images_cases();
+    failures += favorites_cases();
     if (!path_is("/api/remote-images", "/api/remote-images") ||
             !path_is("/api/remote-images?offset=3", "/api/remote-images") ||
             !path_is("/api/remote-images/image?name=x", "/api/remote-images/image") ||
@@ -15270,7 +15522,7 @@ int main(void) {
         failures++;
     }
     if (failures) return 1;
-    puts("PASS semantic JSON, resource backup, Bluetooth native response, Touch sync probe hosts, remote images and route matching validation");
+    puts("PASS semantic JSON, resource backup, Bluetooth native response, Touch sync probe hosts, remote images, favorites and route matching validation");
     return 0;
 }
 #else

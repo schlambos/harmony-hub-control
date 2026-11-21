@@ -743,15 +743,26 @@ function handleRemoteBackgroundImage(res, params) {
    favorites' logos (ci_<uuid>), only listed names are stored (any PNG up to
    512x512), and a new icon is a 70x70 PNG with a 38x38 thumbnail under a
    fresh name. The sim's favorites are made up. */
-const SIM_FAVORITES = {
-  deviceId: "90000001",
-  dialPositions: [
-    { number: "2", image: "00000000-0000-4000-8000-00000000c001.png", name: "Kids Channel" },
-    { number: "5", image: "00000000-0000-4000-8000-00000000c002.png", name: "News 24" },
-  ],
-};
+const SIM_FAVORITES_DEVICE = "74521691"; // the fixture's LG TV, the channel device of two activities
+const simFavorites = new Map(); // deviceId -> { etag, positions: [{number, name, image?, station}] }
 const simImages = new Map(); // name -> PNG bytes
 let simIconNext = 1;
+let simFavoriteNext = 1;
+
+function resetSimFavorites() {
+  simFavorites.clear();
+  simFavoriteNext = 1;
+  simFavorites.set(SIM_FAVORITES_DEVICE, {
+    etag: "\"sim-favorites-0\"",
+    positions: [
+      { number: "2", image: "00000000-0000-4000-8000-00000000c001.png", name: "Kids Channel",
+        station: "00000000-0000-4000-8000-0000000051a1" },
+      { number: "5", image: "00000000-0000-4000-8000-00000000c002.png", name: "News 24",
+        station: "00000000-0000-4000-8000-0000000051a2" },
+    ],
+  });
+}
+resetSimFavorites();
 
 function simNeededImages() {
   const out = [];
@@ -770,14 +781,145 @@ function simNeededImages() {
         uri: base ? `${base}Activity/${name}.png` : undefined });
     }
   }
-  for (const pos of SIM_FAVORITES.dialPositions) {
-    const uuid = /^([A-Za-z0-9-]+)\.png$/.exec(pos.image)?.[1];
-    if (uuid) {
-      add({ kind: "logo", name: `ci_${uuid}`, deviceId: SIM_FAVORITES.deviceId, channel: pos.name,
-        number: pos.number, uri: `content-image://1.0/image/${uuid}.png` });
+  for (const [deviceId, favorites] of simFavorites) {
+    for (const pos of favorites.positions) {
+      const uuid = /^([A-Za-z0-9-]+)\.png$/.exec(pos.image ?? "")?.[1];
+      if (uuid) {
+        add({ kind: "logo", name: `ci_${uuid}`, deviceId, channel: pos.name,
+          number: pos.number, uri: `content-image://1.0/image/${uuid}.png` });
+      }
     }
   }
   return out;
+}
+
+/* Favorite channels (GET/POST /api/favorites), like codexactivity's
+   Favorites and CommitFavorites: a device's list is replaced as a whole, an
+   uploaded logo gets a fresh name, a kept entry is named by its station. */
+const simFavoriteUuid = () => `00000000-0000-4000-8000-${String(0xf00000 + simFavoriteNext++).padStart(12, "0")}`;
+
+function simFavoritesReply(deviceId) {
+  const reply = { ok: true, localOnly: true, deviceId, max: 64, count: 0 };
+  const favorites = simFavorites.get(deviceId);
+  if (!favorites) {
+    const device = findDeviceEntry(deviceId)?.Device;
+    reply.exists = false;
+    reply.canCreate = Boolean(device && typeof device.DeviceProfileUri === "string" && device.DeviceProfileUri);
+    if (!reply.canCreate) {
+      reply.reason = device
+        ? "this device was made on the hub and has no channel list to add favorites to"
+        : "that device isn't on this hub";
+    }
+    return reply;
+  }
+  reply.exists = true;
+  reply.canCreate = true;
+  reply.etag = favorites.etag;
+  reply.serviceId = "{00000000-0000-4000-8000-00000000511e}";
+  reply.count = favorites.positions.length;
+  // As the hub: an empty list is left out.
+  if (favorites.positions.length) {
+    reply.positions = favorites.positions.map((pos) => {
+      const uuid = /^([A-Za-z0-9-]+)\.png$/.exec(pos.image ?? "")?.[1];
+      return {
+        number: pos.number, name: pos.name, station: pos.station,
+        ...(uuid ? { image: pos.image, logo: `ci_${uuid}`, stored: simImages.has(`ci_${uuid}`) } : {}),
+      };
+    });
+  }
+  return reply;
+}
+
+function handleFavoritesGet(res, params) {
+  const deviceId = String(params?.deviceId ?? "");
+  if (!/^[0-9]{1,12}$/.test(deviceId)) {
+    sendJson(res, 400, { ok: false, error: "deviceId must be a device's number." });
+    return;
+  }
+  sendJson(res, 200, simFavoritesReply(deviceId));
+}
+
+function handleFavoritesSet(res, params) {
+  const refuse = (status, error) => sendJson(res, status,
+    status === 400 ? { ok: false, error } : { ok: false, localOnly: true, error, reply: { ok: false, localOnly: true, error } });
+  const deviceId = typeof params.deviceId === "string" ? params.deviceId : "";
+  if (!/^[0-9]{1,12}$/.test(deviceId)) return refuse(400, "deviceId must be a device's number, as a string.");
+  if (!Array.isArray(params.positions)) return refuse(400, "Send {\"deviceId\":...,\"positions\":[...]} as JSON.");
+  const logos = [];
+  if (Array.isArray(params.logos)) {
+    if (params.logos.length > 64) return refuse(400, "At most 64 new logos in one request.");
+    for (const [i, text] of params.logos.entries()) {
+      if (typeof text !== "string") return refuse(400, `Logo ${i + 1} isn't an image.`);
+      const png = simImagePng(text, 0, 0, "logo");
+      if (png.error) return refuse(400, png.error);
+      logos.push(png.bytes);
+    }
+  }
+  if (params.positions.length > 64) return refuse(422, "a device can have at most 64 favorites");
+  const old = simFavorites.get(deviceId);
+  if (old) {
+    if (params.etag != null && params.etag !== old.etag) {
+      return refuse(422, "the favorites changed on the hub; reload and try again");
+    }
+  } else {
+    const blocked = simFavoritesReply(deviceId).reason;
+    if (blocked) return refuse(422, blocked);
+  }
+  const oldPositions = old?.positions ?? [];
+  const usedStations = new Set();
+  const next = [];
+  const newImages = [];
+  for (const [i, item] of params.positions.entries()) {
+    const label = `favorite ${i + 1}`;
+    if (!item || typeof item !== "object") return refuse(422, `${label} isn't an entry`);
+    const number = typeof item.number === "number" ? String(item.number) : item.number;
+    if (typeof number !== "string" || !/^[0-9.-]{1,8}$/.test(number)) {
+      return refuse(422, `${label}: the channel number may only have digits, '.' and '-' (at most 8 characters)`);
+    }
+    const name = typeof item.name === "string" ? item.name.trim() : "";
+    // eslint-disable-next-line no-control-regex
+    if (!name || Buffer.byteLength(name) > 64 || /[\x00-\x1f\x7f]/.test(name)) {
+      return refuse(422, `${label}: the name must be 1 to 64 bytes of plain text`);
+    }
+    let entry = {};
+    if (item.station != null) {
+      const kept = oldPositions.find((pos) => pos.station === item.station);
+      if (!kept || usedStations.has(item.station)) return refuse(422, `${label}: that isn't one of this device's favorites`);
+      usedStations.add(item.station);
+      entry = { ...kept };
+    }
+    entry.number = number;
+    entry.name = name;
+    delete entry.image;
+    if (item.logo != null) {
+      const bytes = typeof item.logo === "number" ? logos[item.logo] : undefined;
+      if (!bytes) return refuse(422, `${label}: the logo wasn't received`);
+      newImages.push({ entry, bytes });
+    } else if (item.image != null) {
+      if (!oldPositions.some((pos) => pos.image === item.image)) {
+        return refuse(422, `${label}: that logo isn't one of this device's logos`);
+      }
+      entry.image = item.image;
+    }
+    next.push(entry);
+  }
+  for (const { entry, bytes } of newImages) {
+    const uuid = simFavoriteUuid();
+    simImages.set(`ci_${uuid}`, bytes);
+    entry.image = `${uuid}.png`;
+  }
+  for (const entry of next) {
+    if (!entry.station) entry.station = simFavoriteUuid();
+  }
+  simFavorites.set(deviceId, { etag: `"sim-favorites-${simFavoriteNext++}"`, positions: next });
+  // Logos this device used and no favorite uses now.
+  const used = new Set([...simFavorites.values()].flatMap((f) => f.positions.map((pos) => pos.image)));
+  for (const pos of oldPositions) {
+    if (pos.image && !used.has(pos.image)) simImages.delete(`ci_${pos.image.replace(/\.png$/, "")}`);
+  }
+  state.revision = newRevision();
+  logEvent({ kind: "favorites", message: `${next.length} favorite(s) saved for device ${deviceId}` });
+  sendJson(res, 200, simFavoritesReply(deviceId));
 }
 
 /* width 0: any size up to 512x512, as codex_webui's stage_png_text(). */
@@ -2695,7 +2837,7 @@ function handleExport(res, pathname) {
 /* Like codex_webui's request_same_origin_json(): the routes that change the
    radio or reboot the hub take only application/json, and a browser's Origin,
    when sent, must be this host. */
-const SAME_ORIGIN_JSON_ROUTES = new Set(["POST /api/multi-remote", "POST /api/remote-unpair", "POST /api/remote-background", "POST /api/remote-images", "POST /api/activity-icon", "POST /api/usb-eth", "POST /api/activity-restrictions"]);
+const SAME_ORIGIN_JSON_ROUTES = new Set(["POST /api/multi-remote", "POST /api/remote-unpair", "POST /api/remote-background", "POST /api/remote-images", "POST /api/activity-icon", "POST /api/favorites", "POST /api/usb-eth", "POST /api/activity-restrictions"]);
 const SAME_ORIGIN_JSON_ERROR =
   "This change takes a JSON request (Content-Type: application/json) from the hub's own web app.";
 
@@ -2776,6 +2918,7 @@ async function handleApi(req, res, pathname, url) {
         resetSimBackground();
         simImages.clear();
         simIconNext = 1;
+        resetSimFavorites();
         state.events.length = 0;
         captureArmed = false;
         canceledRuns.clear();
@@ -2973,6 +3116,12 @@ async function handleApi(req, res, pathname, url) {
     case "POST /api/activity-icon":
       handleActivityIconSet(res, params);
       return;
+    case "GET /api/favorites":
+      handleFavoritesGet(res, params);
+      return;
+    case "POST /api/favorites":
+      handleFavoritesSet(res, params);
+      return;
     case "POST /api/remote-unpair": {
       // Like codex_webui's json_top_int(): the top-level token must be a plain
       // integer, so "2", 1.5, 1e1, 2e0 and 2.0 are all refused.
@@ -3115,7 +3264,7 @@ async function handleApi(req, res, pathname, url) {
         update: { protocol: 0 },
         features: [
           "activity-save", "activity-sync", "catalog-import", "device-commands",
-          "androidtv-devices", "androidtv-inputs", "device-screen", "device-settings", "ha-devices", "ha-devices-v2",
+          "androidtv-devices", "androidtv-inputs", "device-screen", "device-settings", "favorites", "ha-devices", "ha-devices-v2",
           "ha-state", "irdb-import", "remote-background", "remote-pair", "remote-images", "switch2-wake"
         ]
       });

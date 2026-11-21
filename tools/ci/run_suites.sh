@@ -82,6 +82,7 @@ lua-webos-devices|luajit $LUA/codexactivity-webos-devices-test.lua
 lua-home-buttons|luajit $LUA/codexactivity-home-buttons-test.lua
 lua-remote-background|luajit $LUA/codexactivity-remote-background-test.lua
 lua-remote-images|luajit $LUA/codexactivity-remote-images-test.lua
+lua-favorites|luajit $LUA/codexactivity-favorites-test.lua
 lua-touch-controls|luajit $LUA/codexactivity-touch-controls-test.lua
 lua-validate|luajit $LUA/codexactivity-validate-test.lua tools/webui-sim/fixtures/touch-maplist.json
 lua-guards|luajit $LUA/netservicestarter-guards-test.lua
