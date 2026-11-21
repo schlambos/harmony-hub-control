@@ -919,6 +919,13 @@ local function commitActivityResources(request)
   end
 
   digest.configVersion = previousConfigVersion + 1
+  -- A screen remote fetches activity icons only when contentVersion moves.
+  local iconsChecked, iconsChanged = pcall(
+    remoteImages.activityIconsChanged, oldActivities.resource, request.activityList
+  )
+  if not iconsChecked or iconsChanged then
+    digest.contentVersion = (tonumber(digest.contentVersion) or 0) + 1
+  end
   -- connect.statedigest?get answers 304 unless stateVersion changes.
   digest.stateVersion = (tonumber(digest.stateVersion) or 0) + 1
   local digestOk, digestError = pcall(function()
@@ -977,8 +984,14 @@ local function statusResponse()
 end
 
 -- Publish a new revision so the remote and /api/state see a change.
-local function bumpRevision()
+-- contentChanged: images changed too. A screen remote's quick sync (on
+-- wake) fetches images only when contentVersion moves, as the stock
+-- setup.sync?contentchanged handler does.
+local function bumpRevision(contentChanged)
   digest.configVersion = (tonumber(digest.configVersion) or 0) + 1
+  if contentChanged then
+    digest.contentVersion = (tonumber(digest.contentVersion) or 0) + 1
+  end
   -- connect.statedigest?get answers 304 unless stateVersion changes.
   digest.stateVersion = (tonumber(digest.stateVersion) or 0) + 1
   local digestOk, digestError = pcall(function()
@@ -2573,6 +2586,39 @@ do
     end
   end
 
+  -- True when any activity's icon (BaseImageUri + ImageKey) differs between
+  -- the two lists, including activities added or removed with an icon.
+  local function activityIconsChanged(oldList, newList)
+    local function icons(activityList)
+      local found = {}
+      if type(activityList) == "table" and type(activityList.Activities) == "table" then
+        for index, activity in ipairs(activityList.Activities) do
+          if type(activity) == "table" then
+            local key = activity.ImageKey
+            if type(key) == "string" and key ~= "" then
+              local id = activity["Id-"] or activity.Id or ("#" .. index)
+              local base = activity.BaseImageUri
+              found[tostring(id)] = (type(base) == "string" and base or "") .. key
+            end
+          end
+        end
+      end
+      return found
+    end
+    local old, new = icons(oldList), icons(newList)
+    for id, icon in pairs(new) do
+      if old[id] ~= icon then
+        return true
+      end
+    end
+    for id in pairs(old) do
+      if new[id] == nil then
+        return true
+      end
+    end
+    return false
+  end
+
   local function imageWriterRefusal()
     if not blockerActive() then
       return {
@@ -2632,7 +2678,7 @@ do
       result.error = failed[1] and failed[1].error or "nothing was saved"
       return result
     end
-    bumpRevision()
+    bumpRevision(true)
     result.configVersion = digest.configVersion
     return result
   end
@@ -2670,6 +2716,7 @@ do
 
   remoteImages.status = remoteImagesStatus
   remoteImages.pruneActivityIcons = pruneActivityIcons
+  remoteImages.activityIconsChanged = activityIconsChanged
   remoteImages.commit = commitRemoteImages
   remoteImages.commitIcon = commitActivityIcon
 end

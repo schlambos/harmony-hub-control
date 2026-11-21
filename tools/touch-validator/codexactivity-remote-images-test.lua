@@ -361,6 +361,7 @@ seed()
 hub.staged[imageFile(1)] = png(70, 70, "icon")
 hub.staged[imageFile(2)] = png(54, 50, "logo")
 local before = digest.configVersion
+local contentBefore = tonumber(digest.contentVersion) or 0
 r = call("CommitRemoteImages", { images = {
   { name = "1_aaaa-01", file = imageFile(1) },
   { name = "ci_cccc-02", file = imageFile(2) },
@@ -371,6 +372,8 @@ check("sync: the bytes are in the store under those names",
   hub.files["ci_cccc-02"].bytes == png(54, 50, "logo"))
 check("sync: one revision published", hub.published == 1 and digest.configVersion == before + 1 and
   r.configVersion == digest.configVersion)
+check("sync: contentVersion moves, so a remote's quick sync fetches the images",
+  digest.contentVersion == contentBefore + 1, tostring(digest.contentVersion))
 r = call("RemoteImages")
 list = byName(r.images)
 check("list after sync: stored flags and the missing count follow",
@@ -524,6 +527,25 @@ hub.deleted = {}
 images.pruneActivityIcons(nil, { Activities = {} })
 images.pruneActivityIcons({ Activities = { { ImageKey = "Activity/../x.png" }, "junk" } }, nil)
 check("prune: odd input deletes nothing", #hub.deleted == 0, encodeJson(hub.deleted))
+
+-- Which saves change an icon (and so move contentVersion).
+local changed = images.activityIconsChanged
+local function list(...) return { Activities = { ... } } end
+local a1 = { ["Id-"] = 1, BaseImageUri = "https://h/", ImageKey = "Activity/a.png" }
+check("icons: same lists, no change", changed(list(a1), list(a1)) == false)
+check("icons: a new ImageKey is a change",
+  changed(list(a1), list({ ["Id-"] = 1, BaseImageUri = "https://h/", ImageKey = "Activity/b.png" })) == true)
+check("icons: a new BaseImageUri is a change",
+  changed(list(a1), list({ ["Id-"] = 1, BaseImageUri = "https://g/", ImageKey = "Activity/a.png" })) == true)
+check("icons: an icon cleared to null is a change",
+  changed(list(a1), list({ ["Id-"] = 1, BaseImageUri = "https://h/", ImageKey = NULL })) == true)
+check("icons: a removed activity with an icon is a change", changed(list(a1), list()) == true)
+check("icons: an added activity with an icon is a change", changed(list(), list(a1)) == true)
+check("icons: other fields and activities without icons are not a change",
+  changed(list(a1, { ["Id-"] = 2 }), list({ ["Id-"] = 1, BaseImageUri = "https://h/", ImageKey = "Activity/a.png",
+    Label = "new" }, { ["Id-"] = 3, ImageKey = NULL })) == false)
+check("icons: odd input does not throw", changed(nil, "junk") == false and changed(nil, nil) == false and
+  changed({ Activities = { "junk", a1 } }, list(a1)) == false)
 
 print(string.format("%d/%d checks passed", count - failures, count))
 os.exit(failures == 0 and 0 or 1)
