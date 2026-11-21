@@ -158,7 +158,11 @@ async function unpackHubZip(zipPath, version) {
       }
     }
     const missing = Object.keys(HUB_FILES).filter((rel) => !contents[rel]);
-    if (missing.length) throw new HubUpdateError(`The hub zip is missing ${missing.join(", ")}.`);
+    if (missing.length) {
+      throw new HubUpdateError(
+        `This hub zip is older than this app (or incomplete) and is missing files this version requires: ${missing.join(", ")}. Use a hub zip matching this app's version.`
+      );
+    }
     const manifest = contents["payload/bin/MANIFEST.txt"]?.toString("utf8") ?? "";
     for (const line of manifest.split(/\r?\n/)) {
       const m = /^([0-9a-f]{32})\s+(\S+)$/.exec(line);
