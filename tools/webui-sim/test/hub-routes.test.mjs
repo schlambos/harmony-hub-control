@@ -15,7 +15,8 @@ const SERVER = readFileSync(join(ROOT, "payload/source/codex_webui.c"), "utf8");
 // A quoted literal that starts with a hub route, cut at the query string or
 // at a template-literal placeholder.
 const CALLED_ROUTE = /["'`](\/(?:api|ir|bt|export)\/[A-Za-z0-9_\-/]+|\/(?:system|import|mqtt|wifi))(?=["'`?$])/g;
-const SERVED_ROUTE = /strn?cmp\(req(?:->|\.)path, "([^"]+)"/g;
+// codex_webui.c routes with strcmp/strncmp on the path, or path_is().
+const SERVED_ROUTE = /(?:strn?cmp|path_is)\(req(?:->|\.)path, "([^"]+)"/g;
 
 function jsFiles(dir) {
   return readdirSync(dir, { withFileTypes: true }).flatMap((entry) => {

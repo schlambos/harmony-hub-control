@@ -63,7 +63,7 @@ test("sync stores every missing image and reports progress", async () => {
   assert.equal(result.failed.size, 0);
   assert.deepEqual([...hub.stored].sort(), ["a", "b", "c"]);
   assert.deepEqual(progress, [1, 2, 3]);
-  assert.equal(sync.summary(result), "Synced 3. Run Sync remote on each remote.");
+  assert.deepEqual({ ...sync.summary(result) }, { text: "Synced 3. Run Sync remote on each remote.", tone: "ok" });
 });
 
 test("a batch the hub refuses is sent again one image at a time", async () => {
@@ -86,7 +86,7 @@ test("a full page of images Logitech no longer has doesn't block the rest", asyn
   assert.deepEqual([...result.failed.keys()], ["g1", "g2", "g3"]);
   assert.deepEqual([...hub.stored].sort(), ["ok1", "ok2"]);
   assert.ok(hub.gets.some((p) => p.endsWith("offset=3")), hub.gets.join(" "));
-  assert.equal(sync.summary(result), "Synced 2. Run Sync remote on each remote. 3 failed: Logitech no longer has this image.");
+  assert.deepEqual({ ...sync.summary(result) }, { text: "Synced 2. Run Sync remote on each remote. 3 failed: Logitech no longer has this image.", tone: "warn" });
 });
 
 test("nothing missing: one look at the hub, nothing sent", async () => {
@@ -94,6 +94,7 @@ test("nothing missing: one look at the hub, nothing sent", async () => {
   const hub = fakeHub({ names: [] });
   const result = await createImageSync(hub).sync();
   assert.equal(result.synced, 0);
+  assert.deepEqual({ ...createImageSync(hub).summary(result) }, { text: "Nothing synced.", tone: "error" });
   assert.equal(hub.posts.length, 0);
   assert.equal(hub.gets.length, 1);
 });

@@ -341,6 +341,25 @@
       background: var(--primary-container);
       color: var(--on-primary-container);
     }
+    /* Result of the last action in a row (User images sync): a coloured bar
+       and stronger text, apart from the muted description above it. */
+    .m-result {
+      display: block;
+      margin-top: var(--space-1);
+      padding-left: var(--space-2);
+      border-left: 3px solid var(--primary);
+      color: var(--on-surface);
+      font-size: 13px;
+      font-weight: 500;
+    }
+    .m-result--warn {
+      border-left-color: var(--warning);
+      color: var(--warning);
+    }
+    .m-result--error {
+      border-left-color: var(--error);
+      color: var(--error);
+    }
   </style>
 </head>
 <body>

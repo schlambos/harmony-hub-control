@@ -60,6 +60,7 @@
   let userImagesSlow = false;
   let userImagesProgress = "";
   let userImagesMessage = "";
+  let userImagesMessageTone = "ok"; // "ok", "warn" or "error": the result line's colour
   let connectExistingChosen = false;
 
   let wiz = wizardFlow
@@ -302,7 +303,7 @@
           <span class="m-row-text">
             <span class="m-row-title">User images <span class="m-status${status.tone ? ` m-status--${status.tone}` : ""}" id="settingsUserImagesStatus">${escapeHtml(status.text)}</span></span>
             <span class="m-row-sub">Activity icons and channel logos from Logitech.</span>
-            ${userImagesMessage ? `<span class="m-row-sub" id="settingsUserImagesMessage">${escapeHtml(userImagesMessage)}</span>` : ""}
+            ${userImagesMessage ? `<span class="m-result m-result--${userImagesMessageTone}" id="settingsUserImagesMessage">${escapeHtml(userImagesMessage)}</span>` : ""}
           </span>
           <button type="button" class="btn btn-tonal btn-sm" id="syncUserImagesBtn" ${canSync ? "" : "disabled"}>${
             userImagesBusy ? "Syncing…" : "Sync user images from Logitech"
@@ -344,10 +345,13 @@
         const line = document.getElementById("settingsUserImagesStatus");
         if (line) line.textContent = userImagesProgress;
       });
-      userImagesMessage = imageSync.summary(result);
-      showSnackbar(userImagesMessage, result.failed.size > 0 && result.synced === 0);
+      const outcome = imageSync.summary(result);
+      userImagesMessage = outcome.text;
+      userImagesMessageTone = outcome.tone;
+      showSnackbar(userImagesMessage, outcome.tone === "error");
     } catch (err) {
       userImagesMessage = `Sync stopped: ${err?.message || err}`;
+      userImagesMessageTone = "error";
       showSnackbar(userImagesMessage, true);
     } finally {
       userImagesBusy = false;

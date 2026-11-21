@@ -11610,6 +11610,13 @@ refuse:
     fclose(f);
 }
 
+/* The request path is route, alone or followed by a query. The length comes
+   from route itself, so a renamed route can't leave a stale count behind. */
+static int path_is(const char *path, const char *route) {
+    size_t n = strlen(route);
+    return strncmp(path, route, n) == 0 && (path[n] == 0 || path[n] == '?');
+}
+
 /* Remote images (docs/REMOTE_IMAGES.md): activity icons and favorite
  * channel logos a screen remote fetches through the hub. codexactivity lists
  * the ones the hub's own data asks for (RemoteImages), stores synced ones
@@ -14824,11 +14831,9 @@ static void handle_client(int client) {
     } else if (strcmp(req.method, "POST") == 0 && strcmp(req.path, "/api/remote-background") == 0) {
         if (request_same_origin_json(&req)) render_remote_background_set_json(client, &req);
         else send_cross_site_refused(client);
-    } else if (strcmp(req.method, "GET") == 0 && strncmp(req.path, "/api/remote-images", 20) == 0 &&
-        (req.path[20] == 0 || req.path[20] == '?')) {
+    } else if (strcmp(req.method, "GET") == 0 && path_is(req.path, "/api/remote-images")) {
         render_remote_images_json(client, &req);
-    } else if (strcmp(req.method, "GET") == 0 && strncmp(req.path, "/api/remote-images/image", 26) == 0 &&
-        (req.path[26] == 0 || req.path[26] == '?')) {
+    } else if (strcmp(req.method, "GET") == 0 && path_is(req.path, "/api/remote-images/image")) {
         render_remote_image(client, &req, 1);
     } else if (strcmp(req.method, "POST") == 0 && strcmp(req.path, "/api/remote-images") == 0) {
         if (request_same_origin_json(&req)) render_remote_images_set_json(client, &req);
@@ -15176,8 +15181,19 @@ int main(void) {
         }
     }
     failures += remote_images_cases();
+    if (!path_is("/api/remote-images", "/api/remote-images") ||
+            !path_is("/api/remote-images?offset=3", "/api/remote-images") ||
+            !path_is("/api/remote-images/image?name=x", "/api/remote-images/image") ||
+            !path_is("/api/remote-images/image", "/api/remote-images/image") ||
+            path_is("/api/remote-imagesX", "/api/remote-images") ||
+            path_is("/api/remote-images/image", "/api/remote-images") ||
+            path_is("/api/remote-images/images", "/api/remote-images/image") ||
+            path_is("/api/remote-image", "/api/remote-images")) {
+        fputs("FAIL remote images: route matching\n", stderr);
+        failures++;
+    }
     if (failures) return 1;
-    puts("PASS semantic JSON, resource backup, Bluetooth native response, Touch sync probe hosts and remote images validation");
+    puts("PASS semantic JSON, resource backup, Bluetooth native response, Touch sync probe hosts, remote images and route matching validation");
     return 0;
 }
 #else

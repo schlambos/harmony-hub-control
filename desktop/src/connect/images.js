@@ -119,12 +119,13 @@
       return { synced, failed };
     }
 
-    /** One short line for the user about a finished sync. */
+    /** A finished sync for the user: {text, tone} with tone "ok" (all
+        synced), "warn" (some failed) or "error" (nothing synced). */
     function summary({ synced, failed }) {
       const reasons = [...new Set(failed.values())];
       let text = synced ? `Synced ${synced}. Run Sync remote on each remote.` : "Nothing synced.";
       if (failed.size) text += ` ${failed.size} failed: ${reasons.slice(0, 2).join("; ")}.`;
-      return text;
+      return { text, tone: !synced ? "error" : failed.size ? "warn" : "ok" };
     }
 
     return { status, sync, storeImages, summary };
