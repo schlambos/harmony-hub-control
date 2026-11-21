@@ -553,12 +553,15 @@ object ActivityGraphBuilder {
     private fun surfaceTemplate(maps: List<JsonObject>, prefix: String = "16414"): JsonObject? {
         fun id(m: JsonObject): String = m.text("ButtonMapIdentifier").orEmpty()
         fun pick(predicate: (JsonObject) -> Boolean): JsonObject? = maps.firstOrNull { hasSurface(it) && predicate(it) }
-        return (if (prefix.isNotEmpty()) {
+        val own = if (prefix.isNotEmpty()) {
             pick { it.text("__type") == "ActivityButtonMap" && id(it).startsWith("${prefix}Activity") }
                 ?: pick { id(it) == "${prefix}Root" }
                 ?: pick { id(it).startsWith(prefix) }
-        } else null)
-            ?: pick { it.text("__type") == "ActivityButtonMap" }
+        } else null
+        // A screen remote (16417) never borrows Smart Control/Companion surface ids:
+        // if no 16417 map carries them, they stay null on every activity map built for it.
+        if (own != null || prefix == "16417") return own
+        return pick { it.text("__type") == "ActivityButtonMap" }
             ?: pick { id(it).endsWith("Root") }
             ?: pick { true }
             ?: maps.firstOrNull { it.text("__type") == "ActivityButtonMap" && id(it).startsWith("${prefix}Activity") }
@@ -571,7 +574,9 @@ object ActivityGraphBuilder {
      * mirrorTouchHardButtons: a Touch map with no hard buttons gets every one the wizard map has;
      * one that already has some keeps them and takes only the keys this edit changed, so a
      * Touch-only mapping set up in MyHarmony survives. Buttons that aren't hard buttons are
-     * untouched. A hub with a Touch surface but no map for this activity gets one.
+     * untouched. A hub with a Touch surface or a paired 16417 screen remote (for example an
+     * offline hub with no cloud 16417 maps yet, #219/#226) gets one; without a 16417 sibling its
+     * surface ids stay null rather than borrowing the Smart Control's.
      */
     fun mirrorTouchHardButtons(
         maps: List<JsonObject>,
@@ -580,17 +585,18 @@ object ActivityGraphBuilder {
         previousWizardMap: JsonObject?,
         alloc: IdAllocator,
         now: String,
+        remotes: Collection<String> = emptyList(),
     ): List<JsonObject> {
         val identifier = TouchScreenGraph.identifier(activityId.toString())
         val result = maps.toMutableList()
         var index = result.indexOfFirst { it.text("ButtonMapIdentifier") == identifier }
         if (index < 0) {
-            val sibling = maps.firstOrNull { it.text("ButtonMapIdentifier")?.startsWith("16417Activity") == true }
+            val own = maps.firstOrNull { it.text("ButtonMapIdentifier")?.startsWith("16417Activity") == true }
                 ?: maps.firstOrNull { it.text("ButtonMapIdentifier")?.startsWith("16417") == true }
-                ?: return maps
-            val surf = surfaceTemplate(maps, "16417") ?: sibling
+            if (own == null && "16417" !in remotes) return maps
+            val surf = if (own != null) surfaceTemplate(maps, "16417") ?: own else null
             fun surfField(key: String): JsonElement =
-                sibling[key]?.takeIf { it !is JsonNull } ?: surf[key] ?: JsonNull
+                own?.get(key)?.takeIf { it !is JsonNull } ?: surf?.get(key)?.takeIf { it !is JsonNull } ?: JsonNull
             result.add(
                 JsonObject(
                     mapOf(
@@ -851,10 +857,14 @@ object ActivityGraphBuilder {
      * Build the three replacement resources (`activityList`, `mapList`, `functionList`)
      * for a wizard draft, preserving non-wizard-owned maps (`16420Activity<ID>`, second surfaces)
      * and pruning any action-less buttons.
+     *
+     * [remotes]: EquadIDs of paired RF remotes when known (from `GET /api/remotes`), so a paired
+     * screen remote (`16417`) on an offline hub without cloud maps still gets `16417Activity<id>`.
      */
     fun buildActivityGraph(
         snapshot: HubConfigSnapshot,
         draft: ActivityWizardDraft,
+        remotes: Collection<String> = emptyList(),
     ): BuiltActivityGraph {
         val alloc = IdAllocator(
             listOf(snapshot.activityList, snapshot.mapList, snapshot.functionList, snapshot.deviceList)
@@ -935,6 +945,7 @@ object ActivityGraphBuilder {
             previousWizardMap = existingWizardMap,
             alloc = alloc,
             now = now,
+            remotes = remotes,
         )
         val finalMaps = if (editId.isNullOrBlank()) {
             seedTouchOnScreenButtons(mergedMaps, targetActivityId, draft, snapshot, alloc, now)

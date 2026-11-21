@@ -17,6 +17,7 @@ import {
   readActivityButtons,
 } from "../public/js/views/remotes-model.js";
 import { validateMapList } from "../public/js/views/remote-model.js";
+import { readTouchScreen } from "../public/js/views/touch-model.js";
 
 const load = (name) => JSON.parse(readFileSync(new URL(`../fixtures/${name}`, import.meta.url), "utf8"));
 const FRESH = load("fresh-hub.json");
@@ -110,7 +111,22 @@ describe("the first activity on a fresh hub", () => {
   it("a screen remote gets no root map: it has no activity buttons, and Logitech made none", () => {
     assert.ok(!CONFIGURED.mapList.ButtonMaps.some((m) => m.ButtonMapIdentifier === "16417Root"), "Logitech's own setup has none");
     const graph = buildActivityGraph({ config: FRESH.blank, draft: withKeys(), editId: null, remotes: ["16417"] });
+    assert.ok(mapById(graph, `16417Activity${graph.activityId}`), "the screen remote got its activity map");
     assert.ok(!graph.mapList.ButtonMaps.some((m) => m.ButtonMapIdentifier === "16417Root"));
+    assert.ok(!graph.mapList.ButtonMaps.some((m) => String(m.__type).includes("RootButtonMap") && String(m.ButtonMapIdentifier).startsWith("16417")));
+    // A cloud-seeded Touch (skin 99) hub behaves the same: keeps its cloud 16417 surface and gets no 16417Root.
+    const cloud = buildActivityGraph({
+      config: CONFIGURED,
+      draft: { name: "Touch cloud", type: 1, roles: [], buttons: {} },
+      editId: null,
+      remotes: ["16417"],
+    });
+    const cloudTouch = mapById(cloud, `16417Activity${cloud.activityId}`);
+    assert.ok(cloudTouch, "cloud hub still builds 16417Activity");
+    assert.equal(cloudTouch["SurfaceId-"], 14551427);
+    assert.equal(cloudTouch["ButtonMapSurfaceId-"], 14551427);
+    assert.equal(cloudTouch["RemoteId-"], 12345678);
+    assert.ok(!cloud.mapList.ButtonMaps.some((m) => m.ButtonMapIdentifier === "16417Root"));
   });
 
   it("gives a paired screen remote on an offline hub its own activity map (#219)", () => {
@@ -126,6 +142,59 @@ describe("the first activity on a fresh hub", () => {
     assert.deepEqual(hard.map((b) => b.ButtonKey), ["VolumeUp"]);
     assert.deepEqual(hard[0].ButtonAction, wizard.Buttons[0].ButtonAction);
     assert.deepEqual(validateMapList(graph.mapList), []);
+    const saved = { ...FRESH.blank, activityList: graph.activityList, mapList: graph.mapList, functionList: graph.functionList };
+    const screen = readTouchScreen(saved, graph.activityId);
+    assert.equal(screen.exists, true);
+    assert.equal(screen.canCreate, true);
+  });
+
+  it("mirrors Touch hard-key spelling and seeds on-screen buttons on a fresh hub with a paired 16417", () => {
+    const config = structuredClone(FRESH.blank);
+    config.deviceList.DevicesWithFeatures[0].Commands.push(
+      { Name: "Home", "FunctionId-": 10 },
+      { Name: "1", "FunctionId-": 11 },
+      { Name: "Guide", "FunctionId-": 12 },
+    );
+    const draft = firstActivity({
+      buttons: {
+        VolumeUp: { deviceId: DEVICE, command: { name: "Power", functionId: 0 }, hold: null },
+        Dvr: { deviceId: DEVICE, command: { name: "Guide", functionId: 12 }, hold: null },
+        Number1: { deviceId: DEVICE, command: { name: "1", functionId: 11 }, hold: null },
+      },
+    });
+    const graph = buildActivityGraph({ config, draft, editId: null, remotes: ["16417"] });
+    const own = mapById(graph, `16417Activity${graph.activityId}`);
+    assert.ok(own);
+    const hardKeys = own.Buttons.filter((b) => b.__type === "HardRemoteButton").map((b) => b.ButtonKey).sort();
+    assert.deepEqual(hardKeys, ["DVR", "VolumeUp"], "Dvr becomes DVR and digits stay off hard keys");
+    const soft = own.Buttons.filter((b) => b.__type === "SoftRemoteButton");
+    assert.ok(soft.some((b) => b.FunctionGroupType === 2 && b.TextOnRemote === "1"), "number pad seeded");
+    assert.ok(soft.some((b) => b.FunctionGroupType === 0 && b.TextOnRemote === "Home"), "Home button seeded");
+    assert.deepEqual(validateMapList(graph.mapList), []);
+  });
+
+  it("never copies Smart Control surface ids onto 16417 maps across first or later activities", () => {
+    const smartOnly = structuredClone(CONFIGURED);
+    smartOnly.mapList.ButtonMaps = smartOnly.mapList.ButtonMaps.filter(
+      (m) => !String(m.ButtonMapIdentifier ?? "").startsWith("16417"),
+    );
+    const devId = String(smartOnly.deviceList.DevicesWithFeatures[0].Device["Id-"]);
+    const draft = (name) => ({
+      name,
+      type: 1,
+      roles: [{ deviceId: devId, roleType: "DisplayActivityRole", input: "", powerDelay: "" }],
+      buttons: { VolumeUp: { deviceId: devId, command: { name: "VolumeUp", functionId: 0 }, hold: null } },
+    });
+    const first = buildActivityGraph({ config: smartOnly, draft: draft("First"), editId: null, remotes: ["16417"] });
+    const first16417 = mapById(first, `16417Activity${first.activityId}`);
+    assert.ok(first16417);
+    for (const key of ["ButtonMapSurfaceId-", "RemoteId-", "SurfaceId-"]) assert.equal(first16417[key], null, `first ${key}`);
+    const afterFirst = { ...smartOnly, activityList: first.activityList, mapList: first.mapList, functionList: first.functionList };
+    const second = buildActivityGraph({ config: afterFirst, draft: draft("Second"), editId: null, remotes: ["16417"] });
+    const second16417 = mapById(second, `16417Activity${second.activityId}`);
+    assert.ok(second16417);
+    for (const key of ["ButtonMapSurfaceId-", "RemoteId-", "SurfaceId-"]) assert.equal(second16417[key], null, `second ${key}`);
+    assert.deepEqual(validateMapList(second.mapList), []);
   });
 
   it("a screen remote that isn't paired still gets no maps on an offline hub", () => {

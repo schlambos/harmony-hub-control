@@ -468,18 +468,23 @@ function surfaceTemplate(config, remote = "16414") {
     m && (m["SurfaceId-"] ?? m.SurfaceId ?? m["ButtonMapSurfaceId-"] ?? m.ButtonMapSurfaceId) != null;
   const pick = (predicate) => maps.find((m) => hasSurface(m) && predicate(m));
   const id = (m) => String(m?.ButtonMapIdentifier ?? "");
+  const own = prefix
+    ? (pick((m) => m?.__type === "ActivityButtonMap" && id(m).startsWith(`${prefix}Activity`)) ??
+       pick((m) => id(m) === `${prefix}Root`) ??
+       pick((m) => id(m).startsWith(prefix)))
+    : null;
+  /* A screen remote (16417) never borrows Smart Control/Companion surface ids:
+     if no 16417 map carries them, they stay null on later cloned activities too. */
   const source =
-    (prefix && (
-      pick((m) => m?.__type === "ActivityButtonMap" && id(m).startsWith(`${prefix}Activity`)) ??
-      pick((m) => id(m) === `${prefix}Root`) ??
-      pick((m) => id(m).startsWith(prefix))
-    )) ??
-    pick((m) => m?.__type === "ActivityButtonMap") ??
-    pick((m) => id(m).endsWith("Root")) ??
-    pick(() => true) ??
-    maps.find((m) => m?.__type === "ActivityButtonMap" && id(m).startsWith(`${prefix}Activity`)) ??
-    maps.find((m) => m?.__type === "ActivityButtonMap") ??
-    {};
+    own ??
+    (prefix === "16417"
+      ? {}
+      : pick((m) => m?.__type === "ActivityButtonMap") ??
+        pick((m) => id(m).endsWith("Root")) ??
+        pick(() => true) ??
+        maps.find((m) => m?.__type === "ActivityButtonMap" && id(m).startsWith(`${prefix}Activity`)) ??
+        maps.find((m) => m?.__type === "ActivityButtonMap") ??
+        {});
   return {
     "ButtonMapSurfaceId-": source["ButtonMapSurfaceId-"] ?? source.ButtonMapSurfaceId ?? null,
     "RemoteId-": source["RemoteId-"] ?? source.RemoteId ?? null,
