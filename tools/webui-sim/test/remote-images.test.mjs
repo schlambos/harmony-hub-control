@@ -121,6 +121,48 @@ describe("simulator remote images", () => {
     assert.equal(missing.headers.get("cache-control"), "no-store");
   });
 
+  it("puts a new icon on an activity at once, replaces it, and removes it", async () => {
+    const config = await getJson("/api/activity-config");
+    const plain = config.activityList.Activities.find((a) => !a.ImageKey);
+    const id = String(plain["Id-"]);
+    const icon = () => ({ image: png(70, 70), thumbnail: png(38, 38), activityId: id });
+
+    // An activity without an image address needs one sent along.
+    let res;
+    if (!plain.BaseImageUri) {
+      res = await post("/api/activity-icon", icon());
+      assert.equal(res.status, 422);
+      assert.match((await res.json()).error, /send baseImageUri/);
+    }
+    assert.equal((await post("/api/activity-icon", { ...icon(), baseImageUri: "http://x/" })).status, 400);
+
+    res = await post("/api/activity-icon", { ...icon(), baseImageUri: "https://icons.example.invalid/" });
+    const first = await res.json();
+    assert.equal(res.status, 200);
+    assert.equal(first.activityId, id);
+    assert.notEqual(first.revision, config.revision);
+    let after = await getJson("/api/activity-config");
+    let saved = after.activityList.Activities.find((a) => String(a["Id-"]) === id);
+    assert.equal(saved.ImageKey, first.imageKey);
+    assert.equal(saved.BaseImageUri, plain.BaseImageUri || "https://icons.example.invalid/");
+    assert.equal(after.revision, first.revision);
+
+    const second = await (await post("/api/activity-icon", icon())).json();
+    assert.equal((await fetch(`${BASE}/api/remote-images/image?name=${first.name}`)).status, 404);
+    assert.equal((await fetch(`${BASE}/api/remote-images/image?name=${second.name}`)).status, 200);
+
+    const cleared = await (await post("/api/activity-icon", { activityId: id, clear: true })).json();
+    assert.equal(cleared.cleared, true);
+    after = await getJson("/api/activity-config");
+    saved = after.activityList.Activities.find((a) => String(a["Id-"]) === id);
+    assert.equal(saved.ImageKey, null);
+    assert.equal((await fetch(`${BASE}/api/remote-images/image?name=${second.name}_small`)).status, 404);
+
+    assert.equal((await post("/api/activity-icon", { ...icon(), activityId: "999999" })).status, 422);
+    assert.equal((await post("/api/activity-icon", { ...icon(), activityId: "1;x" })).status, 400);
+    assert.equal((await post("/api/activity-icon", { clear: true })).status, 400);
+  });
+
   it("answers 404 for an image it doesn't hold", async () => {
     assert.equal((await fetch(`${BASE}/api/remote-images/image?name=ci_none`)).status, 404);
   });

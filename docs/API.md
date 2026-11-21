@@ -1298,9 +1298,19 @@ Invoke-RestMethod "http://<hub-ip>:8080/api/activity-icon" -Method Post `
 {"ok":true,"localOnly":true,"name":"<name>","imageKey":"Activity/<name>.png"}
 ```
 
-- Stores a new activity icon and its thumbnail under a fresh name. Put
-  `imageKey` in the activity's `ImageKey` (and a `BaseImageUri` if it has
-  none) with the next `/api/activity-save`; that save publishes the revision.
+- Stores a new activity icon and its thumbnail under a fresh name.
+- With `"activityId":"<id>"` the hub puts the icon on that activity itself:
+  it saves ActivityList alone, deletes the old icon if nothing else uses it,
+  and publishes one revision. The answer adds `activityId` and the new
+  `revision` (use it as `baseRevision` for a later `/api/activity-save`).
+  `"baseImageUri":"https://<host>/"` is used when the activity has no image
+  address yet. This is how the editor changes icons: a full
+  `/api/activity-save` moves all three lists through the hub's small memory.
+- `{"activityId":"<id>","clear":true}` removes that activity's icon.
+- Without `activityId`, put `imageKey` in the activity's `ImageKey` (and a
+  `BaseImageUri` if it has none) with the next `/api/activity-save`.
+- `400` for a bad body, `422` when the hub refuses (an activity it doesn't
+  have yet, no image address), `503` when the writer doesn't answer.
 
 ### Multiple remotes of one model (experimental)
 

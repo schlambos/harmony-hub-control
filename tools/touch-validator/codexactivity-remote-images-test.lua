@@ -471,6 +471,81 @@ r = call("CommitActivityIcon", { imageFile = ICON, thumbnailFile = ICON_SMALL })
 check("new icon with the cloud blocker off: refused", r.ok == false and r.error:find("cloud blocker", 1, true),
   encodeJson(r))
 
+-- CommitActivityIcon with activityId: the icon goes on the activity at once,
+-- by saving ActivityList alone (a full activity save doesn't fit in a hub
+-- with large lists).
+local function activityById(id)
+  for _, a in ipairs(decodeJson(hub.files.ActivityList.text).Activities) do
+    if tostring(a["Id-"]) == id then return a end
+  end
+end
+seed()
+hub.files["1_aaaa-01"] = { bytes = "x", etag = '"o"', hetag = "1", image = true }
+hub.files["1_aaaa-01_small"] = { bytes = "x", etag = '"o"', hetag = "1", image = true }
+hub.files.MapList = { text = '{"ButtonMaps":[]}', etag = '"map"', hetag = "1" }
+hub.staged[ICON] = png(70, 70, "direct")
+hub.staged[ICON_SMALL] = png(38, 38, "direct-small")
+local beforeVersion, mapEtag = digest.configVersion, hub.files.MapList.etag
+r = call("CommitActivityIcon", { imageFile = ICON, thumbnailFile = ICON_SMALL, activityId = "200",
+  baseImageUri = "https://icons.example.invalid/" })
+check("direct icon: ok, with the new key and one revision",
+  r.ok == true and r.activityId == "200" and r.imageKey == "Activity/" .. tostring(r.name) .. ".png" and
+  hub.published == 1 and digest.configVersion == beforeVersion + 1 and r.configVersion == digest.configVersion,
+  encodeJson(r))
+check("direct icon: the activity has it, and the address it lacked",
+  activityById("200").ImageKey == r.imageKey and
+  activityById("200").BaseImageUri == "https://icons.example.invalid/", hub.files.ActivityList.text)
+check("direct icon: other activities and other resources untouched",
+  activityById("100").ImageKey == "Activity/1_aaaa-01.png" and activityById("100").BaseImageUri == BASE and
+  hub.files.MapList.etag == mapEtag and #hub.deleted == 0, encodeJson(hub.deleted))
+
+-- Replacing an icon another activity still uses keeps the old files; once
+-- the last user is gone they are deleted.
+hub.staged[ICON] = png(70, 70, "second")
+r = call("CommitActivityIcon", { imageFile = ICON, thumbnailFile = ICON_SMALL, activityId = "100" })
+check("direct icon on an activity with an address: keeps that address, old icon kept while activity 300 uses it",
+  r.ok == true and activityById("100").BaseImageUri == BASE and activityById("100").ImageKey == r.imageKey and
+  #hub.deleted == 0, encodeJson(r))
+r = call("CommitActivityIcon", { activityId = "300", clear = true })
+table.sort(hub.deleted)
+check("remove icon: cleared on the activity, and the now unused icon files are deleted",
+  r.ok == true and r.cleared == true and activityById("300").ImageKey == NULL and
+  encodeJson(hub.deleted) == '["1_aaaa-01","1_aaaa-01_small"]', encodeJson(r) .. encodeJson(hub.deleted))
+
+-- Refusals leave everything as it was.
+local function directRefused(label, fields, pattern)
+  seed()
+  hub.staged[ICON] = png(70, 70)
+  hub.staged[ICON_SMALL] = png(38, 38)
+  local listBefore = hub.files.ActivityList.text
+  local reply = call("CommitActivityIcon", fields)
+  local images = 0
+  for _, file in pairs(hub.files) do if file.image and not file.gone then images = images + 1 end end
+  check(label, reply.ok == false and reply.error:find(pattern, 1, true) ~= nil and images == 0 and
+    hub.files.ActivityList.text == listBefore and hub.published == 0, encodeJson(reply))
+end
+directRefused("direct icon for an activity the hub doesn't have: refused, icon files removed",
+  { imageFile = ICON, thumbnailFile = ICON_SMALL, activityId = "999" }, "save the activity first")
+directRefused("direct icon with a bad activity id: refused",
+  { imageFile = ICON, thumbnailFile = ICON_SMALL, activityId = "1; rm" }, "must be a number")
+directRefused("direct icon on an activity without an address and none sent: refused",
+  { imageFile = ICON, thumbnailFile = ICON_SMALL, activityId = "200" }, "send baseImageUri")
+directRefused("direct icon with an address that isn't a plain https host: refused",
+  { imageFile = ICON, thumbnailFile = ICON_SMALL, activityId = "200", baseImageUri = "https://x.invalid/a/b" },
+  "send baseImageUri")
+directRefused("remove icon without an activity: refused", { clear = true }, "give the activity")
+
+-- ActivityList can't be written: the old list is put back, the new files go.
+seed()
+hub.staged[ICON] = png(70, 70)
+hub.staged[ICON_SMALL] = png(38, 38)
+local listEtag = hub.files.ActivityList.etag
+hub.failSave = "ActivityList"
+r = call("CommitActivityIcon", { imageFile = ICON, thumbnailFile = ICON_SMALL, activityId = "100" })
+check("direct icon when ActivityList can't be saved: rolled back, nothing published",
+  r.ok == false and r.rolledBack == true and hub.files.ActivityList.etag == listEtag and
+  activityById("100").ImageKey == "Activity/1_aaaa-01.png" and hub.published == 0, encodeJson(r))
+
 -- Long names: the list stays under codex_webui's 32 KB answer limit.
 local long = {}
 for i = 1, 100 do

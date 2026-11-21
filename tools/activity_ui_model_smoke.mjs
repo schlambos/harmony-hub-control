@@ -709,4 +709,48 @@ validateGraph();
   assert.equal(imageStatusHtml(), "");
 }
 
+// Changing an icon goes straight to the hub for that one activity (no full
+// save), takes the hub's new revision, and leaves the editor's dirty state.
+{
+  const calls = [];
+  let answer = { status: 200, body: { ok: true, imageKey: "Activity/9_new.png", revision: "rev-icon" } };
+  const iconContext = {
+    __HARMONY_ACTIVITY_TEST__: {},
+    document: { getElementById: () => null, dispatchEvent: () => true },
+    CustomEvent: class { constructor(type) { this.type = type; } },
+    fetch: async (path, options) => {
+      calls.push({ path, body: JSON.parse(options.body) });
+      return { ok: answer.status === 200, status: answer.status, text: async () => JSON.stringify(answer.body) };
+    }
+  };
+  vm.createContext(iconContext);
+  vm.runInContext(source, iconContext, { filename: "activity-ui.js" });
+  const iconApi = iconContext.__HARMONY_ACTIVITY_TEST__.api;
+  iconApi.state.config = { activityList: { Activities: [{ "Id-": 77, Name: "A", ImageKey: null, BaseImageUri: null }] },
+    mapList: { ButtonMaps: [] }, functionList: { FunctionMaps: [] }, deviceList: { DevicesWithFeatures: [] } };
+  iconApi.state.selectedId = "77";
+  iconApi.state.revision = "rev-old";
+  iconApi.state.dirty = false;
+  const target = iconApi.state.config.activityList.Activities[0];
+
+  await iconApi.changeActivityIcon({ image: "i", thumbnail: "t" }, "done");
+  assert.equal(calls[0].path, "/api/activity-icon");
+  assert.deepEqual({ ...calls[0].body }, { image: "i", thumbnail: "t", activityId: "77", baseImageUri: iconApi.ICON_BASE_URI });
+  assert.equal(target.ImageKey, "Activity/9_new.png");
+  assert.equal(target.BaseImageUri, iconApi.ICON_BASE_URI);
+  assert.equal(iconApi.state.revision, "rev-icon");
+  assert.equal(iconApi.state.dirty, false);
+
+  answer = { status: 200, body: { ok: true, cleared: true, revision: "rev-clear" } };
+  await iconApi.changeActivityIcon({ clear: true }, "done");
+  assert.equal(calls[1].body.clear, true);
+  assert.equal(target.ImageKey, null);
+  assert.equal(iconApi.state.revision, "rev-clear");
+
+  answer = { status: 422, body: { ok: false, error: "that activity isn't on the hub yet; save the activity first" } };
+  await iconApi.changeActivityIcon({ image: "i", thumbnail: "t" }, "done");
+  assert.equal(target.ImageKey, null);
+  assert.equal(iconApi.state.revision, "rev-clear");
+}
+
 console.log("activity UI model smoke: ok");

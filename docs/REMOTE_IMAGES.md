@@ -14,10 +14,13 @@ images on the hub instead, the same way it keeps
    - choose a symbol and a tile color, then **Use this symbol**; or
    - **Upload image…** and pick any image your browser can open. The
      middle square of it is used.
-3. **Save** the activity, then choose **Sync remote** on the remote.
+3. Choose **Sync remote** on the remote.
 
-**Remove icon** clears it (save afterwards). The browser draws and scales the
-icon, so the hub only receives a 70x70 PNG and its 38x38 thumbnail.
+The icon is saved on the hub at once; the editor's **Save** isn't needed for
+it, and other unsaved changes in the editor stay as they are. **Remove icon**
+works the same way. A new activity has to be saved once before it can get an
+icon. The browser draws and scales the icon, so the hub only receives a 70x70
+PNG and its 38x38 thumbnail.
 
 An icon that shows **Not on the hub** was kept by Logitech. Sync it from
 Logitech (below), or choose a new one. If the editor says the hub's software
@@ -91,8 +94,10 @@ syncs them for it:
     PNGs up to 512x512 and 512 KB, then publishes one revision so the remotes
     sync again.
   - `CommitActivityIcon` stores a new 70x70 icon and its 38x38 thumbnail
-    under a fresh `<account id>_<uuid>` name. The activity editor puts
-    `Activity/<name>.png` in the activity's `ImageKey` with its next save.
+    under a fresh `<account id>_<uuid>` name and puts
+    `Activity/<name>.png` in the activity's `ImageKey`, saving ActivityList
+    alone. It doesn't go through a full activity save, which moves every
+    list through the hub's small memory.
 - **Cleaning up.** When an activity is saved with another icon, without
   one, or is removed, the hub deletes the old icon and its thumbnail unless
   another activity still uses it.

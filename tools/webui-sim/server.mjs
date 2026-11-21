@@ -850,7 +850,51 @@ function handleRemoteImagesSet(res, params) {
   sendJson(res, 200, { ok: true, localOnly: true, saved, failed });
 }
 
+// Like codexactivity's CommitActivityIcon: with activityId the icon goes on
+// that activity at once (ActivityList alone) and the answer carries the new
+// revision; {activityId, clear:true} removes it. Icon files no activity uses
+// any more are deleted.
+function simPruneActivityIcons(before) {
+  const used = new Set(activities().map((a) => a?.ImageKey));
+  for (const key of before) {
+    const m = typeof key === "string" && !used.has(key) ? /^Activity\/([A-Za-z0-9_-]+)\.png$/.exec(key) : null;
+    if (m) {
+      simImages.delete(m[1]);
+      simImages.delete(`${m[1]}_small`);
+    }
+  }
+}
+
 function handleActivityIconSet(res, params) {
+  const activityId = params.activityId === undefined ? "" : params.activityId;
+  if (typeof activityId !== "string" || !/^\d*$/.test(activityId)) {
+    sendJson(res, 400, { ok: false, error: "activityId must be a string of digits." });
+    return;
+  }
+  const baseImageUri = typeof params.baseImageUri === "string" ? params.baseImageUri : "";
+  if (baseImageUri && !/^https:\/\/[A-Za-z0-9.-]+\/$/.test(baseImageUri)) {
+    sendJson(res, 400, { ok: false, error: "baseImageUri must be https://<host>/." });
+    return;
+  }
+  const target = activityId ? activities().find((a) => String(a?.["Id-"]) === activityId) : null;
+  const refuse = (error) => sendJson(res, 422, { ok: false, localOnly: true, error, reply: { ok: false, localOnly: true, error } });
+  if (params.clear === true) {
+    if (!activityId) {
+      sendJson(res, 400, { ok: false, error: "Give the activityId whose icon to remove." });
+      return;
+    }
+    if (!target) {
+      refuse("that activity isn't on the hub yet; save the activity first");
+      return;
+    }
+    const before = activities().map((a) => a?.ImageKey);
+    target.ImageKey = null;
+    target.BaseImageUri = null;
+    simPruneActivityIcons(before);
+    state.revision = newRevision();
+    sendJson(res, 200, { ok: true, localOnly: true, activityId, cleared: true, revision: state.revision });
+    return;
+  }
   const image = simImagePng(params.image, 70, 70, "icon");
   const small = image.error ? null : simImagePng(params.thumbnail, 38, 38, "icon thumbnail");
   const error = image.error || small.error;
@@ -858,10 +902,27 @@ function handleActivityIconSet(res, params) {
     sendJson(res, 400, { ok: false, error });
     return;
   }
+  if (activityId && !target) {
+    refuse("that activity isn't on the hub yet; save the activity first");
+    return;
+  }
+  if (target && !target.BaseImageUri && !baseImageUri) {
+    refuse("this activity has no image address; send baseImageUri");
+    return;
+  }
   const name = `00000000-0000-4000-8000-${String(simIconNext++).padStart(12, "0")}`;
   simImages.set(name, image.bytes);
   simImages.set(`${name}_small`, small.bytes);
-  sendJson(res, 200, { ok: true, localOnly: true, name, imageKey: `Activity/${name}.png` });
+  const answer = { ok: true, localOnly: true, name, imageKey: `Activity/${name}.png` };
+  if (target) {
+    const before = activities().map((a) => a?.ImageKey);
+    target.ImageKey = answer.imageKey;
+    if (!target.BaseImageUri) target.BaseImageUri = baseImageUri;
+    simPruneActivityIcons(before);
+    state.revision = newRevision();
+    Object.assign(answer, { activityId, revision: state.revision });
+  }
+  sendJson(res, 200, answer);
 }
 
 function handleRemoteImageFile(res, params) {
