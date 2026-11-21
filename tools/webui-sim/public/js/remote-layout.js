@@ -50,9 +50,14 @@ export const REMOTE_BUTTONS = [
   { label: "Enter", aliases: "enter|e" },
 ];
 
-/* ir_command_key: lowercase, keep alphanumerics only. */
+/* ir_command_key: lowercase, keep alphanumerics only. A trailing + or - after
+ * a letter reads as up or down first, so IRDB's "VOLUME +" / "CH -" become
+ * volumeup / chdown instead of both collapsing to "volume" / "ch". */
 export function commandKey(name) {
-  return String(name ?? "").toLowerCase().replace(/[^a-z0-9]/g, "");
+  return String(name ?? "").toLowerCase()
+    .replace(/([a-z])\s*\+\s*$/, "$1up")
+    .replace(/([a-z])\s*-\s*$/, "$1down")
+    .replace(/[^a-z0-9]/g, "");
 }
 
 /* ir_alias_match: exact key match, or the alias (when longer than 4 chars)

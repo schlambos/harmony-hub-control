@@ -154,9 +154,18 @@ object RemoteLayout {
 
     private val NON_ALPHANUMERIC = Regex("[^a-z0-9]")
 
-    /** `ir_command_key`: lowercase, keep alphanumerics only. */
+    private val TRAILING_PLUS = Regex("([a-z])\\s*\\+\\s*$")
+    private val TRAILING_MINUS = Regex("([a-z])\\s*-\\s*$")
+
+    /**
+     * `ir_command_key`: lowercase, keep alphanumerics only. A trailing + or - after a letter
+     * reads as up or down first, so IRDB's "VOLUME +" / "CH -" become volumeup / chdown.
+     */
     fun commandKey(name: String?): String =
-        (name ?: "").lowercase().replace(NON_ALPHANUMERIC, "")
+        (name ?: "").lowercase()
+            .replace(TRAILING_PLUS, "$1up")
+            .replace(TRAILING_MINUS, "$1down")
+            .replace(NON_ALPHANUMERIC, "")
 
     /**
      * `ir_alias_match`: exact key match, or the alias (when longer than 4 chars)

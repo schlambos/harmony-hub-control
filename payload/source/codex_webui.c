@@ -8016,13 +8016,29 @@ static const struct ir_remote_button IR_REMOTE_BUTTONS[] = {
     {"Enter", "enter|e", 62.60, 95.70, 27.05, 3.35}
 };
 
+/* Lowercase alphanumerics only. A trailing + or - after a letter reads as
+   up or down, so IRDB's "VOLUME +" / "CH -" become volumeup / chdown
+   instead of both collapsing to "volume" / "ch" (remote-layout.js). */
 static void ir_command_key(const char *s, char *out, size_t outlen) {
-    size_t w = 0;
+    size_t w = 0, end, i;
+    const char *suffix = NULL;
     if (!outlen) return;
-    while (s && *s && w + 1 < outlen) {
-        unsigned char c = (unsigned char)*s++;
+    if (!s) s = "";
+    end = strlen(s);
+    while (end > 0 && isspace((unsigned char)s[end - 1])) end--;
+    if (end > 0 && (s[end - 1] == '+' || s[end - 1] == '-')) {
+        size_t j = end - 1;
+        while (j > 0 && isspace((unsigned char)s[j - 1])) j--;
+        if (j > 0 && isalpha((unsigned char)s[j - 1])) {
+            suffix = s[end - 1] == '+' ? "up" : "down";
+            end = j;
+        }
+    }
+    for (i = 0; i < end && w + 1 < outlen; i++) {
+        unsigned char c = (unsigned char)s[i];
         if (isalnum(c)) out[w++] = (char)tolower(c);
     }
+    while (suffix && *suffix && w + 1 < outlen) out[w++] = *suffix++;
     out[w] = 0;
 }
 
