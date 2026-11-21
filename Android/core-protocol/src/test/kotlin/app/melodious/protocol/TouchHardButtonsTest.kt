@@ -8,6 +8,7 @@ import app.melodious.protocol.model.WizardRoleDraft
 import java.io.File
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonArray
+import kotlinx.serialization.json.JsonNull
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.JsonPrimitive
 import kotlinx.serialization.json.contentOrNull
@@ -138,5 +139,149 @@ class TouchHardButtonsTest {
         val built = ActivityGraphBuilder.buildActivityGraph(snapshot(root), draft)
         assertNull(touchMap(built.mapList, built.activityId))
         assertTrue(maps(built.mapList).any { it.text("ButtonMapIdentifier") == "16414Activity${built.activityId}" })
+    }
+
+    private fun blankOfflineHubSnapshot(): HubConfigSnapshot {
+        val root = Json.parseToJsonElement(
+            """
+            {
+              "revision": "rev-blank",
+              "activityList": { "Activities": [] },
+              "mapList": { "ButtonMaps": [] },
+              "functionList": { "FunctionMaps": [] },
+              "deviceList": { "DevicesWithFeatures": [
+                {
+                  "Device": { "Id-": 93387741, "Name": "Test TV", "DeviceTypeDisplayName": "Television", "Transport": 1 },
+                  "Commands": [
+                    { "Name": "VolumeUp", "FunctionId-": 1 },
+                    { "Name": "Guide", "FunctionId-": 2 },
+                    { "Name": "Home", "FunctionId-": 3 },
+                    { "Name": "1", "FunctionId-": 4 }
+                  ]
+                }
+              ] }
+            }
+            """.trimIndent()
+        ).jsonObject
+        return ActivityGraphBuilder.parseConfigSnapshot(root)
+    }
+
+    @Test
+    fun `a paired screen remote on an offline hub gets its 16417Activity map with null surface ids (#219, #226)`() {
+        val draft = ActivityWizardDraft(
+            name = "Watch TV",
+            roles = listOf(WizardRoleDraft(roleType = "DisplayActivityRole", deviceId = "93387741")),
+            buttons = mapOf(
+                "VolumeUp" to WizardButtonMapping("93387741", "VolumeUp", functionId = 1),
+                "Dvr" to WizardButtonMapping("93387741", "Guide", functionId = 2),
+                "Number1" to WizardButtonMapping("93387741", "1", functionId = 4),
+            ),
+        )
+        val built = ActivityGraphBuilder.buildActivityGraph(blankOfflineHubSnapshot(), draft, remotes = listOf("16417"))
+        val touch = touchMap(built.mapList, built.activityId)
+        assertNotNull("paired 16417 gets its activity map", touch)
+        assertEquals("ActivityButtonMap", touch!!.text("__type"))
+        assertEquals(built.activityId, touch.text("ActivityId-"))
+        for (key in listOf("ButtonMapSurfaceId-", "RemoteId-", "SurfaceId-")) {
+            assertEquals("$key stays null", JsonNull, touch[key])
+        }
+        assertEquals(listOf("DVR", "VolumeUp"), hardKeys(touch).sortedBy { it })
+        val soft = touch.buttons().filter { it.text("__type") == "SoftRemoteButton" }
+        assertTrue("number pad seeded", soft.any { it.text("TextOnRemote") == "1" })
+        assertTrue("Home button seeded", soft.any { it.text("TextOnRemote") == "Home" })
+        assertTrue("16417Root is never created", maps(built.mapList).none { it.text("ButtonMapIdentifier") == "16417Root" })
+    }
+
+    @Test
+    fun `an unpaired screen remote still gets no 16417 map on an offline hub`() {
+        val draft = ActivityWizardDraft(
+            name = "Watch TV",
+            roles = listOf(WizardRoleDraft(roleType = "DisplayActivityRole", deviceId = "93387741")),
+            buttons = mapOf("VolumeUp" to WizardButtonMapping("93387741", "VolumeUp", functionId = 1)),
+        )
+        val built = ActivityGraphBuilder.buildActivityGraph(blankOfflineHubSnapshot(), draft, remotes = listOf("16414"))
+        assertTrue(maps(built.mapList).none { it.text("ButtonMapIdentifier")?.startsWith("16417") == true })
+    }
+
+    @Test
+    fun `re-saving an activity after pairing a screen remote adds its 16417Activity map`() {
+        val blank = blankOfflineHubSnapshot()
+        val draft = ActivityWizardDraft(
+            name = "Watch TV",
+            roles = listOf(WizardRoleDraft(roleType = "DisplayActivityRole", deviceId = "93387741")),
+            buttons = mapOf("VolumeUp" to WizardButtonMapping("93387741", "VolumeUp", functionId = 1)),
+        )
+        val first = ActivityGraphBuilder.buildActivityGraph(blank, draft, remotes = emptyList())
+        assertNull(touchMap(first.mapList, first.activityId))
+
+        val afterFirst = ActivityGraphBuilder.parseConfigSnapshot(
+            JsonObject(
+                blank.rawRoot + mapOf(
+                    "activityList" to first.activityList,
+                    "mapList" to first.mapList,
+                    "functionList" to first.functionList,
+                )
+            )
+        )
+        val again = ActivityGraphBuilder.buildActivityGraph(
+            afterFirst,
+            draft.copy(editActivityId = first.activityId),
+            remotes = listOf("16417"),
+        )
+        val touch = touchMap(again.mapList, first.activityId)
+        assertNotNull("re-save adds 16417Activity map", touch)
+        for (key in listOf("ButtonMapSurfaceId-", "RemoteId-", "SurfaceId-")) {
+            assertEquals("$key stays null", JsonNull, touch!![key])
+        }
+        assertEquals(listOf("VolumeUp"), hardKeys(touch!!))
+        assertTrue("re-save does not reseed soft buttons", touch.buttons().none { it.text("__type") == "SoftRemoteButton" })
+    }
+
+    @Test
+    fun `never copies Smart Control surface ids onto 16417 maps across first or later activities`() {
+        val smartOnlyMapList = JsonObject(
+            mapOf("ButtonMaps" to JsonArray(maps(fixture["mapList"]!!.jsonObject).filterNot { it.text("ButtonMapIdentifier")!!.startsWith("16417") }))
+        )
+        val smartOnlyRoot = JsonObject(fixture + ("mapList" to smartOnlyMapList))
+        val draft = ActivityWizardDraft(
+            name = "First",
+            buttons = mapOf("VolumeUp" to WizardButtonMapping("74521691", "VolumeUp")),
+        )
+        val first = ActivityGraphBuilder.buildActivityGraph(snapshot(smartOnlyRoot), draft, remotes = listOf("16417"))
+        val firstTouch = touchMap(first.mapList, first.activityId)!!
+        for (key in listOf("ButtonMapSurfaceId-", "RemoteId-", "SurfaceId-")) {
+            assertEquals("first $key", JsonNull, firstTouch[key])
+        }
+        val afterFirst = JsonObject(
+            smartOnlyRoot + mapOf(
+                "activityList" to first.activityList,
+                "mapList" to first.mapList,
+                "functionList" to first.functionList,
+            )
+        )
+        val second = ActivityGraphBuilder.buildActivityGraph(snapshot(afterFirst), draft.copy(name = "Second"), remotes = listOf("16417"))
+        val secondTouch = touchMap(second.mapList, second.activityId)!!
+        for (key in listOf("ButtonMapSurfaceId-", "RemoteId-", "SurfaceId-")) {
+            assertEquals("second $key", JsonNull, secondTouch[key])
+        }
+    }
+
+    @Test
+    fun `extractPairedRemoteEquadIds parses rf info replies and skips empty slots`() {
+        val reply = JsonPrimitive(
+            """{"id":1,"data":{"EquadID":"34827","Devices":[
+              {"EquadID":"16417","SkinId":"100","DeviceIndex":"1","RFID":"1053384461"},
+              {"EquadID":"0","SkinId":"","DeviceIndex":"0","RFID":"0"},
+              {"EquadID":"16414","SkinId":"","DeviceIndex":"2","RFID":"1089578031"}
+            ],"DeviceCount":2},"code":200}"""
+        )
+        assertEquals(
+            listOf("16417", "16414"),
+            app.melodious.protocol.rest.CodexHubRestClient.extractPairedRemoteEquadIds(reply),
+        )
+        assertEquals(
+            emptyList<String>(),
+            app.melodious.protocol.rest.CodexHubRestClient.extractPairedRemoteEquadIds(null),
+        )
     }
 }

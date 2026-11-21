@@ -125,6 +125,43 @@ class CodexHubRestClient(
             val unescaped = payloadText.replace("\\", "")
             return STATE_VERSION_REGEX.find(unescaped)?.groupValues?.get(1)
         }
+
+        /**
+         * Parse paired RF remote EquadIDs from `GET /api/remotes` (`reply` field from `rf.info`).
+         * Mirrors `remotes-model.js` `parseRfInfo` / `wizard.js` `pairedRemotes()`.
+         */
+        fun extractPairedRemoteEquadIds(reply: JsonElement?): List<String> {
+            val obj: JsonObject = when (reply) {
+                is JsonObject -> reply
+                is JsonPrimitive -> {
+                    val text = reply.contentOrNull ?: return emptyList()
+                    val start = text.indexOf('{')
+                    if (start < 0) return emptyList()
+                    runCatching { Json.parseToJsonElement(text.substring(start)).jsonObject }.getOrNull()
+                        ?: return emptyList()
+                }
+                else -> return emptyList()
+            }
+            val code = (obj["code"] as? JsonPrimitive)?.contentOrNull?.toIntOrNull()
+            if (code != 200) return emptyList()
+            val data = obj["data"] as? JsonObject ?: return emptyList()
+            val devices = data["Devices"] as? JsonArray ?: return emptyList()
+            return devices.mapNotNull { el ->
+                val dev = el as? JsonObject ?: return@mapNotNull null
+                val slot = (dev["DeviceIndex"] as? JsonPrimitive)?.contentOrNull?.toIntOrNull() ?: 0
+                val equad = (dev["EquadID"] as? JsonPrimitive)?.contentOrNull?.trim().orEmpty()
+                if (slot > 0 && equad.isNotEmpty() && equad != "0") equad else null
+            }
+        }
+    }
+
+    /**
+     * `GET /api/remotes`: EquadIDs of paired RF remotes, or empty when a pairing window is open
+     * or the hub's radio didn't answer.
+     */
+    suspend fun getPairedRemoteEquadIds(endpoint: HubEndpoint): List<String> = withContext(Dispatchers.IO) {
+        val root = getJson(endpoint, "/api/remotes")
+        extractPairedRemoteEquadIds(root["reply"])
     }
 
     /**
