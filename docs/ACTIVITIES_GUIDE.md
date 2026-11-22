@@ -9,7 +9,8 @@ Start with [Adding Devices & Importing IR Codes](DEVICES_AND_CODES_GUIDE.md).
 Get each device's power, inputs and timing working directly first. An
 activity cannot fix an incorrect code or an input that was never configured.
 
-This guide covers **Windows, Linux and macOS Desktop apps and browsers**,
+This guide covers **macOS, Windows, and Linux Desktop apps and browsers**
+(Windows and Linux Desktop app: **Not fully tested, needs confirmation**),
 plus the **Android app and Android browser**. Screenshots are clean
 simulator examples; they do not certify real equipment or remote hardware.
 
@@ -338,7 +339,7 @@ and per-activity caveats), see [Home control buttons](HOME_CONTROL_BUTTONS.md).
 Make a backup in Web/Desktop's **Settings → Backup** first. Power/input
 commands already belong to the device's power/input recipe: do not add
 another PowerToggle as an "extra" or you may turn it off again. For native
-network TVs such as [Android TV](ANDROID_TV.md) or [LG webOS TV](WEBOS_TV.md),
+network TVs such as [Android TV](ANDROID_TV.md) or [LG webOS TV](WEBOS_TV.md) (experimental),
 configure the TV's MAC address for Wake-on-LAN `PowerOn` when using discrete
 power. For wake-only devices such as a [Nintendo Switch 2](SWITCH2_WAKE.md), Power On
 fires the BLE wake burst at activity start while Power Off is a no-op

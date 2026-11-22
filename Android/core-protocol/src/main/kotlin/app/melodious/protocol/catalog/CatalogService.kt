@@ -219,6 +219,21 @@ class CatalogService(
                 if (commands !is JsonArray) {
                     throw CatalogError("The catalog returned no command list")
                 }
+                val (needIds, needNames) = neededProtocolRefs(commands)
+                val bundledProtocols = if (needIds.isNotEmpty() || needNames.isNotEmpty()) {
+                    try {
+                        selectNeededProtocols(catalog.protocolList(), commands)
+                    } catch (e: CancellationException) {
+                        throw e
+                    } catch (e: CatalogError) {
+                        if (e.accessDenied) throw e
+                        emptyList()
+                    } catch (_: Exception) {
+                        emptyList()
+                    }
+                } else {
+                    emptyList()
+                }
                 val matched = lastSearch?.matches?.firstOrNull { candidate ->
                     ((candidate["Id-"] ?: candidate["Id"]) as? JsonPrimitive)
                         ?.let { parseIntegerElement(it) } == validId
@@ -239,6 +254,7 @@ class CatalogService(
                     globalDevice = device,
                     languageCommands = commands,
                     generatedAt = Instant.now().toString(),
+                    protocols = JsonArray(bundledProtocols),
                 )
             }
         }

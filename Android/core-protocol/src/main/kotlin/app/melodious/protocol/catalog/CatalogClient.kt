@@ -16,6 +16,8 @@ const val SEARCH_OPERATION = "DeviceManager/SearchGlobalDevices"
 const val GLOBAL_DEVICES_OPERATION = "DeviceManager/GetGlobalDevices"
 const val GLOBAL_LANGUAGE_COMMANDS_OPERATION = "DeviceManager/GetGlobalLanguageCommands"
 const val COMMANDS_OPERATION = "DeviceManager/GetCommands"
+const val PROTOCOL_LIST_OPERATION = "UserAccountDirector/ProtocolList"
+private val ACCOUNT_ID_RE = Regex("^[A-Za-z0-9._-]+$")
 
 val DEVICE_TYPE_LABELS: Map<Long, String> = mapOf(
     1L to "Television",
@@ -206,6 +208,51 @@ class GlobalCatalogClient(
             fallbackName = "GetGlobalLanguageCommands",
         )
     }
+
+    suspend fun protocolList(): List<JsonObject> {
+        val table = operations()
+        val operation = table[PROTOCOL_LIST_OPERATION] ?: return emptyList()
+        val accountId = session.accountId.trim()
+        if (accountId.isEmpty() || !ACCOUNT_ID_RE.matches(accountId)) {
+            throw CatalogError("the Harmony session carries an invalid AccountId")
+        }
+        val endpoint = loadBalancerAddress(
+            operation.endpoint(json2 = true)
+                .replace(Regex("\\{accountId\\}|%7BaccountId%7D", RegexOption.IGNORE_CASE), accountId)
+        )
+        val (status, payload) = http.get(
+            endpoint,
+            bearer = bearer,
+            extraHeaders = mapOf("x-logitech-api-version" to "1"),
+            authenticated = true,
+        )
+        val message = (payload as? JsonObject)?.let { it["Message"] as? JsonPrimitive }
+            ?.takeIf { it.isString }?.content
+        if (status == 400 && message != null && message.contains("Access is denied")) {
+            throw CatalogError(
+                "Logitech refused the catalog session; sign in again",
+                accessDenied = true,
+            )
+        }
+        if (status != 200) throw CatalogError("$PROTOCOL_LIST_OPERATION failed with HTTP $status")
+        return extractProtocolList(payload)
+    }
+}
+
+fun extractProtocolList(payload: JsonElement?): List<JsonObject> {
+    if (payload is JsonArray) return payload.mapNotNull { it as? JsonObject }
+    val obj = payload as? JsonObject ?: return emptyList()
+    for (key in listOf("ProtocolListResult", "Data")) {
+        val inner = obj[key]
+        if (inner is JsonObject) {
+            (inner["Protocols"] as? JsonArray)?.let { arr ->
+                return arr.mapNotNull { it as? JsonObject }
+            }
+        } else if (inner is JsonArray) {
+            return inner.mapNotNull { it as? JsonObject }
+        }
+    }
+    return (obj["Protocols"] as? JsonArray)?.mapNotNull { it as? JsonObject } ?: emptyList()
 }
 
 data class CatalogModelCheck(val found: Boolean, val manufacturer: String, val model: String)

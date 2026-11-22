@@ -13,6 +13,7 @@ import app.melodious.protocol.model.SavedBtDevice
 import app.melodious.protocol.model.SavedBtScript
 import app.melodious.protocol.catalog.CatalogCommandRow
 import app.melodious.protocol.catalog.hubProtocolNames
+import app.melodious.protocol.catalog.supportedHubProtocolNames
 import app.melodious.protocol.model.SystemStatusSnapshot
 import app.melodious.protocol.update.HubSoftware
 import app.melodious.protocol.update.ReleaseVersion
@@ -564,11 +565,20 @@ class CodexHubRestClient(
         hubProtocolNames(parsed)
     }
 
-    /** `POST /api/catalog-import` with hub rows from a catalog package. */
+    /** `GET /export/protocols` → protocol names the hub has plus its built-in protocols. */
+    suspend fun getSupportedHubProtocolNames(endpoint: HubEndpoint): List<String> = withContext(Dispatchers.IO) {
+        val raw = getRawText(endpoint, "/export/protocols")
+        val parsed = runCatching { jsonParser.parseToJsonElement(raw) }
+            .getOrElse { throw HubApiException("couldn't be read") }
+        supportedHubProtocolNames(parsed) ?: throw HubApiException("couldn't be read")
+    }
+
+    /** `POST /api/catalog-import` with hub rows (and optional bundled protocols) from a catalog package. */
     suspend fun importCatalogCommands(
         endpoint: HubEndpoint,
         deviceId: String,
         rows: List<CatalogCommandRow>,
+        protocols: List<JsonObject> = emptyList(),
     ): JsonObject = withContext(Dispatchers.IO) {
         val body = buildJsonObject {
             put("deviceId", deviceId)
@@ -582,6 +592,11 @@ class CodexHubRestClient(
                     })
                 }
             })
+            if (protocols.isNotEmpty()) {
+                put("protocols", buildJsonArray {
+                    for (proto in protocols) add(proto)
+                })
+            }
         }
         try {
             postJson(endpoint, "/api/catalog-import", body)

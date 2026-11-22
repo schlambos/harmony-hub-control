@@ -1,9 +1,11 @@
 # Setting up your Harmony Hub with Melodious
 
-Set up your Harmony Hub with Melodious on **Windows, Linux or macOS**.
+Set up your Harmony Hub with Melodious on **macOS, Windows, or Linux**.
 This guide follows the desktop app's built-in Setup Wizard from first
 launch to a hub running Melodious, with your remote paired. Packaged
 Windows and macOS apps need no commands; Linux runs the same app from source.
+On Windows and Linux, the Desktop app and Setup Wizard are **Not fully tested,
+needs confirmation**.
 
 > **Availability.** The built-in Setup Wizard is on `main` and joins the
 > Windows and macOS desktop releases in the first release after `v2.1.0`.
@@ -49,9 +51,9 @@ Install the app from the
 
 | Platform | Install and first launch |
 | --- | --- |
-| **Windows** | Download `Melodious-<version>-win-x64-setup.exe` and run it, or extract `Melodious-<version>-win-x64.zip` and open `Melodious.exe`. The app is unsigned; if SmartScreen warns, choose **More info → Run anyway** after checking the download's source. Python and the USB backend are bundled; no Python installation or HID driver replacement is needed. |
+| **Windows** | **Not fully tested, needs confirmation.** Download `Melodious-<version>-win-x64-setup.exe` and run it, or extract `Melodious-<version>-win-x64.zip` and open `Melodious.exe`. The app is unsigned; if SmartScreen warns, choose **More info → Run anyway** after checking the download's source. Python and the USB backend are bundled; no Python installation or HID driver replacement is needed. |
 | **macOS** | Download `Melodious-<version>-arm64.dmg` (Apple silicon) or `Melodious-<version>-x64.dmg` (Intel), open it and drag **Melodious** into **Applications**. The app has no Apple Developer ID: Control-click → **Open**, or **System Settings → Privacy & Security → Open Anyway**. Choose **Allow** when asked for local-network access. Python and the USB backend are bundled. |
-| **Linux** | Run the desktop app from source using [`desktop/README.md`](../desktop/README.md#linux-from-source). Install Python, the USB dependencies and USB access permissions first. No Linux desktop download is published. Or use the bundled CLI in [`tools/hub-root/`](../tools/hub-root/README.md), followed by `install_webui.py`. |
+| **Linux** | **Not fully tested, needs confirmation.** Run the desktop app from source using [`desktop/README.md`](../desktop/README.md#linux-from-source). Install Python, the USB dependencies and USB access permissions first. No Linux desktop download is published. Or use the bundled CLI in [`tools/hub-root/`](../tools/hub-root/README.md), followed by `install_webui.py`. |
 
 ## Step 0: Open Melodious
 
@@ -65,10 +67,10 @@ either of these:
 - The menu bar: **File → Set Up a New Harmony Hub…** (Windows/Linux) or
   **Melodious → Set Up a New Harmony Hub…** (macOS).
 - **Settings** (File → Settings… on Windows/Linux, or Melodious → Settings…
-  on macOS): **Set up or re-root a hub**,
-  at the top under **Current hub**.
+  on macOS): **Set up or re-root a hub**, in its own **Hub setup** section
+  right below **Current hub**.
 
-![Settings with "Set up or re-root a hub" under Current hub](screenshots/desktop/wizard/03-settings-top-entry.png)
+![Settings with "Set up or re-root a hub" in the Hub setup section below Current hub](screenshots/desktop/wizard/03-settings-top-entry.png)
 
 **If your hub already runs Melodious**, you don't need the wizard. Click
 **My hub already runs Melodious — Connect →**. The Connect screen lists
@@ -154,27 +156,37 @@ for setup**. Click **Continue →** and go to [B4](#b4-connect-your-hub-to-wi-fi
 
 ![Harmony Hub found over USB and ready for setup](screenshots/desktop/wizard/04b-fresh-detect-ready.png)
 
-### B2. If the hub still has an old setup
+### B2. If the hub still has an old setup (or already runs Melodious)
 
-A second-hand hub may still carry the previous owner's setup. The wizard
-then shows **Old setup found on this hub**:
+A second-hand hub may already be configured:
 
-- **Keep Existing Setup** keeps its devices and activities and switches to
-  Path A. Choose this if the old setup is yours.
-- **Erase Hub & Start Fresh** removes the old Logitech account, devices,
-  activities and Wi-Fi settings. Choose this for a hub you bought used or
-  want to start over with. Your Harmony remote isn't harmed; you pair it
-  again at the end.
+- **Melodious is already installed on this hub:** shown if Melodious is
+  already running on the hub. Choose **Open Melodious →** to use it as-is, or
+  **Erase & set up from scratch…** to wipe it and start over.
+- **Old setup found on this hub:** shown if the hub carries a previous setup
+  without Melodious running:
+  - **Keep Existing Setup** keeps its devices and activities and switches to
+    Path A. Choose this if the setup is yours — or if you are resuming a
+    partially completed Path B setup after reopening the app.
+  - **Erase Hub & Start Fresh** removes the old Logitech account, devices,
+    activities and Wi-Fi settings. Choose this for a hub you bought used or
+    want to start over with. Your Harmony remote isn't harmed; you pair it
+    again at the end.
 
 ![Old setup found: keep it or erase it](screenshots/desktop/wizard/05b-fresh-mismatch-erase.png)
 
-After **Erase Hub & Start Fresh**, the wizard explains what is erased.
-Click **Erase Hub**. When it's done, finish restarting the hub:
+After **Erase Hub & Start Fresh** (or **Erase & set up from scratch…**), the
+wizard explains what is erased. Click **Erase Hub**. When it's done, finish
+restarting the hub:
 
 1. **Unplug the USB cable from your computer for 15 seconds.** Wait until the
    fast-blinking red light stops first.
 2. **Plug it back in, wait about 3 minutes** for the blinking red light to
    settle, then click **Check Hub**.
+3. **If Check Hub still doesn't see the hub over USB** after ~3 minutes (even
+   with the red light blinking), unplug the USB cable for 15 seconds and plug
+   it back in a **second time**, then wait briefly and click **Check Hub**
+   again. Some hubs need a second replug before USB comes back.
 
 ![Finish restarting your hub: the 15-second unplug](screenshots/desktop/wizard/06b-fresh-factory-reset.png)
 
@@ -261,6 +273,10 @@ For a new hub, do these three things:
 3. **Pair your remote.** Go to **Settings → Remotes** and click **Open
    pairing window**. On a Harmony Smart Control, hold **Menu** and **Mute**
    together for about 5 seconds. Other remotes use their own pairing steps.
+   For a **never-activated Harmony Ultimate**, place the remote on its
+   charging cradle before its first offline sync so
+   `setup.account?getProvisionInfo` succeeds (waking it near the hub isn't
+   enough on its own).
 
    ![Settings → Remotes → Pair a remote](screenshots/desktop/wizard/13-hub-pair-remote.png)
 
@@ -293,8 +309,13 @@ stops partway.**
 The USB link to the hub sometimes stops responding, especially after
 an erase or a restart. Unplug the USB cable **at the computer end** for 15
 seconds, plug it back in, wait about 3 minutes for the light to settle,
-then click **Try Again** or **Find My Hub**. The wizard remembers what's
-already done and carries on from there.
+then click **Try Again** or **Find My Hub**. If the hub still doesn't appear
+over USB after waiting, try the 15-second unplug a second time. In the same
+session, **Try Again** picks up where setup left off. If you closed and
+reopened Melodious after Steps 1–2 (local account and root access) already
+finished, **Find My Hub** on Path B sees that local setup and shows **Old
+setup found on this hub** — click **Keep Existing Setup** (not **Erase Hub &
+Start Fresh**) to keep what's already done and continue at Step 3.
 
 **Setup paused with an error.**
 The step that stopped is marked, with a plain-English hint. Follow it and

@@ -65,6 +65,7 @@ export function openWebOsSheet({ device = null, onDone } = {}) {
       content.innerHTML = `<form class="m-form" novalidate>
           <h2 class="sheet-title">${editing ? "Edit LG webOS TV" : "LG webOS TV (native LAN)"}</h2>
           <p class="sheet-text">Controls an LG webOS TV directly over your LAN without Home Assistant. Power Off, volume, mute, HDMI inputs, apps, media transport and navigation keys run over webOS SSAP; Power On uses Wake-on-LAN when a MAC address is configured.</p>
+          <p class="list-note">Experimental. Known to have problems on some newer LG TVs (2024 models), such as disconnects and standby being misread. If it doesn't behave, use Home Assistant's LG integration or IR instead.</p>
           ${textField({
             id: ids.name,
             label: "TV name",

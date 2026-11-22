@@ -63,6 +63,7 @@ SEARCH_OPERATION = "DeviceManager/SearchGlobalDevices"
 GLOBAL_DEVICES_OPERATION = "DeviceManager/GetGlobalDevices"
 GLOBAL_LANGUAGE_COMMANDS_OPERATION = "DeviceManager/GetGlobalLanguageCommands"
 COMMANDS_OPERATION = "DeviceManager/GetCommands"
+PROTOCOL_LIST_OPERATION = "UserAccountDirector/ProtocolList"
 TIMEOUT = 30.0
 PACKAGE_SCHEMA = "0.2.0"
 DEFAULT_TOKEN_FILE = Path.home() / ".melodious" / "harmony_token.json"
@@ -91,6 +92,23 @@ class JsonClient:
 
     def cookies(self) -> dict[str, str]:
         return {c.name: c.value or "" for c in self._jar}
+
+    def get(self, url: str, *, token: str | None = None,
+            headers: dict[str, str] | None = None) -> tuple[int, object]:
+        request = urllib.request.Request(url, method="GET")
+        request.add_header("Accept", "application/json")
+        request.add_header("User-Agent", os.environ.get("MELODIOUS_USER_AGENT", "melodious-catalog/1.0"))
+        if token:
+            request.add_header("Authorization", "Bearer " + token)
+        for name, value in (headers or {}).items():
+            request.add_header(name, value)
+        try:
+            with self._opener.open(request, timeout=self._timeout) as response:
+                return response.status, _decode(response.read())
+        except urllib.error.HTTPError as error:
+            return error.code, _decode(error.read())
+        except (urllib.error.URLError, OSError) as error:
+            raise CatalogError(f"could not reach {urllib.parse.urlsplit(url).netloc}: {error}") from None
 
     def post(self, url: str, payload: object, *, token: str | None = None,
              headers: dict[str, str] | None = None) -> tuple[int, object]:
@@ -568,12 +586,133 @@ class GlobalCatalogClient:
                           {"globalLanguageVersionId": {"Value": version_id}},
                           fallback_name="GetGlobalLanguageCommands")
 
+    def protocol_list(self) -> list[dict]:
+        """Fetch the account's ProtocolList from Logitech's sync service
+        (UserAccountDirector/ProtocolList, matching stock sync.lua:431-461).
+        Returns [] when the operation is absent from discovery."""
+        table = self.operations()
+        operation = table.get(PROTOCOL_LIST_OPERATION)
+        if operation is None:
+            return []
+        account_id = (self._session.account_id or "").strip()
+        if not account_id or not re.fullmatch(r"[A-Za-z0-9._-]+", account_id):
+            raise CatalogError("the Harmony session carries an invalid AccountId")
+        endpoint = load_balancer_address(
+            re.sub(r"\{accountId\}|%7BaccountId%7D", urllib.parse.quote(account_id, safe=""),
+                   operation.endpoint(json2=True), flags=re.IGNORECASE)
+        )
+        status, payload = self._client.get(
+            endpoint,
+            token=self._bearer,
+            headers={"x-logitech-api-version": "1"},
+        )
+        message = payload.get("Message") if isinstance(payload, dict) else None
+        if status == 400 and isinstance(message, str) and "Access is denied" in message:
+            raise CatalogError("Logitech refused the catalog session; sign in again")
+        if status != 200:
+            raise CatalogError(f"{PROTOCOL_LIST_OPERATION} failed with HTTP {status}" + (f": {message}" if message else ""))
+        return extract_protocol_list(payload)
+
+
+def extract_protocol_list(payload: object) -> list[dict]:
+    """Extract the Protocols[] list from a UserAccountDirector/ProtocolList response."""
+    if isinstance(payload, list):
+        return [item for item in payload if isinstance(item, dict)]
+    if not isinstance(payload, dict):
+        return []
+    for container_key in ("ProtocolListResult", "Data"):
+        inner = payload.get(container_key)
+        if isinstance(inner, dict) and isinstance(inner.get("Protocols"), list):
+            return [item for item in inner["Protocols"] if isinstance(item, dict)]
+        if isinstance(inner, list):
+            return [item for item in inner if isinstance(item, dict)]
+    protocols = payload.get("Protocols")
+    if isinstance(protocols, list):
+        return [item for item in protocols if isinstance(item, dict)]
+    return []
+
+
+def is_valid_protocol_record(record: object) -> bool:
+    """True when `record` looks like a usable Harmony IrProtocol definition."""
+    if not isinstance(record, dict):
+        return False
+    if record.get("__type") != "IrProtocol":
+        return False
+    pid = record.get("Id-")
+    if not isinstance(pid, int) or isinstance(pid, bool) or pid <= 0 or pid > 999999:
+        return False
+    name = record.get("Name")
+    if not isinstance(name, str) or not name or len(name) > 127:
+        return False
+    if any(ch in name for ch in (":", "\"", "\\")) or any(ord(ch) < 0x20 or ord(ch) == 0x7F for ch in name):
+        return False
+    freq = record.get("CarrierFrequency")
+    if not isinstance(freq, (int, float)) or isinstance(freq, bool) or not (10000 <= freq <= 500000):
+        return False
+    if not isinstance(record.get("KeyCode"), dict):
+        return False
+    ir_segments = record.get("IRSegments")
+    code_segments = record.get("CodeSegments")
+    if not isinstance(ir_segments, list):
+        return False
+    if code_segments is not None and not isinstance(code_segments, list):
+        return False
+    has_ir = any(isinstance(s, dict) for s in ir_segments)
+    has_code = isinstance(code_segments, list) and any(isinstance(s, dict) for s in code_segments)
+    return has_ir or has_code
+
+
+def needed_protocol_refs(commands: object) -> tuple[set[int], set[str]]:
+    """Protocol IDs and G:<name>: protocol names referenced by a command list."""
+    ids: set[int] = set()
+    names: set[str] = set()
+    if not isinstance(commands, list):
+        return ids, names
+    for cmd in commands:
+        if not isinstance(cmd, dict):
+            continue
+        keycode = cmd.get("KeyCode")
+        if isinstance(keycode, str) and keycode.startswith("G:"):
+            parts = keycode[2:].split(":", 1)
+            if parts and parts[0]:
+                names.add(parts[0])
+            pid = cmd.get("ProtocolId")
+            if isinstance(pid, int) and not isinstance(pid, bool) and pid > 0:
+                ids.add(pid)
+    return ids, names
+
+
+def select_needed_protocols(protocol_list: object, commands: object) -> list[dict]:
+    """Filter a ProtocolList down to valid IrProtocol records needed by `commands`."""
+    need_ids, need_names = needed_protocol_refs(commands)
+    if not need_ids and not need_names:
+        return []
+    entries = extract_protocol_list(protocol_list) if not isinstance(protocol_list, list) else [
+        item for item in protocol_list if isinstance(item, dict)
+    ]
+    selected: list[dict] = []
+    seen_ids: set[int] = set()
+    seen_names: set[str] = set()
+    for proto in entries:
+        if not is_valid_protocol_record(proto):
+            continue
+        pid = proto["Id-"]
+        name = proto["Name"]
+        if pid not in need_ids and name not in need_names:
+            continue
+        if pid in seen_ids or name in seen_names:
+            continue
+        seen_ids.add(pid)
+        seen_names.add(name)
+        selected.append(proto)
+    return selected
+
 
 # --------------------------------------------------------------------------
 # the offline package (what the web UI opens)
 # --------------------------------------------------------------------------
 _SECRET_KEY = re.compile(
-    r"(authorization|cookie|password|passwd|secret|access.?token|refresh.?token|id.?token|auth.?token)",
+    r"(authorization|cookie|password|passwd|secret|access.?token|refresh.?token|id.?token|auth.?token|account.?id)",
     re.IGNORECASE)
 
 
@@ -586,7 +725,8 @@ def redact(value: object) -> object:
 
 
 def build_package(*, manufacturer: str, model: str, search_result: object,
-                  selected_match: object, global_device: object, language_commands: object) -> dict:
+                  selected_match: object, global_device: object, language_commands: object,
+                  protocols: object | None = None) -> dict:
     from datetime import datetime, timezone
     resources = {
         "search_result": redact(search_result),
@@ -594,6 +734,8 @@ def build_package(*, manufacturer: str, model: str, search_result: object,
         "global_device": redact(global_device),
         "global_language_commands": redact(language_commands),
     }
+    if protocols is not None:
+        resources["protocols"] = redact(protocols)
     return {
         "schema_version": PACKAGE_SCHEMA,
         "generated_at": datetime.now(timezone.utc).isoformat(),
@@ -634,9 +776,18 @@ def fetch_package(client: JsonClient, session: HarmonySession, manufacturer: str
         if not isinstance(version_id, (int, str)) or isinstance(version_id, bool):
             raise CatalogError("the device carries no language version id")
         commands = catalog.global_language_commands(version_id)
+        protocols: list[dict] = []
+        need_ids, need_names = needed_protocol_refs(commands)
+        if need_ids or need_names:
+            try:
+                protocols = select_needed_protocols(catalog.protocol_list(), commands)
+            except CatalogError as error:
+                if "refused the catalog session" in str(error):
+                    raise
+                protocols = []
     return build_package(manufacturer=manufacturer, model=model, search_result=raw,
                          selected_match=selected, global_device=global_device,
-                         language_commands=commands)
+                         language_commands=commands, protocols=protocols)
 
 
 def _slug(text: str) -> str:
@@ -674,8 +825,10 @@ def main(argv: list[str] | None = None) -> int:
     output.write_text(json.dumps(package, ensure_ascii=False, indent=2, sort_keys=True) + "\n", encoding="utf-8")
     commands = package["resources"]["global_language_commands"]
     count = len(commands) if isinstance(commands, list) else 0
+    bundled = package["resources"].get("protocols")
+    proto_note = f", {len(bundled)} protocol{'s' if len(bundled) != 1 else ''}" if isinstance(bundled, list) and bundled else ""
     match = package["resources"]["selected_match"]
-    print(f"Wrote {output} ({count} commands for {match.get('Manufacturer', '')} {match.get('DeviceModel', '')}).")
+    print(f"Wrote {output} ({count} commands{proto_note} for {match.get('Manufacturer', '')} {match.get('DeviceModel', '')}).")
     print("Now open it in the web UI: device page -> Import codes -> Logitech catalog.")
     return 0
 

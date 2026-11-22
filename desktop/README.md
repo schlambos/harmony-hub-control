@@ -1,9 +1,10 @@
 # Melodious desktop (`desktop/`)
 
-The Melodious web app in a desktop window on Windows, Linux and macOS,
-plus hub Setup Wizard and Logitech catalog lookup. Windows and macOS
-releases include the wizard after `v2.1.0`; it is on `main` and Linux can
-run it from source. The bundled CLI works on all three platforms now. The
+The Melodious web app in a desktop window on macOS, Windows, and Linux,
+plus hub Setup Wizard and Logitech catalog lookup (Windows and Linux Desktop
+app and Setup Wizard: **Not fully tested, needs confirmation**). Windows and
+macOS releases include the wizard after `v2.1.0`; it is on `main` and Linux
+can run it from source. The bundled CLI works on all three platforms now. The
 plan and its security model are in [`docs/DESKTOP_APP.md`](../docs/DESKTOP_APP.md);
 user guides are [Setup Guide](../docs/SETUP_GUIDE.md) and
 [install and first run](../docs/DESKTOP_APP.md#install-and-first-run-user-guide).
@@ -22,6 +23,13 @@ The wizard additionally needs Python 3, `ssh` and `ssh-keygen` on PATH.
 Windows' native `winhid` needs no Python USB package; macOS/Linux need
 `tools/hub-root/requirements-usb.txt` in `tools/hub-root/.venv`.
 Packaged Windows/macOS apps bundle Python and their USB backend instead.
+In unpackaged source mode (`npm start`), `src/wizard/bridge.js` checks
+`tools/hub-root/.venv` and then system `python3` / `python` — it does not
+automatically pick up a runtime staged by `scripts/stage-wizard-runtime.sh`
+under `desktop/build/wizard-python/`; set `MELODIOUS_WIZARD_PYTHON` to that
+interpreter (for example
+`MELODIOUS_WIZARD_PYTHON=build/wizard-python/arm64/bin/python3 npm start`)
+or to any other Python executable you want source mode to use.
 
 ```sh
 cd desktop
@@ -132,7 +140,7 @@ SHA-256-pinned Root & Setup Wizard Python + `hidapi` runtimes for `arm64` and
 - The `.zip.blockmap` files are for auto-update, which the app doesn't
   have. Don't attach them to a release.
 
-## Windows (experimental)
+## Windows (Not fully tested, needs confirmation)
 
 The same app builds for Windows 10 and 11 (x64). It is built and tested on
 GitHub's Windows runner (`.github/workflows/desktop-windows.yml`), and
@@ -179,6 +187,8 @@ npm run test:dist:win
   and verifies Welcome and the File-menu wizard entry. No hub is needed.
 
 ## Linux from source
+
+**Status: Not fully tested, needs confirmation.**
 
 Install your distribution's Node.js/Electron runtime dependencies, Python 3
 with venv support, OpenSSH client (`ssh`, `ssh-keygen`), `unzip` (hub release

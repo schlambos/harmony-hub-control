@@ -20,10 +20,13 @@ the `melodious-windows-x64` artifact. Nothing is signed or published.
 
 ## Test suites
 
-`tools/ci/run_suites.sh` holds the list: the simulator and desktop tests, the
-hygiene and shell checks, the installer contract, the BusyBox links, the
-release tools, the Docker manager, USB Ethernet, the HBus and activity
-checks, and the ten Lua writer tests. Run it the same way before you push:
+`tools/ci/run_suites.sh` holds the 43 suites: the simulator and desktop tests,
+the hygiene and shell checks, the installer contract, the BusyBox links, the
+release tools, the Docker manager, `hub-root` and hardware-regression offline
+tests, Bluetooth and Home Assistant checks, USB Ethernet, the HBus and activity
+checks, and the 18 Lua suites (`lua-*`, covering `codexactivity.lua`,
+`netservicestarter.lua`, and `codexmqtt.lua`). Run it the same way before you
+push:
 
 ```sh
 sh tools/ci/run_suites.sh            # everything, about three minutes
@@ -36,14 +39,10 @@ The list also holds `hwreg-offline`, the hardware regression suite's offline
 unit tests (`tools/hw-regression/`); they need no hub. The live suite itself
 is a manual hardware gate — see `tools/hw-regression/README.md`.
 
-**Quarantine.** `tools/ci/quarantine.txt` lists the suites that already fail
+**Quarantine.** `tools/ci/quarantine.txt` lists any suites that already fail
 on `main`. CI reports them and doesn't count them. When a listed suite
-passes, CI fails until its line is deleted, so the list can't go stale. Two
-suites are on it today:
-
-- `lua-ha-devices`: `codexactivity-ha-devices-test.lua` stops at line 586;
-- `activity-offline-guard`: the guard forbids `http://` in
-  `codexactivity.lua`, which holds the Home Assistant webhook URL.
+passes, CI fails until its line is deleted, so the list can't go stale. The
+file is empty today (0 suites quarantined).
 
 **Left out on Linux.** The suites are written on macOS and CI runs on
 Linux, where 15 tests can't pass for reasons of the host. `run_suites.sh`
@@ -53,18 +52,20 @@ leaves them out on Linux and says so; on macOS it runs everything.
   the host's tools (all of `SingleStateTurnOffOnFlow`, and one in
   `SingleStateBootAndDefenseInDepth`). Its stock lines use `${TDE:0:1}`,
   which dash rejects, and a `sed` script that GNU sed rejects; the hub's
-  BusyBox and macOS accept both. The other 129 run.
+  BusyBox and macOS accept both. The rest (about 150 tests) run.
 - `sim`: one test in `ha-state.test.mjs` compiles a C harness with
   `-std=c99`, which hides `strdup`, `O_CLOEXEC` and `useconds_t` under
-  glibc. The other 745 run.
+  glibc. The rest (over 900 sim tests) run.
 
 Run the suites on a Mac before merging a change to the turn-off flow or the
 Home Assistant state endpoint. (GitHub's macOS runners were tried first: the
 job waited 15 minutes for a runner and was dropped.)
 
-**Flaky.** `usb-eth` waits on real time, and one of its 56 tests fails now
-and then on a busy machine, a different one each time. A failed run is tried
-once more and reported as `FLAKY`.
+**Flaky.** `usb-eth-service`, `usb-eth-cable`, and `usb-eth-guard` (about 80
+Python tests across the three timing-sensitive USB Ethernet suites;
+`usb-eth-logic` runs separately in C) wait on real time, and a test fails now
+and then on a busy machine. A failed run is tried once more and reported as
+`FLAKY`.
 
 **Real MIPS backend:** the `emulator` job starts the pinned `codex_webui`
 and `codex_hbus` under QEMU on its own hosted VM. Its loopback ports are

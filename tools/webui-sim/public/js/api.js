@@ -196,10 +196,13 @@ export function getNetworkOverview() {
   return request("/api/network-overview");
 }
 
-export function importCatalog({ deviceId, commands }) {
+export function importCatalog({ deviceId, commands, protocols }) {
+  const body = Array.isArray(protocols) && protocols.length
+    ? { deviceId, commands, protocols }
+    : { deviceId, commands };
   return request("/api/catalog-import", {
     method: "POST",
-    body: { deviceId, commands },
+    body,
   });
 }
 
