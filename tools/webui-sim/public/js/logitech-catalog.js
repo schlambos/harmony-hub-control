@@ -2,11 +2,12 @@
    tools/catalog/harmony_catalog.py downloads (schema 0.2.0).
 
    The flow this enables: the owner signs in to their own Logitech account
-   on their computer, the helper downloads a device's command set, and the
-   browser then imports only the commands this hub can actually play —
-   KeyCodes whose named protocol has a ProtocolList record here. Raw codes
-   pass through untouched. Everything unimportable is reported by name,
-   never silently dropped. */
+   on their computer, the helper downloads a device's command set (and any
+   matching protocol records from the account's ProtocolList), and the
+   browser then imports the commands this hub can play — KeyCodes whose
+   named protocol is already on the hub, built into the hub, or validly
+   bundled in the package. Raw codes pass through untouched. Everything
+   unimportable is reported by name, never silently dropped. */
 
 /** True when `pkg` is a schema 0.2.0 Logitech catalog package. */
 export function isCatalogPackage(pkg) {
@@ -19,11 +20,59 @@ export function isCatalogPackage(pkg) {
   );
 }
 
+/** True when `record` looks like a usable Harmony IrProtocol definition. */
+export function isValidProtocolRecord(record) {
+  if (!record || typeof record !== "object" || Array.isArray(record)) return false;
+  if (record.__type !== "IrProtocol") return false;
+  const pid = record["Id-"];
+  if (!Number.isInteger(pid) || pid <= 0 || pid > 999999) return false;
+  const name = record.Name;
+  if (typeof name !== "string" || !name || name.length > 127) return false;
+  if (/[:\\"\u0000-\u001f\u007f]/.test(name)) return false;
+  const freq = record.CarrierFrequency;
+  if (typeof freq !== "number" || !Number.isFinite(freq) || freq < 10000 || freq > 500000) {
+    return false;
+  }
+  if (!record.KeyCode || typeof record.KeyCode !== "object" || Array.isArray(record.KeyCode)) {
+    return false;
+  }
+  if (!Array.isArray(record.IRSegments)) return false;
+  if (record.CodeSegments !== undefined && record.CodeSegments !== null && !Array.isArray(record.CodeSegments)) {
+    return false;
+  }
+  const hasIr = record.IRSegments.some((s) => s && typeof s === "object" && !Array.isArray(s));
+  const hasCode =
+    Array.isArray(record.CodeSegments) &&
+    record.CodeSegments.some((s) => s && typeof s === "object" && !Array.isArray(s));
+  return hasIr || hasCode;
+}
+
+/** Valid IrProtocol records bundled inside a catalog package, deduplicated by Id- and Name. */
+export function packageProtocols(packageJson) {
+  const raw = packageJson?.resources?.protocols;
+  if (!Array.isArray(raw)) return [];
+  const valid = [];
+  const seenIds = new Set();
+  const seenNames = new Set();
+  for (const proto of raw) {
+    if (!isValidProtocolRecord(proto)) continue;
+    const pid = proto["Id-"];
+    const name = proto.Name;
+    if (seenIds.has(pid) || seenNames.has(name)) continue;
+    seenIds.add(pid);
+    seenNames.add(name);
+    valid.push(proto);
+  }
+  return valid;
+}
+
 /**
  * Convert a 0.2.0 catalog package into import rows plus a report of what
  * was left out and why. `hubProtocolNames` is the set of protocol names
- * with a ProtocolList record on this hub.
- * @returns {{ rows: Array, skipped: Array, protocolsUsed: string[], missingProtocols: string[] }}
+ * with a ProtocolList record on this hub (or built into the hub). Valid
+ * protocol records bundled in `packageJson.resources.protocols` also make
+ * their KeyCodes importable and are returned in `protocolsToAdd`.
+ * @returns {{ rows: Array, skipped: Array, protocolsUsed: string[], missingProtocols: string[], protocolsToAdd: Array }}
  */
 export function catalogRows(packageJson, hubProtocolNames) {
   const resources = packageJson?.resources ?? {};
@@ -31,10 +80,15 @@ export function catalogRows(packageJson, hubProtocolNames) {
     ? resources.global_language_commands
     : [];
   const have = new Set(hubProtocolNames ?? []);
+  const bundledByName = new Map();
+  for (const proto of packageProtocols(packageJson)) {
+    bundledByName.set(proto.Name, proto);
+  }
   const rows = [];
   const skipped = [];
   const used = new Set();
   const missing = new Set();
+  const toAddByName = new Map();
   for (const command of commands) {
     const name = String(command?.Name ?? "").trim();
     if (!name) {
@@ -50,9 +104,13 @@ export function catalogRows(packageJson, hubProtocolNames) {
         continue;
       }
       if (!have.has(protocol)) {
-        missing.add(protocol);
-        skipped.push({ name, reason: `protocol “${protocol}” is not on this hub` });
-        continue;
+        const bundled = bundledByName.get(protocol);
+        if (!bundled) {
+          missing.add(protocol);
+          skipped.push({ name, reason: `protocol “${protocol}” is not on this hub` });
+          continue;
+        }
+        toAddByName.set(protocol, bundled);
       }
       used.add(protocol);
       rows.push({ name, keycode, raw: "", protocol });
@@ -69,15 +127,24 @@ export function catalogRows(packageJson, hubProtocolNames) {
     skipped,
     protocolsUsed: [...used].sort(),
     missingProtocols: [...missing].sort(),
+    protocolsToAdd: [...toAddByName.values()],
   };
 }
 
 /**
- * Protocols the hub knows natively (ensure_builtin_protocol_for_id in
- * payload/source/codex_webui.c) and automatically writes to ProtocolList.json
- * on import, even on a brand-new blank hub whose ProtocolList starts empty.
+ * Protocols the hub knows natively (BUILTIN_PROTOCOLS /
+ * ensure_builtin_protocol_for_id in payload/source/codex_webui.c) and
+ * automatically writes to ProtocolList.json on import, even on a brand-new
+ * blank hub whose ProtocolList starts empty.
  */
-export const BUILTIN_HUB_PROTOCOLS = Object.freeze(["Toshiba 32 Bit", "MemorexO1 32 Bit"]);
+export const BUILTIN_HUB_PROTOCOLS = Object.freeze([
+  "Toshiba 32 Bit",
+  "Sony 15 Bit",
+  "Sony 20 Bit",
+  "Saitek 11 Bit",
+  "MemorexO1 32 Bit",
+  "Samsung 16 and 20 Bit",
+]);
 
 /** Protocol names the hub has, read from an exported ProtocolList. */
 export function hubProtocolNames(protocolList) {
@@ -106,11 +173,25 @@ export function supportedHubProtocolNames(protocolList) {
   return merged;
 }
 
+/** Human explanation and workaround when a catalog package needs missing IR protocols. */
+export function missingProtocolsHint(missingProtocols) {
+  const list = Array.isArray(missingProtocols) ? missingProtocols.filter(Boolean) : [];
+  if (!list.length) return "";
+  return (
+    `This hub does not have the IR timing definition for ${list.join(", ")}, ` +
+    "so it cannot play those KeyCodes. Learn the buttons from your original remote, " +
+    "or import the device from IRDB or a Flipper .ir file in Find codes."
+  );
+}
+
 /** Human summary of a conversion, for the sheet's status line. */
 export function describeCatalogRows(result) {
-  const { rows, skipped, protocolsUsed, missingProtocols } = result;
+  const { rows, skipped, protocolsUsed, missingProtocols, protocolsToAdd } = result;
   const bits = [`${rows.length} importable`];
   if (protocolsUsed.length) bits.push(`protocols: ${protocolsUsed.join(", ")}`);
+  if (Array.isArray(protocolsToAdd) && protocolsToAdd.length) {
+    bits.push(`adds protocols: ${protocolsToAdd.map((p) => p.Name).sort().join(", ")}`);
+  }
   if (skipped.length) bits.push(`${skipped.length} skipped`);
   if (missingProtocols.length) bits.push(`missing on hub: ${missingProtocols.join(", ")}`);
   return bits.join(" · ");

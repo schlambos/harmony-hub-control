@@ -36,9 +36,12 @@ const {
   DISCOVERY_URL,
   HARMONY_SIGNIN_URL,
   SEARCH_DEVICE_BASE_URL,
+  PROTOCOL_LIST_OPERATION,
   ensureSession,
   loadBalancerAddress,
   parseOperations,
+  isValidProtocolRecord,
+  selectNeededProtocols,
   checkDeviceModel,
   redact,
   buildPackage,
@@ -781,4 +784,112 @@ test("sign-in guards popup session isolation, every callback hook, permissions a
     assert.equal(win.closed, true);
     assert.equal(beforeRedirect, null);
   }
+});
+
+test("ProtocolList fetch bundles matching IrProtocol records, preserves cookie isolation, and enforces allowlist", async () => {
+  const fixtureCustomProto = {
+    __type: "IrProtocol",
+    "Id-": 999,
+    Name: "RC6 Mode 0",
+    CarrierFrequency: 36000,
+    IRSegments: [{ Header: [{ Value: 2666, Type: 1 }], Payload: { NumberOfBits: 16, Encodings: [] }, Trailer: [], TotalLength: 107000, Name: "RC6 Mode 0" }],
+    CodeSegments: [],
+    KeyCode: { Start: null, Repeat: [{ SegmentType: 1, SegmentName: "RC6 Mode 0" }], Finish: null },
+  };
+  const fixtureUnusedProto = {
+    __type: "IrProtocol",
+    "Id-": 555,
+    Name: "Unused Protocol",
+    CarrierFrequency: 38000,
+    IRSegments: [{ Header: [{ Value: 4000, Type: 1 }], Payload: { NumberOfBits: 12, Encodings: [] }, Trailer: [], TotalLength: 45000, Name: "Unused Protocol" }],
+    CodeSegments: [],
+    KeyCode: { Start: null, Repeat: [{ SegmentType: 1, SegmentName: "Unused Protocol" }], Finish: null },
+  };
+  assert.equal(isValidProtocolRecord(fixtureCustomProto), true);
+  assert.deepEqual(
+    selectNeededProtocols({ Protocols: [fixtureUnusedProto, fixtureCustomProto] }, FIXTURES.getGlobalLanguageCommands.GetGlobalLanguageCommandsResult),
+    [fixtureCustomProto]
+  );
+
+  // Verify JsonClient allowlist and cookie scoping on real fetch mock:
+  // - Authenticated GET to UserAccountDirector/ProtocolList is allowed and sends Cookie + Bearer.
+  // - Anonymous SearchDevice GET still sends no Cookie.
+  // - Unauthenticated ProtocolList GET or query string is refused.
+  const seen = [];
+  const client = new JsonClient({
+    fetchImpl: async (url, init) => {
+      seen.push({ url, method: init.method, headers: init.headers });
+      const headers = new Headers();
+      if (url === HARMONY_SIGNIN_URL) {
+        headers.set("set-cookie", "session=fixture-cookie; Path=/");
+        return { status: 200, headers, text: async () => JSON.stringify({ AccountId: "acct-42" }) };
+      }
+      if (url === DISCOVERY_URL) {
+        return {
+          status: 200,
+          headers,
+          text: async () => JSON.stringify({
+            GetJsonOperationsResult: [
+              ...FIXTURES.discovery.GetJsonOperationsResult,
+              {
+                Identifier: PROTOCOL_LIST_OPERATION,
+                Address: "https://svcs.myharmony.com/UserAccountDirectorPlatform/UserAccountDirector.svc/json/Account/{accountId}/",
+                Name: "ProtocolList",
+              },
+            ],
+          }),
+        };
+      }
+      if (url.endsWith("/json2/GetGlobalDevices")) {
+        return { status: 200, headers, text: async () => JSON.stringify(FIXTURES.getGlobalDevices) };
+      }
+      if (url.endsWith("/json/GetGlobalLanguageCommands")) {
+        return { status: 200, headers, text: async () => JSON.stringify(FIXTURES.getGlobalLanguageCommands) };
+      }
+      if (url.endsWith("/Account/acct-42/ProtocolList")) {
+        return {
+          status: 200,
+          headers,
+          text: async () => JSON.stringify({ Protocols: [fixtureUnusedProto, fixtureCustomProto, { __type: "HidProtocol", "Id-": 999997, Name: "HID 16 Bit" }] }),
+        };
+      }
+      if (url.startsWith(`${SEARCH_DEVICE_BASE_URL}/manf/`)) {
+        return { status: 200, headers, text: async () => JSON.stringify(FIXTURES.searchDeviceFound) };
+      }
+      throw new Error(`Unexpected fetch ${url}`);
+    },
+  });
+
+  await assert.rejects(
+    () => client.get("https://lb-svcs.myharmony.com/UserAccountDirectorPlatform/UserAccountDirector.svc/json2/Account/acct-42/ProtocolList"),
+    /unexpected catalog endpoint/
+  );
+  await assert.rejects(
+    () => client.get("https://lb-svcs.myharmony.com/UserAccountDirectorPlatform/UserAccountDirector.svc/json2/Account/acct-42/ProtocolList?extra=1", { authenticated: true }),
+    /unexpected catalog endpoint/
+  );
+
+  const service = createCatalogService({
+    client,
+    settingsStore: {
+      getSettings: () => ({ effectiveClientId: DEFAULT_CLIENT_ID }),
+      getLogitechTokens: () => ({ access_token: "tok-proto", id_token: "id-proto", refresh_token: "ref-proto" }),
+      setLogitechTokens: () => {},
+      clearLogitechTokens: () => {},
+    },
+  });
+  const pkg = await service.download({ id: 167856, manufacturer: "Sony", model: "STR-DG720" });
+  assert.deepEqual(pkg.resources.protocols, [fixtureCustomProto]);
+  assert.equal(JSON.stringify(pkg).includes("acct-42"), false);
+
+  const protoReq = seen.find((r) => r.url.endsWith("/Account/acct-42/ProtocolList"));
+  assert.equal(protoReq.method, "GET");
+  assert.equal(protoReq.headers.Cookie, "session=fixture-cookie");
+  assert.equal(protoReq.headers.Authorization, "Bearer tok-proto");
+  assert.equal(protoReq.headers["x-logitech-api-version"], "1");
+
+  await service.checkModel({ manufacturer: "Sony", model: "STR-DG720" });
+  const searchReq = seen.find((r) => r.url.startsWith(`${SEARCH_DEVICE_BASE_URL}/manf/`));
+  assert.equal(searchReq.headers.Cookie, undefined);
+  assert.equal(searchReq.headers.Authorization, undefined);
 });
