@@ -154,6 +154,32 @@ test("reads a hub zip the user chose: version from its folder, helpers skipped, 
   }
 });
 
+test("keeps refusing an older hub zip missing required files, with a clear older-than-this-app message", { skip: !mac && !win && !linux }, async () => {
+  const dir = tmp();
+  try {
+    makeHubZip(dir, "2.1.0");
+    const top = path.join(dir, "melodious-hub-2.1.0");
+    fs.rmSync(path.join(top, "payload/bin/codex_webos"));
+    fs.rmSync(path.join(top, "payload/bin/codex_usbeth"));
+    const olderZip = path.join(dir, "melodious-hub-2.1.0-older.zip");
+    if (win) execFileSync(unzipCommand(olderZip, dir)[0], ["-a", "-c", "-f", olderZip, "-C", dir, "melodious-hub-2.1.0"]);
+    else if (linux) execFileSync("python3", ["-m", "zipfile", "-c", olderZip, top]);
+    else execFileSync("/usr/bin/ditto", ["-c", "-k", "--keepParent", top, olderZip]);
+
+    for (const call of [() => readLocalHubZip(olderZip), () => readHubPayload(olderZip, "2.1.0")]) {
+      await assert.rejects(call, (err) => {
+        assert.match(err.message, /older than this app/i);
+        assert.match(err.message, /payload\/bin\/codex_webos/);
+        assert.match(err.message, /payload\/bin\/codex_usbeth/);
+        assert.doesNotMatch(err.message, /USB cable/i);
+        return true;
+      });
+    }
+  } finally {
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});
+
 test("refuses a hub zip with a link in its payload", { skip: !mac }, async () => {
   const dir = tmp();
   try {

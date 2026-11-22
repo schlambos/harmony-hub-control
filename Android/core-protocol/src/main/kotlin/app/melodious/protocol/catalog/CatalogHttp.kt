@@ -28,12 +28,21 @@ const val SEARCH_DEVICE_BASE_URL =
 
 private const val DEVICE_MANAGER_BASE =
     "https://lb-svcs.myharmony.com/HarmonyPlatform/DeviceManager.svc/"
+private val PROTOCOL_LIST_URL_RE = Regex(
+    "^https://lb-svcs\\.myharmony\\.com/UserAccountDirectorPlatform/UserAccountDirector\\.svc/json2/Account/[A-Za-z0-9._-]+/ProtocolList$"
+)
 private val JSON_MEDIA_TYPE = "application/json; charset=utf-8".toMediaType()
 
 data class CatalogHttpResponse(val status: Int, val payload: JsonElement?)
 
 interface CatalogHttp {
     suspend fun get(url: String): CatalogHttpResponse
+    suspend fun get(
+        url: String,
+        bearer: String?,
+        extraHeaders: Map<String, String> = emptyMap(),
+        authenticated: Boolean = false,
+    ): CatalogHttpResponse = get(url)
     suspend fun postJson(
         url: String,
         payload: JsonElement,
@@ -77,7 +86,19 @@ class OkHttpCatalogHttp(
     }
 
     override suspend fun get(url: String): CatalogHttpResponse =
-        request(url, "GET", null, emptyMap())
+        request(url, "GET", null, emptyMap(), authenticated = false)
+
+    override suspend fun get(
+        url: String,
+        bearer: String?,
+        extraHeaders: Map<String, String>,
+        authenticated: Boolean,
+    ): CatalogHttpResponse {
+        val headers = LinkedHashMap<String, String>()
+        headers.putAll(extraHeaders)
+        if (authenticated && !bearer.isNullOrEmpty()) headers["Authorization"] = "Bearer $bearer"
+        return request(url, "GET", null, headers, authenticated = authenticated)
+    }
 
     override suspend fun postJson(
         url: String,
@@ -89,7 +110,7 @@ class OkHttpCatalogHttp(
         headers["Content-Type"] = "application/json"
         headers.putAll(extraHeaders)
         if (!bearer.isNullOrEmpty()) headers["Authorization"] = "Bearer $bearer"
-        return request(url, "POST", payload.toString().toRequestBody(JSON_MEDIA_TYPE), headers)
+        return request(url, "POST", payload.toString().toRequestBody(JSON_MEDIA_TYPE), headers, authenticated = true)
     }
 
     override suspend fun postForm(url: String, fields: Map<String, String>): CatalogHttpResponse {
@@ -99,13 +120,15 @@ class OkHttpCatalogHttp(
         return request(
             url, "POST", body,
             mapOf("Content-Type" to "application/x-www-form-urlencoded"),
+            authenticated = true,
         )
     }
 
-    private fun checkAllowed(url: String, method: String) {
+    private fun checkAllowed(url: String, method: String, authenticated: Boolean) {
         val allowed = (method == "POST" &&
             (url == DISCOVERY_URL || url == HARMONY_SIGNIN_URL || url == OAUTH_TOKEN_URL)) ||
-            (method == "GET" && url.startsWith("$SEARCH_DEVICE_BASE_URL/manf/")) ||
+            (method == "GET" && !authenticated && url.startsWith("$SEARCH_DEVICE_BASE_URL/manf/")) ||
+            (method == "GET" && authenticated && PROTOCOL_LIST_URL_RE.matches(url)) ||
             (method == "POST" && listOf(
                 "json2/SearchGlobalDevices",
                 "json2/GetGlobalDevices",
@@ -124,8 +147,9 @@ class OkHttpCatalogHttp(
         method: String,
         body: okhttp3.RequestBody?,
         headers: Map<String, String>,
+        authenticated: Boolean,
     ): CatalogHttpResponse {
-        checkAllowed(url, method)
+        checkAllowed(url, method, authenticated)
         val httpUrl = url.toHttpUrlOrNull()
             ?: throw CatalogError("Refusing an unexpected catalog endpoint")
         val builder = Request.Builder()
@@ -133,7 +157,7 @@ class OkHttpCatalogHttp(
             .header("Accept", "application/json")
             .header("User-Agent", userAgent)
         headers.forEach { (k, v) -> builder.header(k, v) }
-        if (method != "GET") {
+        if (method != "GET" || authenticated) {
             cookieHeader(url)?.let { builder.header("Cookie", it) }
         }
         when (method) {

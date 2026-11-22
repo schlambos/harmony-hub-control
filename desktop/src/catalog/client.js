@@ -18,6 +18,10 @@ const GLOBAL_DEVICES_OPERATION = "DeviceManager/GetGlobalDevices";
 const GLOBAL_LANGUAGE_COMMANDS_OPERATION =
   "DeviceManager/GetGlobalLanguageCommands";
 const COMMANDS_OPERATION = "DeviceManager/GetCommands";
+const PROTOCOL_LIST_OPERATION = "UserAccountDirector/ProtocolList";
+const PROTOCOL_LIST_URL_RE =
+  /^https:\/\/lb-svcs\.myharmony\.com\/UserAccountDirectorPlatform\/UserAccountDirector\.svc\/json2\/Account\/[A-Za-z0-9._-]+\/ProtocolList$/;
+const ACCOUNT_ID_RE = /^[A-Za-z0-9._-]+$/;
 const PACKAGE_SCHEMA = "0.2.0";
 const PACKAGE_SOURCE = "logitech-catalog-via-melodious-desktop";
 const DEFAULT_TIMEOUT_MS = 30_000;
@@ -135,13 +139,26 @@ class JsonClient {
       .join("; ");
   }
 
-  async _request(url, { method = "GET", headers = {}, body = undefined } = {}) {
+  async _request(
+    url,
+    { method = "GET", headers = {}, body = undefined, authenticated = false } = {}
+  ) {
     const u = new URL(url);
     const deviceManager = "https://lb-svcs.myharmony.com/HarmonyPlatform/DeviceManager.svc/";
-    const allowed = url === DISCOVERY_URL || url === HARMONY_SIGNIN_URL ||
-      url === "https://accounts.logi.com/identity/oauth2/token" ||
-      (method === "GET" && url.startsWith(`${SEARCH_DEVICE_BASE_URL}/manf/`)) ||
-      ["json2/SearchGlobalDevices", "json2/GetGlobalDevices", "json/GetGlobalLanguageCommands"].some((p) => url === deviceManager + p);
+    const allowed =
+      (method === "POST" &&
+        (url === DISCOVERY_URL ||
+          url === HARMONY_SIGNIN_URL ||
+          url === "https://accounts.logi.com/identity/oauth2/token" ||
+          [
+            "json2/SearchGlobalDevices",
+            "json2/GetGlobalDevices",
+            "json/GetGlobalLanguageCommands",
+          ].some((p) => url === deviceManager + p))) ||
+      (method === "GET" &&
+        !authenticated &&
+        url.startsWith(`${SEARCH_DEVICE_BASE_URL}/manf/`)) ||
+      (method === "GET" && authenticated && PROTOCOL_LIST_URL_RE.test(url));
     if (!allowed || u.protocol !== "https:" || u.username || u.password || u.hash) {
       throw new CatalogError("Refusing an unexpected catalog endpoint");
     }
@@ -150,7 +167,8 @@ class JsonClient {
       "User-Agent": this._userAgent,
       ...headers,
     };
-    const cookieStr = method === "GET" ? "" : this._cookieHeader(url);
+    const sendCookies = method !== "GET" || authenticated;
+    const cookieStr = sendCookies ? this._cookieHeader(url) : "";
     if (cookieStr && !reqHeaders.Cookie) {
       reqHeaders.Cookie = cookieStr;
     }
@@ -178,8 +196,16 @@ class JsonClient {
     }
   }
 
-  async get(url, { headers = {} } = {}) {
-    return this._request(url, { method: "GET", headers });
+  async get(url, { token = null, headers = {}, authenticated = false } = {}) {
+    const reqHeaders = { ...headers };
+    if (authenticated && token) {
+      reqHeaders.Authorization = `Bearer ${token}`;
+    }
+    return this._request(url, {
+      method: "GET",
+      headers: reqHeaders,
+      authenticated,
+    });
   }
 
   async post(url, payload, { token = null, headers = {} } = {}) {
@@ -491,6 +517,130 @@ class GlobalCatalogClient {
       { fallbackName: "GetGlobalLanguageCommands" }
     );
   }
+
+  async protocolList() {
+    const table = await this.operations();
+    const operation = table[PROTOCOL_LIST_OPERATION];
+    if (!operation) {
+      return [];
+    }
+    const accountId = String(this._session?.accountId ?? "").trim();
+    if (!accountId || !ACCOUNT_ID_RE.test(accountId)) {
+      throw new CatalogError("the Harmony session carries an invalid AccountId");
+    }
+    const endpoint = loadBalancerAddress(
+      operation
+        .endpoint({ json2: true })
+        .replace(/\{accountId\}|%7BaccountId%7D/gi, encodeURIComponent(accountId))
+    );
+    const { status, payload } = await this._client.get(endpoint, {
+      token: this._bearer,
+      headers: { "x-logitech-api-version": "1" },
+      authenticated: true,
+    });
+    const message =
+      payload && typeof payload === "object" ? payload.Message : null;
+    if (
+      status === 400 &&
+      typeof message === "string" &&
+      message.includes("Access is denied")
+    ) {
+      const err = new CatalogError(
+        "Logitech refused the catalog session; sign in again"
+      );
+      err.accessDenied = true;
+      throw err;
+    }
+    if (status !== 200) {
+      throw new CatalogError(`${PROTOCOL_LIST_OPERATION} failed with HTTP ${status}`);
+    }
+    return extractProtocolList(payload);
+  }
+}
+
+function extractProtocolList(payload) {
+  if (Array.isArray(payload)) {
+    return payload.filter((p) => p && typeof p === "object" && !Array.isArray(p));
+  }
+  if (!payload || typeof payload !== "object") return [];
+  for (const key of ["ProtocolListResult", "Data"]) {
+    const inner = payload[key];
+    if (inner && typeof inner === "object" && Array.isArray(inner.Protocols)) {
+      return inner.Protocols.filter((p) => p && typeof p === "object" && !Array.isArray(p));
+    }
+    if (Array.isArray(inner)) {
+      return inner.filter((p) => p && typeof p === "object" && !Array.isArray(p));
+    }
+  }
+  if (Array.isArray(payload.Protocols)) {
+    return payload.Protocols.filter((p) => p && typeof p === "object" && !Array.isArray(p));
+  }
+  return [];
+}
+
+function isValidProtocolRecord(record) {
+  if (!record || typeof record !== "object" || Array.isArray(record)) return false;
+  if (record.__type !== "IrProtocol") return false;
+  const pid = record["Id-"];
+  if (!Number.isInteger(pid) || pid <= 0 || pid > 999999) return false;
+  const name = record.Name;
+  if (typeof name !== "string" || !name || name.length > 127) return false;
+  if (/[:\\"\u0000-\u001f\u007f]/.test(name)) return false;
+  const freq = record.CarrierFrequency;
+  if (typeof freq !== "number" || !Number.isFinite(freq) || freq < 10000 || freq > 500000) {
+    return false;
+  }
+  if (!record.KeyCode || typeof record.KeyCode !== "object" || Array.isArray(record.KeyCode)) {
+    return false;
+  }
+  if (!Array.isArray(record.IRSegments)) return false;
+  if (record.CodeSegments !== undefined && record.CodeSegments !== null && !Array.isArray(record.CodeSegments)) {
+    return false;
+  }
+  const hasIr = record.IRSegments.some((s) => s && typeof s === "object" && !Array.isArray(s));
+  const hasCode =
+    Array.isArray(record.CodeSegments) &&
+    record.CodeSegments.some((s) => s && typeof s === "object" && !Array.isArray(s));
+  return hasIr || hasCode;
+}
+
+function neededProtocolRefs(commands) {
+  const ids = new Set();
+  const names = new Set();
+  if (!Array.isArray(commands)) return { ids, names };
+  for (const cmd of commands) {
+    if (!cmd || typeof cmd !== "object") continue;
+    const keycode = cmd.KeyCode;
+    if (typeof keycode === "string" && keycode.startsWith("G:")) {
+      const name = keycode.slice(2).split(":", 1)[0];
+      if (name) names.add(name);
+      const pid = cmd.ProtocolId;
+      if (Number.isInteger(pid) && pid > 0) ids.add(pid);
+    }
+  }
+  return { ids, names };
+}
+
+function selectNeededProtocols(protocolList, commands) {
+  const { ids, names } = neededProtocolRefs(commands);
+  if (ids.size === 0 && names.size === 0) return [];
+  const entries = Array.isArray(protocolList)
+    ? protocolList.filter((p) => p && typeof p === "object" && !Array.isArray(p))
+    : extractProtocolList(protocolList);
+  const selected = [];
+  const seenIds = new Set();
+  const seenNames = new Set();
+  for (const proto of entries) {
+    if (!isValidProtocolRecord(proto)) continue;
+    const pid = proto["Id-"];
+    const name = proto.Name;
+    if (!ids.has(pid) && !names.has(name)) continue;
+    if (seenIds.has(pid) || seenNames.has(name)) continue;
+    seenIds.add(pid);
+    seenNames.add(name);
+    selected.push(proto);
+  }
+  return selected;
 }
 
 async function checkDeviceModel(client, { manufacturer, model } = {}) {
@@ -551,9 +701,19 @@ function buildPackage({
   selectedMatch,
   globalDevice,
   languageCommands,
+  protocols = undefined,
   generatedAt = new Date().toISOString(),
   source = PACKAGE_SOURCE,
 } = {}) {
+  const resources = {
+    search_result: redact(searchResult),
+    selected_match: redact(selectedMatch),
+    global_device: redact(globalDevice),
+    global_language_commands: redact(languageCommands),
+  };
+  if (protocols !== undefined && protocols !== null) {
+    resources.protocols = redact(protocols);
+  }
   return {
     schema_version: PACKAGE_SCHEMA,
     generated_at: generatedAt,
@@ -562,12 +722,7 @@ function buildPackage({
       manufacturer: String(manufacturer ?? ""),
       model: String(model ?? ""),
     },
-    resources: {
-      search_result: redact(searchResult),
-      selected_match: redact(selectedMatch),
-      global_device: redact(globalDevice),
-      global_language_commands: redact(languageCommands),
-    },
+    resources,
   };
 }
 
@@ -800,6 +955,16 @@ function createCatalogService({
         }
         const commands = await catalog.globalLanguageCommands(versionId);
         if (!Array.isArray(commands)) throw new CatalogError("The catalog returned no command list");
+        let protocols = [];
+        const refs = neededProtocolRefs(commands);
+        if (refs.ids.size > 0 || refs.names.size > 0) {
+          try {
+            protocols = selectNeededProtocols(await catalog.protocolList(), commands);
+          } catch (err) {
+            if (err?.accessDenied) throw err;
+            protocols = [];
+          }
+        }
         const matched =
           lastSearchContext?.matches?.find(
             (m) => Number(m["Id-"] ?? m.Id) === Number(id)
@@ -819,6 +984,7 @@ function createCatalogService({
           selectedMatch: matched,
           globalDevice,
           languageCommands: commands,
+          protocols,
         });
       });
     });
@@ -844,6 +1010,7 @@ module.exports = {
   GLOBAL_DEVICES_OPERATION,
   GLOBAL_LANGUAGE_COMMANDS_OPERATION,
   COMMANDS_OPERATION,
+  PROTOCOL_LIST_OPERATION,
   PACKAGE_SCHEMA,
   PACKAGE_SOURCE,
   CatalogError,
@@ -855,6 +1022,10 @@ module.exports = {
   createOperation,
   parseOperations,
   GlobalCatalogClient,
+  extractProtocolList,
+  isValidProtocolRecord,
+  neededProtocolRefs,
+  selectNeededProtocols,
   checkDeviceModel,
   redact,
   buildPackage,

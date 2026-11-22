@@ -228,4 +228,74 @@ class CatalogClientServiceTest {
         }
         assertEquals(0, http.transportCalls.get())
     }
+
+    @Test
+    fun `download bundles matching IrProtocols from UserAccountDirector ProtocolList`() = runBlocking {
+        val customProto = kotlinx.serialization.json.Json.parseToJsonElement(
+            """{"__type":"IrProtocol","Id-":999,"Name":"RC6 Mode 0","CarrierFrequency":36000,"IRSegments":[{"Name":"RC6 Mode 0"}],"CodeSegments":[],"KeyCode":{"Start":null,"Repeat":[{"SegmentType":1,"SegmentName":"RC6 Mode 0"}],"Finish":null}}"""
+        ) as JsonObject
+        val seenGets = mutableListOf<String>()
+        val http = object : CatalogHttp {
+            override suspend fun get(url: String): CatalogHttpResponse =
+                throw AssertionError("unexpected anonymous GET $url")
+
+            override suspend fun get(
+                url: String,
+                bearer: String?,
+                extraHeaders: Map<String, String>,
+                authenticated: Boolean,
+            ): CatalogHttpResponse {
+                seenGets.add(url)
+                assertTrue(authenticated)
+                assertEquals("saved-acc", bearer)
+                assertEquals("1", extraHeaders["x-logitech-api-version"])
+                return CatalogHttpResponse(200, buildJsonObject {
+                    put("Protocols", kotlinx.serialization.json.buildJsonArray {
+                        add(customProto)
+                        add(buildJsonObject { put("__type", "HidProtocol"); put("Id-", JsonPrimitive(999997)); put("Name", "HID 16 Bit") })
+                    })
+                })
+            }
+
+            override suspend fun postJson(
+                url: String,
+                payload: JsonElement,
+                bearer: String?,
+                extraHeaders: Map<String, String>,
+            ): CatalogHttpResponse = when {
+                url == HARMONY_SIGNIN_URL -> CatalogHttpResponse(200, buildJsonObject { put("AccountId", "acct-77") })
+                url == DISCOVERY_URL -> {
+                    val baseOps = (fixture(fixtures, "discovery") as JsonObject)["GetJsonOperationsResult"] as JsonArray
+                    CatalogHttpResponse(200, buildJsonObject {
+                        put("GetJsonOperationsResult", kotlinx.serialization.json.buildJsonArray {
+                            baseOps.forEach { add(it) }
+                            add(buildJsonObject {
+                                put("Identifier", PROTOCOL_LIST_OPERATION)
+                                put("Address", "https://svcs.myharmony.com/UserAccountDirectorPlatform/UserAccountDirector.svc/json/Account/{accountId}/")
+                                put("Name", "ProtocolList")
+                            })
+                        })
+                    })
+                }
+                url.endsWith("/json2/GetGlobalDevices") -> CatalogHttpResponse(200, fixture(fixtures, "getGlobalDevices"))
+                url.endsWith("/json/GetGlobalLanguageCommands") -> CatalogHttpResponse(200, fixture(fixtures, "getGlobalLanguageCommands"))
+                else -> throw AssertionError("unexpected POST $url")
+            }
+
+            override suspend fun postForm(url: String, fields: Map<String, String>): CatalogHttpResponse =
+                throw AssertionError("unexpected form POST $url")
+
+            override fun clearCookies() {}
+        }
+        val service = CatalogService(http, FakeTokenStore2(CatalogTokens("saved-acc", "saved-id", "saved-ref")))
+        val pkg = service.download(167856, "Sony", "STR-DG720")
+        assertEquals(
+            listOf("https://lb-svcs.myharmony.com/UserAccountDirectorPlatform/UserAccountDirector.svc/json2/Account/acct-77/ProtocolList"),
+            seenGets,
+        )
+        val protocols = (pkg["resources"] as JsonObject)["protocols"] as JsonArray
+        assertEquals(1, protocols.size)
+        assertEquals("RC6 Mode 0", ((protocols[0] as JsonObject)["Name"] as JsonPrimitive).content)
+        assertFalse(pkg.toString().contains("acct-77"))
+    }
 }

@@ -961,9 +961,88 @@
     `;
   }
 
+  function getInstallErrorHint(wiz) {
+    const rawErr = String(wiz?.error || "").trim();
+    const failedStep = Number(wiz?.installChecklistFailedStep) || 0;
+    const wedged = Boolean(wiz?.usbWedgeActive || wiz?.classifyResult?.usbWedge?.wedged);
+    const usesUsbForPrepOrRoot =
+      wiz?.flowPath === "fresh" || wiz?.provisionedTransport === "usb";
+
+    if (/Hub IP address is missing/i.test(rawErr)) {
+      return "Your hub's IP address is missing. Go back to find your hub or connect it to Wi-Fi, then try again.";
+    }
+    if (/Custom Hub ID must be a positive/i.test(rawErr)) {
+      return "Custom Hub ID must be a positive whole number (for example, 20264150). Update it under Advanced options, then click Try Again.";
+    }
+
+    // Step 3 (Downloading and installing Melodious) never uses USB:
+    // it downloads/unpacks a hub zip on this computer and installs over LAN SSH.
+    if (failedStep === 3) {
+      if (
+        /older than this app/i.test(rawErr) ||
+        /hub zip is missing\b/i.test(rawErr) ||
+        /missing files this (?:app|version) requires/i.test(rawErr)
+      ) {
+        return "This hub zip is older than this app and is missing files this version needs. Choose a matching hub zip under Advanced options → Use a local .zip file instead, then click Try Again.";
+      }
+      if (/doesn't know how to install|Update this app first/i.test(rawErr)) {
+        return "This hub zip doesn't match this app (it contains files newer than this version). Update the Melodious app first, or choose a matching zip under Advanced options → Use a local .zip file instead.";
+      }
+      if (/checksum|SHA256SUMS/i.test(rawErr)) {
+        return "The downloaded hub file didn't pass its checksum verification, so nothing was installed. Click Try Again to re-download it, or choose Advanced options → Use a local .zip file instead.";
+      }
+      if (
+        /isn't a Melodious hub zip|no melodious-hub-|no payload folder|isn't a plain file|MANIFEST\.txt doesn't match|valid local Melodious hub \.zip|ditto|bsdtar|tar\.exe|unzip|PKZip|End-of-central-directory/i.test(
+          rawErr
+        )
+      ) {
+        return "Couldn't unpack or verify the hub .zip file — it may be incomplete, corrupted, or not a Melodious hub zip. Click Try Again, or choose a valid zip under Advanced options → Use a local .zip file instead.";
+      }
+      if (/rate-limit/i.test(rawErr)) {
+        return "GitHub is rate-limiting downloads from this network right now. Wait a few minutes and click Try Again, or choose Advanced options → Use a local .zip file instead.";
+      }
+      if (
+        /GitHub|download|outside GitHub|Too many redirects|published Melodious hub release|Release .+ has no /i.test(
+          rawErr
+        )
+      ) {
+        return "Couldn't download the Melodious hub package from GitHub. Check this computer's internet connection and click Try Again, or choose Advanced options → Use a local .zip file instead.";
+      }
+      if (
+        /SSH host key changed|Host key verification failed|REMOTE HOST IDENTIFICATION|Installation canceled/i.test(
+          rawErr
+        )
+      ) {
+        return "Your hub's security key changed (which is normal after a reset) and wasn't trusted yet. Click Try Again and choose Trust & Continue if you reset this hub yourself.";
+      }
+      if (/BLOCKED_CAPACITY|not enough free|flash/i.test(rawErr)) {
+        return "Your hub doesn't have enough free space to install Melodious right now. Open Show technical details to see what's using space on the hub.";
+      }
+      if (/Installer preflight blocked/i.test(rawErr)) {
+        return "The installer paused at a safety check before changing your hub. Open Show technical details to see why, then click Try Again.";
+      }
+      if (/Failed to (?:spawn|run) Python|Missing installer script|OpenSSH client|no ssh program/i.test(rawErr)) {
+        return "This computer couldn't start the installer helper. Open Show technical details to check what's missing, then click Try Again.";
+      }
+      return "Couldn't finish installing Melodious on your hub over your local network. Make sure your hub is powered on and on the same Wi-Fi network as this computer, then click Try Again.";
+    }
+
+    // Step 4 (Restarting hub and checking connection) also uses LAN/Wi-Fi only, never USB.
+    if (failedStep === 4) {
+      return "Melodious finished installing, but your hub hasn't answered on the local network yet. Wait a minute for it to finish restarting on Wi-Fi, then click Try Again.";
+    }
+
+    if (wedged) {
+      return "Unplug the USB cable from your computer for 15 seconds, plug it back in, wait about 3 minutes for the light to settle, then click Try Again.";
+    }
+    if (usesUsbForPrepOrRoot) {
+      return "Make sure the USB cable is firmly connected to this computer and the hub has power, then click Try Again.";
+    }
+    return "Make sure your hub is powered on and connected to the same Wi-Fi network as this computer, then click Try Again.";
+  }
+
   function renderInstallErrorCard(wiz) {
     if (!wiz.error) return "";
-    const wedged = Boolean(wiz.usbWedgeActive || wiz.classifyResult?.usbWedge?.wedged);
     const stepLabels = {
       1: "Setup paused while preparing your hub for offline use.",
       2: "Setup paused while setting up local hub access.",
@@ -972,11 +1051,7 @@
     };
     const headline =
       stepLabels[wiz.installChecklistFailedStep] || "Setup paused before finishing.";
-    const hint = wedged
-      ? "Unplug the USB cable from your computer for 15 seconds, plug it back in, wait about 3 minutes for the light to settle, then click Try Again."
-      : wiz.flowPath === "fresh" || wiz.provisionedTransport === "usb"
-        ? "Make sure the USB cable is firmly connected to this computer and the hub has power, then click Try Again."
-        : "Make sure your hub is powered on and connected to the same Wi-Fi network as this computer, then click Try Again.";
+    const hint = getInstallErrorHint(wiz);
 
     return `
       <div class="notice notice-error" id="wizardErrorNotice" role="alert" style="display:grid;gap:6px">
@@ -1006,7 +1081,7 @@
         <p>Melodious will prepare your hub for offline use, set up local access, and install the latest release.</p>
       </div>
 
-      ${renderWedgeBanner(wiz)}
+      ${wiz.installChecklistFailedStep >= 3 ? "" : renderWedgeBanner(wiz)}
 
       <div class="setup-focus-card" id="wizardStep3Install">
         <p class="muted" style="margin:0;font-size:var(--fs-body-sm)">
@@ -1357,6 +1432,7 @@
     computeProvisionedChecklistStatus,
     computeInstallChecklistItems,
     classifyScreen1Outcome,
+    getInstallErrorHint,
     renderWizardConnectEntry,
     renderWizardSettingsEntry,
     renderWizardPage,

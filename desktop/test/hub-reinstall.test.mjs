@@ -207,4 +207,28 @@ test("backing out or a bad source changes nothing", async () => {
   });
   assert.equal(failed.outcome.error, "Couldn't reach the hub over SSH (port 22).");
   assert.equal(failed.dialogs[2].message, "The hub's software wasn't reinstalled");
+
+  // Older hub zip rejected in Reinstall / repair: explains older-than-this-app without blaming USB
+  const olderErr =
+    "This hub zip is older than this app (or incomplete) and is missing files this version requires: payload/bin/codex_webos. Use a hub zip matching this app's version.";
+  const olderLocal = await run({
+    hubVersion: { version: "2.1.0" },
+    answers: ["Choose a Hub Zip…"],
+    zip: { name: "melodious-hub-2.1.0.zip", version: "2.1.0" },
+    zipError: olderErr,
+  });
+  assert.equal(olderLocal.outcome.ok, false);
+  assert.equal(olderLocal.dialogs[1].message, "Melodious can't use that zip");
+  assert.match(olderLocal.dialogs[1].detail, /older than this app/i);
+  assert.doesNotMatch(olderLocal.dialogs[1].detail, /USB cable/i);
+
+  const olderLatest = await run({
+    hubVersion: { version: "2.1.0" },
+    answers: ["Latest GitHub Release", "Repair"],
+    updateError: olderErr,
+  });
+  assert.equal(olderLatest.outcome.ok, false);
+  assert.equal(olderLatest.dialogs[2].message, "The hub's software wasn't reinstalled");
+  assert.match(olderLatest.dialogs[2].detail, /older than this app/i);
+  assert.doesNotMatch(olderLatest.dialogs[2].detail, /USB cable/i);
 });

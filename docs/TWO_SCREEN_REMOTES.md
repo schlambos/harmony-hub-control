@@ -7,8 +7,9 @@ keep two and serve both at the same time.
 **Status: proven on hardware for everyday use (Gate C, 2026-11-10), with the
 known limitations below.** Two screen remotes (a Touch and a 950) worked at
 the same time on one hub, and the setting is on there now. It is off unless
-you turn it on, it is only in the Python installer, and it changes the hub's
-own remote software.
+you turn it on, it works from both installers (`--two-screen` in
+`install_webui.py` and `-TwoScreen` in `install_webui.ps1`), and it changes
+the hub's own remote software.
 
 ## What you get
 
@@ -65,6 +66,9 @@ remote asleep.
 - After pairing, a remote that came from another hub shows an account
   conflict. Putting it on its charger makes it take this hub's setup. **That
   erases the setup it had.**
+- A **never-activated Harmony Ultimate** must sit on its cradle before its
+  first offline sync so `setup.account?getProvisionInfo` returns `200`;
+  waking the remote near the hub isn't enough on its own.
 
 These three were seen on one Harmony 950 moved to a hub with a Harmony Touch.
 

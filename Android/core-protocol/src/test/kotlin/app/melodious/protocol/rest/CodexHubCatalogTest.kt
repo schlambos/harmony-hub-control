@@ -149,4 +149,31 @@ class CodexHubCatalogTest {
         }
         server.join()
     }
+
+    @Test
+    fun `getSupportedHubProtocolNames merges built-ins and importCatalogCommands sends bundled protocols`() = runBlocking {
+        val protoServer = OneShotServer(200, """{"Protocols":[]}""")
+        val client = CodexHubRestClient()
+        val protoEp = HubEndpoint(name = "test", host = "127.0.0.1", webUiPort = protoServer.port)
+        val supported = client.getSupportedHubProtocolNames(protoEp)
+        protoServer.join()
+        assertTrue(supported.contains("Samsung 16 and 20 Bit"))
+        assertTrue(supported.contains("Sony 15 Bit"))
+
+        val importServer = OneShotServer(200, """{"ok":true,"message":"Imported: 1"}""")
+        val importEp = HubEndpoint(name = "test", host = "127.0.0.1", webUiPort = importServer.port)
+        val bundled = Json.parseToJsonElement(
+            """{"__type":"IrProtocol","Id-":777,"Name":"Fixture Custom 24 Bit","CarrierFrequency":38000,"IRSegments":[{"Name":"Fixture Custom 24 Bit"}],"CodeSegments":[],"KeyCode":{"Start":null,"Repeat":[{"SegmentType":1,"SegmentName":"Fixture Custom 24 Bit"}],"Finish":null}}"""
+        ).jsonObject
+        client.importCatalogCommands(
+            importEp,
+            deviceId = "167856",
+            rows = listOf(CatalogCommandRow("PowerOn", "G:Fixture Custom 24 Bit:()(0x123456)():3", "", "Fixture Custom 24 Bit")),
+            protocols = listOf(bundled),
+        )
+        importServer.join()
+        val reqBody = Json.parseToJsonElement(importServer.captured!!.body).jsonObject
+        assertTrue(reqBody.containsKey("protocols"))
+        assertTrue(reqBody["protocols"].toString().contains("Fixture Custom 24 Bit"))
+    }
 }
