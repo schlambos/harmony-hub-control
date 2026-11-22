@@ -29,7 +29,7 @@ and a user reports the Harmony Elite works.**
 | Harmony Companion remote | Supported: activity buttons and per-activity keys in its own maps, edited the same way as the Smart Control's, and its home control buttons (Light 1, Light 2, Plug 1, Plug 2, + / −), each a command, an activity or a sequence with a long press and + / −, for all activities or one ([HOME_CONTROL_BUTTONS.md](HOME_CONTROL_BUTTONS.md)). Community-tested. |
 | Harmony 950 | Works next to a Touch on one hub ([TWO_SCREEN_REMOTES.md](TWO_SCREEN_REMOTES.md)). Its home control buttons can be set like the Companion's, labeled as physical dots (`• 1 dot`–`•••• 4 dots`): all four dot buttons and + / − are validated on a 950; a long press and one activity's own buttons are not yet ([HOME_CONTROL_BUTTONS.md](HOME_CONTROL_BUTTONS.md#harmony-elite-and-950)). |
 | Harmony Ultimate | Community-confirmed in a dual-Ultimate + Companion setup ([TWO_SCREEN_REMOTES.md](TWO_SCREEN_REMOTES.md)). A never-activated Ultimate must sit on its cradle before its first offline sync so `setup.account?getProvisionInfo` succeeds; waking it near the hub isn't enough. |
-| Other remotes that pair with the hub | Expected to work, but not yet tested. Features that need a screen apply only to remotes that have one. |
+| Other remotes that pair with the hub | Expected to work, but not yet tested. Features that need a screen apply only to remotes that have one. To see which model a paired remote is, look up its `EquadID` and `SkinId` in [API.md](API.md#rf-remotes). |
 | Phones, tablets and computers | The web, Android and desktop apps. |
 
 Two or more remotes of the same model (e.g. two Smart Controls) can share a hub: turn on
@@ -55,7 +55,7 @@ Verified on a live hub, across hub control (IR/Bluetooth/network) and the HA int
 | Hardware | How it's controlled |
 | --- | --- |
 | Harmony Hub, firmware 4.15.600 | The hub itself, in both its 62 MB and 32 MB RAM versions (firmware 4.11.6 compatibility shims exist in `netservicestarter.lua`, not yet verified on a 4.11.6 hub) |
-| Harmony Touch, Harmony Smart Control | Paired remotes (a user also reports the Harmony Elite works; see [Remotes](#remotes)) |
+| Harmony Touch, Harmony Smart Control | Paired remotes (the Harmony Elite is community-tested too; see [Remotes](#remotes)) |
 | LG webOS OLED TV (`OLED65C4PUA`) | Via Home Assistant `webostv` with Wake-on-LAN: stable HDMI 1–4 port switching and live theater/ARC state; also by IR. Hub-native LAN control (`codex_webos`, `wss:3001`/`ws:3000` + WoL, no HA required) is implemented and mock-validated — see [WEBOS_TV.md](WEBOS_TV.md) |
 | Hisense Google TV (`75U8H`) | Natively over the network (`codex_androidtv`, TLS) with Wake-on-LAN — see [ANDROID_TV.md](ANDROID_TV.md) |
 | SEI Robotics Google TV box (`Box R 4K Plus`) | Via Home Assistant `androidtv_remote` (merged `media_player` + `remote`), and as a Bluetooth HID keyboard/remote target |
