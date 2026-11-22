@@ -405,6 +405,31 @@ then put the physical remote into its model's pairing mode. For Smart
 Control, hold **Menu + Mute** for about five seconds. Do not apply that
 button combination to every model; follow the page's instructions.
 
+#### Moving a remote with a screen to a new hub
+
+A Touch, Elite, Ultimate or 950 remembers the hub it was set up with. On a new
+hub it shows **Unable to reach hub** and doesn't pair: it keeps looking for
+the old one. These steps got a Harmony Elite (remote firmware 4.15.330) that
+had been set up on another hub paired and synced on a Melodious hub:
+
+1. Factory-reset the remote. On the Elite, hold **Off** and **Menu** together
+   for about 20 seconds. It comes back on **Set up remote using Harmony app**,
+   and its buttons do nothing. **This erases the setup stored on the remote**;
+   the hub keeps its own copy.
+2. Restart it: hold **Off** for about 15 seconds, until it reboots.
+3. Open the pairing window in **Settings → Remotes** and hold **Menu + Mute**
+   on the remote, near the hub.
+4. It pairs, then pulls the hub's activities, devices and button maps on its
+   own.
+
+Don't skip step 2. Right after a factory reset the remote either doesn't
+answer the pairing window, or it pairs and then stays on **Set up remote using
+Harmony app**, asking the hub only for its provisioning info. Putting it on
+its cradle doesn't help; the 15-second restart does, and the sync starts. This
+happened the same way with the hub's minimal `Settings` and `CapabilityList`
+and with copies from a hub set up by Logitech, so those resources aren't what
+the remote waits for.
+
 Each paired remote has activity/button editing entries. Use **Activity
 buttons** for a screenless remote's activity shortcuts, and the relevant
 activity's key editor for ordinary keys. Shared edits normally keep maps
