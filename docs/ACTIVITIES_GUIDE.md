@@ -47,7 +47,8 @@ Prefer separate On/Off and direct input commands wherever possible.
 | Create an activity | **Name → Devices → Inputs → Buttons → Review** | **Name → Devices → Inputs → Start & end → Buttons**, then **Save activity** |
 | Assign ordinary buttons | 36-key wizard, with **Press** and **Hold** picker | Wizard command picker for the ordinary press |
 | Add custom holds, edit per-remote differences | Web/Desktop wizard or **Settings → Remotes** button editor | Open the hub's Web UI in your phone's browser |
-| On-screen buttons and sequences | **On-screen buttons** editor | **On-screen buttons & sequences** |
+| On-screen buttons | **On-screen buttons** editor (keeps existing sequences as they are) | **On-screen buttons & sequences** |
+| Create or edit sequences | Not available in Web, Desktop or a phone browser (assign existing sequences on Home control buttons, or use the native Android app) | **On-screen buttons & sequences** → **New sequence** |
 | Remote screen gestures and Home control buttons | Web/Desktop editors | Use the phone's browser |
 | Reorder power and add start/end steps | **Advanced editor**; extra actions use **Advanced JSON** | Guided **Start & end** step |
 | Time restrictions and remote pairing | Web/Desktop | Use the phone's browser |
@@ -260,13 +261,25 @@ gain a touchscreen by adding these buttons.
 
 ![On-screen button editor, with On-screen, Hard keys and Gestures tabs](screenshots/guides/onscreen-buttons-1280.png)
 
-Buttons can also run sequences: several commands with waits between them.
-Start with one command, then add a sequence only when you need it.
 Choose **One-shot** for toggles, **Standard** for repeatable steps, or
 **Separate Hold** for a distinct hold action.
-On Android, open **On-screen buttons & sequences**, use **Add button** or
-**New sequence**, and **Save**. It edits screen buttons/sequences, not
-the web editor's Gestures tab.
+
+**Sequences (several commands with waits between them):**
+- **Native Android app (`melodious-*.apk`):** the only client that creates
+  and edits activity sequences. Open **Activities → your activity's ⋮ →
+  On-screen buttons & sequences**, scroll to **Sequences**, use **New
+  sequence** to add commands and waits, then use **Add button** → **Run a
+  sequence** and **Save**. It edits on-screen buttons and sequences, not
+  the Web/Desktop editor's Hard keys or Gestures tabs.
+- **Web UI (including Chrome or another browser on Android) and Desktop app
+  (macOS, Windows, Linux):** the **On-screen buttons** editor (**Remote & HA
+  controls**) offers **Add a button** for single-command buttons only and
+  has no **New sequence** option. Existing sequences stay untouched on the
+  hub (and can still be assigned under **Settings → Remotes → Home control
+  buttons**). For a multi-step action without the native Android app, you
+  can also push a Home Assistant script as a device command.
+- **iOS app (experimental baseline):** control only; no on-screen button or
+  sequence editor.
 
 **Number pad and long-press digits (such as LG webOS Quick Access):**
 New activities automatically seed the remote's `123` number-pad screen
