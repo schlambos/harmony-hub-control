@@ -446,6 +446,40 @@ do
     root.Buttons[1].ButtonAction["ActivityId-"] == FRESH.proven.activityList.Activities[1]["Id-"])
 end
 
+-- contentVersion moves only when an activity's icon changes: a screen
+-- remote's quick sync fetches images only then.
+do
+  local function saveWithIcon(id, imageKey)
+    local list = decodeJson(encodeJson(FRESH.proven.activityList))
+    list.Activities[1].ImageKey = imageKey
+    hub.pending = encodeJson({
+      id = id, op = "CommitActivityResources",
+      activityList = list,
+      mapList = FRESH.proven.mapList,
+      functionList = FRESH.proven.functionList,
+      activityChanged = true, mapChanged = false, functionChanged = false,
+    })
+    run(3)
+    return hub.fs[RESPONSE] and decodeJson(hub.fs[RESPONSE]) or {}
+  end
+  local content = tonumber(digest.contentVersion) or 0
+  local config = digest.configVersion
+  local response = saveWithIcon("icon-same", nil)
+  check("a save without an icon change keeps contentVersion",
+    response.ok == true and (tonumber(digest.contentVersion) or 0) == content and digest.configVersion == config + 1,
+    tostring(response.error))
+  response = saveWithIcon("icon-new", "Activity/1_aaaa-01.png")
+  check("a save that sets an icon moves contentVersion once",
+    response.ok == true and digest.contentVersion == content + 1 and digest.configVersion == config + 2,
+    tostring(response.error))
+  response = saveWithIcon("icon-again", "Activity/1_aaaa-01.png")
+  check("saving the same icon again keeps contentVersion",
+    response.ok == true and digest.contentVersion == content + 1, tostring(response.error))
+  response = saveWithIcon("icon-cleared", nil)
+  check("removing the icon moves contentVersion",
+    response.ok == true and digest.contentVersion == content + 2, tostring(response.error))
+end
+
 -- Hubs that are left alone -------------------------------------------------------
 local function configured()
   resetHub()

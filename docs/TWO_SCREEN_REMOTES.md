@@ -72,6 +72,9 @@ remote asleep.
 
 These three were seen on one Harmony 950 moved to a hub with a Harmony Touch.
 
+The second remote's activity icons and favorite logos come from the hub, not
+from the first remote: see [Adding a second screen remote](REMOTE_IMAGES.md#adding-a-second-screen-remote).
+
 ## How it works
 
 Remotes with a screen talk to the hub over **HOT**: a sequenced, acknowledged

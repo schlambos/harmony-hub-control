@@ -152,6 +152,7 @@ test("scheme handler serves the connect bundle in wizard page mode (app-menu OOB
       "<!doctype html><html><head><title>Connect</title></head><body>CONNECT_PAGE<!-- CONNECT_SCRIPT --></body></html>"
     );
     fs.writeFileSync(path.join(connectDir, "connect.js"), "console.log('connect');");
+    fs.writeFileSync(path.join(connectDir, "images.js"), "console.log('image sync');");
     let mode = "wizard";
     const handler = createSchemeHandler({
       shellDir: dir,
@@ -162,7 +163,11 @@ test("scheme handler serves the connect bundle in wizard page mode (app-menu OOB
     });
     const wizRes = await handler.handle(new Request("melodious://app/"));
     assert.equal(wizRes.status, 200);
-    assert.match(await wizRes.text(), /CONNECT_PAGE/);
+    const wizHtml = await wizRes.text();
+    assert.match(wizHtml, /CONNECT_PAGE/);
+    // The image sync script (Settings) is inlined before connect.js.
+    assert.match(wizHtml, /image sync'\);\nconsole\.log\('connect'\)/);
+    assert.match(wizRes.headers.get("content-security-policy"), /sha256-/);
     mode = "shell";
     const shellRes = await handler.handle(new Request("melodious://app/"));
     assert.equal(shellRes.status, 200);

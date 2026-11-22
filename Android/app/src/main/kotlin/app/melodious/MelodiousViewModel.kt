@@ -3,6 +3,7 @@ package app.melodious
 import android.app.Application
 import android.content.Context
 import android.net.wifi.WifiManager
+import androidx.compose.ui.graphics.asImageBitmap
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
 import app.melodious.protocol.catalog.CatalogError
@@ -298,9 +299,50 @@ data class MelodiousUiState(
 /** Largest catalog package the file picker reads (the Sony package is ~30 KB). */
 private const val MAX_CATALOG_FILE_BYTES = 4 * 1024 * 1024
 
+/** How long an image the hub didn't have is left alone before asking again. */
+private const val IMAGE_MISS_MS = 60_000L
+
 class MelodiousViewModel(application: Application) : AndroidViewModel(application) {
     private val prefs = HubPrefs(application)
     private val restClient = CodexHubRestClient()
+
+    /* Activity icons the hub stores (docs/REMOTE_IMAGES.md), decoded once per
+       name. A new icon always gets a new name, so a cached image never goes
+       stale. */
+    private val activityImages = object : LinkedHashMap<String, androidx.compose.ui.graphics.ImageBitmap>(16, 0.75f, true) {
+        override fun removeEldestEntry(eldest: MutableMap.MutableEntry<String, androidx.compose.ui.graphics.ImageBitmap>?) = size > 48
+    }
+
+    /* When the hub last didn't have an image: lists recompose often, so a miss
+       isn't asked for again for a minute. */
+    private val missingActivityImages = HashMap<String, Long>()
+
+    /** The activity's own icon from the hub, or null (none, not stored, or unreachable). */
+    suspend fun activityImage(activity: HubActivity): androidx.compose.ui.graphics.ImageBitmap? {
+        val name = activity.imageName ?: return null
+        val endpoint = _uiState.value.activeEndpoint ?: return null
+        val key = "${endpoint.host}:${endpoint.webUiPort}/$name"
+        synchronized(activityImages) {
+            activityImages[key]?.let { return it }
+            val missedAt = missingActivityImages[key]
+            if (missedAt != null && android.os.SystemClock.elapsedRealtime() - missedAt < IMAGE_MISS_MS) return null
+        }
+        val bitmap = runCatching { restClient.getRemoteImage(endpoint, name) }.getOrNull()?.let { bytes ->
+            kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.Default) {
+                android.graphics.BitmapFactory.decodeByteArray(bytes, 0, bytes.size)
+            }?.asImageBitmap()
+        }
+        synchronized(activityImages) {
+            if (bitmap == null) {
+                missingActivityImages[key] = android.os.SystemClock.elapsedRealtime()
+            } else {
+                missingActivityImages.remove(key)
+                activityImages[key] = bitmap
+            }
+        }
+        return bitmap
+    }
+
     private val discovery = HubDiscovery()
     private val hbusClient = HBusWebSocketClient(viewModelScope)
     private val sshProvisioner = HubSshProvisioner()

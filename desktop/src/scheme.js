@@ -176,9 +176,13 @@ function loadShellBundle(shellDir, connectDir = null) {
     const connectHtmlRaw = fs.readFileSync(path.join(connectDir, "index.html"), "utf8");
     const connectJs = fs.readFileSync(path.join(connectDir, "connect.js"), "utf8");
     const wizardFlowPath = path.join(connectDir, "..", "wizard", "flow.js");
-    const combinedJs = fs.existsSync(wizardFlowPath)
-      ? `${fs.readFileSync(wizardFlowPath, "utf8")}\n${connectJs}`
-      : connectJs;
+    // Sync user images from Logitech (Settings), loaded before connect.js.
+    const imageSyncPath = path.join(connectDir, "images.js");
+    const combinedJs = [wizardFlowPath, imageSyncPath]
+      .filter((file) => fs.existsSync(file))
+      .map((file) => fs.readFileSync(file, "utf8"))
+      .concat(connectJs)
+      .join("\n");
     const connectHtml = connectHtmlRaw.replace(
       "<!-- CONNECT_SCRIPT -->",
       () => `<script>${combinedJs}</script>`

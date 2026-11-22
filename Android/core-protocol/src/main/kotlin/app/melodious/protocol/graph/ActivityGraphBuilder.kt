@@ -171,6 +171,7 @@ object ActivityGraphBuilder {
                 type = type,
                 activityOrder = order,
                 roles = roles,
+                imageKey = (obj["ImageKey"] as? JsonPrimitive)?.takeIf { it.isString }?.content,
             )
         }.sortedBy { it.activityOrder }
     }

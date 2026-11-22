@@ -953,10 +953,27 @@ end
 -- createResponse's sixth argument (the reply's binary payload). Without the
 -- bytes there, the remote takes the answer and never fetches the picture.
 -- An image the store doesn't hold stays blocked.
+--
+-- The same path serves two more image kinds a screen remote asks for:
+-- * activity icons: <BaseImageUri>Activity/<name>.png and <name>_small.png
+--   (the activity's ImageKey), stored as <name>.png;
+-- * favorite channel logos: content-image://1.0/image/<uuid>.png;maxX=..;maxY=..
+--   (a dialPositions "image" in CD_<deviceId>.json), stored as ci_<uuid>.png.
+--   One stored logo answers every requested size.
 local REMOTE_IMAGE_MAX_BYTES = 512 * 1024
 
 local function remoteImageName(uri)
-  return string.match(uri, "^https?://[^/]+/UserImages/%d+/([%w_%-]+)%.png$")
+  local name = string.match(uri, "^https?://[^/]+/UserImages/%d+/([%w_%-]+)%.png$") or
+    string.match(uri, "^https?://[^/]+/Activity/([%w_%-]+)%.png$")
+  if name then
+    return name
+  end
+  local logo = string.match(uri, "^content%-image://[%d%.]+/image/([%w%-]+)%.png$") or
+    string.match(uri, "^content%-image://[%d%.]+/image/([%w%-]+)%.png;[%w=;]*$")
+  if logo then
+    return "ci_" .. logo
+  end
+  return nil
 end
 
 local function localRemoteImage(cmd, uri, imageName)

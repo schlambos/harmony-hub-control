@@ -3,6 +3,8 @@ import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import {
   activityIconName,
+  activityImageName,
+  activityImageUrl,
   activityKeys,
   activityRoles,
   canonicalKey,
@@ -168,6 +170,14 @@ describe("icons", () => {
     assert.equal(activityIconName(activity(SHIELD)), "movie");
     assert.equal(activityIconName({ Name: "Music", Type: 4 }), "music_note");
     assert.equal(activityIconName({ Name: "X", Type: 9 }), "play_arrow");
+  });
+
+  it("finds an activity's own icon on the hub from its ImageKey", () => {
+    assert.equal(activityImageName({ ImageKey: "Activity/123_ab-cd.png" }), "123_ab-cd");
+    assert.equal(activityImageUrl({ ImageKey: "Activity/123_ab-cd.png" }), "/api/remote-images/image?name=123_ab-cd");
+    for (const key of [null, undefined, "", "Activity/x_small.png", "Activity/../x.png", "UserImages/x.png", "Activity/x.jpg"]) {
+      assert.equal(activityImageUrl({ ImageKey: key }), "", String(key));
+    }
   });
 
   it("picks device icons like the app", () => {
