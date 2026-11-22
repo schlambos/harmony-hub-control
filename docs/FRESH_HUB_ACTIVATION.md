@@ -3,8 +3,8 @@
 Melodious supports **Windows, Linux and macOS**. Use the
 [desktop Setup Wizard](SETUP_GUIDE.md) (Windows and Linux: **Not fully tested,
 needs confirmation**) or the bundled CLI described here.
-The wizard is on `main`, joining Windows and macOS desktop releases in
-the first release after `v2.1.0`; Linux runs it from source. The CLI in
+The wizard is in the Windows and macOS desktop releases from `v2.5.0`;
+Linux runs it from source. The CLI in
 [`tools/hub-root/`](../tools/hub-root/README.md), followed by
 `install_webui.py` (all three platforms) or `install_webui.ps1` (Windows),
 works now. Windows uses native `winhid` with no Python USB packages;

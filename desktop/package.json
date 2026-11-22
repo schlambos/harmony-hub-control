@@ -1,7 +1,7 @@
 {
   "name": "melodious-desktop",
   "productName": "Melodious",
-  "version": "2.0.0",
+  "version": "2.5.0",
   "private": true,
   "description": "Melodious desktop — offline Harmony Hub setup, control and Logitech catalog lookup",
   "main": "src/main.js",

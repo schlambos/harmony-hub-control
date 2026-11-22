@@ -4,8 +4,8 @@ Melodious runs on **macOS, Windows, and Linux**: the hub's web UI in a
 desktop window, a guided hub setup, and Logitech catalog lookup (Windows and
 Linux Desktop app and Setup Wizard: **Not fully tested, needs confirmation**).
 Windows and macOS have desktop downloads; Linux runs from source. The built-in
-Setup Wizard is on `main`, joining Windows and macOS releases in the first
-release after `v2.1.0`. The bundled [CLI](../tools/hub-root/README.md) and
+Setup Wizard is in the Windows and macOS releases from `v2.5.0`. The bundled
+[CLI](../tools/hub-root/README.md) and
 `install_webui.py` work on all three platforms now; Windows can also use
 `install_webui.ps1`.
 
@@ -18,8 +18,8 @@ release after `v2.1.0`. The bundled [CLI](../tools/hub-root/README.md) and
   `/api/catalog-import`. No Python helper, no terminal, no file to copy.
 - **Setup Wizard.** Takes a hub from the Harmony app's setup, or
   from new, factory reset or second-hand, to rooted and running Melodious,
-  over Wi-Fi or USB, with no commands. It's on `main` and ships in the
-  first release after `v2.1.0`. The user guide, with a screenshot of every
+  over Wi-Fi or USB, with no commands. It ships in releases from
+  `v2.5.0`. The user guide, with a screenshot of every
   screen, is **[SETUP_GUIDE.md](SETUP_GUIDE.md)**.
 
 ## Install and first run (user guide)
@@ -30,7 +30,7 @@ release after `v2.1.0`. The bundled [CLI](../tools/hub-root/README.md) and
     `Melodious-<version>-win-x64-setup.exe`, or extract
     `Melodious-<version>-win-x64.zip` and run `Melodious.exe`. The app is
     unsigned; SmartScreen may ask **More info → Run anyway**. Windows
-    downloads start in the release after `v2.1.0`.
+    downloads start in `v2.5.0`.
   - **macOS 13+ (Apple silicon or Intel):** `Melodious-<version>-arm64.dmg`
     or `Melodious-<version>-x64.dmg`; drag Melodious to Applications.
     Control-click → Open, or System Settings → Privacy & Security → Open
