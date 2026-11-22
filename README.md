@@ -133,7 +133,9 @@ On Windows, double-click `Install_Harmony_Control.cmd` or run
 
 Re-run the installer (or use the desktop app's **Update hub…**) to update.
 **[INSTALL.md](docs/INSTALL.md)** covers every flag, a full flash, `--turn-off`/`--turn-on`
-(experimental), rolling back and Docker/Unraid.
+(experimental), rolling back and Docker/Unraid. The
+**[2.5 release notes](docs/RELEASE_NOTES_2_5.md)** list what changed and what to check after
+updating.
 
 ## Guides and reference
 
