@@ -62,7 +62,10 @@ remote asleep.
 - A Harmony 950 or Elite opens its own pairing screen with **Menu + Mute**
   held together. It isn't in the remote's Settings menu.
 - A remote that is set up for another hub won't pair ("Unable to reach hub"):
-  it keeps looking for the hub it knows. It has to forget that hub first.
+  it keeps looking for the hub it knows. It has to forget that hub first: on
+  a Harmony Elite, a factory reset (**Off + Menu**, about 20 seconds), then a
+  restart (**Off**, about 15 seconds), then pairing. See
+  [Moving a remote with a screen to a new hub](ACTIVITIES_GUIDE.md#moving-a-remote-with-a-screen-to-a-new-hub).
 - After pairing, a remote that came from another hub shows an account
   conflict. Putting it on its charger makes it take this hub's setup. **That
   erases the setup it had.**
