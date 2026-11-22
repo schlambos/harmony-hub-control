@@ -1,4 +1,10 @@
-# Network TVs: LG webOS TV (Hub-Native)
+# Network TVs: LG webOS TV (Hub-Native, Experimental)
+
+> **Experimental.** Hub-native LG control is known to have problems on some
+> newer LG TVs, such as 2024 (webOS 24) models: the connection can drop while
+> the TV's app list loads, and standby can be reported wrongly. If it doesn't
+> behave on your TV, control the TV through Home Assistant's LG webOS
+> integration as a [Melodious Home Assistant device](HOME_ASSISTANT.md), or by IR.
 
 Melodious can control an LG webOS TV directly over your LAN — no Home Assistant
 bridge and no IR line of sight required. The hub speaks LG's SSAP protocol over

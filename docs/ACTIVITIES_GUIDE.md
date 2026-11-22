@@ -339,7 +339,7 @@ and per-activity caveats), see [Home control buttons](HOME_CONTROL_BUTTONS.md).
 Make a backup in Web/Desktop's **Settings → Backup** first. Power/input
 commands already belong to the device's power/input recipe: do not add
 another PowerToggle as an "extra" or you may turn it off again. For native
-network TVs such as [Android TV](ANDROID_TV.md) or [LG webOS TV](WEBOS_TV.md),
+network TVs such as [Android TV](ANDROID_TV.md) or [LG webOS TV](WEBOS_TV.md) (experimental),
 configure the TV's MAC address for Wake-on-LAN `PowerOn` when using discrete
 power. For wake-only devices such as a [Nintendo Switch 2](SWITCH2_WAKE.md), Power On
 fires the BLE wake burst at activity start while Power Off is a no-op

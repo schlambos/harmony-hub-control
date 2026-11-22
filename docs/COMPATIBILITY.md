@@ -56,7 +56,7 @@ Verified on a live hub, across hub control (IR/Bluetooth/network) and the HA int
 | --- | --- |
 | Harmony Hub, firmware 4.15.600 | The hub itself, in both its 62 MB and 32 MB RAM versions (firmware 4.11.6 compatibility shims exist in `netservicestarter.lua`, not yet verified on a 4.11.6 hub) |
 | Harmony Touch, Harmony Smart Control | Paired remotes (a user also reports the Harmony Elite works; see [Remotes](#remotes)) |
-| LG webOS OLED TV (`OLED65C4PUA`) | Via Home Assistant `webostv` with Wake-on-LAN: stable HDMI 1–4 port switching and live theater/ARC state; also by IR. Hub-native LAN control (`codex_webos`, `wss:3001`/`ws:3000` + WoL, no HA required) is implemented and mock-validated — see [WEBOS_TV.md](WEBOS_TV.md) |
+| LG webOS OLED TV (`OLED65C4PUA`) | Via Home Assistant `webostv` with Wake-on-LAN: stable HDMI 1–4 port switching and live theater/ARC state; also by IR. Hub-native LAN control (`codex_webos`, `wss:3001`/`ws:3000` + WoL, no HA required) is **experimental**: it has known problems on this webOS 24 TV (app-list disconnects, standby detection) — see [WEBOS_TV.md](WEBOS_TV.md) |
 | Hisense Google TV (`75U8H`) | Natively over the network (`codex_androidtv`, TLS) with Wake-on-LAN — see [ANDROID_TV.md](ANDROID_TV.md) |
 | SEI Robotics Google TV box (`Box R 4K Plus`) | Via Home Assistant `androidtv_remote` (merged `media_player` + `remote`), and as a Bluetooth HID keyboard/remote target |
 | Chromecast with Google TV | Bluetooth HID, including the consumer-page Home/Back and TV keys ([BLUETOOTH_KEYBOARD.md](BLUETOOTH_KEYBOARD.md)) |

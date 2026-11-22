@@ -61,7 +61,8 @@ Then open `http://<hub-ip>:8080/` on your phone or computer.
   original remote.
 - **Activities:** a setup wizard, power order and inputs, and any command on any button or gesture.
 - **Network TVs:** Android and Google TV sets over the network, no IR
-  ([ANDROID_TV.md](docs/ANDROID_TV.md)).
+  ([ANDROID_TV.md](docs/ANDROID_TV.md)); LG webOS TVs too, experimental
+  ([WEBOS_TV.md](docs/WEBOS_TV.md)).
 - **Bluetooth keyboard:** the hub types and sends TV keys to TVs and streaming boxes
   ([BLUETOOTH_KEYBOARD.md](docs/BLUETOOTH_KEYBOARD.md)).
 - **Nintendo Switch 2 wake:** wakes a sleeping Switch 2 over BLE from any activity or remote
@@ -138,7 +139,7 @@ Re-run the installer (or use the desktop app's **Update hub…**) to update.
 
 | Category | Documents |
 | --- | --- |
-| **User guides** | [Setup Guide](docs/SETUP_GUIDE.md) · [Devices & codes](docs/DEVICES_AND_CODES_GUIDE.md) · [Activities](docs/ACTIVITIES_GUIDE.md) · [Install, update, roll back](docs/INSTALL.md) · [Home Assistant](docs/HOME_ASSISTANT.md) · [Web app](docs/MELODIOUS_WEB_UI.md) · [Android app](Android/README.md) · [Android catalog](docs/ANDROID_CATALOG.md) · [Desktop app](docs/DESKTOP_APP.md) · [iOS app (experimental)](docs/IOS_APP.md) · [Bluetooth keyboard](docs/BLUETOOTH_KEYBOARD.md) · [Network TVs](docs/ANDROID_TV.md) · [Remote backgrounds](docs/REMOTE_BACKGROUNDS.md) · [Docker and Unraid](UNRAID.md) |
+| **User guides** | [Setup Guide](docs/SETUP_GUIDE.md) · [Devices & codes](docs/DEVICES_AND_CODES_GUIDE.md) · [Activities](docs/ACTIVITIES_GUIDE.md) · [Install, update, roll back](docs/INSTALL.md) · [Home Assistant](docs/HOME_ASSISTANT.md) · [Web app](docs/MELODIOUS_WEB_UI.md) · [Android app](Android/README.md) · [Android catalog](docs/ANDROID_CATALOG.md) · [Desktop app](docs/DESKTOP_APP.md) · [iOS app (experimental)](docs/IOS_APP.md) · [Bluetooth keyboard](docs/BLUETOOTH_KEYBOARD.md) · [Network TVs](docs/ANDROID_TV.md) · [LG webOS TV (experimental)](docs/WEBOS_TV.md) · [Remote backgrounds](docs/REMOTE_BACKGROUNDS.md) · [Docker and Unraid](UNRAID.md) |
 | **Remotes & hardware** | [Compatibility](docs/COMPATIBILITY.md) · [Home control buttons](docs/HOME_CONTROL_BUTTONS.md) · [Two-screen remotes](docs/TWO_SCREEN_REMOTES.md) · [Multiple remotes](docs/MULTI_REMOTE.md) · [Fresh hub activation](docs/FRESH_HUB_ACTIVATION.md) · [Root tool](tools/hub-root/README.md) · [USB Ethernet](docs/USB_ETHERNET.md) |
 | **Technical reference** | [Architecture](docs/ARCHITECTURE.md) · [HTTP API](docs/API.md) · [Protocols](docs/PROTOCOLS.md) · [Security](docs/SECURITY.md) · [Touch editor](docs/TOUCH_EDITOR.md) · [Design system](DESIGN.md) · [Catalog CLI](tools/catalog/README.md) |
 | **Development** | [Building](docs/BUILD.md) · [CI](docs/CI.md) · [CI/build/release design](docs/CI_BUILD_RELEASE_DESIGN.md) · [Desktop app source](desktop/README.md) · [Simulator](tools/webui-sim/README.md) · [Hub emulator](tools/hub-emu/README.md) · [Contributing](CONTRIBUTING.md) |

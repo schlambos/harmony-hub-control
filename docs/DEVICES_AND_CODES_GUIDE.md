@@ -45,7 +45,7 @@ large changes: **Settings → Backup** in Web/Desktop.
 | --- | --- |
 | An ordinary IR TV, receiver, soundbar, cable box or Blu-ray player | Add an IR device below, then import or learn commands. An IR code cannot reproduce a Bluetooth-only key. |
 | An Android / Google TV over your network | In Web/Desktop choose **Devices → + → Android or Google TV on the network**. Follow [Android TV setup](ANDROID_TV.md) for pairing, standby/wake behavior and input setup. Do not import IR codes into its network command set. |
-| An LG webOS TV directly over your network (no Home Assistant) | In Web/Desktop choose **Devices → + → LG webOS TV on the network**. Follow [LG webOS TV setup](WEBOS_TV.md) for LAN pairing, Wake-on-LAN setup, and refreshing HDMI inputs and apps. Coexists independently with HA-bridged LG devices. |
+| An LG webOS TV directly over your network (no Home Assistant; **experimental**) | In Web/Desktop choose **Devices → + → LG webOS TV on the network (experimental)**. Follow [LG webOS TV setup](WEBOS_TV.md) for LAN pairing, Wake-on-LAN setup, and refreshing HDMI inputs and apps. Coexists independently with HA-bridged LG devices. |
 | A TV, streamer or computer that accepts a Bluetooth keyboard/remote | Use **Settings → Bluetooth keyboard** in Android, or **Settings → Bluetooth** in Web/Desktop. Pair the hub with the target and test the keys; see [Bluetooth keyboard](BLUETOOTH_KEYBOARD.md). This is different from network TV pairing and from learning IR. |
 | A light, plug, scene, network TV or receiver supplied by Home Assistant | Add it through the Melodious integration's **Configure** flow in Home Assistant, not as an empty IR device. See [Home Assistant](HOME_ASSISTANT.md). Its commands then appear alongside ordinary devices. |
 
