@@ -2296,11 +2296,20 @@ function irdbKeycode(protocol, device, subdevice, fn) {
   return `G:Toshiba 32 Bit:(${value})(${nec2 ? value : "Repeat"})():3`;
 }
 
-// keycode_protocol_id(): the protocol a KeyCode names. The sim has no
-// ProtocolList, so only the two the hub can add itself are known here.
+// keycode_protocol_id(): the protocol a KeyCode names. Built-in hub protocols
+// mirror BUILTIN_PROTOCOLS in payload/source/codex_webui.c.
+const BUILTIN_SIM_PROTOCOLS = [
+  { "Id-": 2, Id: 2, Name: "Toshiba 32 Bit" },
+  { "Id-": 17, Id: 17, Name: "Sony 15 Bit" },
+  { "Id-": 18, Id: 18, Name: "Sony 20 Bit" },
+  { "Id-": 202, Id: 202, Name: "Saitek 11 Bit" },
+  { "Id-": 679, Id: 679, Name: "MemorexO1 32 Bit" },
+  { "Id-": 686, Id: 686, Name: "Samsung 16 and 20 Bit" },
+];
+
 function keycodeProtocolId(code) {
   const name = /^G:([^:]+):/.exec(String(code || ""))?.[1];
-  return name === "Toshiba 32 Bit" ? 2 : name === "MemorexO1 32 Bit" ? 679 : 0;
+  return BUILTIN_SIM_PROTOCOLS.find((p) => p.Name === name)?.["Id-"] ?? 0;
 }
 
 // bulk_import_irdb_commands(): name|keycode, name|keycode|code, name|raw|data, or IRDB CSV.
@@ -2372,12 +2381,30 @@ function handleIrdbImport(res, params) {
 }
 
 // Catalog test surface only: no Logitech connection. The named protocols
-// model what a fixture hub already has; they are not new protocol definitions.
+// model what a fixture hub already has; additional validated protocols passed
+// on /api/catalog-import are appended without replacing existing IDs.
 const CATALOG_PROTOCOLS = [
-  { Id: 2, Name: "Toshiba 32 Bit" },
-  { Id: 17, Name: "Sony 15 Bit" },
-  { Id: 18, Name: "Sony 20 Bit" },
+  { "Id-": 2, Id: 2, Name: "Toshiba 32 Bit" },
+  { "Id-": 17, Id: 17, Name: "Sony 15 Bit" },
+  { "Id-": 18, Id: 18, Name: "Sony 20 Bit" },
 ];
+
+function isValidSimProtocolRecord(record) {
+  if (!record || typeof record !== "object" || Array.isArray(record)) return false;
+  if (record.__type !== "IrProtocol") return false;
+  const pid = record["Id-"];
+  if (!Number.isInteger(pid) || pid <= 0 || pid > 999999) return false;
+  const name = record.Name;
+  if (typeof name !== "string" || !name || name.length > 127 || /[:\\"\u0000-\u001f\u007f]/.test(name)) return false;
+  const freq = record.CarrierFrequency;
+  if (typeof freq !== "number" || !Number.isFinite(freq) || freq < 10000 || freq > 500000) return false;
+  if (!record.KeyCode || typeof record.KeyCode !== "object" || Array.isArray(record.KeyCode)) return false;
+  if (!Array.isArray(record.IRSegments)) return false;
+  if (record.CodeSegments !== undefined && record.CodeSegments !== null && !Array.isArray(record.CodeSegments)) return false;
+  const hasIr = record.IRSegments.some((s) => s && typeof s === "object" && !Array.isArray(s));
+  const hasCode = Array.isArray(record.CodeSegments) && record.CodeSegments.some((s) => s && typeof s === "object" && !Array.isArray(s));
+  return hasIr || hasCode;
+}
 
 function handleCatalogImport(res, params) {
   const entry = findDeviceEntry(String(params.deviceId ?? ""));
@@ -2385,7 +2412,21 @@ function handleCatalogImport(res, params) {
     sendError(res, 400, "Catalog import needs a device and commands list within the request limit.");
     return;
   }
+  const bundled = [];
+  if (Array.isArray(params.protocols)) {
+    const seenIds = new Set();
+    const seenNames = new Set();
+    for (const proto of params.protocols.slice(0, 32)) {
+      if (!isValidSimProtocolRecord(proto)) continue;
+      if (seenIds.has(proto["Id-"]) || seenNames.has(proto.Name)) continue;
+      seenIds.add(proto["Id-"]);
+      seenNames.add(proto.Name);
+      bundled.push(proto);
+    }
+  }
   const staged = [];
+  const usedBundled = new Set();
+  const usedBuiltins = new Set();
   const taken = new Set(deviceCommands(entry).map((c) => c.Name));
   let rejected = 0;
   let skipped = 0;
@@ -2395,7 +2436,23 @@ function handleCatalogImport(res, params) {
     const raw = typeof row.raw === "string" ? row.raw : "";
     const code = typeof row.keycode === "string" ? row.keycode : "";
     const name = /^G:([^:]+):/.exec(code)?.[1];
-    const protocolId = CATALOG_PROTOCOLS.find((p) => p.Name === name)?.Id;
+    let protocolId = CATALOG_PROTOCOLS.find((p) => p.Name === name)?.["Id-"] ?? CATALOG_PROTOCOLS.find((p) => p.Name === name)?.Id;
+    if (!protocolId && name) {
+      const builtin = BUILTIN_SIM_PROTOCOLS.find((p) => p.Name === name);
+      if (builtin) {
+        protocolId = builtin["Id-"];
+        usedBuiltins.add(builtin);
+      }
+    }
+    if (!protocolId && name) {
+      const extra = bundled.find((p) => p.Name === name);
+      if (extra &&
+          !CATALOG_PROTOCOLS.some((p) => (p["Id-"] ?? p.Id) === extra["Id-"]) &&
+          !BUILTIN_SIM_PROTOCOLS.some((p) => p["Id-"] === extra["Id-"])) {
+        protocolId = extra["Id-"];
+        usedBundled.add(extra);
+      }
+    }
     if ((raw ? raw.length > 2047 || /[\u0000-\u001f\u007f]/.test(raw) : !protocolId || code.length > 511) ||
         deviceCommands(entry).length + staged.length >= LIMITS.storedCommands) { rejected++; continue; }
     staged.push(irCommand(nextCommandId() + staged.length, row.name, { mode: raw ? "raw" : "keycode", raw, code, protocolId }));
@@ -2403,6 +2460,12 @@ function handleCatalogImport(res, params) {
   }
   const message = `Submitted: ${params.commands.length}  Imported: ${staged.length}  Skipped existing: ${skipped}  Rejected: ${rejected}`;
   if (!staged.length) { sendError(res, 400, message); return; }
+  for (const b of usedBuiltins) {
+    if (!CATALOG_PROTOCOLS.some((p) => (p["Id-"] ?? p.Id) === b["Id-"])) CATALOG_PROTOCOLS.push(b);
+  }
+  for (const extra of usedBundled) {
+    if (!CATALOG_PROTOCOLS.some((p) => (p["Id-"] ?? p.Id) === extra["Id-"])) CATALOG_PROTOCOLS.push(extra);
+  }
   deviceCommands(entry).push(...staged);
   logEvent({ kind: "catalog-import", deviceId: String(params.deviceId), imported: staged.length });
   sendJson(res, 200, { ok: true, message });

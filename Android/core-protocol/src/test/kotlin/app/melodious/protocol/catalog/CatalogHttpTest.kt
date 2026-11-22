@@ -68,5 +68,22 @@ class CatalogHttpTest {
 
         http.get("$SEARCH_DEVICE_BASE_URL/manf/Sony/model/STR-DG720/iface/IR")
         assertEquals(null, seen[3].header("Cookie"))
+        assertEquals(null, seen[3].header("Authorization"))
+
+        // Unauthenticated GET to ProtocolList is refused; authenticated GET sends Cookie + Bearer.
+        assertThrows(CatalogError::class.java) {
+            runBlocking {
+                http.get("https://lb-svcs.myharmony.com/UserAccountDirectorPlatform/UserAccountDirector.svc/json2/Account/acct-1/ProtocolList")
+            }
+        }
+        http.get(
+            "https://lb-svcs.myharmony.com/UserAccountDirectorPlatform/UserAccountDirector.svc/json2/Account/acct-1/ProtocolList",
+            bearer = "fixture-bearer",
+            extraHeaders = mapOf("x-logitech-api-version" to "1"),
+            authenticated = true,
+        )
+        assertEquals("session=fixture-cookie", seen[4].header("Cookie"))
+        assertEquals("Bearer fixture-bearer", seen[4].header("Authorization"))
+        assertEquals("1", seen[4].header("x-logitech-api-version"))
     }
 }

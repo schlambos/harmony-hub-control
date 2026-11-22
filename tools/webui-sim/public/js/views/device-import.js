@@ -8,7 +8,7 @@
    library or a file is built with textContent, never innerHTML. */
 
 import { getJson, importCatalog, postApiForm } from "../api.js";
-import { catalogRows, describeCatalogRows, isCatalogPackage, supportedHubProtocolNames } from "../logitech-catalog.js";
+import { catalogRows, describeCatalogRows, isCatalogPackage, missingProtocolsHint, supportedHubProtocolNames } from "../logitech-catalog.js";
 import * as hub from "../state.js";
 import { clear, el, setText } from "../setup-kit.js";
 import { openSheet, snackbar } from "../ui/shell.js";
@@ -375,6 +375,7 @@ export function openImportSheet({ device }) {
     protocols: null,
     protocolsUsed: [],
     missingProtocols: [],
+    protocolsToAdd: [],
     signedIn: false,
     matches: [],
     initialBrand: String(device.manufacturer ?? "").trim(),
@@ -389,7 +390,7 @@ export function openImportSheet({ device }) {
   let desktop = null;
 
   function clearCatalogPackage() {
-    Object.assign(catalogState, { pkg: null, rows: [], skipped: [], protocolsUsed: [], missingProtocols: [] });
+    Object.assign(catalogState, { pkg: null, rows: [], skipped: [], protocolsUsed: [], missingProtocols: [], protocolsToAdd: [] });
     renderCatalogPreview();
   }
 
@@ -469,13 +470,16 @@ export function openImportSheet({ device }) {
       skipped: catalogState.skipped,
       protocolsUsed: catalogState.protocolsUsed,
       missingProtocols: catalogState.missingProtocols,
+      protocolsToAdd: catalogState.protocolsToAdd,
     });
+    const missingHint = missingProtocolsHint(catalogState.missingProtocols);
     const sample = catalogState.rows.slice(0, 24).map((r) => `${r.name} · ${r.protocol || "raw"}`).join("\n");
     const skippedSample = catalogState.skipped.map((s) => `${s.name} — ${s.reason}`).join("\n");
     refs.catalogPreview.appendChild(el("div", {
       className: "m-card import-preview",
       children: [
         el("p", { text: summary }),
+        ...(missingHint ? [el("p", { className: "m-field-hint", text: missingHint })] : []),
         el("pre", { className: "import-rows mono", text: sample || "(no importable commands)" }),
         ...(skippedSample
           ? [el("p", { className: "m-field-hint", text: "Skipped:" }), el("pre", { className: "import-rows mono", text: skippedSample })]
@@ -498,6 +502,7 @@ export function openImportSheet({ device }) {
     catalogState.skipped = converted.skipped;
     catalogState.protocolsUsed = converted.protocolsUsed;
     catalogState.missingProtocols = converted.missingProtocols;
+    catalogState.protocolsToAdd = converted.protocolsToAdd;
     renderCatalogPreview();
     setMessage(refs.catalogStatus,
       protocols !== null
@@ -652,7 +657,12 @@ export function openImportSheet({ device }) {
     refs.catalogImportBtn.disabled = true;
     setMessage(refs.catalogStatus, "Importing… the hub backs up its device list first.");
     try {
-      const j = await importCatalog({ deviceId: device.id, commands: catalogState.rows });
+      const j = await importCatalog({
+        deviceId: device.id,
+        commands: catalogState.rows,
+        protocols: catalogState.protocolsToAdd,
+      });
+      if (catalogState.protocolsToAdd.length) catalogState.protocols = null;
       try { await hub.refreshConfig(); } catch (_) { /* page catches up */ }
       refs.close();
       snackbar(`Imported to ${device.name}. ${j.message || ""}`.trim());
@@ -828,7 +838,7 @@ export function openImportSheet({ device }) {
     refs.catalogImportBtn = button("Import", "btn-filled btn-block", doCatalogImport);
     refs.catalogImportBtn.hidden = true;
     const catalogIntro = `Use the code set from Logitech's own catalog for ${device.manufacturer || "this maker"} ${device.model || ""}`.trim() + ". ";
-    const catalogGateNote = "Only commands whose IR protocol this hub already has are imported; the rest are listed below, not dropped silently.";
+    const catalogGateNote = "Commands whose IR protocol this hub has, knows natively, or receives in the package are imported; any others are listed below, not dropped silently.";
     const catalogFileWrap = el("div", { className: "import-file", children: [
       el("label", { className: "btn btn-outlined", text: "Open a catalog package…", attrs: { for: refs.catalogFile.id } }),
       refs.catalogFile,

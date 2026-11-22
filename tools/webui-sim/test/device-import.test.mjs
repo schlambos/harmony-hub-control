@@ -100,11 +100,47 @@ describe("Import codes catalog tab", () => {
     await file.emit("change"); await flush();
     assert.match(s.panel.textContent, /4 importable/);
     assert.match(s.panel.textContent, /missing on hub: RC6 Mode 0/);
+    assert.match(s.panel.textContent, /original remote.*IRDB.*Flipper/i);
     assert.doesNotMatch(s.panel.textContent, /missing on hub: protocol/);
     await s.button("Import 4 commands to Fixture receiver").emit("click");
     const sent = s.requests.find((r) => r.url === "/api/catalog-import");
-    assert.equal(JSON.parse(sent.body).commands.length, 4);
+    const sentBody = JSON.parse(sent.body);
+    assert.equal(sentBody.commands.length, 4);
+    assert.equal(sentBody.protocols, undefined);
     assert.equal(s.dialog.open, false);
+  });
+
+  it("previews and posts bundled protocols when a package supplies one missing from the hub", async () => {
+    const s = setup();
+    await s.tab.emit("click");
+    const bundledProto = {
+      __type: "IrProtocol",
+      "Id-": 777,
+      Name: "Fixture Custom 24 Bit",
+      CarrierFrequency: 38000,
+      IRSegments: [{ Header: [{ Value: 4000, Type: 1 }], Payload: { NumberOfBits: 24, Encodings: [] }, Trailer: [], TotalLength: 45000, Name: "Fixture Custom 24 Bit" }],
+      CodeSegments: [],
+      KeyCode: { Start: null, Repeat: [{ SegmentType: 1, SegmentName: "Fixture Custom 24 Bit" }], Finish: null },
+    };
+    const bundledPkg = {
+      schema_version: "0.2.0",
+      resources: {
+        global_language_commands: [
+          { Name: "PowerOn", KeyCode: "G:Fixture Custom 24 Bit:()(0x123456)():3", ProtocolId: 777 },
+        ],
+        protocols: [bundledProto],
+      },
+    };
+    const file = s.input("CatalogFile");
+    file.files = [{ name: "bundled.json", text: JSON.stringify(bundledPkg) }];
+    await file.emit("change"); await flush();
+    assert.match(s.panel.textContent, /1 importable/);
+    assert.match(s.panel.textContent, /adds protocols: Fixture Custom 24 Bit/);
+    await s.button("Import 1 command to Fixture receiver").emit("click");
+    const sent = s.requests.find((r) => r.url === "/api/catalog-import");
+    const sentBody = JSON.parse(sent.body);
+    assert.equal(sentBody.commands.length, 1);
+    assert.deepEqual(sentBody.protocols, [bundledProto]);
   });
 
   it("fake bridge sign in, search, pick, download, preview, all skipped reasons, import, sign out and errors", async () => {

@@ -36,6 +36,7 @@ fun buildPackage(
     languageCommands: JsonElement?,
     generatedAt: String,
     source: String = PACKAGE_SOURCE,
+    protocols: JsonArray? = null,
 ): JsonObject = buildJsonObject {
     put("schema_version", PACKAGE_SCHEMA)
     put("generated_at", generatedAt)
@@ -49,6 +50,9 @@ fun buildPackage(
         put("selected_match", redactNullable(selectedMatch))
         put("global_device", redactNullable(globalDevice))
         put("global_language_commands", redactNullable(languageCommands))
+        if (protocols != null) {
+            put("protocols", redact(protocols))
+        }
     })
 }
 

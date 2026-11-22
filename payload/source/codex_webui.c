@@ -166,11 +166,42 @@ static const char *UPDATE_FILES[] = {
     "codex_dhcpd"
 };
 
-static const char *BUILTIN_PROTOCOL_TOSHIBA_32 =
+static const char BUILTIN_PROTOCOL_TOSHIBA_32[] =
     "{\"IRSegments\":[{\"Header\":[{\"Value\":8990,\"Type\":1,\"MinValue\":null,\"MaxValue\":null},{\"Value\":4490,\"Type\":0,\"MinValue\":null,\"MaxValue\":null}],\"Payload\":{\"NumberOfBits\":32,\"Encodings\":[{\"Atoms\":[{\"Value\":568,\"Type\":1,\"MinValue\":null,\"MaxValue\":null},{\"Value\":552,\"Type\":0,\"MinValue\":null,\"MaxValue\":null}],\"BitType\":0},{\"Atoms\":[{\"Value\":568,\"Type\":1,\"MinValue\":null,\"MaxValue\":null},{\"Value\":1662,\"Type\":0,\"MinValue\":null,\"MaxValue\":null}],\"BitType\":1}],\"ToggleBit\":null,\"EncodingType\":0},\"Trailer\":[{\"Value\":568,\"Type\":1,\"MinValue\":null,\"MaxValue\":null}],\"TotalLength\":107870,\"Name\":\"Toshiba 32 Bit\"}],\"Attributes\":[],\"IsPadded\":true,\"IsFullSequence\":true,\"Rating\":null,\"NumberOfLinkedLanguage\":0,\"Status\":null,\"IsPublic\":true,\"HoldDelay\":null,\"PressMinimumRepeats\":1,\"SendingType\":0,\"Name\":\"Toshiba 32 Bit\",\"ControlSection\":null,\"Flags\":[],\"__type\":\"IrProtocol\",\"CarrierFrequency\":38000,\"Id-\":2,\"CodeSegments\":[{\"Header\":[{\"Value\":8990,\"Type\":1,\"MinValue\":null,\"MaxValue\":null},{\"Value\":2230,\"Type\":0,\"MinValue\":null,\"MaxValue\":null}],\"Payload\":null,\"TotalLength\":0,\"Trailer\":[{\"Value\":568,\"Type\":1,\"MinValue\":null,\"MaxValue\":null},{\"Value\":96077,\"Type\":0,\"MinValue\":null,\"MaxValue\":null}],\"Atoms\":[{\"Value\":8990,\"Type\":1,\"MinValue\":null,\"MaxValue\":null},{\"Value\":2230,\"Type\":0,\"MinValue\":null,\"MaxValue\":null},{\"Value\":568,\"Type\":1,\"MinValue\":null,\"MaxValue\":null},{\"Value\":96077,\"Type\":0,\"MinValue\":null,\"MaxValue\":null}],\"Name\":\"Toshiba 32 Bit KeyCodeRepeat\"}],\"KeyCode\":{\"Start\":[{\"SegmentType\":1,\"SegmentName\":\"Toshiba 32 Bit\"}],\"Repeat\":[{\"SegmentType\":0,\"SegmentName\":\"Toshiba 32 Bit KeyCodeRepeat\"}],\"Finish\":null},\"HoldMinimumRepeats\":null,\"RelatedProtocols\":[]}";
 
-static const char *BUILTIN_PROTOCOL_MEMOREX_O1 =
+static const char BUILTIN_PROTOCOL_SONY_15[] =
+    "{\"IRSegments\":[{\"Header\":[{\"Value\":2400,\"Type\":1,\"MinValue\":null,\"MaxValue\":null}],\"Payload\":{\"NumberOfBits\":15,\"Encodings\":[{\"Atoms\":[{\"Value\":600,\"Type\":0,\"MinValue\":null,\"MaxValue\":null},{\"Value\":600,\"Type\":1,\"MinValue\":null,\"MaxValue\":null}],\"BitType\":0},{\"Atoms\":[{\"Value\":600,\"Type\":0,\"MinValue\":null,\"MaxValue\":null},{\"Value\":1200,\"Type\":1,\"MinValue\":null,\"MaxValue\":null}],\"BitType\":1}],\"ToggleBit\":null,\"EncodingType\":0},\"Trailer\":[],\"TotalLength\":45000,\"Name\":\"Sony 15 Bit\"}],\"Attributes\":[],\"IsPadded\":null,\"IsFullSequence\":null,\"Rating\":null,\"NumberOfLinkedLanguage\":0,\"Status\":null,\"IsPublic\":true,\"HoldDelay\":null,\"PressMinimumRepeats\":null,\"SendingType\":0,\"Name\":\"Sony 15 Bit\",\"ControlSection\":null,\"Flags\":[],\"__type\":\"IrProtocol\",\"CarrierFrequency\":40000,\"Id-\":17,\"CodeSegments\":[],\"KeyCode\":{\"Start\":null,\"Repeat\":[{\"SegmentType\":1,\"SegmentName\":\"Sony 15 Bit\"}],\"Finish\":null},\"HoldMinimumRepeats\":null,\"RelatedProtocols\":[]}";
+
+static const char BUILTIN_PROTOCOL_SONY_20[] =
+    "{\"IRSegments\":[{\"Header\":[{\"Value\":2400,\"Type\":1,\"MinValue\":null,\"MaxValue\":null}],\"Payload\":{\"NumberOfBits\":20,\"Encodings\":[{\"Atoms\":[{\"Value\":600,\"Type\":0,\"MinValue\":null,\"MaxValue\":null},{\"Value\":600,\"Type\":1,\"MinValue\":null,\"MaxValue\":null}],\"BitType\":0},{\"Atoms\":[{\"Value\":600,\"Type\":0,\"MinValue\":null,\"MaxValue\":null},{\"Value\":1200,\"Type\":1,\"MinValue\":null,\"MaxValue\":null}],\"BitType\":1}],\"ToggleBit\":null,\"EncodingType\":0},\"Trailer\":[],\"TotalLength\":45000,\"Name\":\"Sony 20 Bit\"}],\"Attributes\":[],\"IsPadded\":null,\"IsFullSequence\":null,\"Rating\":null,\"NumberOfLinkedLanguage\":0,\"Status\":null,\"IsPublic\":true,\"HoldDelay\":null,\"PressMinimumRepeats\":null,\"SendingType\":0,\"Name\":\"Sony 20 Bit\",\"ControlSection\":null,\"Flags\":[],\"__type\":\"IrProtocol\",\"CarrierFrequency\":40000,\"Id-\":18,\"CodeSegments\":[],\"KeyCode\":{\"Start\":null,\"Repeat\":[{\"SegmentType\":1,\"SegmentName\":\"Sony 20 Bit\"}],\"Finish\":null},\"HoldMinimumRepeats\":null,\"RelatedProtocols\":[]}";
+
+static const char BUILTIN_PROTOCOL_SAITEK_11[] =
+    "{\"IRSegments\":[{\"Header\":[{\"Value\":1874,\"Type\":1,\"MinValue\":null,\"MaxValue\":null},{\"Value\":520,\"Type\":0,\"MinValue\":null,\"MaxValue\":null}],\"Payload\":{\"NumberOfBits\":11,\"Encodings\":[{\"Atoms\":[{\"Value\":525,\"Type\":0,\"MinValue\":null,\"MaxValue\":null}],\"BitType\":0},{\"Atoms\":[{\"Value\":460,\"Type\":1,\"MinValue\":null,\"MaxValue\":null}],\"BitType\":1}],\"ToggleBit\":null,\"EncodingType\":0},\"Trailer\":[{\"Value\":809,\"Type\":0,\"MinValue\":null,\"MaxValue\":null}],\"TotalLength\":0,\"Name\":\"Saitek 11 Bit\"}],\"Attributes\":[],\"IsPadded\":null,\"IsFullSequence\":null,\"Rating\":null,\"NumberOfLinkedLanguage\":0,\"Status\":null,\"IsPublic\":false,\"HoldDelay\":null,\"PressMinimumRepeats\":null,\"SendingType\":0,\"Name\":\"Saitek 11 Bit\",\"ControlSection\":null,\"Flags\":[],\"__type\":\"IrProtocol\",\"CarrierFrequency\":38150,\"Id-\":202,\"CodeSegments\":[],\"KeyCode\":{\"Start\":null,\"Repeat\":[{\"SegmentType\":1,\"SegmentName\":\"Saitek 11 Bit\"}],\"Finish\":null},\"HoldMinimumRepeats\":null,\"RelatedProtocols\":[]}";
+
+static const char BUILTIN_PROTOCOL_MEMOREX_O1[] =
     "{\"IRSegments\":[{\"Header\":[{\"Value\":9000,\"Type\":1,\"MinValue\":null,\"MaxValue\":null},{\"Value\":4500,\"Type\":0,\"MinValue\":null,\"MaxValue\":null}],\"Payload\":{\"NumberOfBits\":32,\"Encodings\":[{\"Atoms\":[{\"Value\":560,\"Type\":1,\"MinValue\":null,\"MaxValue\":null},{\"Value\":560,\"Type\":0,\"MinValue\":null,\"MaxValue\":null}],\"BitType\":0},{\"Atoms\":[{\"Value\":560,\"Type\":1,\"MinValue\":null,\"MaxValue\":null},{\"Value\":1690,\"Type\":0,\"MinValue\":null,\"MaxValue\":null}],\"BitType\":1}],\"ToggleBit\":null,\"EncodingType\":0},\"Trailer\":[{\"Value\":560,\"Type\":1,\"MinValue\":null,\"MaxValue\":null}],\"TotalLength\":107600,\"Name\":\"MemorexO1 32 Bit\"}],\"Attributes\":[],\"IsPadded\":null,\"IsFullSequence\":null,\"Rating\":null,\"NumberOfLinkedLanguage\":0,\"Status\":null,\"IsPublic\":true,\"HoldDelay\":null,\"PressMinimumRepeats\":null,\"SendingType\":0,\"Name\":\"MemorexO1 32 Bit\",\"ControlSection\":null,\"Flags\":[],\"__type\":\"IrProtocol\",\"CarrierFrequency\":38000,\"Id-\":679,\"CodeSegments\":[],\"KeyCode\":{\"Start\":null,\"Repeat\":[{\"SegmentType\":1,\"SegmentName\":\"MemorexO1 32 Bit\"}],\"Finish\":null},\"HoldMinimumRepeats\":null,\"RelatedProtocols\":[]}";
+
+static const char BUILTIN_PROTOCOL_SAMSUNG_16_20[] =
+    "{\"IRSegments\":[{\"Header\":[{\"Value\":4500,\"Type\":1,\"MinValue\":null,\"MaxValue\":null},{\"Value\":4480,\"Type\":0,\"MinValue\":null,\"MaxValue\":null}],\"Payload\":{\"NumberOfBits\":16,\"Encodings\":[{\"Atoms\":[{\"Value\":495,\"Type\":1,\"MinValue\":null,\"MaxValue\":null},{\"Value\":500,\"Type\":0,\"MinValue\":null,\"MaxValue\":null}],\"BitType\":0},{\"Atoms\":[{\"Value\":495,\"Type\":1,\"MinValue\":null,\"MaxValue\":null},{\"Value\":1495,\"Type\":0,\"MinValue\":null,\"MaxValue\":null}],\"BitType\":1}],\"ToggleBit\":null,\"EncodingType\":0},\"Trailer\":[{\"Value\":495,\"Type\":1,\"MinValue\":null,\"MaxValue\":null},{\"Value\":4495,\"Type\":0,\"MinValue\":null,\"MaxValue\":null}],\"TotalLength\":0,\"Name\":\"Samsung 16 and 20 Bit\"},{\"Header\":[],\"Payload\":{\"NumberOfBits\":20,\"Encodings\":[{\"Atoms\":[{\"Value\":495,\"Type\":1,\"MinValue\":null,\"MaxValue\":null},{\"Value\":500,\"Type\":0,\"MinValue\":null,\"MaxValue\":null}],\"BitType\":0},{\"Atoms\":[{\"Value\":495,\"Type\":1,\"MinValue\":null,\"MaxValue\":null},{\"Value\":1495,\"Type\":0,\"MinValue\":null,\"MaxValue\":null}],\"BitType\":1}],\"ToggleBit\":null,\"EncodingType\":0},\"Trailer\":[{\"Value\":495,\"Type\":1,\"MinValue\":null,\"MaxValue\":null},{\"Value\":57500,\"Type\":0,\"MinValue\":null,\"MaxValue\":null}],\"TotalLength\":0,\"Name\":\"Samsung 16 and 20 Bit 1\"}],\"Attributes\":[],\"IsPadded\":null,\"IsFullSequence\":null,\"Rating\":null,\"NumberOfLinkedLanguage\":0,\"Status\":null,\"IsPublic\":true,\"HoldDelay\":null,\"PressMinimumRepeats\":1,\"SendingType\":0,\"Name\":\"Samsung 16 and 20 Bit\",\"ControlSection\":null,\"Flags\":[],\"__type\":\"IrProtocol\",\"CarrierFrequency\":38000,\"Id-\":686,\"CodeSegments\":[],\"KeyCode\":{\"Start\":null,\"Repeat\":[{\"SegmentType\":1,\"SegmentName\":\"Samsung 16 and 20 Bit\"},{\"SegmentType\":1,\"SegmentName\":\"Samsung 16 and 20 Bit 1\"}],\"Finish\":null},\"HoldMinimumRepeats\":null,\"RelatedProtocols\":[]}";
+
+struct builtin_protocol {
+    int id;
+    const char *name;
+    const char *json;
+};
+
+static const struct builtin_protocol BUILTIN_PROTOCOLS[] = {
+    { 2,   "Toshiba 32 Bit",        BUILTIN_PROTOCOL_TOSHIBA_32 },
+    { 17,  "Sony 15 Bit",           BUILTIN_PROTOCOL_SONY_15 },
+    { 18,  "Sony 20 Bit",           BUILTIN_PROTOCOL_SONY_20 },
+    { 202, "Saitek 11 Bit",         BUILTIN_PROTOCOL_SAITEK_11 },
+    { 679, "MemorexO1 32 Bit",      BUILTIN_PROTOCOL_MEMOREX_O1 },
+    { 686, "Samsung 16 and 20 Bit", BUILTIN_PROTOCOL_SAMSUNG_16_20 },
+};
+
+#define BUILTIN_PROTOCOL_COUNT ((int)(sizeof(BUILTIN_PROTOCOLS) / sizeof(BUILTIN_PROTOCOLS[0])))
+#define MAX_CATALOG_PROTOCOLS 32
+#define MAX_CATALOG_PROTOCOL_BYTES 65536
 
 struct request {
     char method[8];
@@ -5093,10 +5124,129 @@ static int append_top_array_item(const char *path, const char *array_key, const 
     return 0;
 }
 
+static const char *find_top_level_key(const char *obj, const char *end, const char *key) {
+    const char *q;
+    size_t key_len;
+    int depth = 0;
+    if (!obj || !end || end <= obj || *obj != '{' || !key || !key[0]) return NULL;
+    key_len = strlen(key);
+    for (q = obj; q <= end; q++) {
+        if (*q == '"') {
+            const char *s = q + 1;
+            const char *kstart = s;
+            int esc = 0;
+            while (s < end) {
+                if (esc) esc = 0;
+                else if (*s == '\\') esc = 1;
+                else if (*s == '"') break;
+                s++;
+            }
+            if (s >= end || *s != '"') return NULL;
+            if (depth == 1 && (size_t)(s - kstart) == key_len &&
+                memcmp(kstart, key, key_len) == 0) {
+                const char *v = s + 1;
+                while (v < end && isspace((unsigned char)*v)) v++;
+                if (v < end && *v == ':') {
+                    v++;
+                    while (v < end && isspace((unsigned char)*v)) v++;
+                    return v < end ? v : NULL;
+                }
+            }
+            q = s;
+        } else if (*q == '{' || *q == '[') {
+            depth++;
+        } else if (*q == '}' || *q == ']') {
+            depth--;
+        }
+    }
+    return NULL;
+}
+
+static int json_parse_strict_long(const char *v, const char *end, long *out) {
+    const char *p = v;
+    char *num_end = NULL;
+    long val;
+    if (!p || !end || p >= end) return 0;
+    if (*p == '-') {
+        if (p + 1 >= end || !isdigit((unsigned char)p[1])) return 0;
+    } else if (!isdigit((unsigned char)*p)) {
+        return 0;
+    }
+    errno = 0;
+    val = strtol(p, &num_end, 10);
+    if (errno != 0 || !num_end || num_end == p || num_end > end) return 0;
+    if (num_end < end && *num_end != ',' && *num_end != '}' && *num_end != ']' &&
+        !isspace((unsigned char)*num_end)) {
+        return 0;
+    }
+    if (out) *out = val;
+    return 1;
+}
+
+static int json_parse_string_val(const char *v, const char *end, char *out, size_t outlen) {
+    const char *p = v;
+    char *w = out;
+    if (!v || !end || v >= end || *v != '"' || !out || !outlen) return 0;
+    out[0] = 0;
+    p++;
+    while (p < end && *p != '"') {
+        char ch;
+        if (*p == '\\') {
+            p++;
+            if (p >= end) return 0;
+            if (*p == 'n') ch = '\n';
+            else if (*p == 't') ch = '\t';
+            else if (*p == 'r') ch = '\r';
+            else if (*p == '"' || *p == '\\' || *p == '/') ch = *p;
+            else return 0;
+        } else {
+            if ((unsigned char)*p < 0x20 || (unsigned char)*p == 0x7f) return 0;
+            ch = *p;
+        }
+        if ((size_t)(w - out) + 1 >= outlen) return 0;
+        *w++ = ch;
+        p++;
+    }
+    if (p >= end || *p != '"') return 0;
+    *w = 0;
+    return 1;
+}
+
+static int builtin_protocol_index_by_id(int protocol_id) {
+    for (int i = 0; i < BUILTIN_PROTOCOL_COUNT; i++) {
+        if (BUILTIN_PROTOCOLS[i].id == protocol_id) return i;
+    }
+    return -1;
+}
+
+static int builtin_protocol_index_by_name(const char *name) {
+    if (!name || !name[0]) return -1;
+    for (int i = 0; i < BUILTIN_PROTOCOL_COUNT; i++) {
+        if (strcmp(BUILTIN_PROTOCOLS[i].name, name) == 0) return i;
+    }
+    return -1;
+}
+
 static int protocol_list_has_id(const char *raw, int protocol_id) {
-    char needle[32];
-    snprintf(needle, sizeof(needle), "\"Id-\":%d", protocol_id);
-    return raw && strstr(raw, needle) != NULL;
+    const char *arr, *arr_end, *p;
+    if (!raw || protocol_id <= 0) return 0;
+    arr = strstr(raw, "\"Protocols\"");
+    arr = arr ? strchr(arr, '[') : NULL;
+    arr_end = arr ? find_matching_json(arr, '[', ']') : NULL;
+    if (!arr || !arr_end) return 0;
+    p = arr + 1;
+    while (p < arr_end) {
+        const char *end, *val;
+        long id = -1;
+        while (p < arr_end && (isspace((unsigned char)*p) || *p == ',')) p++;
+        if (p >= arr_end || *p != '{') break;
+        end = find_matching_json(p, '{', '}');
+        if (!end || end >= arr_end) break;
+        val = find_top_level_key(p, end, "Id-");
+        if (val && json_parse_strict_long(val, end, &id) && id == (long)protocol_id) return 1;
+        p = end + 1;
+    }
+    return 0;
 }
 
 static int ensure_protocol_object(int protocol_id, const char *protocol_json) {
@@ -5110,8 +5260,8 @@ static int ensure_protocol_object(int protocol_id, const char *protocol_json) {
 }
 
 static int ensure_builtin_protocol_for_id(int protocol_id) {
-    if (protocol_id == 2) return ensure_protocol_object(2, BUILTIN_PROTOCOL_TOSHIBA_32);
-    if (protocol_id == 679) return ensure_protocol_object(679, BUILTIN_PROTOCOL_MEMOREX_O1);
+    int idx = builtin_protocol_index_by_id(protocol_id);
+    if (idx >= 0) return ensure_protocol_object(BUILTIN_PROTOCOLS[idx].id, BUILTIN_PROTOCOLS[idx].json);
     return 0;
 }
 
@@ -5124,30 +5274,47 @@ static int protocol_file_has_id(int protocol_id) {
     return present ? 1 : 0;
 }
 
+static int device_list_uses_protocol_id(const char *devices, int protocol_id) {
+    char needle[32];
+    size_t nlen;
+    const char *p = devices;
+    if (!devices || protocol_id <= 0) return 0;
+    snprintf(needle, sizeof(needle), "\"ProtocolId\":%d", protocol_id);
+    nlen = strlen(needle);
+    while ((p = strstr(p, needle)) != NULL) {
+        if (!isdigit((unsigned char)p[nlen])) return 1;
+        p += nlen;
+    }
+    return 0;
+}
+
 static int repair_known_protocols_for_current_commands(void) {
     char *devices = read_file_alloc(DEVICE_LIST, MAX_RESOURCE_FILE, NULL);
-    int need2, need679, missing2 = 0, missing679 = 0, changed = 0;
+    int missing[BUILTIN_PROTOCOL_COUNT];
+    int any_missing = 0;
     if (!devices) return -1;
-    need2 = strstr(devices, "\"ProtocolId\":2") != NULL;
-    need679 = strstr(devices, "\"ProtocolId\":679") != NULL;
+    for (int i = 0; i < BUILTIN_PROTOCOL_COUNT; i++) {
+        missing[i] = 0;
+        if (device_list_uses_protocol_id(devices, BUILTIN_PROTOCOLS[i].id)) {
+            int present = protocol_file_has_id(BUILTIN_PROTOCOLS[i].id);
+            if (present < 0) {
+                free(devices);
+                return -1;
+            }
+            if (!present) {
+                missing[i] = 1;
+                any_missing = 1;
+            }
+        }
+    }
     free(devices);
-    if (need2) {
-        int present = protocol_file_has_id(2);
-        if (present < 0) return -1;
-        missing2 = !present;
-    }
-    if (need679) {
-        int present = protocol_file_has_id(679);
-        if (present < 0) return -1;
-        missing679 = !present;
-    }
-    if (!missing2 && !missing679) return 0;
+    if (!any_missing) return 0;
     backup_resources();
-    if (missing2 && ensure_builtin_protocol_for_id(2) != 0) return -1;
-    if (missing679 && ensure_builtin_protocol_for_id(679) != 0) return -1;
-    changed = missing2 || missing679;
-    if (changed) request_resource_reload();
-    return changed ? 1 : 0;
+    for (int i = 0; i < BUILTIN_PROTOCOL_COUNT; i++) {
+        if (missing[i] && ensure_builtin_protocol_for_id(BUILTIN_PROTOCOLS[i].id) != 0) return -1;
+    }
+    request_resource_reload();
+    return 1;
 }
 
 static int find_device_command_array(const char *raw, const char *device_id, const char **arr, const char **arr_end) {
@@ -5670,81 +5837,78 @@ static int extract_nec_hex(const char *src, char *out, size_t outlen) {
     return 0;
 }
 
-/* The ProtocolList Id- of the protocol named `name`, or -1.  The two
- * protocols the hub can add itself (ensure_builtin_protocol_for_id) count
- * as present. */
 /* The Id- of the protocol whose own (top-level) Name is `name`: a segment
  * inside another protocol can carry the same name. */
 static int protocol_id_in_list(const char *raw, const char *name) {
-    const char *arr, *p, *end;
-    size_t name_len;
+    const char *arr, *arr_end, *p;
     if (!raw || !name || !name[0] || strchr(name, '"') || strchr(name, '\\')) return -1;
-    name_len = strlen(name);
     arr = strstr(raw, "\"Protocols\"");
     arr = arr ? strchr(arr, '[') : NULL;
-    for (p = arr ? strchr(arr + 1, '{') : NULL; p; p = strchr(end + 1, '{')) {
-        const char *q;
-        int depth = 0, in_string = 0;
+    arr_end = arr ? find_matching_json(arr, '[', ']') : NULL;
+    if (!arr || !arr_end) return -1;
+    p = arr + 1;
+    while (p < arr_end) {
+        const char *end, *nval, *ival;
+        char pname[128];
+        long id = -1;
+        while (p < arr_end && (isspace((unsigned char)*p) || *p == ',')) p++;
+        if (p >= arr_end || *p != '{') break;
         end = find_matching_json(p, '{', '}');
-        if (!end) break;
-        for (q = p; q < end; q++) {
-            if (in_string) {
-                if (*q == '\\') q++;
-                else if (*q == '"') in_string = 0;
-                continue;
-            }
-            if (*q == '"') {
-                if (depth == 1 && strncmp(q, "\"Name\"", 6) == 0) {
-                    const char *v = q + 6;
-                    while (isspace((unsigned char)*v)) v++;
-                    if (*v == ':') {
-                        v++;
-                        while (isspace((unsigned char)*v)) v++;
-                        if (*v == '"' && strncmp(v + 1, name, name_len) == 0 && v[1 + name_len] == '"') {
-                            return (int)json_long_range(p, end, "Id-", -1);
-                        }
-                    }
-                }
-                in_string = 1;
-            } else if (*q == '{' || *q == '[') {
-                depth++;
-            } else if (*q == '}' || *q == ']') {
-                depth--;
-            }
+        if (!end || end >= arr_end) break;
+        nval = find_top_level_key(p, end, "Name");
+        if (nval && json_parse_string_val(nval, end, pname, sizeof(pname)) && strcmp(pname, name) == 0) {
+            ival = find_top_level_key(p, end, "Id-");
+            if (ival && json_parse_strict_long(ival, end, &id) && id > 0) return (int)id;
+            return -1;
         }
+        p = end + 1;
     }
     return -1;
 }
 
-/* A ProtocolList read once per import (bulk_import_irdb_commands), so a
- * thousand KeyCodes don't read the file a thousand times. */
+/* A ProtocolList read once per import (bulk_import_irdb_commands /
+ * bulk_import_catalog_commands), so a thousand KeyCodes don't read the
+ * file a thousand times. */
 static char *protocol_list_cache = NULL;
 
+/* The ProtocolList Id- of the protocol named `name`, or -1.  The built-in
+ * protocols the hub can add itself (ensure_builtin_protocol_for_id) count
+ * as present. */
 static int protocol_id_for_name(const char *name) {
     char *raw;
-    int id;
+    int id, bidx;
     if (!name || !name[0]) return -1;
-    if (strcmp(name, "Toshiba 32 Bit") == 0) return 2;
-    if (strcmp(name, "MemorexO1 32 Bit") == 0) return 679;
-    if (protocol_list_cache) return protocol_id_in_list(protocol_list_cache, name);
-    raw = read_file_alloc(PROTOCOL_LIST, MAX_RESOURCE_FILE, NULL);
-    id = protocol_id_in_list(raw, name);
-    free(raw);
-    return id;
+    if (protocol_list_cache) {
+        id = protocol_id_in_list(protocol_list_cache, name);
+    } else {
+        raw = read_file_alloc(PROTOCOL_LIST, MAX_RESOURCE_FILE, NULL);
+        id = protocol_id_in_list(raw, name);
+        free(raw);
+    }
+    if (id > 0) return id;
+    bidx = builtin_protocol_index_by_name(name);
+    if (bidx >= 0) return BUILTIN_PROTOCOLS[bidx].id;
+    return -1;
+}
+
+/* Extract `<protocol name>` from a Harmony KeyCode `"G:<protocol name>:..."`. */
+static int extract_keycode_protocol_name(const char *keycode, char *out, size_t outlen) {
+    const char *colon;
+    size_t n;
+    if (!keycode || strncmp(keycode, "G:", 2) != 0 || !out || !outlen) return 0;
+    colon = strchr(keycode + 2, ':');
+    if (!colon) return 0;
+    n = (size_t)(colon - (keycode + 2));
+    if (n == 0 || n >= outlen) return 0;
+    memcpy(out, keycode + 2, n);
+    out[n] = 0;
+    return 1;
 }
 
 /* The protocol a KeyCode ("G:<protocol name>:...") is written for, or -1. */
 static int keycode_protocol_id(const char *keycode) {
     char name[128];
-    const char *colon;
-    size_t n;
-    if (!keycode || strncmp(keycode, "G:", 2) != 0) return -1;
-    colon = strchr(keycode + 2, ':');
-    if (!colon) return -1;
-    n = (size_t)(colon - (keycode + 2));
-    if (n == 0 || n >= sizeof(name)) return -1;
-    memcpy(name, keycode + 2, n);
-    name[n] = 0;
+    if (!extract_keycode_protocol_name(keycode, name, sizeof(name))) return -1;
     return protocol_id_for_name(name);
 }
 
@@ -6125,7 +6289,8 @@ static int bulk_import_irdb_commands(const char *device_id, char *payload, char 
     size_t joined_len = 0, joined_cap = 0, raw_len, prefix_len, suffix_len, out_len;
     long next_id, max_command_id = 0;
     int imported = 0, empty = 1, remaining, submitted = 0, skipped_existing = 0, existing_commands = 0, rejected = 0;
-    int uses_toshiba = 0, uses_memorex = 0;
+    int used_builtin[BUILTIN_PROTOCOL_COUNT];
+    memset(used_builtin, 0, sizeof(used_builtin));
     if (!safe_label(device_id)) {
         snprintf(msg, msglen, "Invalid device for IRDB import.");
         return -1;
@@ -6233,8 +6398,10 @@ static int bulk_import_irdb_commands(const char *device_id, char *payload, char 
         }
         free(cmd_json);
         imported++;
-        if (protocol_id == 2) uses_toshiba = 1;
-        if (protocol_id == 679) uses_memorex = 1;
+        if (strcasecmp(mode, "raw") != 0) {
+            int bidx = builtin_protocol_index_by_id(protocol_id);
+            if (bidx >= 0) used_builtin[bidx] = 1;
+        }
         line = strtok_r(NULL, "\n", &save);
     }
     free(protocol_list_cache);
@@ -6267,13 +6434,14 @@ static int bulk_import_irdb_commands(const char *device_id, char *payload, char 
     memcpy(out + prefix_len + joined_len, raw + (arr_end - raw), suffix_len);
     out[out_len] = 0;
     backup_resources();
-    if ((uses_toshiba && ensure_builtin_protocol_for_id(2) != 0) ||
-        (uses_memorex && ensure_builtin_protocol_for_id(679) != 0)) {
-        free(raw);
-        free(joined);
-        free(out);
-        snprintf(msg, msglen, "Failed to add the IR protocol these commands need.");
-        return -1;
+    for (int b = 0; b < BUILTIN_PROTOCOL_COUNT; b++) {
+        if (used_builtin[b] && ensure_builtin_protocol_for_id(BUILTIN_PROTOCOLS[b].id) != 0) {
+            free(raw);
+            free(joined);
+            free(out);
+            snprintf(msg, msglen, "Failed to add the IR protocol these commands need.");
+            return -1;
+        }
     }
     if (write_file_atomic(DEVICE_LIST, out, out_len) != 0) {
         free(raw);
@@ -6307,32 +6475,179 @@ struct catalog_command {
     char *raw_text;
 };
 
-/* Parse a JSON body of {"deviceId":"...","commands":[{name,keycode,raw}]}
- * into command structs (fields owned by the returned array; free with
- * free_catalog_commands).  KeyCodes keep their own ProtocolId by name: the
- * hub refuses ("protocol the hub doesn't have") any whose named protocol
- * has no ProtocolList record, instead of stamping a wrong one. */
-static int parse_catalog_commands(const char *body, char *device_id, size_t device_id_len,
-                                  struct catalog_command **out_commands, int *out_count,
-                                  char *msg, size_t msglen) {
+/* One optional IrProtocol object carried alongside catalog commands when a
+ * package bundles protocol definitions for an offline hub.  Validated before
+ * staging and appended to ProtocolList.json only if its Id- is not already
+ * present (append-only, never replaces an existing id). */
+struct catalog_protocol {
+    int id;
+    char name[128];
+    char *json;
+    int used;
+};
+
+static int validate_json_balanced(const char *start, const char *end) {
+    char stack[32];
+    int depth = 0, in_string = 0;
     const char *p;
-    struct catalog_command *commands;
-    int index = 0;
+    if (!start || !end || end <= start || *start != '{' || *end != '}') return 0;
+    if ((size_t)(end - start + 1) > MAX_CATALOG_PROTOCOL_BYTES) return 0;
+    for (p = start; p <= end; p++) {
+        unsigned char c = (unsigned char)*p;
+        if (c == 0x7f) return 0;
+        if (in_string) {
+            if (c < 0x20) return 0;
+            if (c == '\\') {
+                p++;
+                if (p > end) return 0;
+                if (*p == '"' || *p == '\\' || *p == '/' || *p == 'b' ||
+                    *p == 'f' || *p == 'n' || *p == 'r' || *p == 't') {
+                    continue;
+                }
+                if (*p == 'u') {
+                    if (p + 4 > end) return 0;
+                    for (int h = 1; h <= 4; h++) {
+                        if (!isxdigit((unsigned char)p[h])) return 0;
+                    }
+                    p += 4;
+                    continue;
+                }
+                return 0;
+            }
+            if (c == '"') in_string = 0;
+            continue;
+        }
+        if (c < 0x20 && c != '\t' && c != '\n' && c != '\r') return 0;
+        if (c == '"') {
+            in_string = 1;
+        } else if (c == '{' || c == '[') {
+            if (depth >= (int)sizeof(stack)) return 0;
+            stack[depth++] = (char)c;
+        } else if (c == '}' || c == ']') {
+            char expected = (c == '}') ? '{' : '[';
+            if (depth <= 0 || stack[depth - 1] != expected) return 0;
+            depth--;
+            if (depth == 0 && p != end) return 0;
+        }
+    }
+    return !in_string && depth == 0;
+}
+
+static int json_array_has_object(const char *arr, const char *arr_end) {
+    const char *p;
+    if (!arr || !arr_end || arr >= arr_end || *arr != '[' || *arr_end != ']') return 0;
+    p = arr + 1;
+    while (p < arr_end && isspace((unsigned char)*p)) p++;
+    return p < arr_end && *p == '{';
+}
+
+/* Validate a candidate Harmony IrProtocol object before accepting it for
+ * append-only insertion into ProtocolList.json. */
+static int validate_protocol_object(const char *obj, const char *end,
+                                    int *id_out, char *name_out, size_t name_len) {
+    const char *v, *ir_end, *kc_end, *cs_end;
+    char ptype[32], pname[128];
+    long pid = 0, freq = 0;
+    int has_segments = 0;
+    if (!validate_json_balanced(obj, end)) return 0;
+    v = find_top_level_key(obj, end, "__type");
+    if (!v || !json_parse_string_val(v, end, ptype, sizeof(ptype)) ||
+        strcmp(ptype, "IrProtocol") != 0) return 0;
+    v = find_top_level_key(obj, end, "Id-");
+    if (!v || !json_parse_strict_long(v, end, &pid) || pid <= 0 || pid > 999999) return 0;
+    v = find_top_level_key(obj, end, "Name");
+    if (!v || !json_parse_string_val(v, end, pname, sizeof(pname)) || !pname[0]) return 0;
+    if (strchr(pname, ':') || strchr(pname, '"') || strchr(pname, '\\')) return 0;
+    for (const char *s = pname; *s; s++) {
+        if ((unsigned char)*s < 0x20 || (unsigned char)*s == 0x7f) return 0;
+    }
+    v = find_top_level_key(obj, end, "CarrierFrequency");
+    if (!v || !json_parse_strict_long(v, end, &freq) || freq < 10000 || freq > 500000) return 0;
+    v = find_top_level_key(obj, end, "KeyCode");
+    if (!v || *v != '{') return 0;
+    kc_end = find_matching_json(v, '{', '}');
+    if (!kc_end || kc_end >= end) return 0;
+    v = find_top_level_key(obj, end, "IRSegments");
+    if (!v || *v != '[') return 0;
+    ir_end = find_matching_json(v, '[', ']');
+    if (!ir_end || ir_end >= end) return 0;
+    if (json_array_has_object(v, ir_end)) has_segments = 1;
+    v = find_top_level_key(obj, end, "CodeSegments");
+    if (v && strncmp(v, "null", 4) != 0) {
+        if (*v != '[') return 0;
+        cs_end = find_matching_json(v, '[', ']');
+        if (!cs_end || cs_end >= end) return 0;
+        if (json_array_has_object(v, cs_end)) has_segments = 1;
+    }
+    if (!has_segments) return 0;
+    if (id_out) *id_out = (int)pid;
+    if (name_out && name_len) copy_text(name_out, name_len, pname);
+    return 1;
+}
+
+static void free_catalog_commands(struct catalog_command *commands, int count) {
+    if (!commands) return;
+    for (int i = 0; i < count; i++) {
+        free(commands[i].name); free(commands[i].keycode); free(commands[i].raw_text);
+    }
+    free(commands);
+}
+
+static void free_catalog_protocols(struct catalog_protocol *protocols, int count) {
+    if (!protocols) return;
+    for (int i = 0; i < count; i++) {
+        free(protocols[i].json);
+    }
+    free(protocols);
+}
+
+/* Parse a JSON body of
+ *   {"deviceId":"...","commands":[{name,keycode,raw}],"protocols":[{...}]}
+ * into command and optional validated protocol structs.  KeyCodes keep their
+ * own ProtocolId by name: the hub refuses any whose named protocol has no
+ * ProtocolList record (existing, built-in, or validly bundled in `protocols`),
+ * instead of stamping a wrong one. */
+static int parse_catalog_import(const char *body, char *device_id, size_t device_id_len,
+                                struct catalog_command **out_commands, int *out_count,
+                                struct catalog_protocol **out_protocols, int *out_proto_count,
+                                char *msg, size_t msglen) {
+    const char *root, *root_end, *v, *cmd_arr, *cmd_end, *p;
+    struct catalog_command *commands = NULL;
+    struct catalog_protocol *protocols = NULL;
+    int index = 0, proto_index = 0;
     *out_commands = NULL;
     *out_count = 0;
+    *out_protocols = NULL;
+    *out_proto_count = 0;
     if (!body || !body[0]) {
         snprintf(msg, msglen, "The request body was empty.");
         return -1;
     }
-    (void)device_id_len;
-    json_string_range(body, NULL, "deviceId", device_id, device_id_len);
+    root = body;
+    while (*root && isspace((unsigned char)*root)) root++;
+    if (*root != '{') {
+        snprintf(msg, msglen, "Catalog import body must be a JSON object.");
+        return -1;
+    }
+    root_end = find_matching_json(root, '{', '}');
+    if (!root_end) {
+        snprintf(msg, msglen, "Catalog import body was incomplete JSON.");
+        return -1;
+    }
+    device_id[0] = 0;
+    v = find_top_level_key(root, root_end, "deviceId");
+    if (v) json_parse_string_val(v, root_end, device_id, device_id_len);
     if (!safe_label(device_id)) {
         snprintf(msg, msglen, "Invalid device for catalog import.");
         return -1;
     }
-    p = strstr(body, "\"commands\"");
-    p = p ? strchr(p, '[') : NULL;
-    if (!p) {
+    cmd_arr = find_top_level_key(root, root_end, "commands");
+    if (!cmd_arr || *cmd_arr != '[') {
+        snprintf(msg, msglen, "Catalog import needs a commands list.");
+        return -1;
+    }
+    cmd_end = find_matching_json(cmd_arr, '[', ']');
+    if (!cmd_end || cmd_end >= root_end) {
         snprintf(msg, msglen, "Catalog import needs a commands list.");
         return -1;
     }
@@ -6341,15 +6656,16 @@ static int parse_catalog_commands(const char *body, char *device_id, size_t devi
         snprintf(msg, msglen, "Not enough memory to receive catalog commands.");
         return -1;
     }
-    for (p = strchr(p, '{'); p; p = strchr(p, '{')) {
-        const char *end = find_matching_json(p, '{', '}');
+    p = cmd_arr + 1;
+    while (p < cmd_end) {
+        const char *end;
         char name[128], keycode[512], raw_text[2048];
-        if (!end) break;
+        while (p < cmd_end && (isspace((unsigned char)*p) || *p == ',')) p++;
+        if (p >= cmd_end || *p != '{') break;
+        end = find_matching_json(p, '{', '}');
+        if (!end || end >= cmd_end) break;
         if (index >= MAX_IR_BATCH_COMMANDS) {
-            for (int i = 0; i < index; i++) {
-                free(commands[i].name); free(commands[i].keycode); free(commands[i].raw_text);
-            }
-            free(commands);
+            free_catalog_commands(commands, index);
             snprintf(msg, msglen, "Catalog import holds too many commands for one request.");
             return -1;
         }
@@ -6361,10 +6677,7 @@ static int parse_catalog_commands(const char *body, char *device_id, size_t devi
         commands[index].raw_text = strdup(raw_text);
         if (!commands[index].name || !commands[index].keycode || !commands[index].raw_text) {
             free(commands[index].name); free(commands[index].keycode); free(commands[index].raw_text);
-            for (int i = 0; i < index; i++) {
-                free(commands[i].name); free(commands[i].keycode); free(commands[i].raw_text);
-            }
-            free(commands);
+            free_catalog_commands(commands, index);
             snprintf(msg, msglen, "Not enough memory to receive catalog commands.");
             return -1;
         }
@@ -6372,34 +6685,80 @@ static int parse_catalog_commands(const char *body, char *device_id, size_t devi
         p = end + 1;
     }
     if (!index) {
-        free(commands);
+        free_catalog_commands(commands, index);
         snprintf(msg, msglen, "Catalog import carried no commands.");
         return -1;
     }
+    v = find_top_level_key(root, root_end, "protocols");
+    if (v && *v == '[') {
+        const char *proto_end = find_matching_json(v, '[', ']');
+        if (proto_end && proto_end < root_end) {
+            protocols = (struct catalog_protocol *)calloc(MAX_CATALOG_PROTOCOLS, sizeof(*protocols));
+            if (!protocols) {
+                free_catalog_commands(commands, index);
+                snprintf(msg, msglen, "Not enough memory to receive catalog protocols.");
+                return -1;
+            }
+            p = v + 1;
+            while (p < proto_end && proto_index < MAX_CATALOG_PROTOCOLS) {
+                const char *end;
+                int pid = 0, dup = 0;
+                char pname[128];
+                while (p < proto_end && (isspace((unsigned char)*p) || *p == ',')) p++;
+                if (p >= proto_end || *p != '{') break;
+                end = find_matching_json(p, '{', '}');
+                if (!end || end >= proto_end) break;
+                if (validate_protocol_object(p, end, &pid, pname, sizeof(pname))) {
+                    for (int k = 0; k < proto_index; k++) {
+                        if (protocols[k].id == pid || strcmp(protocols[k].name, pname) == 0) {
+                            dup = 1;
+                            break;
+                        }
+                    }
+                    if (!dup) {
+                        size_t jlen = (size_t)(end - p + 1);
+                        char *copy = (char *)malloc(jlen + 1);
+                        if (!copy) {
+                            free_catalog_protocols(protocols, proto_index);
+                            free_catalog_commands(commands, index);
+                            snprintf(msg, msglen, "Not enough memory to receive catalog protocols.");
+                            return -1;
+                        }
+                        memcpy(copy, p, jlen);
+                        copy[jlen] = 0;
+                        protocols[proto_index].id = pid;
+                        copy_text(protocols[proto_index].name, sizeof(protocols[proto_index].name), pname);
+                        protocols[proto_index].json = copy;
+                        protocols[proto_index].used = 0;
+                        proto_index++;
+                    }
+                }
+                p = end + 1;
+            }
+        }
+    }
     *out_commands = commands;
     *out_count = index;
+    *out_protocols = protocols;
+    *out_proto_count = proto_index;
     return 0;
-}
-
-static void free_catalog_commands(struct catalog_command *commands, int count) {
-    if (!commands) return;
-    for (int i = 0; i < count; i++) {
-        free(commands[i].name); free(commands[i].keycode); free(commands[i].raw_text);
-    }
-    free(commands);
 }
 
 /* Import browser-parsed catalog rows (already KeyCode/Raw gated by the
  * browser; re-validated here).  Same write path as the pipe importer:
- * backup first, one atomic DeviceList write, then a reload request. */
+ * backup first, append any missing needed protocols (never replacing an
+ * existing id), one atomic DeviceList write, then a reload request. */
 static int bulk_import_catalog_commands(const char *device_id, struct catalog_command *commands,
-                                        int count, char *msg, size_t msglen) {
+                                        int count, struct catalog_protocol *protocols,
+                                        int proto_count, char *msg, size_t msglen) {
     char *joined = NULL, *raw, *out;
     const char *arr, *arr_end, *scan;
     size_t joined_len = 0, joined_cap = 0, raw_len, prefix_len, suffix_len, out_len;
     long next_id, max_command_id = 0;
     int imported = 0, skipped_existing = 0, rejected = 0, submitted = 0;
-    int uses_toshiba = 0, uses_memorex = 0, empty = 1;
+    int empty = 1;
+    int used_builtin[BUILTIN_PROTOCOL_COUNT];
+    memset(used_builtin, 0, sizeof(used_builtin));
 
     raw = read_file_alloc(DEVICE_LIST, MAX_RESOURCE_FILE, &raw_len);
     if (!raw || find_device_command_array(raw, device_id, &arr, &arr_end) != 0) {
@@ -6423,17 +6782,47 @@ static int bulk_import_catalog_commands(const char *device_id, struct catalog_co
         struct catalog_command *row = &commands[i];
         int is_raw = row->raw_text[0] != 0;
         int protocol_id = 0;
-        char why[96];
+        int bidx = -1, pidx = -1;
         char *cmd_json;
         submitted++;
         if (!safe_label(row->name)) { rejected++; continue; }
         if (command_array_has_name(arr, arr_end, row->name) ||
             command_fragment_has_name(joined, row->name)) { skipped_existing++; continue; }
         if (is_raw ? !safe_raw_import_value(row->raw_text) : !row->keycode[0]) { rejected++; continue; }
-        if (!is_raw &&
-            (protocol_id = keycode_storage_protocol(row->keycode, 2, why, sizeof(why))) <= 0) {
-            rejected++;
-            continue;
+        if (!is_raw) {
+            if (strncmp(row->keycode, "G:", 2) == 0) {
+                char pname[128];
+                if (!extract_keycode_protocol_name(row->keycode, pname, sizeof(pname))) {
+                    rejected++;
+                    continue;
+                }
+                if (protocol_list_cache) {
+                    protocol_id = protocol_id_in_list(protocol_list_cache, pname);
+                }
+                if (protocol_id <= 0) {
+                    bidx = builtin_protocol_index_by_name(pname);
+                    if (bidx >= 0) protocol_id = BUILTIN_PROTOCOLS[bidx].id;
+                }
+                if (protocol_id <= 0 && protocols && proto_count > 0) {
+                    for (int k = 0; k < proto_count; k++) {
+                        if (strcmp(protocols[k].name, pname) == 0) {
+                            if (!protocol_list_has_id(protocol_list_cache, protocols[k].id) &&
+                                builtin_protocol_index_by_id(protocols[k].id) < 0) {
+                                protocol_id = protocols[k].id;
+                                pidx = k;
+                            }
+                            break;
+                        }
+                    }
+                }
+                if (protocol_id <= 0) {
+                    rejected++;
+                    continue;
+                }
+            } else {
+                protocol_id = 2;
+                bidx = builtin_protocol_index_by_id(2);
+            }
         }
         if (imported >= remaining) { rejected++; continue; }
         cmd_json = is_raw ?
@@ -6447,8 +6836,8 @@ static int bulk_import_catalog_commands(const char *device_id, struct catalog_co
         }
         free(cmd_json);
         imported++;
-        if (protocol_id == 2) uses_toshiba = 1;
-        if (protocol_id == 679) uses_memorex = 1;
+        if (bidx >= 0) used_builtin[bidx] = 1;
+        if (pidx >= 0) protocols[pidx].used = 1;
     }
     free(protocol_list_cache);
     protocol_list_cache = NULL;
@@ -6475,11 +6864,19 @@ static int bulk_import_catalog_commands(const char *device_id, struct catalog_co
     memcpy(out + prefix_len + joined_len, raw + (arr_end - raw), suffix_len);
     out[out_len] = 0;
     backup_resources();
-    if ((uses_toshiba && ensure_builtin_protocol_for_id(2) != 0) ||
-        (uses_memorex && ensure_builtin_protocol_for_id(679) != 0)) {
-        free(raw); free(joined); free(out);
-        snprintf(msg, msglen, "Failed to add the IR protocol these commands need.");
-        return -1;
+    for (int b = 0; b < BUILTIN_PROTOCOL_COUNT; b++) {
+        if (used_builtin[b] && ensure_builtin_protocol_for_id(BUILTIN_PROTOCOLS[b].id) != 0) {
+            free(raw); free(joined); free(out);
+            snprintf(msg, msglen, "Failed to add the IR protocol these commands need.");
+            return -1;
+        }
+    }
+    for (int k = 0; k < proto_count; k++) {
+        if (protocols[k].used && ensure_protocol_object(protocols[k].id, protocols[k].json) != 0) {
+            free(raw); free(joined); free(out);
+            snprintf(msg, msglen, "Failed to add the IR protocol these commands need.");
+            return -1;
+        }
     }
     if (write_file_atomic(DEVICE_LIST, out, out_len) != 0) {
         free(raw); free(joined); free(out);
@@ -6495,7 +6892,8 @@ static int bulk_import_catalog_commands(const char *device_id, struct catalog_co
 static void render_catalog_import_json(int fd, const struct request *req) {
     char device_id[64], msg[512];
     struct catalog_command *commands = NULL;
-    int count = 0;
+    struct catalog_protocol *protocols = NULL;
+    int count = 0, proto_count = 0;
     FILE *f;
     int rc;
     if (req->body_truncated) {
@@ -6505,8 +6903,12 @@ static void render_catalog_import_json(int fd, const struct request *req) {
         fclose(f);
         return;
     }
-    rc = parse_catalog_commands(req->body, device_id, sizeof(device_id), &commands, &count, msg, sizeof(msg));
-    if (rc == 0) rc = bulk_import_catalog_commands(device_id, commands, count, msg, sizeof(msg));
+    rc = parse_catalog_import(req->body, device_id, sizeof(device_id),
+                              &commands, &count, &protocols, &proto_count,
+                              msg, sizeof(msg));
+    if (rc == 0) rc = bulk_import_catalog_commands(device_id, commands, count,
+                                                   protocols, proto_count,
+                                                   msg, sizeof(msg));
     f = send_json_start(fd, rc == 0 ? "200 OK" : "400 Bad Request");
     if (f) {
         fputs("{\"ok\":", f); fputs(rc == 0 ? "true" : "false", f);
@@ -6515,6 +6917,7 @@ static void render_catalog_import_json(int fd, const struct request *req) {
         fclose(f);
     }
     free_catalog_commands(commands, count);
+    free_catalog_protocols(protocols, proto_count);
 }
 
 static int ir_run_canceled(const char *run_id) {

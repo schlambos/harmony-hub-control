@@ -93,7 +93,7 @@ fun CatalogImportTab(
     Column(verticalArrangement = Arrangement.spacedBy(14.dp)) {
         Text(
             "Use the code set from Logitech's own catalog for ${device.manufacturer} ${device.model}. " +
-                "Only commands whose IR protocol this hub already has are imported; the rest are listed below, not dropped silently.",
+                "Commands whose IR protocol this hub has, knows natively, or receives in the package are imported; any others are listed below, not dropped silently.",
             fontSize = 14.sp,
             color = MaterialTheme.colorScheme.onSurfaceVariant,
         )
@@ -196,6 +196,14 @@ fun CatalogImportTab(
         val preview = tab.preview
         if (preview != null) {
             Text(tab.previewSummary, fontSize = 15.sp, fontWeight = FontWeight.Medium)
+            val missingHint = app.melodious.protocol.catalog.missingProtocolsHint(preview.missingProtocols)
+            if (missingHint.isNotEmpty()) {
+                Text(
+                    missingHint,
+                    fontSize = 13.sp,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+            }
             val sample = preview.rows.take(24).joinToString("\n") { row ->
                 "${row.name} · ${row.protocol.ifEmpty { "raw" }}"
             }

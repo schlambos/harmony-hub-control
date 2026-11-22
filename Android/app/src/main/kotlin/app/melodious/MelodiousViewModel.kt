@@ -868,7 +868,7 @@ class MelodiousViewModel(application: Application) : AndroidViewModel(applicatio
                 finishCatalogPreview(emptyList(), pkg, label, protocolsUnreadable = true)
                 return@launch
             }
-            runCatching { restClient.getHubProtocolNames(endpoint) }
+            runCatching { restClient.getSupportedHubProtocolNames(endpoint) }
                 .onSuccess { names -> finishCatalogPreview(names, pkg, label, protocolsUnreadable = false) }
                 .onFailure { finishCatalogPreview(emptyList(), pkg, label, protocolsUnreadable = true) }
         }
@@ -915,7 +915,8 @@ class MelodiousViewModel(application: Application) : AndroidViewModel(applicatio
         }
         viewModelScope.launch {
             runCatching {
-                val reply = restClient.importCatalogCommands(endpoint, device.id, rows)
+                val protocols = tab.preview?.protocolsToAdd.orEmpty()
+                val reply = restClient.importCatalogCommands(endpoint, device.id, rows, protocols)
                 runCatching { reloadConfig(endpoint) }
                 reply
             }.onSuccess { reply ->
