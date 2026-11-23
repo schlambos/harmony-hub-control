@@ -98,6 +98,7 @@ Each run:
 | --- | --- | --- |
 | `--preflight-only` | `-PreflightOnly` | Stages and compares in RAM, prints what would change and a verdict, and writes nothing to flash. |
 | `--clean-install` | `-CleanInstall` | Writes the configuration from scratch. |
+| `--hub-host` (`--host`), `--key-path`, `--port`, `--ssh-user` | `-HubHost`, `-KeyPath`, `-Port`, `-SshUser` | How to reach the hub over SSH: its address, the private key (default `~/.ssh/harmony_owner_*`), port and user. |
 | `--hub-id` | `-HubId` | The Hub ID. Without it, the installer reads it from the hub, then from the root tool's files in `~/.harmony-hub/`. |
 | `--no-prompt` | `-NoPrompt` | Fails instead of asking for a missing value. |
 | `--mqtt-broker`, `--mqtt-port`, `--mqtt-user`, `--mqtt-password`, `--mqtt-base-topic`, `--mqtt-discovery-prefix`, `--mqtt-client-id`, `--mqtt-disabled` | `-MqttBroker` … `-MqttDisabled` | Set up the MQTT bridge. Without them, an upgrade keeps the hub's MQTT settings. |

@@ -65,8 +65,8 @@ Then open `http://<hub-ip>:8080/` on your phone or computer.
   ([WEBOS_TV.md](docs/WEBOS_TV.md)).
 - **Bluetooth keyboard:** the hub types and sends TV keys to TVs and streaming boxes
   ([BLUETOOTH_KEYBOARD.md](docs/BLUETOOTH_KEYBOARD.md)).
-- **Nintendo Switch 2 wake:** wakes a sleeping Switch 2 over BLE from any activity or remote
-  ([SWITCH2_WAKE.md](docs/SWITCH2_WAKE.md)).
+- **Nintendo Switch 2 wake (tested; wake only):** wakes a sleeping Switch 2 over BLE from any
+  activity or remote ([SWITCH2_WAKE.md](docs/SWITCH2_WAKE.md)).
 
 </td><td valign="top">
 
@@ -105,7 +105,7 @@ SSH-key needs, and tested hardware: **[COMPATIBILITY.md](docs/COMPATIBILITY.md)*
 
 ## The apps
 
-One hub, three apps, one design ([DESIGN.md](DESIGN.md)):
+One hub, four apps, one design ([DESIGN.md](DESIGN.md)):
 
 - **Web app** — served by the hub at `http://<hub-ip>:8080/`, in any browser on your network:
   [MELODIOUS_WEB_UI.md](docs/MELODIOUS_WEB_UI.md).
@@ -141,10 +141,10 @@ updating.
 
 | Category | Documents |
 | --- | --- |
-| **User guides** | [Setup Guide](docs/SETUP_GUIDE.md) · [Devices & codes](docs/DEVICES_AND_CODES_GUIDE.md) · [Activities](docs/ACTIVITIES_GUIDE.md) · [Install, update, roll back](docs/INSTALL.md) · [Home Assistant](docs/HOME_ASSISTANT.md) · [Web app](docs/MELODIOUS_WEB_UI.md) · [Android app](Android/README.md) · [Android catalog](docs/ANDROID_CATALOG.md) · [Desktop app](docs/DESKTOP_APP.md) · [iOS app (experimental)](docs/IOS_APP.md) · [Bluetooth keyboard](docs/BLUETOOTH_KEYBOARD.md) · [Network TVs](docs/ANDROID_TV.md) · [LG webOS TV (experimental)](docs/WEBOS_TV.md) · [Remote backgrounds](docs/REMOTE_BACKGROUNDS.md) · [Docker and Unraid](UNRAID.md) |
-| **Remotes & hardware** | [Compatibility](docs/COMPATIBILITY.md) · [Home control buttons](docs/HOME_CONTROL_BUTTONS.md) · [Two-screen remotes](docs/TWO_SCREEN_REMOTES.md) · [Multiple remotes](docs/MULTI_REMOTE.md) · [Fresh hub activation](docs/FRESH_HUB_ACTIVATION.md) · [Root tool](tools/hub-root/README.md) · [USB Ethernet](docs/USB_ETHERNET.md) |
-| **Technical reference** | [Architecture](docs/ARCHITECTURE.md) · [HTTP API](docs/API.md) · [Protocols](docs/PROTOCOLS.md) · [Security](docs/SECURITY.md) · [Touch editor](docs/TOUCH_EDITOR.md) · [Design system](DESIGN.md) · [Catalog CLI](tools/catalog/README.md) |
-| **Development** | [Building](docs/BUILD.md) · [CI](docs/CI.md) · [CI/build/release design](docs/CI_BUILD_RELEASE_DESIGN.md) · [Desktop app source](desktop/README.md) · [Simulator](tools/webui-sim/README.md) · [Hub emulator](tools/hub-emu/README.md) · [Contributing](CONTRIBUTING.md) |
+| **User guides** | [Setup Guide](docs/SETUP_GUIDE.md) · [Devices & codes](docs/DEVICES_AND_CODES_GUIDE.md) · [Activities](docs/ACTIVITIES_GUIDE.md) · [Install, update, roll back](docs/INSTALL.md) · [Home Assistant](docs/HOME_ASSISTANT.md) · [Web app](docs/MELODIOUS_WEB_UI.md) · [Android app](Android/README.md) · [Android catalog](docs/ANDROID_CATALOG.md) · [Desktop app](docs/DESKTOP_APP.md) · [iOS app (experimental)](docs/IOS_APP.md) · [Bluetooth keyboard](docs/BLUETOOTH_KEYBOARD.md) · [Network TVs](docs/ANDROID_TV.md) · [LG webOS TV (experimental)](docs/WEBOS_TV.md) · [Switch 2 wake](docs/SWITCH2_WAKE.md) · [Remote backgrounds](docs/REMOTE_BACKGROUNDS.md) · [Docker and Unraid](UNRAID.md) |
+| **Remotes & hardware** | [Compatibility](docs/COMPATIBILITY.md) · [Home control buttons](docs/HOME_CONTROL_BUTTONS.md) · [Two-screen remotes](docs/TWO_SCREEN_REMOTES.md) · [Multiple remotes (experimental)](docs/MULTI_REMOTE.md) · [Fresh hub activation](docs/FRESH_HUB_ACTIVATION.md) · [Root tool](tools/hub-root/README.md) · [USB Ethernet (experimental)](docs/USB_ETHERNET.md) · [BusyBox](docs/BUSYBOX.md) |
+| **Technical reference** | [Architecture](docs/ARCHITECTURE.md) · [HTTP API](docs/API.md) · [Protocols](docs/PROTOCOLS.md) · [Security](docs/SECURITY.md) · [Touch editor](docs/TOUCH_EDITOR.md) · [Design system](DESIGN.md) · [Catalog CLI](tools/catalog/README.md) · [HA devices design](docs/HA_DEVICES_DESIGN.md) |
+| **Development** | [Building](docs/BUILD.md) · [CI](docs/CI.md) · [CI/build/release design](docs/CI_BUILD_RELEASE_DESIGN.md) · [Releasing](docs/RELEASING.md) · [Desktop app source](desktop/README.md) · [Simulator](tools/webui-sim/README.md) · [Hub emulator](tools/hub-emu/README.md) · [Hardware regression](tools/hw-regression/README.md) · [Contributing](CONTRIBUTING.md) |
 
 No hub is needed to develop: run the simulator with `node tools/webui-sim/server.mjs`
 (`http://127.0.0.1:8787/#remote`), or the real binaries under QEMU with the hub emulator.

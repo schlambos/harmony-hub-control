@@ -149,10 +149,17 @@ See [Android catalog](ANDROID_CATALOG.md) for the sign-in and storage details.
 - **Importable** is the number this hub can accept, not the number the
   manufacturer claims the remote has. The preview shows a sample of the
   accepted names and lists skipped commands with reasons.
-- A Bluetooth-only key is not an IR signal. An unsupported IR protocol or
-  command without a usable IR code cannot be made to work by clicking
-  Import again. Use a supported network/Bluetooth path or learn a real IR
-  equivalent if the device has one.
+- A Bluetooth-only key is not an IR signal, and a command without a usable
+  IR code cannot be made to work by clicking Import again. An IR protocol
+  the hub lacks is usually no longer a blocker: a set downloaded by the
+  Desktop or Android app, or a package from the catalog helper, now brings
+  the protocol definitions it needs with it (the preview counts those
+  commands as importable and says which protocols it adds), and the hub
+  also has several common protocols built in. Only an older package that
+  carries no definition is still skipped for a missing protocol; the
+  preview names it and suggests learning the buttons from the original
+  remote, or importing the device from IRDB or a Flipper `.ir` file in
+  **Find codes** instead.
 - For dependable activities, look for `PowerOn`, `PowerOff`, and direct
   input commands such as `InputHdmi1` and `InputHdmi2`. Names vary by device.
   The preview lists only the first 24 accepted commands; verify the full
@@ -375,6 +382,9 @@ package picker. Only transfer the finished package, not
    first. Test power and an input on the actual equipment before trusting it.
 6. If nothing responds, try another likely set; do not keep increasing
    repeats on a completely wrong code set.
+
+Names ending in `+` or `-`, such as `VOLUME +` and `CHANNEL -`, map to the
+up and down keys automatically.
 
 Search and preview fetch the library using your computer/phone's browser;
 the hub does not fetch IRDB. Nothing is saved until you choose Import.

@@ -76,8 +76,9 @@ Some parts are less tested than others. Each one is labelled where it is describ
   or the remote's own emitter (@mirsadone).
 - **Logitech catalog.** An import brings the IR protocol with it when the hub lacks it (#243),
   and imports work on a blank hub.
-- **Wired network over USB Ethernet** (**experimental**), in Settings → Experimental. Tested with
-  Realtek RTL8153 and ASIX AX88772C adapters only (@apnar, [guide](USB_ETHERNET.md)).
+- **Wired network over USB Ethernet** (**experimental**), in Settings → Experimental.
+  Traffic-tested with an ASIX AX88772C adapter; a Realtek RTL8153 binds, but its wired traffic
+  is not yet verified (@apnar, [guide](USB_ETHERNET.md)).
 
 ### Activities
 
@@ -135,6 +136,9 @@ Some parts are less tested than others. Each one is labelled where it is describ
 - The PowerShell installer runs on Windows PowerShell 5.1 (#139, also in 2.1).
 - The Setup Wizard reports a download or unpack problem as that, and no longer blames the USB
   cable.
+- The installer removes dead legacy data left by older installs and the root tool automatically,
+  before checking whether the hub's flash has room. `--remove-root-tool-leftovers` is still
+  accepted, but does nothing extra now.
 - The hub's programs are about 310 KB smaller (@apnar).
 
 ## How to update

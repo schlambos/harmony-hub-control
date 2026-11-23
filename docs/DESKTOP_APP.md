@@ -186,8 +186,8 @@ refused.
 | Operation table | `POST cf-svcs…/Discovery.svc/json/GetJsonOperations` `{"clientTypeId":"Redbull 1.0"}`, cached for the session; addresses moved to `lb-svcs` as the helper does |
 | Model check (anonymous) | `GET svcs.myharmony.com/HarmonyPlatform/DeviceManager.svc/json2/SearchDevice/manf/<m>/model/<n>/iface/IR` → found or not, and the canonical spelling |
 | Search | `DeviceManager/SearchGlobalDevices` (json2) `{manufacturer, modelNumber, deviceType:0, searchType:2, maxResults:50}` |
-| Download | `GetGlobalDevices([id])`, then `GetGlobalLanguageCommands({globalLanguageVersionId:{Value}})` |
-| Package | schema `0.2.0`, `source` names the desktop app, secrets redacted with the helper's `redact` rule |
+| Download | `GetGlobalDevices([id])`, then `GetGlobalLanguageCommands({globalLanguageVersionId:{Value}})`, then the account's `UserAccountDirector/ProtocolList` filtered to the protocols the device's KeyCodes need |
+| Package | schema `0.2.0`, `source` names the desktop app, the needed protocol records under `resources.protocols`, secrets redacted with the helper's `redact` rule |
 
 Session handling follows `ensure_session`. It tries the saved tokens first,
 then one silent refresh, and only then asks the user to sign in. A refused
@@ -253,9 +253,10 @@ The catalog tab in the app, top to bottom:
    "Not found under that name".
 3. **Search Logitech catalog**, then a results list: display text, device
    type and description, one row each. Tapping a row downloads it.
-4. The existing preview: importable count, protocols, a command sample,
-   and every skipped command with its reason (for example "protocol 'X' is
-   not on this hub"). Then the existing **Import N commands to <device>**.
+4. The existing preview: importable count, protocols (including any the
+   package adds to the hub), a command sample, and every skipped command
+   with its reason (for example "protocol 'X' is not on this hub"). Then
+   the existing **Import N commands to <device>**.
 5. "Open a catalog package…" stays below, for packages made by the helper.
 
 ## Code reused
