@@ -1,0 +1,15 @@
+// CI only (android.yml). Maven Central answers GitHub runners with 429, so
+// resolve its artifacts from Google's mirror of Central instead. Local
+// builds never load this script.
+def mirror = 'https://maven-central.storage-download.googleapis.com/maven2/'
+def useMirror = { RepositoryHandler repos ->
+    repos.withType(MavenArtifactRepository).configureEach { repo ->
+        if (repo.url.toString().startsWith('https://repo.maven.apache.org/maven2')) {
+            repo.url = mirror
+        }
+    }
+}
+settingsEvaluated { settings ->
+    useMirror(settings.pluginManagement.repositories)
+    useMirror(settings.dependencyResolutionManagement.repositories)
+}
