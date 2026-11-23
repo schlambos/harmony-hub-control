@@ -3,8 +3,8 @@
 The Melodious web app in a desktop window on macOS, Windows, and Linux,
 plus hub Setup Wizard and Logitech catalog lookup (Windows and Linux Desktop
 app and Setup Wizard: **Not fully tested, needs confirmation**). Windows and
-macOS releases include the wizard after `v2.1.0`; it is on `main` and Linux
-can run it from source. The bundled CLI works on all three platforms now. The
+macOS releases include the wizard from `v2.5.0`; Linux can run it from
+source. The bundled CLI works on all three platforms. The
 plan and its security model are in [`docs/DESKTOP_APP.md`](../docs/DESKTOP_APP.md);
 user guides are [Setup Guide](../docs/SETUP_GUIDE.md) and
 [install and first run](../docs/DESKTOP_APP.md#install-and-first-run-user-guide).

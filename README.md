@@ -41,7 +41,7 @@ New to Melodious? Follow the three guides in order:
 
 1. **[Set up your hub](docs/SETUP_GUIDE.md)** — the desktop Setup Wizard roots the
    hub and installs Melodious over Wi-Fi or USB (macOS; Windows and Linux: **Not fully tested,
-   needs confirmation** — Windows and macOS releases after `v2.1.0`, Linux from source), or use the
+   needs confirmation** — Windows and macOS releases from `v2.5.0`, Linux from source), or use the
    CLI: [`tools/hub-root/`](tools/hub-root/README.md) + `install_webui` ([INSTALL.md](docs/INSTALL.md)).
 2. **[Add devices & import IR codes](docs/DEVICES_AND_CODES_GUIDE.md)** — Logitech catalog, IRDB
    and other imports, learning, and the power, input and timing settings activities need.

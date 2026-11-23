@@ -7,9 +7,9 @@ Windows and macOS apps need no commands; Linux runs the same app from source.
 On Windows and Linux, the Desktop app and Setup Wizard are **Not fully tested,
 needs confirmation**.
 
-> **Availability.** The built-in Setup Wizard is on `main` and joins the
-> Windows and macOS desktop releases in the first release after `v2.1.0`.
-> The `v2.1.0` app doesn't have it yet. Linux uses the desktop app from
+> **Availability.** The built-in Setup Wizard is in the Windows and macOS
+> desktop releases from `v2.5.0`. The `v2.1.0` app and older don't have
+> it. Linux uses the desktop app from
 > source. The bundled CLI works on all three platforms now:
 > [`tools/hub-root/`](../tools/hub-root/README.md) for rooting, then
 > `install_webui.ps1` (Windows) or `install_webui.py` (all three) for installation.

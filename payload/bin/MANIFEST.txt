@@ -20,5 +20,5 @@
 ae43e73bdd9ca1054bfd277d1627438a  codex_portal
 bd1ec83e8ea73befe10ba132025d1452  codex_usbeth
 05d6463b934937f7fd1d8c4bafaaab4b  codex_webos
-5aafac25886d059fdf4b924af6f96fae  codex_webui
+71ec4df9e798e5228c04d963e484e0bf  codex_webui
 ceabc15471be6f67f1e13fccd20a9508  dropbearmulti
