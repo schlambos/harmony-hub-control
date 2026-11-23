@@ -33,8 +33,11 @@ def fake_apk(_path: Path) -> dict:
 
 
 def write_hub_zip(path: Path, extra: dict | None = None, bad_md5: bool = False, helpers: bool = True,
-                  gpl_source: bool = True, gpl_source_omit: str = "", readme: str = README) -> None:
+                  gpl_source: bool = True, gpl_source_omit: str = "", readme: str = README,
+                  patch_inputs: bool = True) -> None:
     files = {rel: f"content of {rel}\n".encode() for rel in release.HUB_FILES}
+    if patch_inputs:
+        files.update({rel: b"{}" for rel in release.HUB_PATCH_INPUTS})
     if helpers:
         files.update({rel: f"helper {rel}\n".encode() for rel in release.HUB_INSTALLER_HELPERS})
     files.update(extra or {})
@@ -191,6 +194,16 @@ class ReleaseToolTest(unittest.TestCase):
     def test_missing_installer_helper_is_rejected(self):
         with self.assertRaisesRegex(release.ReleaseError, "missing payload files payload/helpers/"):
             self.make_release(helpers=False)
+
+    def test_installer_patch_data_ships_but_is_not_installed(self):
+        manifest = self.make_release()
+        paths = {f["path"] for f in manifest["hub"]["files"]}
+        self.assertTrue(release.HUB_PATCH_INPUTS)
+        self.assertFalse(paths & release.HUB_PATCH_INPUTS)
+
+    def test_missing_installer_patch_data_is_rejected(self):
+        with self.assertRaisesRegex(release.ReleaseError, "missing payload files payload/helpers/hal_"):
+            self.make_release(patch_inputs=False)
 
     def test_busybox_needs_its_licence_and_source_in_the_zip(self):
         self.assertIn("payload/bin/busybox-extra", release.HUB_FILES)

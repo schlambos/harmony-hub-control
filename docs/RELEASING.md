@@ -25,6 +25,15 @@ key, so losing that key means users uninstall and reinstall.
 
 1. **Build the assets** into one folder:
    - `melodious-hub-<v>.zip`;
+     build it from the release commit. Include the installer-only HAL patch data with the flash probe. The complete archive command is:
+
+     ```sh
+     git archive --format=zip --prefix="melodious-hub-$v/" -o "$folder/melodious-hub-$v.zip" HEAD \
+       Install_Harmony_Control.cmd install_webui.py install_webui.ps1 \
+       payload/bin payload/helpers payload/activity payload/mqtt payload/scripts payload/androidtv payload/modules \
+       LICENSE third_party/busybox-1.37.0 build/build_harmony_tools_kali.sh \
+       build/busybox-zig-cc.sh build/busybox-zig-ar.sh build/discard-mips-pdr.ld
+     ```
    - the owner signs the APK with `apksigner` → `melodious-<v>.apk`;
    - `Melodious-<v>-{arm64,x64}.{dmg,zip}`;
    - `Melodious-<v>-win-x64-setup.exe` and `Melodious-<v>-win-x64.zip`, from
