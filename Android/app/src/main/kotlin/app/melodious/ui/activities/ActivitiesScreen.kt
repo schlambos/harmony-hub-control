@@ -52,11 +52,10 @@ import app.melodious.MelodiousUiState
 import app.melodious.MelodiousViewModel
 import app.melodious.RemoteTarget
 import app.melodious.ui.components.ConfirmDialog
-import app.melodious.ui.components.IconTile
 import app.melodious.ui.components.ScreenTitle
 import app.melodious.ui.components.SectionLabel
 import app.melodious.ui.components.StatusDot
-import app.melodious.ui.components.activityIcon
+import app.melodious.ui.components.ActivityTile
 import app.melodious.ui.components.rememberHaptics
 import app.melodious.ui.theme.MelodiousColors
 import app.melodious.protocol.model.HubActivity
@@ -168,7 +167,7 @@ private fun RunningCard(
         verticalArrangement = Arrangement.spacedBy(16.dp),
     ) {
         Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(14.dp)) {
-            IconTile(activityIcon(activity), size = 52, container = MaterialTheme.colorScheme.primaryContainer, tint = MaterialTheme.colorScheme.onPrimaryContainer)
+            ActivityTile(activity, size = 52, container = MaterialTheme.colorScheme.primaryContainer, tint = MaterialTheme.colorScheme.onPrimaryContainer)
             Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(2.dp)) {
                 Text("RUNNING NOW", fontSize = 12.sp, fontWeight = FontWeight.SemiBold, letterSpacing = 0.8.sp, color = MaterialTheme.colorScheme.primary)
                 Text(activity.name, fontSize = 22.sp, fontWeight = FontWeight.Medium, maxLines = 1, overflow = TextOverflow.Ellipsis)
@@ -225,7 +224,7 @@ private fun ActivityRow(
         verticalAlignment = Alignment.CenterVertically,
         horizontalArrangement = Arrangement.spacedBy(14.dp),
     ) {
-        IconTile(activityIcon(activity), size = 48, container = androidx.compose.ui.graphics.Color(0xFF23302A), tint = androidx.compose.ui.graphics.Color(0xFFA8E6C8))
+        ActivityTile(activity, size = 48, container = androidx.compose.ui.graphics.Color(0xFF23302A), tint = androidx.compose.ui.graphics.Color(0xFFA8E6C8))
         Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(2.dp)) {
             Text(activity.name, fontSize = 17.sp, fontWeight = FontWeight.Medium, maxLines = 1, overflow = TextOverflow.Ellipsis)
             if (buttonCount < FEW_BUTTONS) {

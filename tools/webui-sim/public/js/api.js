@@ -142,6 +142,19 @@ export function getRemoteBackground() {
   return request("/api/remote-background");
 }
 
+// A device's favorite channels, as the remote lists them: { exists,
+// canCreate, reason, etag, count, max, positions: [{ number, name, station,
+// image, logo, stored }] } (positions is absent when there are none).
+export function getFavorites(deviceId) {
+  return request(`/api/favorites?deviceId=${encodeURIComponent(deviceId)}`);
+}
+
+// Replace a device's favorites: { deviceId, etag, positions, logos } as
+// favorites-model.js builds it. Answers the new list.
+export function saveFavorites(body) {
+  return request("/api/favorites", { method: "POST", body });
+}
+
 // { action: "upload", image, thumbnail } (PNG data URLs, 240x320 and 60x80),
 // { action: "select", image: "<name>.png" } or { action: "default" }.
 export function setRemoteBackground(body) {

@@ -542,6 +542,27 @@ button.m-row:focus-visible {
   color: var(--tile-fg, var(--on-tile));
 }
 
+/* An image over the tile's icon (imageTile): the activity's own icon, or a
+   favorite's logo. The icon is hidden while the image is in the tile, so a
+   transparent image shows only the tile's colour; a failed image is removed
+   (ui/shell.js), which brings the icon back. */
+.m-tile--image {
+  position: relative;
+  overflow: hidden;
+}
+
+.m-tile-img {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+}
+
+.m-tile--image:has(.m-tile-img) > .ic {
+  visibility: hidden;
+}
+
 .m-tile--primary {
   --tile-bg: var(--primary-container);
   --tile-fg: var(--on-primary-container);

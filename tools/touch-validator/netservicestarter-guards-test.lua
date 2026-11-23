@@ -317,7 +317,45 @@ check("background over 512 KiB: not sent", r.data.code == "404" and r.binary == 
 r = getResource("proxy.resource?get", nil, { uri = BUCKET .. "..%2Fbg_1.png" })
 check("a name outside [A-Za-z0-9_-]: blocked", r.data.code == "404" and r.binary == nil, encode(r))
 r = getResource("proxy.resource?get", nil, { uri = "https://images.example.invalid/DefaultImages/111/bg_1.png" })
-check("only the UserImages bucket is answered", r.data.code == "404" and r.binary == nil, encode(r))
+check("DefaultImages is not answered", r.data.code == "404" and r.binary == nil, encode(r))
+
+-- Activity icons: the remote fetches <BaseImageUri>Activity/<name>.png and
+-- <name>_small.png (the activity's ImageKey), stored as <name>.png.
+local ACT = "https://images.example.invalid/Activity/"
+stored["1_act-a"] = { etag = '"act"', hetag = "5", resource = "resources/1_act-a.png" }
+files["/data/resources/1_act-a.png"] = png .. "a"
+stored["1_act-a_small"] = { etag = '"act-s"', hetag = "6", resource = "resources/1_act-a_small.png" }
+files["/data/resources/1_act-a_small.png"] = png .. "as"
+
+r = getResource("proxy.resource?get", nil, { uri = ACT .. "1_act-a.png" })
+check("saved activity icon: 200 with the PNG as binary payload",
+  r.data.code == "200" and r.data.etag == '"act"' and r.data.hetag == "5" and
+  r.binary == png .. "a" and r.data.resource == nil, encode(r))
+r = getResource("proxy.resource?get", nil, { uri = ACT .. "1_act-a_small.png" })
+check("saved activity icon thumbnail: served", r.data.code == "200" and r.binary == png .. "as", encode(r))
+r = getResource("proxy.resource?get", nil, { uri = ACT .. "1_not-saved.png" })
+check("activity icon the hub doesn't hold: 404", r.data.code == "404" and r.binary == nil, encode(r))
+r = getResource("proxy.resource?get", nil, { uri = ACT .. "..%2F1_act-a.png" })
+check("activity icon name outside [A-Za-z0-9_-]: blocked", r.data.code == "404" and r.binary == nil, encode(r))
+r = getResource("proxy.resource?get", nil, { uri = ACT .. "sub/1_act-a.png" })
+check("activity icon in a subfolder: blocked", r.data.code == "404" and r.binary == nil, encode(r))
+
+-- Favorite channel logos: content-image://1.0/image/<uuid>.png;maxX=..;maxY=..
+-- stored as ci_<uuid>.png, one file for every requested size.
+stored["ci_0bab-11"] = { etag = '"logo"', hetag = "9", resource = "resources/ci_0bab-11.png" }
+files["/data/resources/ci_0bab-11.png"] = png .. "l"
+r = getResource("proxy.resource?get", nil, { uri = "content-image://1.0/image/0bab-11.png;maxX=54;maxY=54" })
+check("saved channel logo with size hints: 200 with the PNG",
+  r.data.code == "200" and r.data.etag == '"logo"' and r.binary == png .. "l" and
+  r.data.uri == "content-image://1.0/image/0bab-11.png;maxX=54;maxY=54", encode(r))
+r = getResource("proxy.resource?get", nil, { uri = "content-image://1.0/image/0bab-11.png" })
+check("saved channel logo without size hints: served", r.data.code == "200" and r.binary == png .. "l", encode(r))
+r = getResource("proxy.resource?get", nil, { uri = "content-image://1.0/image/ffff-00.png;maxX=54;maxY=54" })
+check("channel logo the hub doesn't hold: 404", r.data.code == "404" and r.binary == nil, encode(r))
+r = getResource("proxy.resource?get", nil, { uri = "content-image://1.0/image/..%2Fbg_1.png;maxX=54" })
+check("channel logo name outside [A-Za-z0-9-]: blocked", r.data.code == "404" and r.binary == nil, encode(r))
+r = getResource("proxy.resource?get", nil, { uri = "content-image://1.0/station/0bab-11/image;maxX=40;maxY=40" })
+check("other content-image paths: blocked", r.data.code == "404" and r.binary == nil, encode(r))
 
 -- Melodious turned off (/etc/melodious-off, and legacy /data/codex/melodious-off):
 -- even with cloud_blocker.conf = "1" and restrictions/timezone files present,

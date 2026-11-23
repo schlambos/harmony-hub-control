@@ -1170,6 +1170,7 @@
     try {
       const config = await fetchJson("/api/activity-config");
       state.config = config;
+      imageStatus.checked = false;
       state.revision = text(config.revision);
       buildCommandCatalog();
       resetIdPool();
@@ -1469,6 +1470,276 @@
     }
   }
 
+  // Activity icon on the remote (docs/REMOTE_IMAGES.md). The remote shows
+  // the image at <BaseImageUri><ImageKey>; the hub stores it and answers
+  // that fetch. A new icon is drawn (a Material symbol on a colored tile) or
+  // taken from an uploaded image, sent to /api/activity-icon as a 70x70 PNG
+  // and its 38x38 thumbnail, and its ImageKey goes into the activity with the
+  // next save. The firmware Icon number is left alone.
+  //
+  // Material Icons by Google, Apache License 2.0 (third_party/material-icons);
+  // the same path data as the shell's icons.js.
+  const ICON_GLYPHS = [
+    { key: "tv", label: "TV", d: "M21 3H3c-1.1 0-2 .9-2 2v12c0 1.1.9 2 2 2h5v2h8v-2h5c1.1 0 1.99-.9 1.99-2L23 5c0-1.1-.9-2-2-2zm0 14H3V5h18v12z" },
+    { key: "movie", label: "Movie", d: "m18 4 2 4h-3l-2-4h-2l2 4h-3l-2-4H8l2 4H7L5 4H4c-1.1 0-1.99.9-1.99 2L2 18c0 1.1.9 2 2 2h16c1.1 0 2-.9 2-2V4h-4z" },
+    { key: "sports_esports", label: "Game", d: "m21.58 16.09-1.09-7.66A3.996 3.996 0 0 0 16.53 5H7.47C5.48 5 3.79 6.46 3.51 8.43l-1.09 7.66a2.545 2.545 0 0 0 4.32 2.16L9 16h6l2.25 2.25c.48.48 1.13.75 1.8.75 1.56 0 2.75-1.37 2.53-2.91zM11 11H9v2H8v-2H6v-1h2V8h1v2h2v1zm4-1c-.55 0-1-.45-1-1s.45-1 1-1 1 .45 1 1-.45 1-1 1zm2 3c-.55 0-1-.45-1-1s.45-1 1-1 1 .45 1 1-.45 1-1 1z" },
+    { key: "music_note", label: "Music", d: "M12 3v10.55c-.59-.34-1.27-.55-2-.55-2.21 0-4 1.79-4 4s1.79 4 4 4 4-1.79 4-4V7h4V3h-6z" },
+    { key: "speaker", label: "Speaker", d: "M17 2H7c-1.1 0-2 .9-2 2v16c0 1.1.9 1.99 2 1.99L17 22c1.1 0 2-.9 2-2V4c0-1.1-.9-2-2-2zm-5 2c1.1 0 2 .9 2 2s-.9 2-2 2a2 2 0 1 1 0-4zm0 16c-2.76 0-5-2.24-5-5s2.24-5 5-5 5 2.24 5 5-2.24 5-5 5zm0-8c-1.66 0-3 1.34-3 3s1.34 3 3 3 3-1.34 3-3-1.34-3-3-3z" },
+    { key: "computer", label: "Computer", d: "M20 18c1.1 0 1.99-.9 1.99-2L22 6c0-1.1-.9-2-2-2H4c-1.1 0-2 .9-2 2v10c0 1.1.9 2 2 2H0v2h24v-2h-4zM4 6h16v10H4V6z" },
+    { key: "cast", label: "Streaming", d: "M21 3H3c-1.1 0-2 .9-2 2v3h2V5h18v14h-7v2h7c1.1 0 2-.9 2-2V5c0-1.1-.9-2-2-2zM1 18v3h3c0-1.66-1.34-3-3-3zm0-4v2c2.76 0 5 2.24 5 5h2c0-3.87-3.13-7-7-7zm0-4v2a9 9 0 0 1 9 9h2c0-6.08-4.93-11-11-11z" },
+    { key: "videocam", label: "Camera", d: "M17 10.5V7c0-.55-.45-1-1-1H4c-.55 0-1 .45-1 1v10c0 .55.45 1 1 1h12c.55 0 1-.45 1-1v-3.5l4 4v-11l-4 4z" },
+    { key: "settings_input_hdmi", label: "HDMI input", d: "M18 7V4c0-1.1-.9-2-2-2H8c-1.1 0-2 .9-2 2v3H5v6l3 6v3h8v-3l3-6V7h-1zM8 4h8v3h-2V5h-1v2h-2V5h-1v2H8V4z" },
+    { key: "home", label: "Home", d: "M10 20v-6h4v6h5v-8h3L12 3 2 12h3v8z" },
+    { key: "settings_remote", label: "Remote", d: "M15 9H9c-.55 0-1 .45-1 1v12c0 .55.45 1 1 1h6c.55 0 1-.45 1-1V10c0-.55-.45-1-1-1zm-3 6c-1.1 0-2-.9-2-2s.9-2 2-2 2 .9 2 2-.9 2-2 2zM7.05 6.05l1.41 1.41a5.022 5.022 0 0 1 7.08 0l1.41-1.41C15.68 4.78 13.93 4 12 4s-3.68.78-4.95 2.05zM12 0C8.96 0 6.21 1.23 4.22 3.22l1.41 1.41C7.26 3.01 9.51 2 12 2s4.74 1.01 6.36 2.64l1.41-1.41C17.79 1.23 15.04 0 12 0z" },
+    { key: "play_arrow", label: "Play", d: "M8 5v14l11-7z" },
+    { key: "bluetooth", label: "Bluetooth", d: "M17.71 7.71 12 2h-1v7.59L6.41 5 5 6.41 10.59 12 5 17.59 6.41 19 11 14.41V22h1l5.71-5.71-4.3-4.29 4.3-4.29zM13 5.83l1.88 1.88L13 9.59V5.83zm1.88 10.46L13 18.17v-3.76l1.88 1.88z" },
+    { key: "wifi", label: "Network", d: "m1 9 2 2c4.97-4.97 13.03-4.97 18 0l2-2C16.93 2.93 7.08 2.93 1 9zm8 8 3 3 3-3a4.237 4.237 0 0 0-6 0zm-4-4 2 2a7.074 7.074 0 0 1 10 0l2-2C15.14 9.14 8.87 9.14 5 13z" },
+    { key: "schedule", label: "Timer", d: "M11.99 2C6.47 2 2 6.48 2 12s4.47 10 9.99 10C17.52 22 22 17.52 22 12S17.52 2 11.99 2zM12 20c-4.42 0-8-3.58-8-8s3.58-8 8-8 8 3.58 8 8-3.58 8-8 8zm.5-13H11v6l5.25 3.15.75-1.23-4.5-2.67z" }
+  ];
+  const ICON_COLORS = [
+    { value: "#f26e21", label: "Orange" },
+    { value: "#1e88e5", label: "Blue" },
+    { value: "#43a047", label: "Green" },
+    { value: "#8e24aa", label: "Purple" },
+    { value: "#e53935", label: "Red" },
+    { value: "#455a64", label: "Slate" }
+  ];
+  const ICON_SIZE = 70;
+  const ICON_SMALL_SIZE = 38;
+  // Any https host works: the hub answers Activity/<name>.png for every host.
+  // A new activity has no BaseImageUri, so it gets this one.
+  const ICON_BASE_URI = "https://images.melodious.invalid/";
+  const iconChoice = { glyph: ICON_GLYPHS[0].key, color: ICON_COLORS[0].value, busy: false };
+
+  function activityImageName(activity) {
+    const match = /^Activity\/([A-Za-z0-9_-]{1,96})\.png$/.exec(text(activity && activity.ImageKey));
+    return match && !match[1].endsWith("_small") ? match[1] : "";
+  }
+
+  // The square of a width x height image that fills a tile (centered).
+  function coverRect(width, height) {
+    const side = Math.min(width, height);
+    return { x: Math.round((width - side) / 2), y: Math.round((height - side) / 2), side };
+  }
+
+  function roundedTile(g, size, color) {
+    const r = size * 0.22;
+    g.beginPath();
+    g.moveTo(r, 0);
+    g.arcTo(size, 0, size, size, r);
+    g.arcTo(size, size, 0, size, r);
+    g.arcTo(0, size, 0, 0, r);
+    g.arcTo(0, 0, size, 0, r);
+    g.closePath();
+    g.fillStyle = color;
+    g.fill();
+  }
+
+  function glyphPng(size) {
+    const canvas = document.createElement("canvas");
+    canvas.width = canvas.height = size;
+    const g = canvas.getContext("2d");
+    roundedTile(g, size, iconChoice.color);
+    const glyph = ICON_GLYPHS.find((item) => item.key === iconChoice.glyph) || ICON_GLYPHS[0];
+    const scale = (size * 0.62) / 24;
+    g.translate((size - 24 * scale) / 2, (size - 24 * scale) / 2);
+    g.scale(scale, scale);
+    g.fillStyle = "#ffffff";
+    g.fill(new Path2D(glyph.d));
+    return canvas.toDataURL("image/png");
+  }
+
+  function imagePng(image, size) {
+    const canvas = document.createElement("canvas");
+    canvas.width = canvas.height = size;
+    const g = canvas.getContext("2d");
+    const rect = coverRect(image.naturalWidth || image.width, image.naturalHeight || image.height);
+    g.imageSmoothingQuality = "high";
+    g.drawImage(image, rect.x, rect.y, rect.side, rect.side, 0, 0, size, size);
+    return canvas.toDataURL("image/png");
+  }
+
+  // Read the file as a data: URL, not a blob: one: the desktop app's
+  // Content-Security-Policy allows only 'self' and data: images.
+  function loadImage(file) {
+    return new Promise((resolve, reject) => {
+      const unreadable = () => reject(new Error("That file isn't an image this browser can open."));
+      const reader = new FileReader();
+      reader.onerror = unreadable;
+      reader.onload = () => {
+        const image = new Image();
+        image.onload = () => resolve(image);
+        image.onerror = unreadable;
+        image.src = String(reader.result || "");
+      };
+      reader.readAsDataURL(file);
+    });
+  }
+
+  // Images the hub's activities and favorites use (GET /api/remote-images).
+  // The editor only reports what's missing; syncing them from Logitech is in
+  // the desktop app's Settings (connect/images.js), because only the desktop
+  // app can reach Logitech. A hub without the route (404) runs software older
+  // than this editor, and can't store icons yet.
+  const imageStatus = { checked: false, checking: false, oldHub: false, missing: 0, total: 0 };
+
+  function inDesktopApp() {
+    return Boolean(globalThis.melodiousDesktop && globalThis.melodiousDesktop.catalog);
+  }
+
+  async function refreshImageStatus() {
+    if (imageStatus.checking) return;
+    imageStatus.checking = true;
+    try {
+      const list = await fetchJson("/api/remote-images");
+      imageStatus.missing = Number(list.missing) || 0;
+      imageStatus.total = Number(list.total) || 0;
+      imageStatus.oldHub = false;
+    } catch (error) {
+      imageStatus.oldHub = error.status === 404;
+      imageStatus.missing = 0;
+    } finally {
+      imageStatus.checked = true;
+      imageStatus.checking = false;
+      renderIconField(selectedActivity());
+    }
+  }
+
+  // The shell remembers which activity images the hub didn't have; tell it
+  // when that may have changed (ui/shell.js listens).
+  function imagesChanged() {
+    try {
+      document.dispatchEvent(new CustomEvent("melodious:images-changed"));
+    } catch (_) {
+      // No CustomEvent here (tests): nothing listens either.
+    }
+  }
+
+  const SYNC_HINT_DESKTOP = "Sync them in Settings → Logitech account.";
+  const SYNC_HINT_BROWSER = "Sync them with the Melodious desktop app (Settings → Logitech account).";
+
+  function imageStatusHtml() {
+    if (!imageStatus.checked) return "";
+    if (imageStatus.oldHub) {
+      return `<div class="activity-icon-sync"><span>The hub's software is older than this editor: update the hub to set icons.</span></div>`;
+    }
+    if (imageStatus.missing <= 0) return "";
+    const what = `Missing user images: ${imageStatus.missing} of ${imageStatus.total}.`;
+    return `<div class="activity-icon-sync"><span>${esc(what)} ${esc(inDesktopApp() ? SYNC_HINT_DESKTOP : SYNC_HINT_BROWSER)}</span></div>`;
+  }
+
+  function renderIconField(activity) {
+    const host = byId("activityIconField");
+    if (!host) return;
+    const name = activityImageName(activity);
+    const glyphs = ICON_GLYPHS.map((item) => `<button type="button" class="activity-icon-glyph" data-icon-glyph="${esc(item.key)}" aria-pressed="${item.key === iconChoice.glyph}" title="${esc(item.label)}" aria-label="${esc(item.label)}"><svg viewBox="0 0 24 24" width="22" height="22" aria-hidden="true" focusable="false"><path d="${esc(item.d)}" fill="currentColor"/></svg></button>`).join("");
+    const colors = ICON_COLORS.map((item) => `<button type="button" class="activity-icon-color" data-icon-color="${esc(item.value)}" aria-pressed="${item.value === iconChoice.color}" title="${esc(item.label)}" aria-label="${esc(item.label)}" style="--swatch:${esc(item.value)}"></button>`).join("");
+    host.innerHTML = `
+      <span class="activity-icon-label">Icon on the remote</span>
+      <div class="activity-icon-row">
+        <span class="activity-icon-preview">${name ? `<img src="/api/remote-images/image?name=${encodeURIComponent(name)}" alt="Current icon" width="${ICON_SIZE}" height="${ICON_SIZE}">` : ""}<span class="activity-icon-none"${name ? " hidden" : ""}>No icon</span></span>
+        <div class="activity-icon-tools">
+          <div class="activity-icon-glyphs" role="group" aria-label="Symbol">${glyphs}</div>
+          <div class="activity-icon-colors" role="group" aria-label="Tile color">${colors}</div>
+          <div class="activity-icon-actions">
+            <button type="button" class="btn btn-secondary secondary" data-icon-use${iconChoice.busy || imageStatus.oldHub ? " disabled" : ""}>Use this symbol</button>
+            <label class="btn btn-secondary secondary activity-icon-upload">Upload image…<input type="file" accept="image/*" data-icon-upload hidden${iconChoice.busy || imageStatus.oldHub ? " disabled" : ""}></label>
+            ${name ? `<button type="button" class="btn btn-secondary secondary" data-icon-remove${iconChoice.busy ? " disabled" : ""}>Remove icon</button>` : ""}
+          </div>
+          <p class="activity-icon-note" data-icon-note></p>
+        </div>
+      </div>
+      ${imageStatusHtml()}`;
+    if (!imageStatus.checked && !imageStatus.checking) refreshImageStatus();
+    const preview = host.querySelector(".activity-icon-preview img");
+    preview?.addEventListener("error", () => {
+      preview.remove();
+      const none = host.querySelector(".activity-icon-none");
+      if (none) {
+        none.hidden = false;
+        none.textContent = "Not on the hub";
+      }
+      const note = host.querySelector("[data-icon-note]");
+      if (note) {
+        note.textContent = `This activity's icon was kept by Logitech and isn't on the hub. ${inDesktopApp() ? SYNC_HINT_DESKTOP : SYNC_HINT_BROWSER} Or choose a new one.`;
+      }
+    });
+  }
+
+  async function storeActivityIcon(image, thumbnail) {
+    const activity = selectedActivity();
+    if (!activity) return;
+    const id = objectId(activity);
+    iconChoice.busy = true;
+    renderIconField(activity);
+    markNotice("Storing the icon on the hub…");
+    try {
+      const result = await fetchJson("/api/activity-icon", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ image, thumbnail })
+      });
+      const target = activities().find((item) => sameId(objectId(item), id));
+      if (!target || typeof result.imageKey !== "string") throw new Error("The hub didn't return the icon's name.");
+      target.ImageKey = result.imageKey;
+      if (!text(target.BaseImageUri)) target.BaseImageUri = ICON_BASE_URI;
+      touch(target);
+      imagesChanged();
+      markNotice("Icon stored on the hub. Save the activity, then sync the remote to see it.");
+    } catch (error) {
+      const hint = error.status === 404
+        ? "The hub's software is older than this editor: update the hub to set icons."
+        : error.message;
+      markNotice(`The icon wasn't stored: ${hint}`, "error");
+    } finally {
+      iconChoice.busy = false;
+      renderIconField(selectedActivity());
+    }
+  }
+
+  function bindIconField() {
+    const host = byId("activityIconField");
+    if (!host) return;
+    host.addEventListener("click", (event) => {
+      const glyph = event.target.closest("[data-icon-glyph]");
+      const color = event.target.closest("[data-icon-color]");
+      if (glyph || color) {
+        if (glyph) iconChoice.glyph = glyph.dataset.iconGlyph;
+        if (color) iconChoice.color = color.dataset.iconColor;
+        host.querySelectorAll("[data-icon-glyph]").forEach((button) => {
+          button.setAttribute("aria-pressed", String(button.dataset.iconGlyph === iconChoice.glyph));
+        });
+        host.querySelectorAll("[data-icon-color]").forEach((button) => {
+          button.setAttribute("aria-pressed", String(button.dataset.iconColor === iconChoice.color));
+        });
+        return;
+      }
+      if (event.target.closest("[data-icon-use]") && !iconChoice.busy && !imageStatus.oldHub) {
+        storeActivityIcon(glyphPng(ICON_SIZE), glyphPng(ICON_SMALL_SIZE));
+        return;
+      }
+      if (event.target.closest("[data-icon-remove]") && !iconChoice.busy) {
+        const activity = selectedActivity();
+        if (!activity) return;
+        activity.ImageKey = null;
+        activity.BaseImageUri = null;
+        touch(activity);
+        renderIconField(activity);
+        markNotice("Icon removed. Save the activity to apply it.");
+      }
+    });
+    host.addEventListener("change", async (event) => {
+      const input = event.target.closest("[data-icon-upload]");
+      if (!input || !input.files || !input.files[0] || iconChoice.busy || imageStatus.oldHub) return;
+      try {
+        const image = await loadImage(input.files[0]);
+        await storeActivityIcon(imagePng(image, ICON_SIZE), imagePng(image, ICON_SMALL_SIZE));
+      } catch (error) {
+        markNotice(error.message, "error");
+      }
+    });
+  }
+
   function renderEditor() {
     const activity = selectedActivity();
     const empty = byId("activityEmpty");
@@ -1482,7 +1753,7 @@
     byId("activityEditorMeta").textContent = `Activity ${objectId(activity)} · order ${activity.ActivityOrder ?? "—"}`;
     byId("activityName").value = activityName(activity);
     byId("activityType").innerHTML = renderTypeOptions(activity);
-    byId("activityIcon").value = text(activity.Icon);
+    renderIconField(activity);
     byId("activityDefaultChannel").value = text(activity.DefaultChannel);
     byId("activityDefaultStation").value = text(activity.DefaultStationName || activity.DefaultStation);
     renderRoles(activity);
@@ -2380,12 +2651,7 @@
       touch(activity);
       renderRoster();
     });
-    byId("activityIcon")?.addEventListener("input", (event) => {
-      const activity = selectedActivity();
-      if (!activity) return;
-      activity.Icon = event.target.value || null;
-      touch(activity);
-    });
+    bindIconField();
     byId("activityDefaultChannel")?.addEventListener("input", (event) => {
       const activity = selectedActivity();
       if (!activity) return;
@@ -2443,7 +2709,13 @@
       validateGraph,
       saveActivities,
       activityMapSurfaceKey,
-      activityFunctionMaps
+      activityFunctionMaps,
+      activityImageName,
+      coverRect,
+      ICON_GLYPHS,
+      ICON_BASE_URI,
+      imageStatus,
+      imageStatusHtml
     };
     return;
   }

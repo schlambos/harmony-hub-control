@@ -203,6 +203,19 @@ public final class HubRestClient: Sendable {
 
     // MARK: - Private HTTP transport
 
+    /// `GET /api/remote-images/image?name=`: an activity's own icon as PNG data,
+    /// or nil when the hub doesn't hold it or can't be reached. docs/REMOTE_IMAGES.md
+    public func getRemoteImage(endpoint: HubEndpoint, name: String) async -> Data? {
+        let allowed = CharacterSet(charactersIn: "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789_-")
+        guard (1...96).contains(name.count), name.unicodeScalars.allSatisfy({ allowed.contains($0) }) else { return nil }
+        guard let data = try? await getRawData(endpoint: endpoint, path: "/api/remote-images/image?name=\(name)") else {
+            return nil
+        }
+        let signature: [UInt8] = [0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A]
+        guard data.count <= 512 * 1024, data.count >= 8, Array(data.prefix(8)) == signature else { return nil }
+        return data
+    }
+
     private func getRawData(endpoint: HubEndpoint, path: String, useProbeSession: Bool = false) async throws -> Data {
         guard let url = URL(string: "\(endpoint.baseUrlString)\(path)") else {
             throw HubApiError(message: "Invalid hub URL: \(endpoint.baseUrlString)\(path)")
