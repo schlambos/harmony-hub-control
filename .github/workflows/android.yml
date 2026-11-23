@@ -28,6 +28,11 @@ jobs:
           restore-keys: android-deps-
       - name: Run JVM suites with runner JDK 17 and Android SDK
         working-directory: Android
+        env:
+          # Robolectric's own test-time fetch of android-all keeps getting
+          # refused by repo1.maven.org on uncached runners, so take it from
+          # Google's mirror of Maven Central instead. Test JVMs inherit this.
+          JAVA_TOOL_OPTIONS: -Drobolectric.dependency.repo.url=https://maven-central.storage-download.googleapis.com/maven2
         run: |
           # Retry only when the failure is a dependency or download error.
           # A failing test with no download error fails at once.
