@@ -149,6 +149,7 @@ ROOT_TOOL_DROPBEAR_REMOVE = (
 # this install creates is added after cleanup and kept by prune_handoffs().
 BACKUP_KEEP = 3
 RESOURCE_BACKUP_ROOT = "/data/codex/resource-backups"
+REPAIR_REMOTE_MAPS_FLAG = "/data/codex/repair_remote_maps"
 BACKUP_ROOTS = [RESOURCE_BACKUP_ROOT, HANDOFF_ROOT, "/data/codex/update-backups"]
 # Names directly in /data/codex/bin the installer manages besides the
 # manifest binaries: the Dropbear links phase wiring creates, the hal copies
@@ -2755,6 +2756,7 @@ class Installer:
             "/usr/sbin/dropbearkey /etc/init.d/rcS.local; "
             "chmod 644 /data/codex/modules/usb-net/r8152.ko /data/codex/modules/usb-net/usbnet.ko /data/codex/modules/usb-net/asix.ko /data/codex/modules/usb-net/cdc_ether.ko /data/codex/modules/usb-net/cdc_ncm.ko /data/codex/modules/usb-net/ax88179_178a.ko /data/codex/modules/usb-net/README.md 2>/dev/null || true; "
             "chmod 600 /data/codexmqtt/config.json 2>/dev/null || true; "
+            f": > {REPAIR_REMOTE_MAPS_FLAG}; "
             "/bin/busybox sync 2>/dev/null || true"
         )
         self.run_remote(post, timeout=60, quiet=True)

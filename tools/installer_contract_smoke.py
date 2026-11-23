@@ -423,6 +423,8 @@ class FakeHub:
             if self.fail_wiring:
                 return 1, "", "simulated wiring failure"
             self.events.append(("wiring",))
+            if f": > {INST.REPAIR_REMOTE_MAPS_FLAG}" in c:
+                self.events.append(("repair_flag", INST.REPAIR_REMOTE_MAPS_FLAG))
             return 0, "", ""
 
         if c.startswith("mkdir -p"):
@@ -1039,6 +1041,9 @@ class PythonInstallerMutating(unittest.TestCase):
                     f"unrelated persistent path mutated: {event[1]}",
                 )
         self.assertNotIn(("service", "reboot"), self.hub.events)
+        # Post-install wiring schedules automatic remote activity map repair (#250).
+        repair_index = self.hub.first_index(lambda e: e == ("repair_flag", INST.REPAIR_REMOTE_MAPS_FLAG))
+        self.assertGreater(repair_index, verify_index)
 
     def test_flash_full_in_phase_one_changes_nothing(self):
         """[PYTHON BEHAVIORAL] running out of flash while writing new copies
@@ -4258,6 +4263,9 @@ class PowerShellStaticContract(unittest.TestCase):
         self.assertEqual(self.ps_scalar("VerdictConfigUncertain"),
                          INST.VERDICT_CONFIG_UNCERTAIN)
         self.assertEqual(self.ps_scalar("VerdictValidation"), INST.VERDICT_VALIDATION)
+        self.assertEqual(self.ps_scalar("RepairRemoteMapsFlag"), INST.REPAIR_REMOTE_MAPS_FLAG)
+        wiring = self.text.split("function Invoke-PostWiring()", 1)[1].split("\nfunction ", 1)[0]
+        self.assertIn(": > $RepairRemoteMapsFlag;", wiring)
 
     def test_multi_remote_parity(self):
         """[PS1 STATIC] -MultiRemote on|off mirrors --multi-remote: same

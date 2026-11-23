@@ -85,6 +85,8 @@ const newHbus = Buffer.from("#!/bin/sh\necho new-hbus\n");
 root("mkdir -p /data/codex-backups && for s in 20261027-120000 20261026-120000 20261028-090000 20261025-120000; do mkdir -p /data/codex-backups/webui-handoff-$s; done");
 let r = apply(stage("a", [{ dest: "/data/codex/bin/codex_hbus", body: newHbus }]));
 check("RESULT ok restarted", r.result === "RESULT ok restarted", r.log);
+check("post-install repair flag written", root("[ -f /data/codex/repair_remote_maps ] && echo y || echo n").trim() === "y");
+root("rm -f /data/codex/repair_remote_maps");
 check("codex_hbus replaced and executable", fileMd5("/data/codex/bin/codex_hbus") === md5(newHbus) &&
   root("[ -x /data/codex/bin/codex_hbus ] && echo x").trim() === "x");
 check("no .codex-new left", root("ls /data/codex/bin | grep -c codex-new || true").trim() === "0");
@@ -124,6 +126,8 @@ console.log("\n== plugin change: reboot instead of restart");
 const rebootsBefore = JSON.parse(execFileSync("curl", ["-s", `${CTRL}/status`], { encoding: "utf8" })).rebootCount ?? 0;
 r = apply(stage("e", [{ dest: "/pkg/codexactivity/codexactivity.lua", mode: "644", reboot: true, body: Buffer.from("-- plugin\n") }]));
 check("RESULT ok reboot", r.result === "RESULT ok reboot", r.log);
+check("post-install repair flag written before reboot", root("[ -f /data/codex/repair_remote_maps ] && echo y || echo n").trim() === "y");
+root("rm -f /data/codex/repair_remote_maps");
 let rebootsAfter = rebootsBefore;
 for (let i = 0; i < 10 && rebootsAfter === rebootsBefore; i++) {
   execFileSync("sleep", ["1"]);

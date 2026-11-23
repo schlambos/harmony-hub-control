@@ -282,22 +282,26 @@ export function createRemotesView(section) {
       </div>`;
   }
 
-  /* A remote without a screen that has no map for some activities: say what
-     that means and offer the fix. Pairing here adds them itself; this is for
-     a remote paired before that, or when that save didn't land. */
+  /* A remote with keys (with or without a screen) that has no map for some
+     activities: say what that means and offer the fix. Hub updates and
+     pairing add them automatically; this is the manual fallback. */
   function missingKeysNotice(remote) {
     const missing = missingRemoteActivityMaps(hub.state.config, [remote.equadId]);
     if (!missing.length) return "";
     const names = missing.map((m) => escapeHtml(m.name)).join(", ");
+    const effect = remote.role === "screen"
+      ? "this remote's physical buttons do nothing."
+      : "the hub ignores every key on this remote, Off included.";
     return `<div class="notice notice-warn" role="status">
         <strong>This remote has no keys for ${missing.length === 1 ? "one activity" : `${missing.length} activities`}:</strong> ${names}.
-        While ${missing.length === 1 ? "it" : "one of them"} runs the hub ignores every key on this remote, Off included.
+        While ${missing.length === 1 ? "it" : "one of them"} runs ${effect}
         <div class="actions"><button type="button" class="btn btn-filled btn-sm" data-act="add-keys"${busy() || remotesBusy ? " disabled" : ""}>${addingKeys ? "Adding…" : "Add its keys"}</button></div>
       </div>`;
   }
 
-  /* Give every paired remote without a screen a map for each activity it
-     has none for. One save for all of them; nothing else in MapList changes. */
+  /* Give every paired remote with keys (screen or no-screen) a map for each
+     activity it has none for. One save for all of them; nothing else in
+     MapList changes. */
   async function addMissingKeys() {
     if (addingKeys || !hub.state.config) return;
     const { mapList, created } = buildRemoteActivityMapsMapList(hub.state.config, paired());
@@ -441,7 +445,7 @@ export function createRemotesView(section) {
   function remoteSection(remote) {
     let body;
     if (remote.role === "no-screen") body = `${missingKeysNotice(remote)}${activityButtonsCard(remote)}${activitiesCard(remote)}`;
-    else if (remote.role === "screen") body = `${activitiesCard(remote)}<div data-bg-slot></div>`;
+    else if (remote.role === "screen") body = `${missingKeysNotice(remote)}${activitiesCard(remote)}<div data-bg-slot></div>`;
     else body = `<div class="m-card"><p class="list-note">Nothing to set for this remote here yet.</p></div>`;
     if (hasHomeButtons(remote)) body += homeButtonsCard(remote);
     const count = remote.slots.length;

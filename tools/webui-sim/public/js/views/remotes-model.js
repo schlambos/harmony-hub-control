@@ -365,13 +365,25 @@ function harmonyDate() {
 }
 
 /* Surface identities for a new map of this remote, borrowed from one of its
-   maps that has them, else from any activity map: the hub never reads them,
-   and Logitech gave a Companion's maps the Smart Control's. */
+   maps that has them (activity map first, then root, then any map of that
+   remote). A screen remote (16417) never borrows Smart Control/Companion
+   surface ids (stays null when no 16417 map has them); no-screen remotes fall
+   back to any activity/root map, as Logitech gave a Companion the Smart Control's. */
 function remoteSurface(config, remote) {
+  const prefix = String(remote ?? "");
   const has = (m) => m && (m["SurfaceId-"] ?? m["ButtonMapSurfaceId-"]) != null;
-  const source = maps(config).find((m) => has(m) && String(m?.ButtonMapIdentifier ?? "").startsWith(String(remote)))
-    ?? maps(config).find((m) => has(m) && m?.__type === "ActivityButtonMap")
-    ?? {};
+  const id = (m) => String(m?.ButtonMapIdentifier ?? "");
+  const all = maps(config);
+  const own = all.find((m) => has(m) && String(m?.__type ?? "").includes("ActivityButtonMap") && id(m).startsWith(`${prefix}Activity`))
+    ?? all.find((m) => has(m) && id(m) === `${prefix}Root`)
+    ?? all.find((m) => has(m) && id(m).startsWith(prefix));
+  const source = own
+    ?? (prefix === TOUCH_EQUAD
+      ? {}
+      : all.find((m) => has(m) && String(m?.__type ?? "").includes("ActivityButtonMap"))
+        ?? all.find((m) => has(m) && id(m).endsWith("Root"))
+        ?? all.find((m) => has(m))
+        ?? {});
   return {
     "ButtonMapSurfaceId-": source["ButtonMapSurfaceId-"] ?? null,
     "RemoteId-": source["RemoteId-"] ?? null,
@@ -467,14 +479,14 @@ export function activityButtonsSaveOutcome(config, baseRows, sentRows, remote = 
   return "changed";
 }
 
-/* -- Keys for a remote paired after its activities ----------------------------
-   Pairing writes nothing to MapList, and Logitech's setup made activity maps
-   only for the remotes the account had. So a remote without a screen paired
-   here has no <EquadID>Activity<id> map for the activities that already
-   exist: its activity button starts one from <EquadID>Root, then the engine
-   drops every press, Off included, while that activity runs (issue #86).
-   These give it a map for every activity, with the keys another remote
-   already has there, which is what saving each activity again used to do. */
+/* -- Keys for a remote missing its activity maps ------------------------------
+   Pairing writes nothing to MapList, Logitech's setup made activity maps
+   only for the remotes the account had, and older Melodious builds omitted
+   16417Activity<id> on screen-remote-only hubs (issues #86, #250). When
+   <EquadID>Activity<id> is absent, the engine silently drops presses while
+   that activity runs. These give any paired remote with keys (with or
+   without a screen) a map for every activity it lacks, with the command
+   keys another remote already has there. */
 
 const COMMAND_ACTION = "ButtonCommandAction";
 
@@ -482,15 +494,15 @@ function isCommandAction(action) {
   return Boolean(action) && String(action.__type ?? "").includes(COMMAND_ACTION) && Boolean(action.CommandName);
 }
 
-function pairedNoScreenRemotes(remotes) {
+function pairedKeyRemotes(remotes) {
   const paired = new Set((remotes ?? []).map((r) => String(r?.equadId ?? r)));
-  return NO_SCREEN_REMOTES.filter((r) => paired.has(r));
+  return KEY_REMOTES.filter((r) => paired.has(r));
 }
 
 /**
- * The activities a paired remote without a screen has no keys for:
- * [{ remote, activityId, name }], by remote then activity order. `remotes`
- * is the paired remotes (parseRfInfo's) or their EquadIDs.
+ * The activities a paired remote with keys (screen or no-screen) has no map
+ * for: [{ remote, activityId, name }], by remote then activity order.
+ * `remotes` is the paired remotes (parseRfInfo's) or their EquadIDs.
  */
 export function missingRemoteActivityMaps(config, remotes) {
   const have = new Set(maps(config).map((m) => String(m?.ButtonMapIdentifier ?? "")));
@@ -498,7 +510,7 @@ export function missingRemoteActivityMaps(config, remotes) {
     .slice()
     .sort((a, b) => (a.ActivityOrder ?? 0) - (b.ActivityOrder ?? 0));
   const missing = [];
-  for (const remote of pairedNoScreenRemotes(remotes)) {
+  for (const remote of pairedKeyRemotes(remotes)) {
     for (const activity of activities) {
       const activityId = String(activity["Id-"]);
       if (have.has(`${remote}Activity${activityId}`)) continue;
@@ -515,10 +527,11 @@ export function missingRemoteActivityMaps(config, remotes) {
 /* The keys a new map of `remote` starts with in an activity: those another
    remote has there, a remote without a screen first, then one with a screen
    (no number keys). hal names every no-screen remote's keys from one table,
-   so those are taken under the names they have, also ones this editor
-   doesn't list (Logitech's UpArrow, say); a screen remote's are respelled.
-   Only keys that send a command: a sequence or a home control belongs to
-   the map it was made in. */
+   so no-screen -> no-screen keeps the names they have, also ones this editor
+   doesn't list (Logitech's UpArrow, say); any conversion involving a screen
+   remote respells and filters through keyOn (Dvr <-> DVR, no hard number keys
+   on 16417). Only keys that send a command: a sequence or a home control
+   belongs to the map it was made in. */
 function borrowedKeys(config, remote, activityId, alloc) {
   const others = [...NO_SCREEN_REMOTES, ...KEY_REMOTES.filter((r) => !NO_SCREEN_REMOTES.includes(r))]
     .filter((r) => r !== remote);
@@ -526,9 +539,10 @@ function borrowedKeys(config, remote, activityId, alloc) {
     const source = maps(config).find((m) => m?.ButtonMapIdentifier === `${other}Activity${activityId}`);
     const buttons = [];
     const seen = new Set();
+    const bothNoScreen = NO_SCREEN_REMOTES.includes(remote) && NO_SCREEN_REMOTES.includes(other);
     for (const button of source?.Buttons ?? []) {
       if (button?.__type !== "HardRemoteButton" || !isCommandAction(button[PRESS])) continue;
-      const key = NO_SCREEN_REMOTES.includes(other) ? String(button.ButtonKey ?? "") : keyOn(remote, button.ButtonKey);
+      const key = bothNoScreen ? String(button.ButtonKey ?? "") : keyOn(remote, button.ButtonKey);
       if (!key || seen.has(key)) continue;
       seen.add(key);
       const kept = (action) => (isCommandAction(action) ? cloneJsonResource(action) : null);
@@ -537,7 +551,7 @@ function borrowedKeys(config, remote, activityId, alloc) {
         __type: "HardRemoteButton",
         [PRESS]: cloneJsonResource(button[PRESS]),
         ButtonDoublePressAction: kept(button.ButtonDoublePressAction),
-        FunctionGroupType: /^Number\d$/.test(key) ? 2 : 0,
+        FunctionGroupType: remote !== TOUCH_EQUAD && /^Number\d$/.test(key) ? 2 : 0,
         ButtonState: 1,
         ButtonKey: key,
         [LONG_PRESS]: kept(button[LONG_PRESS]),
@@ -549,12 +563,12 @@ function borrowedKeys(config, remote, activityId, alloc) {
 }
 
 /**
- * MapList with an activity map for every paired remote without a screen
- * that lacks one (missingRemoteActivityMaps). A new map takes the keys
- * another remote has in that activity; with none to take it is empty, which
- * still lets the engine answer Off and the activity buttons from the root
- * map. Existing maps are never touched. Returns { mapList, created } where
- * `created` lists the new maps' identifiers.
+ * MapList with an activity map for every paired remote with keys (screen or
+ * no-screen) that lacks one (missingRemoteActivityMaps). A new map takes the
+ * keys another remote has in that activity; with none to take it is empty,
+ * which still lets the engine answer Off and the activity buttons from the
+ * root map. Existing maps are never touched. Returns { mapList, created }
+ * where `created` lists the new maps' identifiers.
  */
 export function buildRemoteActivityMapsMapList(config, remotes) {
   const mapList = cloneJsonResource(config?.mapList ?? { ButtonMaps: [] });

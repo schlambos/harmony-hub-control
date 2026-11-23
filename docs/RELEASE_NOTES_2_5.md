@@ -121,8 +121,9 @@ Some parts are less tested than others. Each one is labelled where it is describ
 
 - Imported Logitech activities did not answer the remote until they were saved again, and a
   remote paired after the activities existed got no buttons (#86).
-- A new activity on a hub that only ever had a remote with a screen got no buttons for that
-  remote (#250). See [Upgrade notes](#upgrade-notes).
+- Activities whose remote buttons did nothing on hubs that only had a remote with a screen are
+  repaired automatically when you update, and new activities get the remote's buttons right away
+  (#250).
 - A Harmony Ultimate no longer stalls at 58% when it syncs offline (#180). One that was never
   activated with Logitech is no longer stuck on the setup screen (#219, with @jrx-code).
 
@@ -164,9 +165,8 @@ Your devices, activities, button assignments and settings are kept.
 
 ## Upgrade notes
 
-- **Activities made on 2.1.0 or older, on a hub that only ever had a remote with a screen (for
-  example an Elite), need one re-save.** Open the activity's wizard in the web or desktop app and
-  save it once. Until then the remote's buttons do nothing in that activity (#250).
+- Activities whose remote buttons did nothing on hubs that only had a remote with a screen are
+  repaired automatically when you update (#250).
 - The 2.5 desktop app needs a 2.5 hub zip. Reinstall / repair and the Setup Wizard refuse the zip
   from an older release.
 

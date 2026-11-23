@@ -152,9 +152,18 @@ describe("issue #86: a synthetic hub after pairing a Smart Control", () => {
     assert.deepEqual(buildRemoteActivityMapsMapList(config, ["16422"]).created, []);
     assert.deepEqual(buildRemoteActivityMapsMapList(config, []).created, []);
     assert.deepEqual(buildRemoteActivityMapsMapList(config, undefined).created, []);
-    /* A remote with a screen keeps its setup itself and is left alone; so
-       are a keyboard and a dongle. */
-    assert.deepEqual(buildRemoteActivityMapsMapList(config, ["16417", "16420", "34830"]).created, []);
+    /* A keyboard and a dongle have no per-activity key maps here and are left alone. */
+    assert.deepEqual(buildRemoteActivityMapsMapList(config, ["16420", "34830"]).created, []);
+    /* A paired screen remote (16417) missing activity maps gets them too (#250),
+       never borrowing Smart Control/Companion surface ids when no 16417 map exists. */
+    const screenBuilt = buildRemoteActivityMapsMapList(config, ["16417"]);
+    assert.deepEqual(screenBuilt.created.slice().sort(), [ALPHA, BETA, GAMMA].map((id) => `16417Activity${id}`).sort());
+    const screenBeta = mapOf(screenBuilt.mapList, `16417Activity${BETA}`);
+    assert.equal(screenBeta["RemoteId-"], null);
+    assert.equal(screenBeta["SurfaceId-"], null);
+    assert.equal(screenBeta["ButtonMapSurfaceId-"], null);
+    assert.ok(screenBeta.Buttons.every((b) => b.FunctionGroupType === 0 && !/^Number/.test(b.ButtonKey)));
+    assert.ok(!screenBeta.Buttons.some((b) => b.ButtonKey === "Dvr"));
   });
 
   it("reads the paired remotes from the hub's own rf.info reply", () => {
