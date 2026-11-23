@@ -11,11 +11,15 @@
 
 <p align="center"><a href="#start-here">Start here</a> · <a href="#what-it-does">What it does</a> · <a href="#requirements-and-compatibility">Requirements</a> · <a href="#the-apps">Apps</a> · <a href="#install-update-and-roll-back">Install</a> · <a href="#guides-and-reference">Docs</a></p>
 
-Melodious runs on a rooted Harmony Hub, next to Logitech's own firmware, and takes over the cloud's
-jobs: devices, activities and remote sync, plus two-way Home Assistant control. The desktop Setup
-Wizard takes a new, reset or second-hand hub all the way from the box to running Melodious, fully
-offline, without ever touching Logitech. Then run it from the hub's web app, the Android app, or the
-desktop app.
+Logitech stopped making Harmony remotes in 2021, yet a stock hub still needs Logitech's app and
+cloud to change anything. Melodious ends that. It runs on the hub itself, next to Logitech's own
+firmware, and takes over the cloud's jobs: devices, activities and remote sync, plus two-way Home
+Assistant control. Your setup lives in local files you can back up, restore and edit without an
+account.
+
+The desktop Setup Wizard takes a new, reset or second-hand hub all the way from the box to running
+Melodious, fully offline, without ever touching Logitech. Then run it from the hub's web app, the
+Android app, or the desktop app.
 
 **Installing Melodious keeps your setup.** Your existing devices, activities and remote button
 bindings stay as they are, including any made with the Logitech app. Melodious runs beside
@@ -23,10 +27,6 @@ Logitech's firmware without reflashing it, the hub backs up its setup before eve
 the Backup page downloads a full copy. `--turn-off` (experimental; back up first) returns the hub to
 Logitech's stock behaviour with nothing of Melodious's deleted
 ([Install, update and roll back](#install-update-and-roll-back)).
-
-Logitech stopped making Harmony remotes in 2021, yet a stock hub still needs its app and cloud to
-change anything. Melodious keeps Logitech's IR, activity and remote engine, with your setup in local
-files you can back up, restore and edit without an account.
 
 <p align="center">
   <img src="docs/screenshots/web/remote.png" alt="The web app's remote on a phone" height="480">
