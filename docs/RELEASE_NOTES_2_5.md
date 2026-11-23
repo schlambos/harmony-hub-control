@@ -186,8 +186,8 @@ Your devices, activities, button assignments and settings are kept.
 
 **Checked by automated tests only, not yet on real hardware**
 
-- Saving: the first-Save fix (#218) and the faster save check that followed it (#224).
-- Logitech catalog imports that bring an IR protocol with them (#243).
+- Importing Logitech catalog codes the hub didn't know before, such as some Samsung soundbars
+  (#243).
 - Saved Bluetooth keyboards as devices, and their scripts as commands (#114).
 - Button fixes for imported activities and for remotes paired later (#86), and for hubs with
   only a remote with a screen (#250).
