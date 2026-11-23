@@ -65,8 +65,6 @@ Then open `http://<hub-ip>:8080/` on your phone or computer.
   ([WEBOS_TV.md](docs/WEBOS_TV.md)).
 - **Bluetooth keyboard:** the hub types and sends TV keys to TVs and streaming boxes
   ([BLUETOOTH_KEYBOARD.md](docs/BLUETOOTH_KEYBOARD.md)).
-- **Nintendo Switch 2 wake (tested; wake only):** wakes a sleeping Switch 2 over BLE from any
-  activity or remote ([SWITCH2_WAKE.md](docs/SWITCH2_WAKE.md)).
 
 </td><td valign="top">
 

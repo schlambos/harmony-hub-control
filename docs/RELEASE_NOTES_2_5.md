@@ -18,8 +18,8 @@ Some parts are less tested than others. Each one is labelled where it is describ
 - **More buttons you can set.** The Home Control buttons on Companion, Elite and 950 remotes, the
   `--` and `E` keys on remotes without a screen, and a number pad on new activities for remotes
   with a screen.
-- **New kinds of device.** Nintendo Switch 2 wake (**tested**), saved Bluetooth keyboards, and
-  LG webOS TVs over the network (**experimental**).
+- **New kinds of device.** Saved Bluetooth keyboards and LG webOS TVs over the network
+  (**experimental**).
 - **Logitech catalog codes that used to be skipped now import.** Codes that need an IR protocol
   the hub did not have, such as some Samsung soundbars, bring the protocol with them.
 
@@ -61,9 +61,6 @@ Some parts are less tested than others. Each one is labelled where it is describ
 
 ### Devices
 
-- **Nintendo Switch 2 wake** (**tested**). The hub wakes a sleeping Switch 2 over Bluetooth when
-  an activity starts. It only wakes the console and does not control it. Controllers with their
-  own IDs, such as PowerA, are untested ([guide](SWITCH2_WAKE.md)).
 - **LG webOS TVs over the network** (**experimental**), without Home Assistant or IR. It has
   known problems on some newer LG TVs, such as 2024 (webOS 24) models ([guide](WEBOS_TV.md)).
 - **Android TV and Google TV.** Choose how each TV switches inputs in Settings → Inputs, with a
@@ -78,6 +75,8 @@ Some parts are less tested than others. Each one is labelled where it is describ
   and imports work on a blank hub.
 - **Wired network over USB Ethernet** (**experimental**), in Settings → Experimental.
   Tested with Realtek RTL8153 and ASIX AX88772C adapters (@apnar, [guide](USB_ETHERNET.md)).
+- **Nintendo Switch 2 wake** (**tested**, wake only). Controllers with their own IDs, such as
+  PowerA, are untested ([guide](SWITCH2_WAKE.md)).
 
 ### Activities
 
