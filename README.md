@@ -67,9 +67,9 @@ Then open `http://<hub-ip>:8080/` on your phone or computer.
   Home Control buttons on the Companion, 950 and Elite, and your own backgrounds on screen
   remotes ([HOME_CONTROL_BUTTONS.md](docs/HOME_CONTROL_BUTTONS.md),
   [REMOTE_BACKGROUNDS.md](docs/REMOTE_BACKGROUNDS.md)).
-- **Devices and codes:** the Logitech catalog (codes bring their IR protocols with them), IRDB,
-  Flipper and Pronto imports, or learn from the original remote.
-- **Activities:** a setup wizard, power order and inputs, and time restrictions.
+- **Devices and codes:** the Logitech catalog, IRDB, Flipper and Pronto imports, or learn from
+  the original remote.
+- **Activities:** a setup wizard that handles power order and inputs for you.
 - **Network TVs and Bluetooth:** Android and Google TV over the network
   ([ANDROID_TV.md](docs/ANDROID_TV.md)), LG webOS TVs (experimental,
   [WEBOS_TV.md](docs/WEBOS_TV.md)), and the hub as a Bluetooth keyboard with saved scripts

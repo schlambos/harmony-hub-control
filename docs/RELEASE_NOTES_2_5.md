@@ -24,8 +24,6 @@ Some parts are less tested than others. Each one is labelled where it is describ
   then works on the second try.
 - **New kinds of device.** Saved Bluetooth keyboards and LG webOS TVs over the network
   (**experimental**).
-- **Logitech catalog codes that used to be skipped now import.** Codes that need an IR protocol
-  the hub did not have, such as some Samsung soundbars, bring the protocol with them.
 
 ## What's new
 
