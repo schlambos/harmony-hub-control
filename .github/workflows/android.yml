@@ -11,6 +11,53 @@ jobs:
     runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      # Maven Central answers 429 to uncached runners. Keep the Gradle
+      # distribution, Gradle's dependency cache, and the android-all jars
+      # Robolectric fetches into ~/.m2 at test time between runs.
+      - name: Cache Gradle and Robolectric dependencies
+        id: deps
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: |
+            ~/.gradle/wrapper
+            ~/.gradle/caches
+            ~/.m2/repository
+            !~/.gradle/caches/*/*.lock
+            !~/.gradle/caches/*/gc.properties
+          key: android-deps-${{ hashFiles('Android/**/*.gradle.kts', 'Android/gradle/libs.versions.toml', 'Android/gradle/wrapper/gradle-wrapper.properties', 'Android/gradle.properties', 'Android/**/gradle.lockfile') }}
+          restore-keys: android-deps-
       - name: Run JVM suites with runner JDK 17 and Android SDK
         working-directory: Android
-        run: JAVA_HOME="$JAVA_HOME_17_X64" ./gradlew :core-protocol:test :core-ssh:test :app:testDebugUnitTest
+        run: |
+          # Retry only when the failure is a dependency or download error.
+          # A failing test with no download error fails at once.
+          export JAVA_HOME="$JAVA_HOME_17_X64"
+          deps='Could not (GET|HEAD|resolve|download)|Received status code|Too Many Requests|Server returned HTTP response code|Downloading from https://services\.gradle\.org|Connection reset|Read timed out|Connect timed out'
+          marker="$RUNNER_TEMP/gradle-start"
+          touch "$marker"
+          for attempt in 1 2 3; do
+            log="$RUNNER_TEMP/gradle-$attempt.log"
+            attempt_marker="$RUNNER_TEMP/gradle-attempt-$attempt"
+            touch "$attempt_marker"
+            set +e
+            ./gradlew --no-daemon :core-protocol:test :core-ssh:test :app:testDebugUnitTest 2>&1 | tee "$log"
+            status=${PIPESTATUS[0]}
+            set -e
+            if [ "$status" -eq 0 ]; then
+              break
+            fi
+            retriable=no
+            if grep -Eq "$deps" "$log"; then
+              retriable=yes
+            elif find . -path '*/build/test-results/*' -name '*.xml' -newer "$attempt_marker" -print0 \
+                | xargs -0 -r grep -Elq 'MavenArtifactFetcher|status code 429|Too Many Requests'; then
+              retriable=yes
+            fi
+            if [ "$retriable" = no ] || [ "$attempt" -eq 3 ]; then
+              exit "$status"
+            fi
+            echo "::warning::Gradle attempt $attempt hit a dependency download error; retrying in $((attempt * 30))s"
+            sleep $((attempt * 30))
+          done
+          new=$(find ~/.gradle/wrapper/dists ~/.gradle/caches/modules-2/files-2.1 ~/.m2/repository -type f -newer "$marker" 2>/dev/null | wc -l)
+          echo "Dependency cache hit: ${{ steps.deps.outputs.cache-hit || 'false' }}; dependency files downloaded this run: $new"
