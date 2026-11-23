@@ -161,7 +161,19 @@ local function localHetag()
   return tostring(math.floor(value))
 end
 
-local function sameValue(left, right, seen)
+-- Keep /var/watchdog/luaworks fresh and give luaworks' cooperative scheduler
+-- a turn between heavy hash/JSON/disk phases so a large save cannot starve
+-- /usr/bin/watchdog (15 s reboot timeout) or stall port-8088 /api/state polls.
+local function keepAlive()
+  if type(system.tiggleWatchDog) == "function" then
+    pcall(system.tiggleWatchDog)
+  end
+  if type(system.yield) == "function" and coroutine.running() ~= nil then
+    system.yield()
+  end
+end
+
+local function sameValue(left, right, seen, budget)
   if left == right then
     return true
   end
@@ -176,8 +188,14 @@ local function sameValue(left, right, seen)
     return true
   end
   seen[left] = right
+  budget = budget or {n = 0}
+  budget.n = budget.n + 1
+  if budget.n >= 256 then
+    budget.n = 0
+    keepAlive()
+  end
   for key, value in pairs(left) do
-    if not sameValue(value, right[key], seen) then
+    if not sameValue(value, right[key], seen, budget) then
       return false
     end
   end
@@ -187,18 +205,6 @@ local function sameValue(left, right, seen)
     end
   end
   return true
-end
-
--- Keep /var/watchdog/luaworks fresh and give luaworks' cooperative scheduler
--- a turn between heavy hash/JSON/disk phases so a large save cannot starve
--- /usr/bin/watchdog (15 s reboot timeout) or stall port-8088 /api/state polls.
-local function keepAlive()
-  if type(system.tiggleWatchDog) == "function" then
-    pcall(system.tiggleWatchDog)
-  end
-  if type(system.yield) == "function" and coroutine.running() ~= nil then
-    system.yield()
-  end
 end
 
 local function resourceSnapshot(name)
@@ -388,7 +394,10 @@ local function baselineActivitySlotCounts(oldMapList)
   if type(oldMapList) ~= "table" or type(oldMapList.ButtonMaps) ~= "table" then
     return counts
   end
-  for _, oldMap in ipairs(oldMapList.ButtonMaps) do
+  for mapIndex, oldMap in ipairs(oldMapList.ButtonMaps) do
+    if mapIndex % 4 == 0 then
+      keepAlive()
+    end
     if type(oldMap) == "table" then
       local oldType = type(oldMap.__type) == "string" and oldMap.__type or ""
       local identifier = type(oldMap.ButtonMapIdentifier) == "string" and
@@ -460,7 +469,10 @@ local function validateGraph(activityList, mapList, functionList, deviceList, ol
       end
     end
   end
-  for _, buttonMap in ipairs(mapList.ButtonMaps) do
+  for mapIndex, buttonMap in ipairs(mapList.ButtonMaps) do
+    if mapIndex % 4 == 0 then
+      keepAlive()
+    end
     if type(buttonMap) ~= "table" then
       return nil, "MapList contains a non-object button map"
     end
@@ -1596,9 +1608,15 @@ local GESTURE_KEYS = {
 -- Every map and button ID in use, and the next free one above the floors.
 local function identityAllocator(...)
   local seen, nextMap, nextButton = {}, MAP_ID_FLOOR + 1, BUTTON_ID_FLOOR + 1
+  local walked = 0
   local function walk(value)
     if type(value) ~= "table" then
       return
+    end
+    walked = walked + 1
+    if walked >= 256 then
+      walked = 0
+      keepAlive()
     end
     for key, child in pairs(value) do
       if IDENTITY_KEYS[key] then
@@ -3041,13 +3059,20 @@ local function haIsV1Entry(entry, spec)
   return false
 end
 
-local function copyValue(value)
-  if type(value) ~= "table" then
+local function copyValue(value, budget)
+  if type(value) ~= "table" or value == json.null then
     return value
+  end
+  if budget then
+    budget.n = budget.n + 1
+    if budget.n >= 256 then
+      budget.n = 0
+      keepAlive()
+    end
   end
   local out = {}
   for key, item in pairs(value) do
-    out[key] = copyValue(item)
+    out[key] = copyValue(item, budget)
   end
   return out
 end
@@ -3819,6 +3844,767 @@ local function commitHaDevices(request, family)
   return result
 end
 
+-- Automatic repair for missing paired-remote activity maps (issues #250, #86).
+-- On 2.1.0 and older, creating an activity on a screen-remote-only hub (e.g.
+-- Harmony Elite) wrote only 16414Activity<id> and omitted 16417Activity<id>.
+-- Because harmonyengine silently drops button presses when <EquadID>Activity<id>
+-- is missing (activity.lua), the remote's buttons did nothing in that activity.
+-- This runs automatically once at boot and after every install/update (via
+-- FLAG_FILE) using the same surface selection (#146) and hard-button mirroring
+-- (#146 / #149) rules as the web/desktop editors. On a healthy hub it writes
+-- nothing; existing maps are never overwritten or edited.
+local remoteMapRepair = {
+  TOUCH_EQUAD = "16417",
+  NO_SCREEN_REMOTES = {"16414", "16422", "16423"},
+  KEY_REMOTES = {"16417", "16414", "16422", "16423"},
+  NO_SCREEN_SET = {["16414"] = true, ["16422"] = true, ["16423"] = true},
+  KEY_REMOTE_SET = {["16417"] = true, ["16414"] = true, ["16422"] = true, ["16423"] = true},
+  TOUCH_HARD_KEYS = {
+    Blue = true, ChannelDown = true, ChannelUp = true, DVR = true,
+    DirectionDown = true, DirectionLeft = true, DirectionRight = true,
+    DirectionUp = true, Exit = true, FastForward = true, Green = true,
+    Guide = true, Info = true, Menu = true, Pause = true, Play = true,
+    PrevChannel = true, Record = true, Red = true, Rewind = true,
+    Select = true, Stop = true, VolumeDown = true, VolumeMute = true,
+    VolumeUp = true, Yellow = true
+  },
+  SMART_CONTROL_HARD_KEYS = {
+    Blue = true, ChannelDown = true, ChannelUp = true,
+    DirectionDown = true, DirectionLeft = true, DirectionRight = true,
+    DirectionUp = true, Dvr = true, Exit = true, FastForward = true,
+    Green = true, Guide = true, Info = true, Menu = true,
+    Number0 = true, Number1 = true, Number2 = true, Number3 = true,
+    Number4 = true, Number5 = true, Number6 = true, Number7 = true,
+    Number8 = true, Number9 = true, NumberEnter = true, NumberPlus = true,
+    Pause = true, Play = true, PrevChannel = true, Record = true,
+    Red = true, Rewind = true, Select = true, Stop = true,
+    VolumeDown = true, VolumeMute = true, VolumeUp = true, Yellow = true
+  },
+  FLAG_FILE = "/data/codex/repair_remote_maps",
+  RESOURCE_DIR = "/data/resources/",
+  BACKUP_DIR = "/data/codex/resource-backups",
+  BACKUP_FILES = {
+    "DeviceList.json",
+    "FunctionList.json",
+    "ProtocolList.json",
+    "ActivityList.json",
+    "MapList.json",
+    "AutomationConfig.json"
+  },
+  INIT_LOG = "/cache/codex-init.log",
+  MAX_BOOT_RETRIES = 30,
+  RETRY_COOLDOWN_TICKS = 20,
+  bootChecked = false,
+  flagExhausted = false,
+  retryCount = 0,
+  cooldownTicks = 0
+}
+
+function remoteMapRepair.isPresent(v)
+  return v ~= nil and v ~= json.null
+end
+
+function remoteMapRepair.harmonyDate()
+  return string.format("/Date(%d000+0000)/", math.floor(tonumber(os.time()) or 0))
+end
+
+function remoteMapRepair.isCommandAction(action)
+  return type(action) == "table" and action ~= json.null and
+    type(action.__type) == "string" and
+    string.find(action.__type, "ButtonCommandAction", 1, true) ~= nil and
+    type(action.CommandName) == "string" and action.CommandName ~= ""
+end
+
+function remoteMapRepair.keyOn(targetRemote, sourceRemote, buttonKey)
+  if type(buttonKey) ~= "string" or buttonKey == "" then
+    return ""
+  end
+  if remoteMapRepair.NO_SCREEN_SET[targetRemote] and
+      remoteMapRepair.NO_SCREEN_SET[sourceRemote] then
+    return buttonKey
+  end
+  if targetRemote == remoteMapRepair.TOUCH_EQUAD then
+    local spelled = buttonKey == "Dvr" and "DVR" or buttonKey
+    return remoteMapRepair.TOUCH_HARD_KEYS[spelled] and spelled or ""
+  end
+  local spelled = buttonKey == "DVR" and "Dvr" or buttonKey
+  return remoteMapRepair.SMART_CONTROL_HARD_KEYS[spelled] and spelled or ""
+end
+
+function remoteMapRepair.surfaceField(map, dashed, plain)
+  if remoteMapRepair.isPresent(map[dashed]) then
+    return map[dashed]
+  end
+  if remoteMapRepair.isPresent(map[plain]) then
+    return map[plain]
+  end
+  return json.null
+end
+
+function remoteMapRepair.hasSurface(map)
+  return type(map) == "table" and (
+    remoteMapRepair.isPresent(map["SurfaceId-"]) or
+    remoteMapRepair.isPresent(map.SurfaceId) or
+    remoteMapRepair.isPresent(map["ButtonMapSurfaceId-"]) or
+    remoteMapRepair.isPresent(map.ButtonMapSurfaceId)
+  )
+end
+
+-- Surface ids for a new map of `remote`, matching wizard-model.js surfaceTemplate:
+-- own ActivityButtonMap -> own Root -> any own map; a screen remote (16417)
+-- never borrows Smart Control/Companion surface ids (stays null if none exist).
+function remoteMapRepair.surfaceTemplate(buttonMaps, remote)
+  local prefix = tostring(remote or "")
+  local actPrefix = prefix .. "Activity"
+  local rootId = prefix .. "Root"
+  local ownAct, ownRoot, ownAny
+  local anyAct, anyRoot, anyMap
+  for i, map in ipairs(buttonMaps) do
+    if i % 16 == 0 then
+      keepAlive()
+    end
+    if remoteMapRepair.hasSurface(map) then
+      local id = type(map.ButtonMapIdentifier) == "string" and map.ButtonMapIdentifier or ""
+      local mapType = type(map.__type) == "string" and map.__type or ""
+      local isAct = string.find(mapType, "ActivityButtonMap", 1, true) ~= nil
+      if prefix ~= "" then
+        if not ownAct and isAct and string.sub(id, 1, #actPrefix) == actPrefix then
+          ownAct = map
+        elseif not ownRoot and id == rootId then
+          ownRoot = map
+        elseif not ownAny and string.sub(id, 1, #prefix) == prefix then
+          ownAny = map
+        end
+      end
+      if not anyAct and isAct then
+        anyAct = map
+      elseif not anyRoot and string.sub(id, -4) == "Root" then
+        anyRoot = map
+      elseif not anyMap then
+        anyMap = map
+      end
+    end
+  end
+  local source = ownAct or ownRoot or ownAny
+  if not source and prefix ~= remoteMapRepair.TOUCH_EQUAD then
+    source = anyAct or anyRoot or anyMap
+  end
+  if not source then
+    return {
+      ["ButtonMapSurfaceId-"] = json.null,
+      ["RemoteId-"] = json.null,
+      ["SurfaceId-"] = json.null
+    }
+  end
+  return {
+    ["ButtonMapSurfaceId-"] = remoteMapRepair.surfaceField(source, "ButtonMapSurfaceId-", "ButtonMapSurfaceId"),
+    ["RemoteId-"] = remoteMapRepair.surfaceField(source, "RemoteId-", "RemoteId"),
+    ["SurfaceId-"] = remoteMapRepair.surfaceField(source, "SurfaceId-", "SurfaceId")
+  }
+end
+
+-- Mirror hard command buttons from one source activity map to `targetRemote`,
+-- matching wizard-model.js mirrorHardButtons and remotes-model.js borrowedKeys.
+function remoteMapRepair.actionDeviceValid(action, deviceIds)
+  if not deviceIds then
+    return true
+  end
+  local devId = normalizedId(action["DeviceId-"])
+  return devId ~= nil and deviceIds[devId] == true
+end
+
+function remoteMapRepair.mirrorHardButtons(sourceMap, targetRemote, sourceRemote, alloc, budget, deviceIds)
+  local buttons = {}
+  local seen = {}
+  local sourceButtons = type(sourceMap) == "table" and
+    type(sourceMap.Buttons) == "table" and sourceMap.Buttons or {}
+  for _, button in ipairs(sourceButtons) do
+    budget.n = budget.n + 1
+    if budget.n >= 64 then
+      budget.n = 0
+      keepAlive()
+    end
+    if type(button) == "table" and button.__type == "HardRemoteButton" and
+        remoteMapRepair.isCommandAction(button.ButtonAction) and
+        remoteMapRepair.actionDeviceValid(button.ButtonAction, deviceIds) then
+      local key = remoteMapRepair.keyOn(targetRemote, sourceRemote, button.ButtonKey)
+      if key ~= "" and not seen[key] then
+        seen[key] = true
+        local id = alloc.buttonId()
+        if not id then
+          return nil, "no free button IDs are left"
+        end
+        local fgType = (
+          targetRemote ~= remoteMapRepair.TOUCH_EQUAD and
+          string.match(key, "^Number%d$") ~= nil
+        ) and 2 or 0
+        local keepLong = remoteMapRepair.isCommandAction(button.ButtonLongPressAction) and
+          remoteMapRepair.actionDeviceValid(button.ButtonLongPressAction, deviceIds)
+        local keepDouble = remoteMapRepair.isCommandAction(button.ButtonDoublePressAction) and
+          remoteMapRepair.actionDeviceValid(button.ButtonDoublePressAction, deviceIds)
+        buttons[#buttons + 1] = {
+          ButtonId = id,
+          __type = "HardRemoteButton",
+          ButtonAction = copyValue(button.ButtonAction, budget),
+          ButtonDoublePressAction = keepDouble and
+            copyValue(button.ButtonDoublePressAction, budget) or json.null,
+          FunctionGroupType = fgType,
+          ButtonState = 1,
+          ButtonKey = key,
+          ButtonLongPressAction = keepLong and
+            copyValue(button.ButtonLongPressAction, budget) or json.null
+        }
+      end
+    end
+  end
+  return buttons
+end
+
+function remoteMapRepair.borrowedKeys(mapsById, targetRemote, activityId, alloc, budget, deviceIds)
+  local others = {"16414", "16422", "16423", "16417"}
+  for _, other in ipairs(others) do
+    if other ~= targetRemote then
+      local source = mapsById[other .. "Activity" .. activityId]
+      if source then
+        local buttons, err = remoteMapRepair.mirrorHardButtons(
+          source, targetRemote, other, alloc, budget, deviceIds
+        )
+        if not buttons then
+          return nil, err
+        end
+        if #buttons > 0 then
+          return buttons
+        end
+      end
+    end
+  end
+  return {}
+end
+
+function remoteMapRepair.normalizeRemotes(rawRemotes)
+  local paired = {}
+  if type(rawRemotes) == "table" then
+    for _, item in ipairs(rawRemotes) do
+      local eq
+      if type(item) == "table" then
+        local slot = tonumber(item.DeviceIndex or item.slot)
+        local rawEq = item.EquadID or item.equadId
+        if rawEq ~= nil and (slot == nil or slot > 0) then
+          eq = tostring(rawEq)
+        end
+      elseif item ~= nil then
+        eq = tostring(item)
+      end
+      if eq and eq ~= "" and eq ~= "0" and remoteMapRepair.KEY_REMOTE_SET[eq] then
+        paired[eq] = true
+      end
+    end
+  end
+  local ordered = {}
+  for _, eq in ipairs(remoteMapRepair.KEY_REMOTES) do
+    if paired[eq] then
+      ordered[#ordered + 1] = eq
+    end
+  end
+  return ordered
+end
+
+function remoteMapRepair.queryPairedRemotes()
+  if not system.isMessageRegistered("hal_transaction") then
+    return nil, "HAL transaction handler is unavailable"
+  end
+  local okReq, hbusMod = pcall(require, "tasks.hal.core.hbus")
+  if not okReq or type(hbusMod) ~= "table" or type(hbusMod.instance) ~= "function" then
+    return nil, "HAL hbus module is unavailable"
+  end
+  keepAlive()
+  local okCmd, resp = pcall(function()
+    return hbusMod:instance():command("rf.info")
+  end)
+  keepAlive()
+  if not okCmd or type(resp) ~= "table" or tonumber(resp.code) ~= 200 or
+      type(resp.data) ~= "table" or type(resp.data.Devices) ~= "table" then
+    return nil, "could not read paired remotes from HAL rf.info"
+  end
+  return remoteMapRepair.normalizeRemotes(resp.data.Devices)
+end
+
+function remoteMapRepair.sortedActivities(activityList)
+  local list = {}
+  local raw = type(activityList) == "table" and
+    type(activityList.Activities) == "table" and activityList.Activities or {}
+  for idx, act in ipairs(raw) do
+    if type(act) == "table" then
+      local id = normalizedId(act["Id-"])
+      if id and id ~= "-1" then
+        list[#list + 1] = {
+          idx = idx,
+          order = tonumber(act.ActivityOrder) or 0,
+          id = id,
+          activity = act
+        }
+      end
+    end
+  end
+  table.sort(list, function(a, b)
+    if a.order ~= b.order then
+      return a.order < b.order
+    end
+    return a.idx < b.idx
+  end)
+  return list
+end
+
+function remoteMapRepair.findMissing(activityList, mapList, pairedRemotes)
+  local mapsById = {}
+  local buttonMaps = type(mapList) == "table" and
+    type(mapList.ButtonMaps) == "table" and mapList.ButtonMaps or {}
+  for i, map in ipairs(buttonMaps) do
+    if i % 16 == 0 then
+      keepAlive()
+    end
+    if type(map) == "table" and type(map.ButtonMapIdentifier) == "string" and
+        map.ButtonMapIdentifier ~= "" then
+      mapsById[map.ButtonMapIdentifier] = map
+    end
+  end
+  local activities = remoteMapRepair.sortedActivities(activityList)
+  local missing = {}
+  for _, remote in ipairs(pairedRemotes) do
+    for _, entry in ipairs(activities) do
+      local identifier = remote .. "Activity" .. entry.id
+      if not mapsById[identifier] then
+        missing[#missing + 1] = {
+          remote = remote,
+          activityId = entry.id,
+          identifier = identifier
+        }
+      end
+    end
+  end
+  return missing, mapsById
+end
+
+function remoteMapRepair.buildRepairedMapList(
+  activityList,
+  mapList,
+  functionList,
+  deviceList,
+  pairedRemotes,
+  missing,
+  mapsById
+)
+  local oldButtonMaps = type(mapList) == "table" and
+    type(mapList.ButtonMaps) == "table" and mapList.ButtonMaps or {}
+  local deviceIds = deviceIdsFrom(deviceList)
+  local alloc = identityAllocator(activityList, mapList, functionList, deviceList)
+  keepAlive()
+  local nextMapList = {}
+  for key, value in pairs(mapList) do
+    nextMapList[key] = value
+  end
+  local nextButtonMaps = {}
+  for i, map in ipairs(oldButtonMaps) do
+    if i % 32 == 0 then
+      keepAlive()
+    end
+    nextButtonMaps[i] = map
+  end
+  nextMapList.ButtonMaps = nextButtonMaps
+
+  local surfaces = {}
+  local created = {}
+  local createdMaps = {}
+  local budget = {n = 0}
+  local modified = remoteMapRepair.harmonyDate()
+  for _, item in ipairs(missing) do
+    keepAlive()
+    local mapId = alloc.mapId()
+    if not mapId then
+      return nil, nil, nil, "no free map IDs are left"
+    end
+    local buttons, err = remoteMapRepair.borrowedKeys(
+      mapsById, item.remote, item.activityId, alloc, budget, deviceIds
+    )
+    if not buttons then
+      return nil, nil, nil, err
+    end
+    local surf = surfaces[item.remote]
+    if not surf then
+      surf = remoteMapRepair.surfaceTemplate(oldButtonMaps, item.remote)
+      surfaces[item.remote] = surf
+    end
+    local made = {
+      ["ButtonMapId-"] = mapId,
+      ["ActivityId-"] = tonumber(item.activityId),
+      Buttons = buttons,
+      ["ButtonMapSurfaceId-"] = surf["ButtonMapSurfaceId-"],
+      __type = "ActivityButtonMap",
+      ["RemoteId-"] = surf["RemoteId-"],
+      ButtonMapIdentifier = item.identifier,
+      DateModified = modified,
+      Sequences = {},
+      ["SurfaceId-"] = surf["SurfaceId-"]
+    }
+    nextButtonMaps[#nextButtonMaps + 1] = made
+    created[#created + 1] = item.identifier
+    createdMaps[#createdMaps + 1] = made
+  end
+  keepAlive()
+  return nextMapList, created, createdMaps
+end
+
+-- Validate every newly created map against the same invariants validateGraph
+-- enforces, without letting unrelated pre-existing Logitech quirks in
+-- untouched activities/maps block automatic repair.
+function remoteMapRepair.validateCreatedMaps(createdMaps, activityList, deviceList, oldMapList)
+  local deviceIds = deviceIdsFrom(deviceList)
+  if not deviceIds then
+    return nil, "DeviceList.DevicesWithFeatures must be an array"
+  end
+  local activityIds = {}
+  for _, act in ipairs(type(activityList) == "table" and type(activityList.Activities) == "table" and activityList.Activities or {}) do
+    local id = type(act) == "table" and normalizedId(act["Id-"]) or nil
+    if id and id ~= "-1" then
+      activityIds[id] = true
+    end
+  end
+  local usedIds, usedMapIds, usedButtonIds = {}, {}, {}
+  for i, m in ipairs(type(oldMapList) == "table" and type(oldMapList.ButtonMaps) == "table" and oldMapList.ButtonMaps or {}) do
+    if i % 16 == 0 then
+      keepAlive()
+    end
+    if type(m) == "table" then
+      if type(m.ButtonMapIdentifier) == "string" and m.ButtonMapIdentifier ~= "" then
+        usedIds[m.ButtonMapIdentifier] = true
+      end
+      local mid = tonumber(m["ButtonMapId-"])
+      if mid and mid > 0 then
+        usedMapIds[mid] = true
+      end
+      if type(m.Buttons) == "table" then
+        for _, b in ipairs(m.Buttons) do
+          local bid = type(b) == "table" and tonumber(b.ButtonId) or nil
+          if bid and bid > 0 then
+            usedButtonIds[bid] = true
+          end
+        end
+      end
+    end
+  end
+  for _, m in ipairs(createdMaps) do
+    keepAlive()
+    local label = tostring(m.ButtonMapIdentifier or "unknown")
+    if type(m.ButtonMapIdentifier) ~= "string" or m.ButtonMapIdentifier == "" or usedIds[m.ButtonMapIdentifier] then
+      return nil, "created map " .. label .. " has a missing or duplicate ButtonMapIdentifier"
+    end
+    usedIds[m.ButtonMapIdentifier] = true
+    local mid = tonumber(m["ButtonMapId-"])
+    if not mid or mid <= 0 or usedMapIds[mid] then
+      return nil, "created map " .. label .. " has an invalid or duplicate ButtonMapId-"
+    end
+    usedMapIds[mid] = true
+    local actOk, actErr = validateActivityReference(activityIds, m["ActivityId-"], "MapList")
+    if not actOk then
+      return nil, actErr
+    end
+    if m.__type ~= "ActivityButtonMap" or type(m.Buttons) ~= "table" or type(m.Sequences) ~= "table" then
+      return nil, "created map " .. label .. " has an invalid shape"
+    end
+    for _, b in ipairs(m.Buttons) do
+      if type(b) ~= "table" or b.__type ~= "HardRemoteButton" or type(b.ButtonKey) ~= "string" or b.ButtonKey == "" then
+        return nil, "created map " .. label .. " has an invalid HardRemoteButton"
+      end
+      local bid = tonumber(b.ButtonId)
+      if not bid or bid <= 0 or usedButtonIds[bid] or b.ButtonState ~= 1 then
+        return nil, "created map " .. label .. " button " .. b.ButtonKey .. " has an invalid ButtonId or ButtonState"
+      end
+      usedButtonIds[bid] = true
+      for _, field in ipairs({"ButtonAction", "ButtonLongPressAction", "ButtonDoublePressAction"}) do
+        local action = b[field]
+        if type(action) == "table" and action ~= json.null then
+          local devOk, devErr = validateDeviceReference(deviceIds, action["DeviceId-"], "MapList " .. field)
+          if not devOk then
+            return nil, devErr
+          end
+        end
+      end
+    end
+  end
+  keepAlive()
+  return true
+end
+
+function remoteMapRepair.backupResources()
+  local stamp = os.date and os.date("%Y%m%d_%H%M%S") or tostring(os.time() or 0)
+  local backupPath = remoteMapRepair.BACKUP_DIR .. "/" .. stamp
+  local lfsOk, lfs = pcall(require, "lfs")
+  if lfsOk and type(lfs) == "table" then
+    pcall(lfs.mkdir, "/data/codex")
+    pcall(lfs.mkdir, remoteMapRepair.BACKUP_DIR)
+    -- Prune older YYYYMMDD_HHMMSS backups past 4 so at most 5 remain,
+    -- matching codex_webui.c backup_resources().
+    local dirs = {}
+    local okDir, iter, state = pcall(lfs.dir, remoteMapRepair.BACKUP_DIR)
+    if okDir and iter then
+      for entry in iter, state do
+        if string.match(entry, "^%d%d%d%d%d%d%d%d_%d%d%d%d%d%d$") and entry ~= stamp then
+          dirs[#dirs + 1] = entry
+        end
+      end
+      table.sort(dirs)
+      local drop = #dirs - 4
+      for i = 1, drop do
+        keepAlive()
+        local oldDir = remoteMapRepair.BACKUP_DIR .. "/" .. dirs[i]
+        local okSub, subIter, subState = pcall(lfs.dir, oldDir)
+        if okSub and subIter then
+          for name in subIter, subState do
+            if name ~= "." and name ~= ".." then
+              os.remove(oldDir .. "/" .. name)
+            end
+          end
+        end
+        pcall(lfs.rmdir, oldDir)
+      end
+    end
+    pcall(lfs.mkdir, backupPath)
+  end
+  local copied = 0
+  for _, fileName in ipairs(remoteMapRepair.BACKUP_FILES) do
+    keepAlive()
+    local data = readFile(remoteMapRepair.RESOURCE_DIR .. fileName)
+    if data ~= nil then
+      local out = io.open(backupPath .. "/" .. fileName, "wb")
+      if out then
+        out:write(data)
+        out:close()
+        copied = copied + 1
+      end
+    end
+  end
+  keepAlive()
+  return copied > 0 and backupPath or nil
+end
+
+function remoteMapRepair.appendInitLog(message)
+  local f = io.open(remoteMapRepair.INIT_LOG, "a")
+  if not f then
+    return
+  end
+  local stamp = os.date and os.date("%Y-%m-%d %H:%M:%S") or tostring(os.time() or 0)
+  pcall(function()
+    f:write(stamp .. " " .. message .. "\n")
+    f:close()
+  end)
+end
+
+function remoteMapRepair.run(request)
+  if not blockerActive() then
+    return {
+      ok = false,
+      localOnly = true,
+      deferred = true,
+      error = "remote activity map repair refused to run because the cloud blocker is not active"
+    }
+  end
+  if resources.isAnySyncInProgress() then
+    return {
+      ok = false,
+      localOnly = true,
+      deferred = true,
+      error = "a Harmony sync is in progress; deferring remote activity map repair"
+    }
+  end
+  local pairedRemotes, rfErr
+  if type(request) == "table" and type(request.remotes) == "table" then
+    pairedRemotes = remoteMapRepair.normalizeRemotes(request.remotes)
+  else
+    pairedRemotes, rfErr = remoteMapRepair.queryPairedRemotes()
+    if not pairedRemotes then
+      return {
+        ok = false,
+        localOnly = true,
+        deferred = true,
+        error = rfErr
+      }
+    end
+  end
+  if #pairedRemotes == 0 then
+    return {ok = true, localOnly = true, repaired = 0, created = {}, noOp = true}
+  end
+
+  local oldActivities, actErr = resourceSnapshot("ActivityList")
+  if not oldActivities then
+    return {ok = false, localOnly = true, error = actErr}
+  end
+  local oldMaps, mapErr = resourceSnapshot("MapList")
+  if not oldMaps then
+    return {ok = false, localOnly = true, error = mapErr}
+  end
+  local missing, mapsById = remoteMapRepair.findMissing(
+    oldActivities.resource, oldMaps.resource, pairedRemotes
+  )
+  if #missing == 0 then
+    return {
+      ok = true,
+      localOnly = true,
+      repaired = 0,
+      created = {},
+      noOp = true,
+      checkedRemotes = pairedRemotes
+    }
+  end
+
+  local oldFunctions = resourceSnapshot("FunctionList")
+  local oldDevices, devErr = resourceSnapshot("DeviceList")
+  if not oldDevices then
+    return {ok = false, localOnly = true, error = devErr}
+  end
+
+  local nextMapList, created, createdMaps, buildErr = remoteMapRepair.buildRepairedMapList(
+    oldActivities.resource,
+    oldMaps.resource,
+    oldFunctions and oldFunctions.resource or nil,
+    oldDevices.resource,
+    pairedRemotes,
+    missing,
+    mapsById
+  )
+  if not nextMapList then
+    return {ok = false, localOnly = true, error = buildErr}
+  end
+
+  local valid, validationError = remoteMapRepair.validateCreatedMaps(
+    createdMaps,
+    oldActivities.resource,
+    oldDevices.resource,
+    oldMaps.resource
+  )
+  keepAlive()
+  if not valid then
+    return {ok = false, localOnly = true, error = validationError}
+  end
+
+  if type(request) == "table" and request.dryRun == true then
+    return {
+      ok = true,
+      localOnly = true,
+      dryRun = true,
+      repaired = #created,
+      created = created,
+      checkedRemotes = pairedRemotes
+    }
+  end
+
+  if not system.isMessageRegistered("config_new") then
+    return {
+      ok = false,
+      localOnly = true,
+      deferred = true,
+      error = "Harmony activity engine reload handler is unavailable"
+    }
+  end
+
+  local backupDir = remoteMapRepair.backupResources()
+  local mapEtag = localEtag()
+  local mapHetag = localHetag()
+  local saved, saveErr = saveResource("MapList", nextMapList, mapEtag, mapHetag)
+  if not saved then
+    local restored = saveResource("MapList", oldMaps.resource, oldMaps.etag, oldMaps.hetag)
+    return {
+      ok = false,
+      localOnly = true,
+      rolledBack = restored and true or false,
+      error = saveErr
+    }
+  end
+
+  local reloadArg = needFullEngineLoad and "all" or {"MapList"}
+  local sent, reloaded = pcall(system.sendMessage, "config_new", reloadArg)
+  if not sent or reloaded ~= true then
+    local restored = saveResource("MapList", oldMaps.resource, oldMaps.etag, oldMaps.hetag)
+    pcall(system.sendMessage, "config_new", {"MapList"})
+    return {
+      ok = false,
+      localOnly = true,
+      rolledBack = restored and true or false,
+      error = "Harmony engine rejected the remote activity map reload"
+    }
+  end
+  if reloadArg == "all" then
+    needFullEngineLoad = false
+  end
+
+  local engineReady = publishLocalRevision()
+  local summary = "codexactivity: repaired missing remote activity maps (" ..
+    table.concat(created, ", ") .. ")" ..
+    (backupDir and (" [backup: " .. backupDir .. "]") or "")
+  log.notice(summary)
+  remoteMapRepair.appendInitLog(summary)
+  return {
+    ok = true,
+    localOnly = true,
+    repaired = #created,
+    created = created,
+    checkedRemotes = pairedRemotes,
+    backupDir = backupDir,
+    reloaded = true,
+    activityEngineReady = engineReady,
+    configVersion = digest.configVersion,
+    mapEtag = mapEtag
+  }
+end
+
+function remoteMapRepair.checkAuto()
+  local flagPresent = readFile(remoteMapRepair.FLAG_FILE) ~= nil
+  if not flagPresent then
+    remoteMapRepair.flagExhausted = false
+  end
+  local needRun = (not remoteMapRepair.bootChecked) or
+    (flagPresent and not remoteMapRepair.flagExhausted)
+  if not needRun then
+    return
+  end
+  if remoteMapRepair.cooldownTicks > 0 then
+    remoteMapRepair.cooldownTicks = remoteMapRepair.cooldownTicks - 1
+    return
+  end
+  if not blockerActive() or resources.isAnySyncInProgress() or
+      not system.isMessageRegistered("config_new") then
+    return
+  end
+  local res = remoteMapRepair.run(nil)
+  if res and res.deferred then
+    remoteMapRepair.retryCount = remoteMapRepair.retryCount + 1
+    remoteMapRepair.cooldownTicks = remoteMapRepair.RETRY_COOLDOWN_TICKS
+    if remoteMapRepair.retryCount >= remoteMapRepair.MAX_BOOT_RETRIES then
+      log.warning(
+        "codexactivity: deferred remote activity map repair exhausted retries:",
+        tostring(res.error or "unknown")
+      )
+      remoteMapRepair.bootChecked = true
+      if flagPresent then
+        remoteMapRepair.flagExhausted = true
+      end
+    end
+    return
+  end
+  if flagPresent then
+    os.remove(remoteMapRepair.FLAG_FILE)
+  end
+  remoteMapRepair.bootChecked = true
+  remoteMapRepair.flagExhausted = false
+  remoteMapRepair.retryCount = 0
+  remoteMapRepair.cooldownTicks = 0
+  if not (res and res.ok) then
+    log.warning(
+      "codexactivity: automatic remote activity map repair failed:",
+      tostring(res and res.error or "unknown")
+    )
+  end
+end
+
 local function processRequest(raw)
   local ok, request = pcall(json.decode, raw)
   keepAlive()
@@ -3850,6 +4636,8 @@ local function processRequest(raw)
     response = commitDeviceScreen(request)
   elseif request.op == "CommitRemoteBackground" then
     response = commitRemoteBackground(request)
+  elseif request.op == "RepairRemoteActivityMaps" then
+    response = remoteMapRepair.run(request)
   elseif request.op == "Status" then
     response = statusResponse()
   elseif request.op == "SimulateGesture" then
@@ -4001,6 +4789,10 @@ local function workerLoop()
     local seeded, seedError = pcall(seedBlankHub)
     if not seeded then
       log.error("codexactivity blank hub setup failed:", tostring(seedError))
+    end
+    local repaired, repairError = pcall(remoteMapRepair.checkAuto)
+    if not repaired then
+      log.error("codexactivity remote map repair failed:", tostring(repairError))
     end
     local raw = readFile(REQUEST_FILE)
     if raw then

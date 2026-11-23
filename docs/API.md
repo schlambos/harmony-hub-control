@@ -1358,18 +1358,20 @@ buttons (`#activitybuttons/<EquadID>`) and keys per activity
 writes every remote's map in one save unless the owner sets that key for
 one remote only.
 
-Pairing writes nothing to `MapList`, and Logitech's setup made activity
-maps only for the remotes the account had. So a remote without a screen
-paired here has no `<EquadID>Activity<id>` map for the activities that
-already exist: its activity button starts one from the root map, and then
-every key on it, Off included, is dropped while that activity runs (issue
-#86). The Remotes page closes that gap: after a pairing window in which a
-remote joined, it saves a map for every activity each paired remote without
-a screen lacks, with the command keys another remote already has in that
-activity (an empty map when none has any, which still lets Off and the
-activity buttons reach the root map). A remote found without such maps
-later shows a notice with an "Add its keys" button that does the same.
-Existing maps are never changed, and remotes with a screen are left alone.
+Pairing writes nothing to `MapList`, Logitech's setup made activity maps
+only for the remotes the account had, and Melodious 2.1.0 and older
+omitted `16417Activity<id>` on hubs that only ever had a remote with a
+screen (issues #86, #250). When a paired remote lacks
+`<EquadID>Activity<id>`, the engine silently drops presses while that
+activity runs. `codexactivity.lua` repairs missing maps automatically
+after every install/update and at hub boot (backing up resources first,
+reloading the engine and publishing a new revision so screen remotes
+resync on their own), without touching existing maps. As a manual
+fallback, the Remotes page also repairs missing maps after a pairing
+window or via its "Add its keys" button for both screen remotes and
+remotes without a screen, copying command keys another remote already
+has in that activity (or an empty map when none has any). Existing maps
+are never changed.
 
 ### USB Ethernet (experimental)
 

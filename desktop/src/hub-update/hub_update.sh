@@ -248,6 +248,7 @@ apply() {
   ln -sf dropbearmulti /data/codex/bin/dropbear
   ln -sf dropbearmulti /data/codex/bin/dropbearkey
   chmod 600 /data/codexmqtt/config.json 2>/dev/null
+  : > /data/codex/repair_remote_maps
   /bin/busybox sync 2>/dev/null
 
   if [ -n "$(awk '$3 == 1' "$PLAN")" ]; then

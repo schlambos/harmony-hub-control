@@ -195,6 +195,7 @@ if [ -x /data/codex/bin/dropbear ] && grep /data/codex/bin/dropbear /usr/sbin/dr
 # Dead legacy data cleanup, same constants and hub commands as install_webui.py.
 $BackupKeep = 3
 $ResourceBackupRoot = "/data/codex/resource-backups"
+$RepairRemoteMapsFlag = "/data/codex/repair_remote_maps"
 $BinDir = "/data/codex/bin"
 $ManagedBinFiles = @("dropbear", "dropbearkey", "hal_multiremote", "hal_remotes", "MANIFEST.txt")
 $BinDirScan = @'
@@ -2703,6 +2704,7 @@ function Invoke-PostWiring() {
         "/usr/sbin/dropbearkey /etc/init.d/rcS.local; " +
         "chmod 644 /data/codex/modules/usb-net/r8152.ko /data/codex/modules/usb-net/usbnet.ko /data/codex/modules/usb-net/asix.ko /data/codex/modules/usb-net/cdc_ether.ko /data/codex/modules/usb-net/cdc_ncm.ko /data/codex/modules/usb-net/ax88179_178a.ko /data/codex/modules/usb-net/README.md 2>/dev/null || true; " +
         "chmod 600 /data/codexmqtt/config.json 2>/dev/null || true; " +
+        ": > $RepairRemoteMapsFlag; " +
         "/bin/busybox sync 2>/dev/null || true"
     Invoke-Remote $post $null 60000 | Out-Null
 }
