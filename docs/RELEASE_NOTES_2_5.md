@@ -1,23 +1,27 @@
 # Melodious 2.5
 
 Melodious 2.5 is the first full release since 2.0. (2.1 was 2.0 with a fix for the Windows
-installer.) It adds a guided setup in the desktop app, more remote and device options, a Windows
-desktop app, and fixes for the problems people reported.
+installer.) You can now set up a brand-new hub without Logitech at all, run two screen remotes on
+one hub at the same time, and customise far more of every remote. There's a Windows desktop app,
+and fixes for the problems people reported.
 
 Some parts are less tested than others. Each one is labelled where it is described, and
 [Known limitations](#known-limitations) lists what has only been checked by automated tests.
 
 ## What you will notice
 
-- **Guided setup.** The desktop app's Setup Wizard takes a hub that is new, factory reset,
-  second-hand or already set up, and leaves it rooted and running Melodious. No commands and no
-  Logitech account. Tested on macOS with a real hub. On Windows and Linux: **Not fully tested,
-  needs confirmation**. See the [Setup Guide](SETUP_GUIDE.md).
+- **Set up a hub with no Logitech at all.** The desktop app's Setup Wizard takes a hub that is
+  new, factory reset, second-hand or already set up, provisions it locally, roots it and leaves it
+  running Melodious, fully offline. No Logitech account, app or cloud, and no commands. Tested on
+  macOS with a real hub. On Windows and Linux: **Not fully tested, needs confirmation**. See the
+  [Setup Guide](SETUP_GUIDE.md).
+- **Two screen remotes at once.** Run a Touch and a 950, or two Ultimates, on one hub, kept in sync
+  ([guide](TWO_SCREEN_REMOTES.md)).
+- **More of every remote is yours.** The Home Control buttons on Companion, Elite and 950 remotes,
+  your own backgrounds on screen remotes, the `--` and `E` keys on remotes without a screen, and a
+  number pad on new activities for remotes with a screen.
 - **Saving works the first time.** The first Save after opening an editor no longer fails and
   then works on the second try.
-- **More buttons you can set.** The Home Control buttons on Companion, Elite and 950 remotes, the
-  `--` and `E` keys on remotes without a screen, and a number pad on new activities for remotes
-  with a screen.
 - **New kinds of device.** Saved Bluetooth keyboards and LG webOS TVs over the network
   (**experimental**).
 - **Logitech catalog codes that used to be skipped now import.** Codes that need an IR protocol

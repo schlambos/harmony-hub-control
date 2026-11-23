@@ -6,15 +6,16 @@
 
 <p align="center">
   Local control for the Logitech Harmony Hub and its remotes, connected to Home Assistant in both directions.<br>
-  No Logitech app, account or cloud.
+  Set up a brand-new hub and run it with no Logitech app, account or cloud at all.
 </p>
 
 <p align="center"><a href="#start-here">Start here</a> · <a href="#what-it-does">What it does</a> · <a href="#requirements-and-compatibility">Requirements</a> · <a href="#the-apps">Apps</a> · <a href="#install-update-and-roll-back">Install</a> · <a href="#guides-and-reference">Docs</a></p>
 
 Melodious runs on a rooted Harmony Hub, next to Logitech's own firmware, and takes over the cloud's
-jobs: devices, activities and remote sync, plus two-way Home Assistant control. Install it with the
-desktop Setup Wizard or the command line, then run it from the hub's web app or the Android and
-desktop apps (Windows, Linux, macOS).
+jobs: devices, activities and remote sync, plus two-way Home Assistant control. The desktop Setup
+Wizard takes a new, reset or second-hand hub all the way from the box to running Melodious, fully
+offline, without ever touching Logitech. Then run it from the hub's web app, the Android app, or the
+desktop app.
 
 **Installing Melodious keeps your setup.** Your existing devices, activities and remote button
 bindings stay as they are, including any made with the Logitech app. Melodious runs beside
@@ -56,15 +57,24 @@ Then open `http://<hub-ip>:8080/` on your phone or computer.
 <tr><th width="50%">Harmony</th><th width="50%">Home Assistant</th></tr>
 <tr><td valign="top">
 
-- **Runs offline:** Logitech's cloud is blocked and the paired remote syncs from the hub.
-- **Devices and codes:** Logitech catalog, IRDB, Flipper and Pronto imports, or learn from the
-  original remote.
-- **Activities:** a setup wizard, power order and inputs, and any command on any button or gesture.
-- **Network TVs:** Android and Google TV sets over the network, no IR
-  ([ANDROID_TV.md](docs/ANDROID_TV.md)); LG webOS TVs too, experimental
-  ([WEBOS_TV.md](docs/WEBOS_TV.md)).
-- **Bluetooth keyboard:** the hub types and sends TV keys to TVs and streaming boxes
+- **Set up a hub with no Logitech at all:** the Setup Wizard provisions a new or reset hub
+  locally, roots it and installs Melodious. No account, no app, no cloud
+  ([SETUP_GUIDE.md](docs/SETUP_GUIDE.md)).
+- **Two screen remotes at once:** a Touch and a 950, or two Ultimates, on one hub and kept in
+  sync ([TWO_SCREEN_REMOTES.md](docs/TWO_SCREEN_REMOTES.md)).
+- **Runs offline:** Logitech's cloud is blocked and every paired remote syncs from the hub.
+- **Your remote, your way:** any command on any button or gesture, screen buttons and sequences,
+  Home Control buttons on the Companion, 950 and Elite, and your own backgrounds on screen
+  remotes ([HOME_CONTROL_BUTTONS.md](docs/HOME_CONTROL_BUTTONS.md),
+  [REMOTE_BACKGROUNDS.md](docs/REMOTE_BACKGROUNDS.md)).
+- **Devices and codes:** the Logitech catalog (codes bring their IR protocols with them), IRDB,
+  Flipper and Pronto imports, or learn from the original remote.
+- **Activities:** a setup wizard, power order and inputs, and time restrictions.
+- **Network TVs and Bluetooth:** Android and Google TV over the network
+  ([ANDROID_TV.md](docs/ANDROID_TV.md)), LG webOS TVs (experimental,
+  [WEBOS_TV.md](docs/WEBOS_TV.md)), and the hub as a Bluetooth keyboard with saved scripts
   ([BLUETOOTH_KEYBOARD.md](docs/BLUETOOTH_KEYBOARD.md)).
+- **Apps:** the hub's web app, Android, and a desktop app for macOS, Windows and Linux.
 
 </td><td valign="top">
 
@@ -95,8 +105,8 @@ How the pieces fit, and how presses and gestures are timed: [ARCHITECTURE.md](do
 - **Home Assistant** (optional), with [HACS](https://hacs.xyz/).
 - **Android 8.0+** or the **Desktop app** (optional).
 
-Validated on the Harmony Touch and Smart Control; the Companion and 950 work, a user reports the
-Elite works, and other remotes that pair with the hub are expected to. Remote details, flash and
+Validated on the Harmony Touch, 950, Smart Control and Companion; users confirm the Elite and the
+Ultimate, and other remotes that pair with the hub are expected to work. Remote details, flash and
 SSH-key needs, and tested hardware: **[COMPATIBILITY.md](docs/COMPATIBILITY.md)**.
 
 <a id="the-macos-app"></a>
