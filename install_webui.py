@@ -27,8 +27,21 @@ Changed files install as a two-phase commit:
 
 When harmony-hub-root already left its dropbearmulti on the hub (either
 build of our Dropbear: DROPBEAR_BUILDS), phase 1
-hard-links it instead of writing a second copy. Its leftover staging
-folders are reported, and removed with --remove-root-tool-leftovers.
+hard-links it instead of writing a second copy.
+
+Dead legacy data is removed automatically before the capacity check, with
+no flag and no prompt: harmony-hub-root's staging folders and (once SSH
+runs the installed Dropbear) its spare Dropbear copy; binaries an earlier
+Melodious release installed that this one no longer ships, identified by
+the hub's own /data/codex/bin/MANIFEST.txt (exact path plus the MD5 it
+records); Melodious backup generations beyond the newest BACKUP_KEEP per
+kind under /data/codex/resource-backups and /data/codex-backups; and
+temporary files an interrupted install left behind (<dest>.codex-new /
+.codex-rb next to installer destinations, and incomplete handoff folders).
+Only those positively identified paths are ever removed: user resources
+(/data/resources), the Dropbear SSH is running on, stock firmware files,
+and /pkg/moosehead (measured and reported only) are never touched.
+--remove-root-tool-leftovers is still accepted, as a no-op alias.
 
 Originals are copied into RAM before phase 1, so any later failure restores
 them (copy to <dest>.codex-rb, then rename) with their observed modes.
@@ -130,6 +143,66 @@ ROOT_TOOL_DROPBEAR_REMOVE = (
     "if [ -x /data/codex/bin/dropbear ] && grep /data/codex/bin/dropbear /usr/sbin/dropbear >/dev/null; then "
     "rm -f " + " ".join(ROOT_TOOL_FILES) + " && echo removed; fi"
 )
+
+# Melodious backup generations kept per kind (resource, settings, handoff);
+# older ones are dead weight the installer removes on its own. The handoff
+# this install creates is added after cleanup and kept by prune_handoffs().
+BACKUP_KEEP = 3
+RESOURCE_BACKUP_ROOT = "/data/codex/resource-backups"
+BACKUP_ROOTS = [RESOURCE_BACKUP_ROOT, HANDOFF_ROOT, "/data/codex/update-backups"]
+# Names directly in /data/codex/bin the installer manages besides the
+# manifest binaries: the Dropbear links phase wiring creates, the hal copies
+# only an explicit setting installs, and the manifest itself. Anything else
+# there is stale only when the hub's own MANIFEST.txt (left by an earlier
+# Melodious install) records it with the MD5 the file still has.
+MANAGED_BIN_FILES = {"dropbear", "dropbearkey", "hal_multiremote", "hal_remotes", "MANIFEST.txt"}
+BIN_DIR = "/data/codex/bin"
+BIN_DIR_SCAN = (
+    "ls -l /data/codex/bin 2>/dev/null | awk '/^-/ {print \"bin_file bytes=\"$5\" name=\"$NF}'; "
+    "awk '$1 ~ /^[0-9a-f][0-9a-f][0-9a-f][0-9a-f]/ && length($1) == 32 "
+    "{print \"old_manifest md5=\"$1\" name=\"$2}' /data/codex/bin/MANIFEST.txt 2>/dev/null; "
+    "for f in /data/codex/bin/*; do [ -f \"$f\" ] && [ ! -L \"$f\" ] && md5sum \"$f\"; done"
+)
+# Every regular file under the backup roots, one line each; the installer
+# aggregates them into generations and prunes past BACKUP_KEEP. The walk
+# never follows a symlink (same shape as EXTENDER_SCAN).
+BACKUP_SCAN = (
+    "for r in /data/codex/resource-backups /data/codex-backups /data/codex/update-backups; do "
+    '[ -d "$r" ] && [ ! -L "$r" ] || continue; set -- "$r"; '
+    'while [ $# -gt 0 ]; do d=$1; shift; '
+    'for e in "$d"/* "$d"/.[!.]*; do '
+    'if [ -d "$e" ] && [ ! -L "$e" ]; then set -- "$@" "$e"; '
+    'elif [ -f "$e" ]; then sz=$(ls -l "$e" | awk \'{print $5}\'); '
+    'echo "backup_file bytes=$sz path=$e"; fi; done; done; done'
+)
+HANDOFF_DIR_RE = re.compile(rf"^{re.escape(HANDOFF_ROOT)}/webui-handoff-\d{{8}}-\d{{6}}$")
+INCOMPLETE_HANDOFF_RE = re.compile(rf"^{re.escape(HANDOFF_ROOT)}/\.incomplete-webui-handoff-\d{{8}}-\d{{6}}$")
+RESOURCE_GEN_RE = re.compile(r"^\d{8}_\d{6}$")
+SETTINGS_GEN_RE = re.compile(r"^settings_\d{8}_\d{6}$")
+UPDATE_GEN_RE = re.compile(r"^\d+$")
+# Paths cleanup must never remove, whatever the scans say: user resources,
+# the Extender package (#118: detect and warn only), and stock firmware
+# trees. Removal of anything outside the positively identified cleanup
+# classes is refused by assert_removable().
+NEVER_REMOVE_PREFIXES = ("/data/resources", EXTENDER_PACKAGE, "/usr", "/opt", "/etc", "/pkg", "/cache", "/home")
+
+
+def assert_removable(path: str, kind: str) -> None:
+    """Fail closed: only the positively identified dead-data classes go."""
+    if any(path == p or path.startswith(p + "/") for p in NEVER_REMOVE_PREFIXES):
+        raise RuntimeError(f"refusing to remove protected path {path!r}")
+    ok = (
+        (kind == "root_tool_stage" and bool(ROOT_TOOL_STAGE_RE.match(path)))
+        or (kind == "root_tool_dropbear" and path in ROOT_TOOL_FILES)
+        or (kind == "stale_binary" and path.startswith(BIN_DIR + "/") and "/" not in path[len(BIN_DIR) + 1:])
+        or (kind == "old_backup" and bool(HANDOFF_DIR_RE.match(path)))
+        or (kind == "old_backup" and path.startswith(RESOURCE_BACKUP_ROOT + "/")
+            and bool(RESOURCE_GEN_RE.match(path.rsplit("/", 1)[-1]) or SETTINGS_GEN_RE.match(path.rsplit("/", 1)[-1])))
+        or (kind == "install_temp" and bool(INCOMPLETE_HANDOFF_RE.match(path)))
+        or (kind == "install_temp" and (path.endswith(NEW_SUFFIX) or path.endswith(RESTORE_SUFFIX)))
+    )
+    if not ok:
+        raise RuntimeError(f"refusing to remove unclassified path {path!r} as {kind}")
 
 
 def hub_copy_current(dest: str, have: str, want: str) -> bool:
@@ -1384,6 +1457,13 @@ class Installer:
         self.dropbear_copies: dict[str, str] = {}
         # Hard-link count of each, by path.
         self.dropbear_links: dict[str, int] = {}
+        # Dead legacy data cleanup: positively identified items, each
+        # {"class", "path", "bytes", "files"}; probe paths for temp files.
+        self.legacy_items: list[dict[str, object]] = []
+        self.temp_probe_paths: list[str] = []
+        # Dead legacy data found by scan_legacy_cleanup():
+        # {"class", "path", "bytes", "files"} per removal target.
+        self.legacy_items: list[dict[str, object]] = []
 
     # ------------------------------------------------------------------ ssh
 
@@ -1769,7 +1849,10 @@ class Installer:
         step("Probing destination state (BusyBox ls -l / md5sum)")
         dests = [c.dest for c in self.candidates]
         dests += [p for p in HANDOFF_REQUIRED_PATHS + [ROOT_TOOL_DROPBEAR, HAL_MULTI_DEST] if p not in dests]
-        self.probe = self.file_status(dests)
+        # Interrupted installs leave <dest>.codex-new/.codex-rb behind; probe
+        # them (exact installer-owned paths only) so cleanup can find them.
+        self.temp_probe_paths = [d + suffix for d in dests for suffix in (NEW_SUFFIX, RESTORE_SUFFIX)]
+        self.probe = self.file_status(dests + self.temp_probe_paths)
         for cand in self.candidates:
             if self.probe[cand.dest]["kind"] in ("symlink", "other"):
                 self.fail_validation(
@@ -1879,6 +1962,140 @@ class Installer:
                 self.moosehead_bytes = int(found.group(1))
                 self.moosehead_files = int(found.group(2))
 
+    def scan_legacy_cleanup(self) -> None:
+        """Positively identify every dead-data class. Read-only.
+
+        Root-tool stages come from scan_root_tool_leftovers(); here: stale
+        binaries (hub MANIFEST.txt + still-matching MD5, no longer shipped),
+        backup generations past BACKUP_KEEP, incomplete handoffs, and
+        .codex-new/.codex-rb temp files next to installer destinations.
+        """
+        self.legacy_items = []
+        for stage in self.root_tool_stages:
+            self.legacy_items.append({"class": "root_tool_stage", "path": str(stage["path"]),
+                                      "bytes": int(stage["bytes"]), "files": int(stage["files"])})
+        if self.root_tool_dropbear_removable():
+            self.legacy_items.append({"class": "root_tool_dropbear", "path": ROOT_TOOL_DROPBEAR,
+                                      "bytes": int(self.probe[ROOT_TOOL_DROPBEAR]["size"]), "files": 1})
+        # Stale binaries: in the hub's own MANIFEST.txt, not in ours, same MD5.
+        out = self.run_remote(BIN_DIR_SCAN, timeout=60, quiet=True)
+        bin_files: dict[str, int] = {}
+        old_manifest: dict[str, str] = {}
+        bin_md5: dict[str, str] = {}
+        for line in out.splitlines():
+            line = line.strip()
+            m = re.match(r"^bin_file bytes=(\d+) name=(\S+)$", line)
+            if m:
+                bin_files[m.group(2)] = int(m.group(1))
+                continue
+            m = re.match(r"^old_manifest md5=([0-9a-f]{32}) name=(\S+)$", line)
+            if m:
+                old_manifest[m.group(2)] = m.group(1)
+                continue
+            m = MD5_LINE_RE.match(line)
+            if m and m.group(2).startswith(BIN_DIR + "/"):
+                bin_md5[m.group(2)[len(BIN_DIR) + 1:]] = m.group(1)
+        current = set(bin_manifest_names())
+        dests = {c.dest for c in self.candidates}
+        for name, size in sorted(bin_files.items()):
+            path = f"{BIN_DIR}/{name}"
+            if (name in old_manifest and name not in current and name not in MANAGED_BIN_FILES
+                    and path not in dests and bin_md5.get(name) == old_manifest[name]):
+                self.legacy_items.append({"class": "stale_binary", "path": path, "bytes": size, "files": 1})
+        # Backup generations: aggregate BACKUP_SCAN files per generation dir.
+        out = self.run_remote(BACKUP_SCAN, timeout=60, quiet=True)
+        gens: dict[str, dict[str, int]] = {}
+        for line in out.splitlines():
+            m = re.match(r"^backup_file bytes=(\d+) path=(\S+)$", line.strip())
+            if not m:
+                continue
+            path, size = m.group(2), int(m.group(1))
+            root = next((r for r in BACKUP_ROOTS if path.startswith(r + "/")), None)
+            if root is None:
+                continue
+            gen = root + "/" + path[len(root) + 1:].split("/", 1)[0]
+            entry = gens.setdefault(gen, {"bytes": 0, "files": 0})
+            entry["bytes"] += size
+            entry["files"] += 1
+        by_kind: dict[tuple[str, str], list[str]] = {}
+        for gen in sorted(gens):
+            name = gen.rsplit("/", 1)[-1]
+            if INCOMPLETE_HANDOFF_RE.match(gen):
+                self.legacy_items.append({"class": "install_temp", "path": gen, **gens[gen]})
+            elif HANDOFF_DIR_RE.match(gen):
+                by_kind.setdefault((HANDOFF_ROOT, "handoff"), []).append(gen)
+            elif gen.startswith(RESOURCE_BACKUP_ROOT + "/") and RESOURCE_GEN_RE.match(name):
+                by_kind.setdefault((RESOURCE_BACKUP_ROOT, "resource"), []).append(gen)
+            elif gen.startswith(RESOURCE_BACKUP_ROOT + "/") and SETTINGS_GEN_RE.match(name):
+                by_kind.setdefault((RESOURCE_BACKUP_ROOT, "settings"), []).append(gen)
+            # update-backups generations are counted only, never removed:
+            # nothing here positively identifies their contents as dead.
+        for group in by_kind.values():
+            for gen in sorted(group)[: max(0, len(group) - BACKUP_KEEP)]:
+                self.legacy_items.append({"class": "old_backup", "path": gen, **gens[gen]})
+        # Temp files from interrupted installs, at exact probed paths.
+        for path in self.temp_probe_paths:
+            state = self.probe.get(path, {})
+            if state.get("kind") == "regular":
+                self.legacy_items.append({"class": "install_temp", "path": path,
+                                          "bytes": int(state.get("size", "0")), "files": 1})
+
+    def legacy_credit(self) -> int:
+        """Estimated flash removing every legacy item would free."""
+        credit = 0
+        for item in self.legacy_items:
+            if item["class"] == "root_tool_stage":
+                credit += int(item["bytes"]) * 3 // 5  # base64 chunks, as leftover_credit()
+            elif item["class"] == "root_tool_dropbear":
+                credit += self.leftover_credit() - sum(
+                    int(s["bytes"]) * 3 // 5 for s in self.root_tool_stages)
+            else:
+                credit += int(item["bytes"]) * 3 // 5
+        return credit
+
+    def clean_legacy_data(self) -> int:
+        """Remove every positively identified dead-data item; log each one.
+
+        Returns the raw bytes removed. Not rolled back: nothing live reads
+        these paths. Refuses (assert_removable) anything outside the classes.
+        """
+        step("Removing dead legacy data (automatic cleanup)")
+        removed_bytes = 0
+        for item in list(self.legacy_items):
+            path, kind = str(item["path"]), str(item["class"])
+            assert_removable(path, kind)
+            if kind == "root_tool_dropbear":
+                code, out, _err = self.run_remote_rc(ROOT_TOOL_DROPBEAR_REMOVE, timeout=30)
+                if code == 0 and out.strip() == "removed":
+                    kv(f"removed_legacy class=root_tool_dropbear bytes={item['bytes']} files=1 path={path}")
+                    kv(f"removed_leftover={path}")
+                    removed_bytes += int(item["bytes"])
+                else:
+                    info(f"kept {path}: SSH doesn't run the installed Dropbear yet")
+                continue
+            cmd = f"rm -rf {remote_quote(path)}" if kind in ("root_tool_stage", "old_backup") or INCOMPLETE_HANDOFF_RE.match(path) else f"rm -f {remote_quote(path)}"
+            code, _out, err = self.run_remote_rc(cmd, timeout=120)
+            if code != 0:
+                info(f"warning: could not remove {path}: {err.strip()}")
+                continue
+            kv(f"removed_legacy class={kind} bytes={item['bytes']} files={item['files']} path={path}")
+            if kind == "root_tool_stage":
+                kv(f"removed_leftover={path}")
+            info(f"removed {path} ({kind}, {kib(int(item['bytes']))})")
+            removed_bytes += int(item["bytes"])
+        if removed_bytes:
+            kv(f"legacy_cleanup_removed_bytes={removed_bytes}")
+            info(f"Dead legacy data removed: {kib(removed_bytes)} in {len(self.legacy_items)} item(s).")
+        else:
+            info("No dead legacy data to remove.")
+        self.scan_root_tool_leftovers()
+        self.scan_legacy_cleanup()
+        self.measure_flash()
+        if self.flash_avail is not None:
+            kv(f"flash_free_after_cleanup_bytes={self.flash_avail}")
+            info(f"Flash free after cleanup: {kib(self.flash_avail)}.")
+        return removed_bytes
+
     def root_tool_dropbear_removable(self) -> bool:
         """True when the root tool's Dropbear is a separate copy that SSH no
         longer uses and phase 1 won't link."""
@@ -1965,7 +2182,7 @@ class Installer:
 
     def flash_after(self) -> int:
         """Estimated free flash once the install (and any opted-in cleanup) is done."""
-        credit = self.leftover_credit() if self.args.remove_root_tool_leftovers else 0
+        credit = self.legacy_credit()
         return max(0, (self.flash_avail or 0) + credit - self.flash_written + self.flash_released)
 
     def flash_shortfall(self, credit: int = 0) -> int:
@@ -2010,7 +2227,7 @@ class Installer:
     def decide_verdict(self) -> None:
         if self.verdict == VERDICT_CONFIG_UNCERTAIN:
             return
-        credit = self.leftover_credit() if self.args.remove_root_tool_leftovers else 0
+        credit = self.legacy_credit()
         if self.ram_free_bytes < self.ram_required_bytes:
             self.verdict = VERDICT_ROLLBACK_CAPACITY
             self.verdict_reasons.append(
@@ -2021,7 +2238,7 @@ class Installer:
             self.capacity_stage = "preflight"
             self.verdict_reasons.append(
                 f"free flash {self.flash_avail} < estimated need {self.flash_required}"
-                + (f" (after about {credit} freed from root-tool leftovers)" if credit else "")
+                + (f" (after about {credit} freed by automatic legacy cleanup)" if credit else "")
             )
         else:
             self.verdict = VERDICT_ALLOWED
@@ -2036,10 +2253,17 @@ class Installer:
             "Status so far uses private volatile staging under "
             "/var/volatile/codex-install-* only."
         )
-        info(
-            "No persistent hub paths have been written, pruned, handed off, "
-            "installed, or restarted yet."
-        )
+        if self.args.preflight_only:
+            info(
+                "No persistent hub paths have been written, pruned, handed off, "
+                "installed, or restarted yet."
+            )
+        else:
+            info(
+                "So far only dead legacy data (see removed_legacy lines) may "
+                "have been removed; nothing has been handed off, installed, "
+                "or restarted yet."
+            )
         if self.args.preflight_only:
             info(
                 "Mode: --preflight-only — stages, verifies, compares, and "
@@ -2161,18 +2385,16 @@ class Installer:
                     f"{cand.dest}: harmony-hub-root's copy of the same Dropbear at {cand.link_source} is reused "
                     "as a hard link, so it takes no extra flash."
                 )
-        leftovers = [(str(s["path"]), int(s["bytes"]), int(s["files"])) for s in self.root_tool_stages]
-        if self.root_tool_dropbear_removable():
-            leftovers.append((ROOT_TOOL_DROPBEAR, int(self.probe[ROOT_TOOL_DROPBEAR]["size"]), 1))
-        for path, size, files in leftovers:
-            kv(f"root_tool_leftover bytes={size} files={files} path={path}")
-            what = "a second copy of Dropbear that SSH no longer uses" if path == ROOT_TOOL_DROPBEAR else "staging files"
-            info(f"harmony-hub-root left {path} behind: {what}, {kib(size)} in {files} file(s).")
-        if leftovers:
-            if self.args.remove_root_tool_leftovers and not self.args.preflight_only:
-                info("They are removed before the install (--remove-root-tool-leftovers).")
+        for item in self.legacy_items:
+            kv(f"legacy_cleanup class={item['class']} bytes={item['bytes']} files={item['files']} path={item['path']}")
+            if item["class"] in ("root_tool_stage", "root_tool_dropbear"):
+                kv(f"root_tool_leftover bytes={item['bytes']} files={item['files']} path={item['path']}")
+            info(f"Dead legacy data: {item['path']} ({item['class']}, {kib(int(item['bytes']))} in {item['files']} file(s)).")
+        if self.legacy_items:
+            if self.args.preflight_only:
+                info("Dead legacy data is removed automatically when the install runs; preflight-only removes nothing.")
             else:
-                info("Run the installer with --remove-root-tool-leftovers to remove them and free that flash.")
+                info("Dead legacy data was removed automatically before the capacity check (see removed_legacy lines).")
         if self.moosehead_bytes is not None:
             kv(
                 f"extender_package bytes={self.moosehead_bytes} files={self.moosehead_files} "
@@ -2207,10 +2429,10 @@ class Installer:
                 f"BLOCKED_CAPACITY — not enough free flash: about {kib(self.flash_required)} needed, "
                 f"{kib(self.flash_avail or 0)} free. Nothing was installed."
             )
-            if (self.root_tool_stages or self.root_tool_dropbear_removable()) and not self.args.remove_root_tool_leftovers:
+            if self.legacy_items:
                 info(
-                    f"Removing harmony-hub-root's leftovers (--remove-root-tool-leftovers) frees about "
-                    f"{kib(self.leftover_credit())}."
+                    f"Automatic cleanup removed {kib(self.legacy_credit())} of dead legacy data "
+                    "and it still does not fit."
                 )
             if self.moosehead_bytes is not None:
                 info(
@@ -2344,30 +2566,8 @@ class Installer:
         self.handoff_dirs.append(created[-1])
 
     def remove_root_tool_leftovers(self) -> None:
-        """Delete harmony-hub-root's staging folders and, while SSH runs ours,
-        its spare Dropbear. Opted in with --remove-root-tool-leftovers; not
-        rolled back, since nothing reads them."""
-        step("Removing harmony-hub-root leftovers")
-        for stage in self.root_tool_stages:
-            path = str(stage["path"])
-            if not ROOT_TOOL_STAGE_RE.match(path):
-                raise RuntimeError(f"refusing to remove unexpected path {path!r}")
-            code, _out, err = self.run_remote_rc(f"rm -rf {remote_quote(path)}", timeout=120)
-            if code != 0:
-                info(f"warning: could not remove {path}: {err.strip()}")
-            else:
-                kv(f"removed_leftover={path}")
-        if self.root_tool_dropbear_removable():
-            code, out, _err = self.run_remote_rc(ROOT_TOOL_DROPBEAR_REMOVE, timeout=30)
-            if code == 0 and out.strip() == "removed":
-                kv(f"removed_leftover={ROOT_TOOL_DROPBEAR}")
-            else:
-                info(f"kept {ROOT_TOOL_DROPBEAR}: SSH doesn't run the installed Dropbear yet")
-        self.scan_root_tool_leftovers()
-        self.measure_flash()
-        if self.flash_avail is not None:
-            kv(f"flash_free_after_cleanup_bytes={self.flash_avail}")
-            info(f"Flash free after removing them: {kib(self.flash_avail)}.")
+        """Compatibility alias: cleanup is automatic (clean_legacy_data)."""
+        self.clean_legacy_data()
 
     def report_flash_after_install(self) -> None:
         self.measure_flash()
@@ -3111,12 +3311,18 @@ class Installer:
 
         self.count_backup_generations()
         self.compute_handoff_estimate()
+        self.scan_legacy_cleanup()
         if self.verdict == VERDICT_CONFIG_UNCERTAIN:
             self.render_preflight_report()
             self.cleanup_stage()
             return 2
 
         self.build_plans()
+        if not self.args.preflight_only and self.legacy_items:
+            # Dead legacy data goes first, automatically; capacity is judged
+            # only on what is free afterwards.
+            self.clean_legacy_data()
+            self.build_plans()
         self.decide_verdict()
         self.render_preflight_report()
 
@@ -3126,23 +3332,8 @@ class Installer:
 
         if self.verdict != VERDICT_ALLOWED:
             self.cleanup_stage()
-            info("normal mode aborted before any persistent mutation")
+            info("normal mode aborted before installing (dead legacy data, if any, was already removed)")
             return 2
-
-        if self.args.remove_root_tool_leftovers and (self.root_tool_stages or self.root_tool_dropbear_removable()):
-            self.remove_root_tool_leftovers()
-            if self.active_candidates() and self.flash_shortfall() and not self.args.skip_flash_check:
-                self.verdict = VERDICT_CAPACITY
-                self.capacity_stage = "preflight"
-                reason = (
-                    f"free flash {self.flash_avail} < estimated need {self.flash_required} "
-                    "after removing the leftovers"
-                )
-                self.verdict_reasons.append(reason)
-                kv(f"verdict_reason={reason}")
-                self.render_verdict()
-                self.cleanup_stage()
-                return 2
 
         if not self.active_candidates():
             self.cleanup_stage()
@@ -3385,8 +3576,9 @@ def parse_args(argv: list[str]) -> argparse.Namespace:
         "--remove-root-tool-leftovers",
         action="store_true",
         help=(
-            "Delete harmony-hub-root's leftover /data/codexssh_*_stage folders, and its spare "
-            "/data/rootssh/bin/dropbearmulti once SSH runs the installed Dropbear, before installing"
+            "Accepted for compatibility; no longer needed. Dead legacy data (harmony-hub-root's "
+            "leftovers and the other positively identified classes) is removed automatically "
+            "before the capacity check"
         ),
     )
     parser.add_argument(

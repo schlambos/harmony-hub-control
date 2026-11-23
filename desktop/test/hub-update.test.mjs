@@ -400,6 +400,52 @@ test("refuses to update a hub where /etc/melodious-off is set and cleans up stag
   }
 });
 
+test("hub_update.sh cleanup removes dead legacy data and keeps the protected list", { skip: !mac }, () => {
+  const dir = tmp();
+  try {
+    const fakeRoot = path.join(dir, "hubroot");
+    const stage = path.join(fakeRoot, "stage");
+    const put = (rel, body = "x") => {
+      fs.mkdirSync(path.dirname(path.join(fakeRoot, rel)), { recursive: true });
+      fs.writeFileSync(path.join(fakeRoot, rel), body);
+    };
+    put("data/codex/hub_id", "1234\n");
+    put("proc/meminfo", "MemFree: 16384 kB\n");
+    // Dead data: root-tool stage, old resource generations, incomplete handoff, temps.
+    put("data/codexssh_abc123_stage/chunks/0001", "chunk");
+    for (let i = 1; i <= 5; i++) put(`data/codex/resource-backups/2026010${i}_000000/DeviceList.json`, "{}");
+    put("data/codex-backups/.incomplete-webui-handoff-20260101-000000/part", "p");
+    put("data/codex/bin/codex_webui.codex-new", "partial");
+    put("data/codex/bin/codex_webui.codex-rb", "partial");
+    // Protected: user resources, the running SSH Dropbear, current files.
+    put("data/resources/DeviceList.json", "{}");
+    put("data/codex/bin/dropbearmulti", "installed dropbear");
+    fs.chmodSync(path.join(fakeRoot, "data/codex/bin/dropbearmulti"), 0o755);
+    fs.symlinkSync("dropbearmulti", path.join(fakeRoot, "data/codex/bin/dropbear"));
+    put("usr/sbin/dropbear", "exec /data/codex/bin/dropbear\n");
+    put("data/rootssh/bin/dropbearmulti", "root tool copy");
+    fs.mkdirSync(stage, { recursive: true });
+    fs.writeFileSync(path.join(stage, "plan"), `${"0".repeat(32)} 755 0 payload_bin_codex_webui /data/codex/bin/codex_webui\n`);
+    execFileSync("/bin/sh", [path.join(ROOT, "desktop/src/hub-update/hub_update.sh"), "cleanup", stage], {
+      env: { ...process.env, HUB_UPDATE_ROOT: fakeRoot },
+      encoding: "utf8",
+    });
+    const log = fs.readFileSync(path.join(stage, "log"), "utf8");
+    assert.match(log, /STEP cleanup removed .*codexssh_abc123_stage/);
+    assert.equal(fs.existsSync(path.join(fakeRoot, "data/codexssh_abc123_stage")), false);
+    for (let i = 1; i <= 2; i++) assert.equal(fs.existsSync(path.join(fakeRoot, `data/codex/resource-backups/2026010${i}_000000`)), false);
+    for (let i = 3; i <= 5; i++) assert.equal(fs.existsSync(path.join(fakeRoot, `data/codex/resource-backups/2026010${i}_000000`)), true);
+    assert.equal(fs.existsSync(path.join(fakeRoot, "data/codex-backups/.incomplete-webui-handoff-20260101-000000")), false);
+    assert.equal(fs.existsSync(path.join(fakeRoot, "data/codex/bin/codex_webui.codex-new")), false);
+    assert.equal(fs.existsSync(path.join(fakeRoot, "data/resources/DeviceList.json")), true);
+    assert.equal(fs.existsSync(path.join(fakeRoot, "data/codex/bin/dropbearmulti")), true);
+    // The root tool copy goes only when it has no second name (link count 1).
+    assert.equal(fs.existsSync(path.join(fakeRoot, "data/rootssh/bin/dropbearmulti")), false);
+  } finally {
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});
+
 // End to end against tools/hub-emu with Dropbear on 127.0.0.1:2222 and a test
 // key (see the Auto-Update notes). Off by default.
 test("updates hub-emu over SSH, then finds nothing left to do", { skip: !process.env.HUB_EMU_SSH }, async () => {
