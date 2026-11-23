@@ -132,7 +132,8 @@ Some parts are less tested than others. Each one is labelled where it is describ
   (#172).
 - With the cloud blocker on, the hub now checks its Wi-Fi link and rejoins when it drops (#202).
 - System → Logs hides routine status polls and says its times are UTC (#194).
-- The hub software no longer stops at startup on firmware 4.11.6 (#176, with @jupbek).
+- Firmware 4.11.6 works: the hub software no longer stops at startup there (#176, tested and
+  contributed by @jupbek).
 - The PowerShell installer runs on Windows PowerShell 5.1 (#139, also in 2.1).
 - The Setup Wizard reports a download or unpack problem as that, and no longer blames the USB
   cable.
@@ -194,7 +195,6 @@ Your devices, activities, button assignments and settings are kept.
   by a user, the rest is not.
 - Old Logitech maps with duplicate menu positions (#178), and hold commands on digits (#190).
 - The `--` and `E` keys (#234) and the command picker layout (#216).
-- Firmware 4.11.6 support as merged (#176). The original patch ran on a 4.11.6 hub.
 - The Extender package warning in the installer (#118).
 - The Home Assistant changes after integration 0.7.2, on the hub and in the integration.
 - Android: this release's changes are built and unit tested, not run on a phone.
