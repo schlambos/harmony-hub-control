@@ -1,7 +1,7 @@
 name: Android JVM
 on:
   pull_request:
-    paths: ['Android/**', '.github/workflows/android.yml']
+    paths: ['Android/**', '.github/android/**', '.github/workflows/android.yml']
   push:
     branches: [main]
 permissions:
@@ -24,14 +24,15 @@ jobs:
             ~/.m2/repository
             !~/.gradle/caches/*/*.lock
             !~/.gradle/caches/*/gc.properties
-          key: android-deps-${{ hashFiles('Android/**/*.gradle.kts', 'Android/gradle/libs.versions.toml', 'Android/gradle/wrapper/gradle-wrapper.properties', 'Android/gradle.properties', 'Android/**/gradle.lockfile') }}
+          key: android-deps-${{ hashFiles('.github/android/*.gradle', 'Android/**/*.gradle.kts', 'Android/gradle/libs.versions.toml', 'Android/gradle/wrapper/gradle-wrapper.properties', 'Android/gradle.properties', 'Android/**/gradle.lockfile') }}
           restore-keys: android-deps-
       - name: Run JVM suites with runner JDK 17 and Android SDK
         working-directory: Android
         env:
-          # Robolectric's own test-time fetch of android-all keeps getting
-          # refused by repo1.maven.org on uncached runners, so take it from
-          # Google's mirror of Maven Central instead. Test JVMs inherit this.
+          # Maven Central keeps refusing uncached runners, which leaves
+          # nothing to cache. Gradle (via the init script) and Robolectric's
+          # test-time fetch of android-all (via this property, which test
+          # JVMs inherit) both use Google's mirror of Central instead.
           JAVA_TOOL_OPTIONS: -Drobolectric.dependency.repo.url=https://maven-central.storage-download.googleapis.com/maven2
         run: |
           # Retry only when the failure is a dependency or download error.
@@ -45,7 +46,7 @@ jobs:
             attempt_marker="$RUNNER_TEMP/gradle-attempt-$attempt"
             touch "$attempt_marker"
             set +e
-            ./gradlew --no-daemon :core-protocol:test :core-ssh:test :app:testDebugUnitTest 2>&1 | tee "$log"
+            ./gradlew --no-daemon --init-script ../.github/android/central-mirror.init.gradle :core-protocol:test :core-ssh:test :app:testDebugUnitTest 2>&1 | tee "$log"
             status=${PIPESTATUS[0]}
             set -e
             if [ "$status" -eq 0 ]; then
