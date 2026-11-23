@@ -10,8 +10,10 @@
 #include <strings.h>
 #include <sys/socket.h>
 #include <sys/stat.h>
+#include <sys/time.h>
 #include <sys/types.h>
 #include <sys/uio.h>
+#include <sys/un.h>
 #include <sys/wait.h>
 #include <time.h>
 #include <unistd.h>
@@ -79,6 +81,35 @@ static const char *const hcitool_clients[] = {
 #define L2CAP_CONN_RESPONSE 0x03
 #define HID_TRANS_GET_REPORT 0x04
 #define HID_REPORT_INPUT 0x01
+
+/*
+ * BlueZ 4's bluetoothd serves the local SDP database on this unix socket.
+ * Logitech's HAL registers the HID record through it with libbluetooth.
+ * The PDU ids below are BlueZ 4 lib/sdp.h; 0x75..0x80 are the local-only
+ * register/update/remove requests.
+ */
+#ifndef SDP_LOCAL_SOCKET_PATH
+#define SDP_LOCAL_SOCKET_PATH "/var/run/sdp"
+#endif
+#define SDP_ERROR_RSP 0x01
+#define SDP_SVC_SEARCH_ATTR_REQ 0x06
+#define SDP_SVC_SEARCH_ATTR_RSP 0x07
+#define SDP_SVC_UPDATE_REQ 0x77
+#define SDP_SVC_UPDATE_RSP 0x78
+#define SDP_SVC_REMOVE_REQ 0x79
+#define SDP_SVC_REMOVE_RSP 0x80
+#define SDP_ATTR_RECORD_HANDLE 0x0000
+#define SDP_ATTR_HID_DESCRIPTOR_LIST 0x0206
+#define SDP_UUID_HID 0x1124
+#define SDP_UUID_ATT 0x0007
+#define SDP_UUID_L2CAP 0x0100
+#define SDP_ATTR_SERVICE_CLASS_ID_LIST 0x0001
+#define SDP_ATTR_PROTOCOL_DESCRIPTOR_LIST 0x0004
+#define SDP_MAX_RESPONSE 8192
+#define SDP_IO_TIMEOUT_MS 700
+#define HID_USAGE_PAGE_GENERIC_DEVICE 0x06
+#define HID_USAGE_BATTERY_STRENGTH 0x20
+#define HID_MAX_BLOCKS 32
 
 struct sockaddr_hci {
     sa_family_t hci_family;
@@ -506,6 +537,1263 @@ static int send_hid_input_report_reply(int fd, unsigned int handle,
         report_size + 1);
 }
 
+/*
+ * HID descriptor edits in the published SDP record.
+ *
+ * The btkeyboard descriptor that Logitech's HAL publishes in the SDP
+ * HIDDescriptorList (attribute 0x0206) has a top-level collection whose
+ * only input is Generic Device Controls / Battery Strength (report 0xAC).
+ * Linux hid-input on the host turns that into a power supply, and Android
+ * polls it with GET_REPORT.  HAL answers on the control channel with a
+ * truncated one-byte DATA reply before the daemon's complete reply below.
+ * Some hosts (an Amlogic Android 14 box) then time the request out and
+ * retry forever without registering the keyboard.
+ *
+ * Removing that collection from the published record means the host never
+ * creates the battery and never asks.  Hosts cache the descriptor when they
+ * bond, so a host that bonded earlier must forget the keyboard and pair
+ * again.  The GET_REPORT reply stays as a fallback: it cannot win on its own,
+ * because HAL answers on its own L2CAP socket first.
+ */
+#define HID_APP(page, usage) (((uint32_t)(page) << 16) | (uint32_t)(usage))
+
+struct hid_block {
+    size_t start;
+    size_t end;
+    int closed;
+    int seen_collection;
+    int application;
+    uint32_t app_usage;         /* usage of the top-level collection */
+    int battery;
+    int keyboard_usages;        /* page 0x07 usages inside the collection */
+    int consumer_usages;        /* page 0x0C usages inside the collection */
+    int report_id;              /* -1 until the block sets one */
+    int mixed_report_ids;
+    int output_or_feature;
+    unsigned int inputs;
+    unsigned int report_id_items;
+    unsigned int globals_set;       /* one bit per global item tag */
+    unsigned int globals_pre_local; /* set before the first local/main item */
+    unsigned int globals_pre_io;    /* set before the first Input/Output/Feature */
+    int seen_local_or_main;
+    int seen_io;
+};
+
+struct hid_scan {
+    struct hid_block blocks[HID_MAX_BLOCKS];
+    unsigned int report_id_items[256];
+    size_t count;
+};
+
+static int hid_short_item(const unsigned char *d, size_t len, size_t pos,
+                          unsigned int *type, unsigned int *tag,
+                          uint32_t *value, size_t *item_len) {
+    unsigned int prefix;
+    size_t size, i;
+    uint32_t v = 0;
+
+    if (pos >= len) return -1;
+    prefix = d[pos];
+    if (prefix == 0xfe) return -1; /* long items: not expected here */
+    size = prefix & 3;
+    if (size == 3) size = 4;
+    if (size > len - pos - 1) return -1;
+    for (i = 0; i < size; i++) v |= (uint32_t)d[pos + 1 + i] << (8 * i);
+    *type = (prefix >> 2) & 3;
+    *tag = prefix >> 4;
+    *value = v;
+    *item_len = 1 + size;
+    return 0;
+}
+
+/*
+ * Splits a report descriptor into top-level collections ("blocks"), each
+ * with the global and local items in front of it.  Returns 0, or -1 if the
+ * descriptor uses something this parser does not model (long items,
+ * Push/Pop, unbalanced collections).
+ */
+static int hid_scan_blocks(const unsigned char *d, size_t len,
+                           struct hid_scan *scan) {
+    struct hid_block *b = NULL;
+    uint32_t usage_page = 0, last_usage = 0;
+    size_t pos = 0;
+    int depth = 0;
+
+    memset(scan, 0, sizeof(*scan));
+    while (pos < len) {
+        unsigned int type, tag;
+        uint32_t value;
+        size_t item_len;
+
+        if (hid_short_item(d, len, pos, &type, &tag, &value, &item_len) != 0) {
+            return -1;
+        }
+        if (!b) {
+            if (scan->count >= HID_MAX_BLOCKS) return -1;
+            b = &scan->blocks[scan->count++];
+            b->start = pos;
+            b->report_id = -1;
+        }
+        if (type == 1) { /* global */
+            if (tag >= 0x0a) return -1; /* Push, Pop, reserved */
+            b->globals_set |= 1U << tag;
+            if (!b->seen_local_or_main) b->globals_pre_local |= 1U << tag;
+            if (!b->seen_io) b->globals_pre_io |= 1U << tag;
+            if (tag == 0x00) usage_page = value;
+            if (tag == 0x08) {
+                if (value == 0 || value > 0xff) return -1;
+                scan->report_id_items[value]++;
+                b->report_id_items++;
+                if (b->report_id < 0) b->report_id = (int)value;
+                else if (b->report_id != (int)value) b->mixed_report_ids = 1;
+            }
+        } else if (type == 2) { /* local */
+            uint32_t page = item_len == 5 ? value >> 16 : usage_page;
+            uint32_t usage = item_len == 5 ? value & 0xffff : value;
+            b->seen_local_or_main = 1;
+            if (tag <= 0x02) { /* Usage, Usage Minimum, Usage Maximum */
+                if (tag == 0x00) last_usage = HID_APP(page, usage);
+                if (b->seen_collection) {
+                    if (page == 0x07) b->keyboard_usages = 1;
+                    if (page == 0x0c) b->consumer_usages = 1;
+                }
+            }
+            if (tag == 0x00 && page == HID_USAGE_PAGE_GENERIC_DEVICE &&
+                usage == HID_USAGE_BATTERY_STRENGTH) {
+                b->battery = 1;
+            }
+        } else if (type == 0) { /* main */
+            b->seen_local_or_main = 1;
+            if (tag == 0x0a) { /* Collection */
+                if (depth == 0 && !b->seen_collection) {
+                    b->seen_collection = 1;
+                    b->application = value == 0x01;
+                    b->app_usage = last_usage;
+                }
+                depth++;
+            } else if (tag == 0x0c) { /* End Collection */
+                if (depth == 0) return -1;
+                depth--;
+                if (depth == 0) {
+                    b->end = pos + item_len;
+                    b->closed = 1;
+                    b = NULL;
+                }
+            } else if (tag == 0x08) { /* Input */
+                b->seen_io = 1;
+                b->inputs++;
+            } else if (tag == 0x09 || tag == 0x0b) { /* Output, Feature */
+                b->seen_io = 1;
+                b->output_or_feature = 1;
+            } else {
+                return -1;
+            }
+        } else {
+            return -1;
+        }
+        /* Local items apply to the next main item only. */
+        if (type == 0) last_usage = 0;
+        pos += item_len;
+    }
+    if (depth != 0) return -1;
+    if (b) b->end = len;
+    return 0;
+}
+
+static int hid_block_is_keyboard_side(const struct hid_block *b) {
+    return b->application &&
+        (((b->app_usage == HID_APP(0x01, 0x06) ||
+           b->app_usage == HID_APP(0x01, 0x07)) && b->keyboard_usages) ||
+         (b->app_usage == HID_APP(0x0c, 0x01) && b->consumer_usages) ||
+         b->app_usage == HID_APP(0x01, 0x80));
+}
+
+/* A collection that exists only to report battery strength. */
+static int hid_block_is_battery_only(const struct hid_block *b) {
+    return b->application && b->battery && !b->output_or_feature &&
+        b->inputs > 0;
+}
+
+/*
+ * Can block i be cut without changing how the rest parses?  It needs one
+ * report ID of its own, and global items persist into the next collection,
+ * so the next one must set again every global the block changed: the
+ * usage page before its first usage, the rest before its first field.
+ */
+static int hid_block_cut_safe(const struct hid_scan *scan, size_t i) {
+    const struct hid_block *c = &scan->blocks[i];
+
+    if (!c->closed || c->report_id < 0 || c->mixed_report_ids ||
+        scan->report_id_items[c->report_id] != c->report_id_items) {
+        return 0;
+    }
+    if (i + 1 < scan->count) {
+        const struct hid_block *n = &scan->blocks[i + 1];
+        if ((c->globals_set & 1U) && !(n->globals_pre_local & 1U)) return 0;
+        if ((c->globals_set & ~1U) & ~n->globals_pre_io) return 0;
+    }
+    return 1;
+}
+
+/*
+ * Finds the first battery-only collection that can be cut safely, in a
+ * descriptor that also has a keyboard-side collection.  Returns 1 and the
+ * byte range [start, end), 0 if there is none, -1 if the descriptor cannot
+ * be parsed.
+ */
+static int hid_find_strip_block(const unsigned char *d, size_t len,
+                                size_t *out_start, size_t *out_end,
+                                unsigned int *out_report_id) {
+    static struct hid_scan scan;
+    size_t i, kept = 0;
+
+    if (hid_scan_blocks(d, len, &scan) != 0) return -1;
+    for (i = 0; i < scan.count; i++) {
+        if (hid_block_is_keyboard_side(&scan.blocks[i])) kept++;
+    }
+    if (kept == 0) return 0;
+    for (i = 0; i < scan.count; i++) {
+        const struct hid_block *c = &scan.blocks[i];
+        if (!hid_block_is_battery_only(c) || !hid_block_cut_safe(&scan, i)) {
+            continue;
+        }
+        *out_start = c->start;
+        *out_end = c->end;
+        *out_report_id = (unsigned int)c->report_id;
+        return 1;
+    }
+    return 0;
+}
+
+/* Prints the descriptor's collections and whether each would be cut. */
+static void hid_print_blocks(const unsigned char *d, size_t len) {
+    static struct hid_scan scan;
+    size_t i;
+
+    if (hid_scan_blocks(d, len, &scan) != 0) {
+        printf("pair-agent sdp-hid descriptor-unparsed len=%u\n",
+            (unsigned int)len);
+        return;
+    }
+    for (i = 0; i < scan.count; i++) {
+        const struct hid_block *b = &scan.blocks[i];
+        int safe = hid_block_cut_safe(&scan, i);
+        printf("pair-agent sdp-hid collection=%u offset=%u bytes=%u usage=%04lx:%04lx report=0x%02x%s battery-only=%s\n",
+            (unsigned int)i, (unsigned int)b->start,
+            (unsigned int)(b->end - b->start),
+            (unsigned long)(b->app_usage >> 16),
+            (unsigned long)(b->app_usage & 0xffff),
+            b->report_id < 0 ? 0 : (unsigned int)b->report_id,
+            b->mixed_report_ids ? "+mixed" : "",
+            hid_block_is_battery_only(b) ?
+                (safe ? "remove" : "unsafe") : "keep");
+    }
+}
+
+/* SDP data element header: type, size index, header length, data length. */
+static int sdp_element(const unsigned char *p, size_t avail,
+                       unsigned int *type, size_t *header_len,
+                       size_t *data_len) {
+    static const size_t fixed[5] = {1, 2, 4, 8, 16};
+    unsigned int t, s;
+    size_t h = 1, n;
+
+    if (avail < 1) return -1;
+    t = p[0] >> 3;
+    s = p[0] & 7;
+    switch (t) {
+    case 0: /* nil */
+        if (s != 0) return -1;
+        n = 0;
+        break;
+    case 1: case 2: case 3: case 5: /* uint, int, UUID, bool */
+        if (s > 4) return -1;
+        n = fixed[s];
+        break;
+    case 4: case 6: case 7: case 8: /* text, sequence, alternative, URL */
+        if (s == 5) {
+            if (avail < 2) return -1;
+            n = p[1];
+            h = 2;
+        } else if (s == 6) {
+            if (avail < 3) return -1;
+            n = ((size_t)p[1] << 8) | p[2];
+            h = 3;
+        } else if (s == 7) {
+            if (avail < 5) return -1;
+            n = ((size_t)p[1] << 24) | ((size_t)p[2] << 16) |
+                ((size_t)p[3] << 8) | p[4];
+            h = 5;
+        } else {
+            return -1;
+        }
+        break;
+    default:
+        return -1;
+    }
+    if (n > avail - h) return -1;
+    *type = t;
+    *header_len = h;
+    *data_len = n;
+    return 0;
+}
+
+/* Shrinks a variable-length element's length field in place. */
+static void sdp_element_shrink(unsigned char *p, size_t removed) {
+    unsigned int s = p[0] & 7;
+    size_t n;
+
+    if (s == 5) {
+        p[1] = (unsigned char)(p[1] - removed);
+    } else if (s == 6) {
+        n = (((size_t)p[1] << 8) | p[2]) - removed;
+        p[1] = (unsigned char)(n >> 8);
+        p[2] = (unsigned char)n;
+    } else if (s == 7) {
+        n = (((size_t)p[1] << 24) | ((size_t)p[2] << 16) |
+            ((size_t)p[3] << 8) | p[4]) - removed;
+        p[1] = (unsigned char)(n >> 24);
+        p[2] = (unsigned char)(n >> 16);
+        p[3] = (unsigned char)(n >> 8);
+        p[4] = (unsigned char)n;
+    }
+}
+
+struct sdp_strip_result {
+    uint32_t handle;
+    int have_handle;
+    unsigned int collections;   /* collections removed */
+    char report_ids[64];        /* their report IDs, "0xac,0x02" */
+    size_t removed;             /* bytes removed */
+    int descriptors;
+};
+
+/*
+ * rec is one service record: a sequence of (uint16 attribute id, value)
+ * pairs, as a ServiceSearchAttributeResponse returns it and as
+ * SDP_SVC_UPDATE_REQ takes it.  Removes the battery-only collections
+ * from the HIDDescriptorList.  Returns 1 if any were removed, 0 if there
+ * are none, -1 if the record is malformed, -2 if a descriptor cannot be
+ * parsed.  verbose prints each descriptor's collections first.
+ */
+static int sdp_record_strip_hid(unsigned char *rec, size_t *rec_len,
+                                int verbose,
+                                struct sdp_strip_result *result) {
+    unsigned int type;
+    size_t header, body, pos, end;
+    int unparsed = 0;
+
+    memset(result, 0, sizeof(*result));
+    if (sdp_element(rec, *rec_len, &type, &header, &body) != 0 || type != 6) {
+        return -1;
+    }
+    pos = header;
+    end = header + body;
+    while (pos < end) {
+        unsigned int id_type, value_type, attr_id;
+        size_t id_header, id_len, value_pos, value_header, value_len;
+
+        if (sdp_element(rec + pos, end - pos, &id_type, &id_header,
+                &id_len) != 0 || id_type != 1 || id_len != 2) {
+            return -1;
+        }
+        attr_id = ((unsigned int)rec[pos + id_header] << 8) |
+            rec[pos + id_header + 1];
+        value_pos = pos + id_header + id_len;
+        if (sdp_element(rec + value_pos, end - value_pos, &value_type,
+                &value_header, &value_len) != 0) {
+            return -1;
+        }
+        if (attr_id == SDP_ATTR_RECORD_HANDLE && value_type == 1 &&
+            value_len == 4) {
+            const unsigned char *h = rec + value_pos + value_header;
+            result->handle = ((uint32_t)h[0] << 24) | ((uint32_t)h[1] << 16) |
+                ((uint32_t)h[2] << 8) | h[3];
+            result->have_handle = 1;
+        } else if (attr_id == SDP_ATTR_HID_DESCRIPTOR_LIST &&
+                   value_type == 6) {
+            size_t list_pos = value_pos + value_header;
+            size_t list_end = list_pos + value_len;
+            while (list_pos < list_end) {
+                unsigned int class_type;
+                size_t class_header, class_len, item_pos, item_end;
+
+                if (sdp_element(rec + list_pos, list_end - list_pos,
+                        &class_type, &class_header, &class_len) != 0) {
+                    return -1;
+                }
+                item_pos = list_pos + class_header;
+                item_end = item_pos + class_len;
+                while (class_type == 6 && item_pos < item_end) {
+                    unsigned int item_type;
+                    size_t item_header, item_len;
+
+                    if (sdp_element(rec + item_pos, item_end - item_pos,
+                            &item_type, &item_header, &item_len) != 0) {
+                        return -1;
+                    }
+                    if (item_type == 4) {
+                        unsigned char *desc = rec + item_pos + item_header;
+                        size_t cut_start, cut_end, removed;
+                        unsigned int report_id;
+                        int found;
+
+                        result->descriptors++;
+                        if (verbose) hid_print_blocks(desc, item_len);
+                        while ((found = hid_find_strip_block(desc, item_len,
+                                &cut_start, &cut_end,
+                                &report_id)) > 0) {
+                            size_t used = strlen(result->report_ids);
+                            if (!result->have_handle) return -1;
+                            removed = cut_end - cut_start;
+                            memmove(desc + cut_start, desc + cut_end,
+                                *rec_len - (size_t)(desc + cut_end - rec));
+                            *rec_len -= removed;
+                            item_len -= removed;
+                            item_end -= removed;
+                            list_end -= removed;
+                            end -= removed;
+                            sdp_element_shrink(rec + item_pos, removed);
+                            sdp_element_shrink(rec + list_pos, removed);
+                            sdp_element_shrink(rec + value_pos, removed);
+                            sdp_element_shrink(rec, removed);
+                            value_len -= removed;
+                            result->collections++;
+                            result->removed += removed;
+                            snprintf(result->report_ids + used,
+                                sizeof(result->report_ids) - used,
+                                "%s0x%02x", used ? "," : "", report_id);
+                        }
+                        if (found < 0) unparsed = 1;
+                    }
+                    item_pos += item_header + item_len;
+                }
+                list_pos = item_end;
+            }
+        }
+        pos = value_pos + value_header + value_len;
+    }
+    if (result->collections) return 1;
+    return unparsed ? -2 : 0;
+}
+
+static void print_hex(const char *label, const unsigned char *p, size_t len) {
+    size_t i;
+    printf("%s", label);
+    for (i = 0; i < len; i++) printf("%s%02X", i ? " " : "", p[i]);
+    printf("\n");
+}
+
+static int sdp_local_open(char *err, size_t errlen) {
+    struct sockaddr_un address;
+    struct timeval timeout;
+    int fd;
+
+    fd = socket(AF_UNIX, SOCK_STREAM, 0);
+    if (fd < 0) {
+        snprintf(err, errlen, "socket: %s", strerror(errno));
+        return -1;
+    }
+    timeout.tv_sec = SDP_IO_TIMEOUT_MS / 1000;
+    timeout.tv_usec = (SDP_IO_TIMEOUT_MS % 1000) * 1000;
+    setsockopt(fd, SOL_SOCKET, SO_RCVTIMEO, &timeout, sizeof(timeout));
+    setsockopt(fd, SOL_SOCKET, SO_SNDTIMEO, &timeout, sizeof(timeout));
+    memset(&address, 0, sizeof(address));
+    address.sun_family = AF_UNIX;
+    snprintf(address.sun_path, sizeof(address.sun_path), "%s",
+        SDP_LOCAL_SOCKET_PATH);
+    if (connect(fd, (struct sockaddr *)&address, sizeof(address)) != 0) {
+        snprintf(err, errlen, "connect %s: %s", SDP_LOCAL_SOCKET_PATH,
+            strerror(errno));
+        close(fd);
+        return -1;
+    }
+    return fd;
+}
+
+static int sdp_read_exact(int fd, unsigned char *buf, size_t len) {
+    size_t done = 0;
+    while (done < len) {
+        ssize_t got = read(fd, buf + done, len - done);
+        if (got < 0 && errno == EINTR) continue;
+        if (got <= 0) {
+            if (got == 0) errno = ECONNRESET;
+            return -1;
+        }
+        done += (size_t)got;
+    }
+    return 0;
+}
+
+/*
+ * One request/response.  bluetoothd's sdpd peeks the 5-byte header and then
+ * expects the whole PDU from a single recv(), dropping the session on a
+ * short read, so the request goes out in one write.
+ */
+static int sdp_transact(int fd, unsigned int pdu_id,
+                        const unsigned char *params, size_t params_len,
+                        unsigned int *rsp_pdu, unsigned char *rsp,
+                        size_t rsp_cap, size_t *rsp_len,
+                        char *err, size_t errlen) {
+    static unsigned char request[5 + SDP_MAX_RESPONSE];
+    static unsigned int transaction;
+    unsigned char header[5];
+    unsigned int rsp_tid;
+    size_t plen;
+    ssize_t written;
+
+    if (params_len > SDP_MAX_RESPONSE) {
+        snprintf(err, errlen, "request too large");
+        return -1;
+    }
+    transaction = (transaction + 1) & 0xffff;
+    request[0] = (unsigned char)pdu_id;
+    request[1] = (unsigned char)(transaction >> 8);
+    request[2] = (unsigned char)transaction;
+    request[3] = (unsigned char)(params_len >> 8);
+    request[4] = (unsigned char)params_len;
+    memcpy(request + 5, params, params_len);
+    do {
+        written = send(fd, request, 5 + params_len, MSG_NOSIGNAL);
+    } while (written < 0 && errno == EINTR);
+    if (written != (ssize_t)(5 + params_len)) {
+        snprintf(err, errlen, "write: %s",
+            written < 0 ? strerror(errno) : "short write");
+        return -1;
+    }
+    if (sdp_read_exact(fd, header, sizeof(header)) != 0) {
+        snprintf(err, errlen, "read: %s", strerror(errno));
+        return -1;
+    }
+    rsp_tid = ((unsigned int)header[1] << 8) | header[2];
+    plen = ((size_t)header[3] << 8) | header[4];
+    if (rsp_tid != transaction || plen > rsp_cap) {
+        snprintf(err, errlen, "bad response tid=0x%04x len=%u",
+            rsp_tid, (unsigned int)plen);
+        return -1;
+    }
+    if (sdp_read_exact(fd, rsp, plen) != 0) {
+        snprintf(err, errlen, "read: %s", strerror(errno));
+        return -1;
+    }
+    *rsp_pdu = header[0];
+    *rsp_len = plen;
+    return 0;
+}
+
+/* All records matching uuid16, every attribute, following continuations. */
+static int sdp_fetch_records(int fd, unsigned int uuid16, unsigned char *out,
+                             size_t out_cap, size_t *out_len,
+                             char *err, size_t errlen) {
+    static unsigned char rsp[SDP_MAX_RESPONSE];
+    unsigned char request[64];
+    unsigned char cont[17];
+    size_t cont_len = 1, total = 0;
+    int rounds;
+
+    cont[0] = 0;
+    for (rounds = 0; rounds < 32; rounds++) {
+        size_t n = 0, rsp_len, chunk;
+        unsigned int rsp_pdu;
+
+        request[n++] = 0x35; request[n++] = 0x03; /* pattern: one UUID16 */
+        request[n++] = 0x19;
+        request[n++] = (unsigned char)(uuid16 >> 8);
+        request[n++] = (unsigned char)uuid16;
+        request[n++] = 0xff; request[n++] = 0xf0; /* max attribute bytes */
+        request[n++] = 0x35; request[n++] = 0x05; /* range 0x0000-0xffff */
+        request[n++] = 0x0a;
+        request[n++] = 0x00; request[n++] = 0x00;
+        request[n++] = 0xff; request[n++] = 0xff;
+        memcpy(request + n, cont, cont_len);
+        n += cont_len;
+        if (sdp_transact(fd, SDP_SVC_SEARCH_ATTR_REQ, request, n, &rsp_pdu,
+                rsp, sizeof(rsp), &rsp_len, err, errlen) != 0) {
+            return -1;
+        }
+        if (rsp_pdu == SDP_ERROR_RSP) {
+            snprintf(err, errlen, "search error 0x%04x",
+                rsp_len >= 2 ? ((unsigned int)rsp[0] << 8) | rsp[1] : 0xffff);
+            return -1;
+        }
+        if (rsp_pdu != SDP_SVC_SEARCH_ATTR_RSP || rsp_len < 3) {
+            snprintf(err, errlen, "unexpected search response 0x%02x",
+                rsp_pdu);
+            return -1;
+        }
+        chunk = ((size_t)rsp[0] << 8) | rsp[1];
+        if (chunk + 3 > rsp_len || rsp[2 + chunk] > 16 ||
+            chunk + 3 + rsp[2 + chunk] != rsp_len) {
+            snprintf(err, errlen, "malformed search response");
+            return -1;
+        }
+        if (chunk > out_cap - total) {
+            snprintf(err, errlen, "records exceed %u bytes",
+                (unsigned int)out_cap);
+            return -1;
+        }
+        memcpy(out + total, rsp + 2, chunk);
+        total += chunk;
+        cont_len = 1 + rsp[2 + chunk];
+        memcpy(cont, rsp + 2 + chunk, cont_len);
+        if (cont_len == 1) {
+            *out_len = total;
+            return 0;
+        }
+    }
+    snprintf(err, errlen, "too many continuation rounds");
+    return -1;
+}
+
+static int sdp_update_record(int fd, uint32_t handle,
+                             const unsigned char *rec, size_t rec_len,
+                             char *err, size_t errlen) {
+    static unsigned char request[SDP_MAX_RESPONSE];
+    unsigned char rsp[64];
+    size_t rsp_len;
+    unsigned int rsp_pdu, status;
+
+    if (rec_len + 4 > sizeof(request)) {
+        snprintf(err, errlen, "record too large");
+        return -1;
+    }
+    request[0] = (unsigned char)(handle >> 24);
+    request[1] = (unsigned char)(handle >> 16);
+    request[2] = (unsigned char)(handle >> 8);
+    request[3] = (unsigned char)handle;
+    memcpy(request + 4, rec, rec_len);
+    if (sdp_transact(fd, SDP_SVC_UPDATE_REQ, request, rec_len + 4, &rsp_pdu,
+            rsp, sizeof(rsp), &rsp_len, err, errlen) != 0) {
+        return -1;
+    }
+    status = rsp_len >= 2 ? ((unsigned int)rsp[0] << 8) | rsp[1] : 0xffff;
+    if (rsp_pdu != SDP_SVC_UPDATE_RSP || status != 0) {
+        snprintf(err, errlen, "update refused pdu=0x%02x status=0x%04x",
+            rsp_pdu, status);
+        return -1;
+    }
+    return 0;
+}
+
+#define SDP_STRIP_APPLY 1
+#define SDP_STRIP_VERBOSE 2
+
+/*
+ * Checks every HID record in the local SDP database and, with
+ * SDP_STRIP_APPLY, rewrites the ones that carry a battery-only collection
+ * removes.  Returns the number of records stripped (or, without APPLY,
+ * that would be), or -1 with a reason in err.
+ */
+static int sdp_strip_hid(int flags, char *err, size_t errlen) {
+    static unsigned char lists[SDP_MAX_RESPONSE];
+    static unsigned char rec[SDP_MAX_RESPONSE];
+    size_t lists_len = 0, header, body, pos, end;
+    unsigned int type;
+    int fd, changed = 0, records = 0;
+
+    err[0] = 0;
+    fd = sdp_local_open(err, errlen);
+    if (fd < 0) return -1;
+    if (sdp_fetch_records(fd, SDP_UUID_HID, lists, sizeof(lists),
+            &lists_len, err, errlen) != 0) {
+        close(fd);
+        return -1;
+    }
+    if (sdp_element(lists, lists_len, &type, &header, &body) != 0 ||
+        type != 6) {
+        snprintf(err, errlen, "malformed attribute lists");
+        close(fd);
+        return -1;
+    }
+    pos = header;
+    end = header + body;
+    while (pos < end) {
+        struct sdp_strip_result result;
+        size_t rec_header, rec_body, rec_len;
+        int stripped;
+
+        if (sdp_element(lists + pos, end - pos, &type, &rec_header,
+                &rec_body) != 0 || type != 6) {
+            snprintf(err, errlen, "malformed record");
+            close(fd);
+            return -1;
+        }
+        rec_len = rec_header + rec_body;
+        memcpy(rec, lists + pos, rec_len);
+        pos += rec_len;
+        records++;
+        if (flags & SDP_STRIP_VERBOSE) {
+            print_hex("pair-agent sdp-hid record-hex ", rec, rec_len);
+        }
+        stripped = sdp_record_strip_hid(rec, &rec_len,
+            flags & SDP_STRIP_VERBOSE, &result);
+        if (flags & SDP_STRIP_VERBOSE) {
+            printf("pair-agent sdp-hid record=%d handle=0x%08lx descriptors=%d result=%s\n",
+                records, (unsigned long)result.handle, result.descriptors,
+                stripped > 0 ? "battery-collection" :
+                (stripped == 0 ? "clean" :
+                (stripped == -2 ? "descriptor-unparsed" : "malformed")));
+        }
+        if (stripped == -1) {
+            snprintf(err, errlen, "malformed HID record %d", records);
+            close(fd);
+            return -1;
+        }
+        if (stripped <= 0) continue;
+        if (flags & SDP_STRIP_VERBOSE) {
+            printf("pair-agent sdp-hid would-remove report=%s collections=%u bytes=%u\n",
+                result.report_ids, result.collections,
+                (unsigned int)result.removed);
+            print_hex("pair-agent sdp-hid patched-hex ", rec, rec_len);
+        }
+        if (flags & SDP_STRIP_APPLY) {
+            if (sdp_update_record(fd, result.handle, rec, rec_len,
+                    err, errlen) != 0) {
+                close(fd);
+                return -1;
+            }
+            printf("pair-agent sdp-hid battery-report-removed handle=0x%08lx report=%s bytes=%u\n",
+                (unsigned long)result.handle, result.report_ids,
+                (unsigned int)result.removed);
+        }
+        changed++;
+    }
+    close(fd);
+    if (records == 0) {
+        snprintf(err, errlen, "no HID record registered");
+    }
+    return changed;
+}
+
+/*
+ * GATT over BR/EDR.
+ *
+ * bluetoothd's attribute server publishes SDP records for its GATT
+ * services over BR/EDR (ATT on PSM 0x1F).  An Android 14 box (Homatics Box
+ * R 4K Plus) runs GATT discovery against them once a Google service
+ * connects GATT to the newly paired keyboard.  Its Bluetooth main thread
+ * then spins and never sends the first ATT request, which freezes every
+ * Bluetooth device on the box until it reboots.
+ *
+ * bluetoothd registers exactly three such records, once, in adapter_init:
+ * GAP 0x1800, GATT 0x1801 and the Harmony BLE setup service.  Only those
+ * are removed, and only from SDP: LE GATT (fixed CID 0x0004), the
+ * Harmony app's BLE setup and bluetoothd's ATT listener are untouched.
+ * They stay gone until bluetoothd starts again.
+ */
+#define SDP_PSM_ATT 0x001f
+#define SDP_UUID_GAP 0x1800
+#define SDP_UUID_GATT 0x1801
+/* The Harmony BLE setup service bluetoothd publishes over BR/EDR too. */
+#define SDP_UUID_HARMONY_BLE "830a55485c6623bd0949c0040000227e"
+
+struct sdp_att_record {
+    uint32_t handle;
+    int have_handle;
+    unsigned int service_uuid16;    /* 0 if none or not 16-bit */
+    char service[40];               /* first service class, as text */
+    int has_att;
+    unsigned int att_start;
+    unsigned int att_end;
+    unsigned int l2cap_psm;         /* 0 if the record names none */
+};
+
+/* Reads a UUID element into text and, if 16-bit, a number. */
+static void sdp_uuid_text(const unsigned char *p, size_t len, char *out,
+                          size_t outlen, unsigned int *uuid16) {
+    size_t i, used = 0;
+    *uuid16 = len == 2 ? ((unsigned int)p[0] << 8) | p[1] : 0;
+    out[0] = 0;
+    for (i = 0; i < len && used + 3 < outlen; i++) {
+        used += (size_t)snprintf(out + used, outlen - used, "%02x", p[i]);
+    }
+}
+
+/*
+ * Finds the first UUID in the service class list and an ATT element (UUID
+ * 0x0007 followed by two uint16 handles) in the protocol descriptor list.
+ */
+static int sdp_record_att_info(const unsigned char *rec, size_t rec_len,
+                               struct sdp_att_record *info) {
+    unsigned int type;
+    size_t header, body, pos, end;
+
+    memset(info, 0, sizeof(*info));
+    if (sdp_element(rec, rec_len, &type, &header, &body) != 0 || type != 6) {
+        return -1;
+    }
+    pos = header;
+    end = header + body;
+    while (pos < end) {
+        unsigned int id_type, value_type, attr_id;
+        size_t id_header, id_len, value_pos, value_header, value_len;
+
+        if (sdp_element(rec + pos, end - pos, &id_type, &id_header,
+                &id_len) != 0 || id_type != 1 || id_len != 2) {
+            return -1;
+        }
+        attr_id = ((unsigned int)rec[pos + id_header] << 8) |
+            rec[pos + id_header + 1];
+        value_pos = pos + id_header + id_len;
+        if (sdp_element(rec + value_pos, end - value_pos, &value_type,
+                &value_header, &value_len) != 0) {
+            return -1;
+        }
+        if (attr_id == SDP_ATTR_RECORD_HANDLE && value_type == 1 &&
+            value_len == 4) {
+            const unsigned char *h = rec + value_pos + value_header;
+            info->handle = ((uint32_t)h[0] << 24) | ((uint32_t)h[1] << 16) |
+                ((uint32_t)h[2] << 8) | h[3];
+            info->have_handle = 1;
+        } else if (attr_id == SDP_ATTR_SERVICE_CLASS_ID_LIST &&
+                   value_type == 6 && value_len > 0) {
+            unsigned int t;
+            size_t h, n;
+            const unsigned char *first = rec + value_pos + value_header;
+            if (sdp_element(first, value_len, &t, &h, &n) == 0 && t == 3) {
+                sdp_uuid_text(first + h, n, info->service,
+                    sizeof(info->service), &info->service_uuid16);
+            }
+        } else if (attr_id == SDP_ATTR_PROTOCOL_DESCRIPTOR_LIST &&
+                   value_type == 6) {
+            size_t lpos = value_pos + value_header;
+            size_t lend = lpos + value_len;
+            while (lpos < lend) {
+                unsigned int t, ut, ht;
+                size_t h, n, ipos, uh, un, hh, hn;
+
+                if (sdp_element(rec + lpos, lend - lpos, &t, &h, &n) != 0) {
+                    return -1;
+                }
+                ipos = lpos + h;
+                if (t == 6 && n > 0 &&
+                    sdp_element(rec + ipos, n, &ut, &uh, &un) == 0 &&
+                    ut == 3 && un == 2 &&
+                    (((unsigned int)rec[ipos + uh] << 8) |
+                        rec[ipos + uh + 1]) == SDP_UUID_L2CAP) {
+                    /* { L2CAP, uint16 PSM } */
+                    size_t ppos = ipos + uh + un;
+                    if (ppos < ipos + n &&
+                        sdp_element(rec + ppos, ipos + n - ppos, &ht, &hh,
+                            &hn) == 0 && ht == 1 && hn == 2) {
+                        info->l2cap_psm = ((unsigned int)rec[ppos + hh] << 8) |
+                            rec[ppos + hh + 1];
+                    }
+                }
+                if (t == 6 && n > 0 &&
+                    sdp_element(rec + ipos, n, &ut, &uh, &un) == 0 &&
+                    ut == 3 && un == 2 &&
+                    (((unsigned int)rec[ipos + uh] << 8) |
+                        rec[ipos + uh + 1]) == SDP_UUID_ATT) {
+                    size_t ppos = ipos + uh + un;
+                    size_t pend = ipos + n;
+                    info->has_att = 1;
+                    if (ppos < pend &&
+                        sdp_element(rec + ppos, pend - ppos, &ht, &hh,
+                            &hn) == 0 && ht == 1 && hn == 2) {
+                        info->att_start = ((unsigned int)rec[ppos + hh] << 8) |
+                            rec[ppos + hh + 1];
+                        ppos += hh + hn;
+                        if (ppos < pend &&
+                            sdp_element(rec + ppos, pend - ppos, &ht, &hh,
+                                &hn) == 0 && ht == 1 && hn == 2) {
+                            info->att_end =
+                                ((unsigned int)rec[ppos + hh] << 8) |
+                                rec[ppos + hh + 1];
+                        }
+                    }
+                }
+                lpos += h + n;
+            }
+        }
+        pos = value_pos + value_header + value_len;
+    }
+    return 0;
+}
+
+static int sdp_remove_record(int fd, uint32_t handle, char *err,
+                             size_t errlen) {
+    unsigned char request[4], rsp[64];
+    size_t rsp_len;
+    unsigned int rsp_pdu, status;
+
+    request[0] = (unsigned char)(handle >> 24);
+    request[1] = (unsigned char)(handle >> 16);
+    request[2] = (unsigned char)(handle >> 8);
+    request[3] = (unsigned char)handle;
+    if (sdp_transact(fd, SDP_SVC_REMOVE_REQ, request, sizeof(request),
+            &rsp_pdu, rsp, sizeof(rsp), &rsp_len, err, errlen) != 0) {
+        return -1;
+    }
+    status = rsp_len >= 2 ? ((unsigned int)rsp[0] << 8) | rsp[1] : 0xffff;
+    if (rsp_pdu != SDP_SVC_REMOVE_RSP || status != 0) {
+        snprintf(err, errlen, "remove refused pdu=0x%02x status=0x%04x",
+            rsp_pdu, status);
+        return -1;
+    }
+    return 0;
+}
+
+/*
+ * Lists every record an ATT (UUID 0x0007) search returns, as a remote GATT
+ * client sees it.  With apply, removes bluetoothd's GATT-over-BR/EDR
+ * records (sdp_att_record_is_bluez_gatt).  Returns how many there were, or
+ * -1.
+ */
+/* GAP, GATT or the Harmony BLE setup service, carried by ATT on PSM 0x1F. */
+static int sdp_att_record_is_bluez_gatt(const struct sdp_att_record *info) {
+    return info->have_handle && info->has_att &&
+        info->l2cap_psm == SDP_PSM_ATT &&
+        (info->service_uuid16 == SDP_UUID_GAP ||
+         info->service_uuid16 == SDP_UUID_GATT ||
+         strcmp(info->service, SDP_UUID_HARMONY_BLE) == 0);
+}
+
+static int sdp_att_records(int apply, int verbose, char *err,
+                           size_t errlen) {
+    static unsigned char lists[SDP_MAX_RESPONSE];
+    size_t lists_len = 0, header, body, pos, end;
+    unsigned int type;
+    int fd, matched = 0, records = 0;
+
+    err[0] = 0;
+    fd = sdp_local_open(err, errlen);
+    if (fd < 0) return -1;
+    if (sdp_fetch_records(fd, SDP_UUID_ATT, lists, sizeof(lists),
+            &lists_len, err, errlen) != 0 ||
+        sdp_element(lists, lists_len, &type, &header, &body) != 0 ||
+        type != 6) {
+        if (!err[0]) snprintf(err, errlen, "malformed attribute lists");
+        close(fd);
+        return -1;
+    }
+    pos = header;
+    end = header + body;
+    while (pos < end) {
+        struct sdp_att_record info;
+        size_t rec_header, rec_body;
+        const char *action = "keep";
+
+        if (sdp_element(lists + pos, end - pos, &type, &rec_header,
+                &rec_body) != 0 || type != 6 ||
+            sdp_record_att_info(lists + pos, rec_header + rec_body,
+                &info) != 0) {
+            snprintf(err, errlen, "malformed record");
+            close(fd);
+            return -1;
+        }
+        pos += rec_header + rec_body;
+        records++;
+        if (sdp_att_record_is_bluez_gatt(&info)) {
+            matched++;
+            action = apply ? "removed" : "would-remove";
+            if (apply && sdp_remove_record(fd, info.handle, err,
+                    errlen) != 0) {
+                close(fd);
+                return -1;
+            }
+        }
+        if (!verbose && strcmp(action, "removed") != 0) continue;
+        if (info.has_att) {
+            printf("pair-agent sdp-att record handle=0x%08lx service=%s psm=0x%04x att=0x%04x-0x%04x %s\n",
+                (unsigned long)info.handle,
+                info.service[0] ? info.service : "?", info.l2cap_psm,
+                info.att_start, info.att_end, action);
+        } else {
+            printf("pair-agent sdp-att record handle=0x%08lx service=%s att=none %s\n",
+                (unsigned long)info.handle,
+                info.service[0] ? info.service : "?", action);
+        }
+    }
+    close(fd);
+    if (verbose) {
+        printf("pair-agent sdp-att records=%d gatt-records=%d\n", records,
+            matched);
+    }
+    return matched;
+}
+
+/*
+ * When the agent touches the local SDP database at all: only for a
+ * btkeyboard target.  That is a saved Bluetooth device of that type
+ * (codex_webui's bt-devices.json), a target file that says so, or the
+ * pairing helper running for that profile.  A hub without such a keyboard
+ * never opens /var/run/sdp.
+ */
+#ifndef BT_DEVICE_STORE_PATH
+#define BT_DEVICE_STORE_PATH "/data/codex/bt-devices.json"
+#endif
+#ifndef BT_TARGET_PATH
+#define BT_TARGET_PATH "/data/codex/bthid_target"
+#endif
+
+/* Does the text file contain needle?  Reads it in blocks, carrying the
+   last need-1 bytes over, so its size does not matter. */
+static int file_contains(const char *path, const char *needle) {
+    char buf[4096 + 64];
+    size_t need = strlen(needle), keep = 0, got;
+    int found = 0;
+    FILE *input;
+
+    if (need == 0 || need >= 64) return 0;
+    input = fopen(path, "rb");
+    if (!input) return 0;
+    while (!found && (got = fread(buf + keep, 1, 4096, input)) > 0) {
+        size_t total = keep + got;
+        buf[total] = 0;
+        found = strstr(buf, needle) != NULL;
+        keep = total < need - 1 ? total : need - 1;
+        memmove(buf, buf + total - keep, keep);
+    }
+    fclose(input);
+    return found;
+}
+
+static int target_is_btkeyboard(void) {
+    char line[96];
+    int found = 0;
+    FILE *input = fopen(BT_TARGET_PATH, "r");
+
+    if (!input) return 0;
+    while (fgets(line, sizeof(line), input)) {
+        line[strcspn(line, "\r\n")] = 0;
+        if (strcmp(line, "type=btkeyboard") == 0) found = 1;
+    }
+    fclose(input);
+    return found;
+}
+
+static int btkeyboard_target_saved(void) {
+    /* codex_webui writes "type":"btkeyboard" compactly; inside a saved
+       script the quotes would be escaped, so that cannot match. */
+    return file_contains(BT_DEVICE_STORE_PATH, "\"type\":\"btkeyboard\"") ||
+        target_is_btkeyboard();
+}
+
+/*
+ * The SDP watch, run by the HID control daemon and by the pairing helper
+ * in btkeyboard mode.  It has no timer: it acts on events and otherwise
+ * leaves the agent blocked in poll().
+ *
+ * Layer 1, the battery collection: HAL registers the HID record again each
+ * time it initialises its HID profile, and right after that it writes the
+ * class of device (HCI 0x0C24) and the inquiry access code (0x0C3A).  The
+ * strip runs on those, on every incoming or completed connection, and once
+ * at start.
+ *
+ * Layer 2, the GATT records: bluetoothd registers them once, at adapter
+ * init, and again only when it starts again.  The daemon keeps an idle
+ * connection to its SDP socket.  A new connection means a new bluetoothd,
+ * so the records are hidden once then: at the first try 300 ms later, or
+ * within 5 s.  The connection closes when bluetoothd exits; connecting
+ * again is tried at once and on HCI LE Set Advertising Data (0x2008),
+ * which bluetoothd sends as it brings the adapter up.
+ */
+#define SDP_HID_SETTLE_MS 150
+#define SDP_ATT_SETTLE_MS 300
+#define SDP_ATT_WINDOW_MS 5000
+#define SDP_ATT_RETRY_MS 500
+#define HCI_OP_WRITE_CLASS_OF_DEVICE 0x0c24
+#define HCI_OP_WRITE_CURRENT_IAC_LAP 0x0c3a
+#define HCI_OP_LE_SET_ADVERTISING_DATA 0x2008
+
+struct sdp_watch {
+    int pairing_btkeyboard;  /* the pairing helper runs for btkeyboard */
+    int use_monitor;         /* the daemon: follow bluetoothd restarts */
+    int monitor_fd;          /* idle connection to bluetoothd's SDP socket */
+    int active_logged;       /* last gate state logged, -1 = none */
+    long long hid_due;       /* monotonic ms; 0 = nothing pending */
+    long long att_due;
+    long long att_until;
+};
+
+static long long monotonic_ms(void) {
+    struct timespec ts;
+    clock_gettime(CLOCK_MONOTONIC, &ts);
+    return (long long)ts.tv_sec * 1000 + ts.tv_nsec / 1000000;
+}
+
+static void sdp_watch_init(struct sdp_watch *watch, int pairing_btkeyboard,
+                           int use_monitor) {
+    memset(watch, 0, sizeof(*watch));
+    watch->pairing_btkeyboard = pairing_btkeyboard;
+    watch->use_monitor = use_monitor;
+    watch->monitor_fd = -1;
+    watch->active_logged = -1;
+}
+
+static int sdp_watch_active(struct sdp_watch *watch) {
+    int active = watch->pairing_btkeyboard || btkeyboard_target_saved();
+    if (active != watch->active_logged) {
+        printf("pair-agent sdp-hid %s\n", active ?
+            "active: btkeyboard target" : "idle: no btkeyboard target");
+        watch->active_logged = active;
+    }
+    if (!active && watch->monitor_fd >= 0) {
+        close(watch->monitor_fd);
+        watch->monitor_fd = -1;
+    }
+    return active;
+}
+
+static void sdp_watch_hid_soon(struct sdp_watch *watch, int delay_ms) {
+    long long due = monotonic_ms() + delay_ms;
+    if (!watch->hid_due || due < watch->hid_due) watch->hid_due = due;
+}
+
+static void sdp_watch_att_soon(struct sdp_watch *watch) {
+    long long now = monotonic_ms();
+    watch->att_due = now + SDP_ATT_SETTLE_MS;
+    watch->att_until = now + SDP_ATT_WINDOW_MS;
+}
+
+/* A new connection to bluetoothd's SDP socket is a new bluetoothd. */
+static void sdp_watch_connect_monitor(struct sdp_watch *watch) {
+    char err[128];
+    if (!watch->use_monitor || watch->monitor_fd >= 0) return;
+    watch->monitor_fd = sdp_local_open(err, sizeof(err));
+    if (watch->monitor_fd < 0) return;
+    fcntl(watch->monitor_fd, F_SETFL,
+        fcntl(watch->monitor_fd, F_GETFL) | O_NONBLOCK);
+    sdp_watch_att_soon(watch);
+}
+
+static void sdp_watch_start(struct sdp_watch *watch) {
+    if (!sdp_watch_active(watch)) return;
+    sdp_watch_hid_soon(watch, 0);
+    if (watch->use_monitor) sdp_watch_connect_monitor(watch);
+    else sdp_watch_att_soon(watch);
+}
+
+/* An HCI command some other process (HAL, bluetoothd) sent. */
+static void sdp_watch_hci_command(struct sdp_watch *watch,
+                                  unsigned int opcode) {
+    if (opcode == HCI_OP_WRITE_CLASS_OF_DEVICE ||
+        opcode == HCI_OP_WRITE_CURRENT_IAC_LAP) {
+        sdp_watch_hid_soon(watch, SDP_HID_SETTLE_MS);
+    } else if (opcode == HCI_OP_LE_SET_ADVERTISING_DATA) {
+        if (!watch->use_monitor) {
+            if (!watch->att_due) sdp_watch_att_soon(watch);
+        } else if (watch->monitor_fd < 0 && sdp_watch_active(watch)) {
+            sdp_watch_connect_monitor(watch);
+        }
+    }
+}
+
+static void sdp_watch_connection(struct sdp_watch *watch) {
+    sdp_watch_hid_soon(watch, 0);
+}
+
+/* The monitor connection is readable: EOF means bluetoothd exited. */
+static void sdp_watch_monitor_event(struct sdp_watch *watch) {
+    unsigned char scratch[64];
+    ssize_t got = read(watch->monitor_fd, scratch, sizeof(scratch));
+
+    if (got > 0 || (got < 0 && (errno == EINTR || errno == EAGAIN))) return;
+    close(watch->monitor_fd);
+    watch->monitor_fd = -1;
+    printf("pair-agent sdp-hid bluetoothd-sdp-closed\n");
+    sdp_watch_connect_monitor(watch);
+}
+
+/* How long poll() may block: idle_ms when nothing is pending. */
+static int sdp_watch_timeout(const struct sdp_watch *watch, int idle_ms) {
+    long long next = watch->hid_due;
+    long long wait;
+    if (watch->att_due && (!next || watch->att_due < next)) next = watch->att_due;
+    if (!next) return idle_ms;
+    wait = next - monotonic_ms();
+    if (wait < 0) wait = 0;
+    if (idle_ms >= 0 && wait > idle_ms) wait = idle_ms;
+    return (int)wait;
+}
+
+static void sdp_watch_run(struct sdp_watch *watch) {
+    long long now = monotonic_ms();
+    char err[128];
+    int rc;
+
+    if (!(watch->hid_due && now >= watch->hid_due) &&
+        !(watch->att_due && now >= watch->att_due)) {
+        return;
+    }
+    if (!sdp_watch_active(watch)) {
+        watch->hid_due = 0;
+        watch->att_due = 0;
+        return;
+    }
+    if (watch->hid_due && now >= watch->hid_due) {
+        watch->hid_due = 0;
+        rc = sdp_strip_hid(SDP_STRIP_APPLY, err, sizeof(err));
+        if (rc < 0) printf("pair-agent sdp-hid check failed: %s\n", err);
+    }
+    if (watch->att_due && now >= watch->att_due) {
+        rc = sdp_att_records(1, 0, err, sizeof(err));
+        if (rc > 0 || now >= watch->att_until) {
+            watch->att_due = 0;
+            if (rc < 0) printf("pair-agent sdp-att check failed: %s\n", err);
+        } else {
+            watch->att_due = now + SDP_ATT_RETRY_MS;
+        }
+    }
+}
+
+static int hex_value(int c) {
+    if (c >= '0' && c <= '9') return c - '0';
+    if (c >= 'a' && c <= 'f') return c - 'a' + 10;
+    if (c >= 'A' && c <= 'F') return c - 'A' + 10;
+    return -1;
+}
+
+/*
+ * Offline: read one record as hex on stdin (separators ignored), print the
+ * result.  Lets a captured record be checked on a PC, and drives the
+ * host-side test.
+ */
+static int sdp_filter_stdin(void) {
+    static unsigned char rec[SDP_MAX_RESPONSE];
+    struct sdp_strip_result result;
+    size_t len = 0;
+    int c, high = -1, rc;
+
+    while ((c = getchar()) != EOF) {
+        int v = hex_value(c);
+        if (v < 0) continue;
+        if (high < 0) {
+            high = v;
+            continue;
+        }
+        if (len >= sizeof(rec)) {
+            fprintf(stderr, "record too large\n");
+            return 1;
+        }
+        rec[len++] = (unsigned char)((high << 4) | v);
+        high = -1;
+    }
+    if (high >= 0) {
+        fprintf(stderr, "odd number of hex digits\n");
+        return 1;
+    }
+    rc = sdp_record_strip_hid(rec, &len, 0, &result);
+    if (rc == -1) {
+        printf("malformed\n");
+        return 1;
+    }
+    if (rc == -2) {
+        printf("descriptor-unparsed\n");
+        return 0;
+    }
+    if (rc == 0) {
+        printf("clean\n");
+        return 0;
+    }
+    printf("removed handle=0x%08lx report=%s bytes=%u\n",
+        (unsigned long)result.handle, result.report_ids,
+        (unsigned int)result.removed);
+    print_hex("", rec, len);
+    return 0;
+}
+
 static ssize_t receive_hci_packet(int fd, unsigned char *buf, size_t buflen,
                                   int *incoming) {
     struct msghdr message;
@@ -622,13 +1910,15 @@ int main(int argc, char **argv) {
         hid_control_daemon ||
         (argc > 3 && strcmp(argv[3], "--observe") == 0);
     int direct_only = argc > 3 && strcmp(argv[3], "--direct-only") == 0;
+    const char *sdp_mode = argc > 3 && strncmp(argv[3], "--sdp-", 6) == 0 ?
+        argv[3] : NULL;
     int enable_hid_control = hid_control_shim || hid_control_daemon;
     int use_pin_fifo = !observe_only && !direct_only;
     int allow_direct_reconnect = direct_only;
     int fd;
     struct sockaddr_hci address;
     struct hci_filter filter;
-    struct pollfd poll_fd;
+    struct pollfd poll_fds[2];
     time_t deadline;
     time_t paired_at = 0;
     time_t connected_at = 0;
@@ -639,6 +1929,11 @@ int main(int argc, char **argv) {
     unsigned int local_control_cid = 0;
     unsigned int remote_control_cid = 0;
     char last_address[24] = "";
+    struct sdp_watch sdp_watch;
+    /* The daemon follows the saved targets; the pairing helper only acts
+       for the btkeyboard profile it was started with. */
+    int pairing_btkeyboard = use_pin_fifo && strcmp(profile, "btkeyboard") == 0;
+    int watch_sdp = hid_control_daemon || pairing_btkeyboard;
 
     /*
      * The WebGUI can start this helper while serving an HTTP request.  Do not
@@ -655,6 +1950,100 @@ int main(int argc, char **argv) {
 
     setvbuf(stdout, NULL, _IOLBF, 0);
     setvbuf(stderr, NULL, _IOLBF, 0);
+    sdp_watch_init(&sdp_watch, pairing_btkeyboard, hid_control_daemon);
+
+    if (sdp_mode) {
+        char err[128];
+        int rc;
+
+        if (strcmp(sdp_mode, "--sdp-hid-filter") == 0) {
+            return sdp_filter_stdin();
+        }
+        if (strcmp(sdp_mode, "--sdp-watch-test") == 0) {
+            /*
+             * The daemon's SDP watch without HCI, for tests.  Each stdin
+             * line stands for an HCI event: "cmd 0c24" (a command HAL or
+             * bluetoothd sent, opcode in hex) or "conn" (a connection).
+             * It runs until SIGTERM, or timeout_seconds.
+             */
+            time_t end_at = time(NULL) + timeout_seconds;
+            int stdin_open = 1;
+            sdp_watch_init(&sdp_watch, 0, 1);
+            signal(SIGTERM, on_signal);
+            signal(SIGINT, on_signal);
+            signal(SIGPIPE, SIG_IGN);
+            sdp_watch_start(&sdp_watch);
+            while (!stop_requested && time(NULL) < end_at) {
+                struct pollfd pfds[2];
+                int n = 0, mon = -1;
+                sdp_watch_run(&sdp_watch);
+                if (stdin_open) {
+                    pfds[n].fd = 0;
+                    pfds[n].events = POLLIN;
+                    pfds[n++].revents = 0;
+                }
+                if (sdp_watch.monitor_fd >= 0) {
+                    mon = n;
+                    pfds[n].fd = sdp_watch.monitor_fd;
+                    pfds[n].events = POLLIN;
+                    pfds[n++].revents = 0;
+                }
+                if (poll(pfds, (nfds_t)n, sdp_watch_timeout(&sdp_watch, 1000)) <= 0) {
+                    continue;
+                }
+                if (mon >= 0 && pfds[mon].revents) {
+                    sdp_watch_monitor_event(&sdp_watch);
+                }
+                if (stdin_open && pfds[0].revents) {
+                    char line[64];
+                    unsigned int opcode;
+                    if (!fgets(line, sizeof(line), stdin)) {
+                        stdin_open = 0;
+                    } else if (sscanf(line, "cmd %x", &opcode) == 1) {
+                        sdp_watch_hci_command(&sdp_watch, opcode);
+                    } else if (strncmp(line, "conn", 4) == 0) {
+                        sdp_watch_connection(&sdp_watch);
+                    }
+                }
+            }
+            return 0;
+        }
+        if (strcmp(sdp_mode, "--sdp-att-check") == 0 ||
+            strcmp(sdp_mode, "--sdp-att-hide") == 0) {
+            int apply = strcmp(sdp_mode, "--sdp-att-hide") == 0;
+            if (apply && strcmp(profile, "btkeyboard") != 0) {
+                fprintf(stderr,
+                    "pair-agent sdp-att only used with the btkeyboard profile\n");
+                return 2;
+            }
+            if (sdp_att_records(apply, 1, err, sizeof(err)) < 0) {
+                fprintf(stderr, "pair-agent sdp-att failed: %s\n", err);
+                return 1;
+            }
+            return 0;
+        }
+        if (strcmp(sdp_mode, "--sdp-hid-check") == 0) {
+            rc = sdp_strip_hid(SDP_STRIP_VERBOSE, err, sizeof(err));
+        } else if (strcmp(sdp_mode, "--sdp-hid-strip-battery") == 0) {
+            if (strcmp(profile, "btkeyboard") != 0) {
+                fprintf(stderr,
+                    "pair-agent sdp-hid only the btkeyboard profile is patched\n");
+                return 2;
+            }
+            rc = sdp_strip_hid(SDP_STRIP_APPLY | SDP_STRIP_VERBOSE,
+                err, sizeof(err));
+        } else {
+            fprintf(stderr, "unknown mode: %s\n", sdp_mode);
+            return 2;
+        }
+        if (rc < 0) {
+            fprintf(stderr, "pair-agent sdp-hid failed: %s\n", err);
+            return 1;
+        }
+        printf("pair-agent sdp-hid records-with-battery-collection=%d%s\n",
+            rc, err[0] ? " (no HID record registered)" : "");
+        return 0;
+    }
     signal(SIGTERM, on_signal);
     signal(SIGINT, on_signal);
     signal(SIGCHLD, SIG_DFL);
@@ -735,9 +2124,9 @@ int main(int argc, char **argv) {
         printf("pair-agent link-key-load-complete count=%d\n", loaded);
     }
 
-    memset(&poll_fd, 0, sizeof(poll_fd));
-    poll_fd.fd = fd;
-    poll_fd.events = POLLIN;
+    memset(poll_fds, 0, sizeof(poll_fds));
+    poll_fds[0].fd = fd;
+    poll_fds[0].events = POLLIN;
     deadline = hid_control_daemon ? 0 : time(NULL) + timeout_seconds;
     printf("pair-agent start profile=%s timeout=%d mode=%s\n",
         profile, timeout_seconds,
@@ -745,6 +2134,7 @@ int main(int argc, char **argv) {
         (hid_control_shim ? "hid-control-shim" :
         (observe_only ? "observe" :
         (direct_only ? "direct-only" : "local"))));
+    if (watch_sdp) sdp_watch_start(&sdp_watch);
 
     while (!stop_requested && (!deadline || time(NULL) < deadline)) {
         unsigned char buf[512];
@@ -757,6 +2147,7 @@ int main(int argc, char **argv) {
         int incoming = -1;
 
         reap_children();
+        if (watch_sdp) sdp_watch_run(&sdp_watch);
         if (!observe_only && paired_at && current_connected &&
             connected_at && now - connected_at >= 10) {
             printf("pair-agent complete\n");
@@ -779,7 +2170,14 @@ int main(int argc, char **argv) {
             }
             next_reconnect_at = now + 4;
         }
-        poll_rc = poll(&poll_fd, 1, 1000);
+        poll_fds[1].fd = sdp_watch.monitor_fd;
+        poll_fds[1].events = POLLIN;
+        poll_fds[1].revents = 0;
+        /* The daemon has no timed work of its own: without pending SDP work
+           it blocks until an HCI packet (or bluetoothd's socket) wakes it. */
+        poll_rc = poll(poll_fds, sdp_watch.monitor_fd >= 0 ? 2 : 1,
+            watch_sdp ? sdp_watch_timeout(&sdp_watch,
+                hid_control_daemon ? -1 : 1000) : 1000);
         if (poll_rc < 0) {
             if (errno == EINTR) continue;
             fprintf(stderr, "pair-agent HCI poll failed: %s\n", strerror(errno));
@@ -787,8 +2185,12 @@ int main(int argc, char **argv) {
             return 1;
         }
         if (poll_rc == 0) continue;
-        if (!(poll_fd.revents & POLLIN)) {
-            fprintf(stderr, "pair-agent HCI poll revents=0x%x\n", poll_fd.revents);
+        if (sdp_watch.monitor_fd >= 0 && poll_fds[1].revents) {
+            sdp_watch_monitor_event(&sdp_watch);
+        }
+        if (!poll_fds[0].revents) continue;
+        if (!(poll_fds[0].revents & POLLIN)) {
+            fprintf(stderr, "pair-agent HCI poll revents=0x%x\n", poll_fds[0].revents);
             close(fd);
             return 1;
         }
@@ -807,6 +2209,7 @@ int main(int argc, char **argv) {
                 printf("pair-agent hci-command opcode=0x%04x plen=%u\n",
                     opcode, (unsigned int)buf[3]);
             }
+            if (watch_sdp) sdp_watch_hci_command(&sdp_watch, opcode);
             continue;
         }
         if (length >= 5 && buf[0] == HCI_ACLDATA_PKT) {
@@ -861,6 +2264,8 @@ int main(int argc, char **argv) {
             unsigned int link_type = payload[9];
             format_addr(payload, peer, sizeof(peer));
             printf("pair-agent connection-request peer=%s linkType=%u\n", peer, link_type);
+            /* Recheck before the host can query SDP on this link. */
+            if (watch_sdp) sdp_watch_connection(&sdp_watch);
             if (link_type == 1) {
                 snprintf(last_address, sizeof(last_address), "%s", peer);
             }
@@ -942,6 +2347,8 @@ int main(int argc, char **argv) {
             char peer[24];
             format_addr(payload + 3, peer, sizeof(peer));
             printf("pair-agent connection-complete peer=%s status=%u\n", peer, payload[0]);
+            /* Hub-initiated links never raise a connection request. */
+            if (watch_sdp) sdp_watch_connection(&sdp_watch);
             if (payload[0] == 0) {
                 current_connected = 1;
                 connected_at = now;
