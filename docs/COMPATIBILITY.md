@@ -7,7 +7,7 @@ against. The short version is in the [README](../README.md#requirements-and-comp
 
 | Requirement | Details |
 | --- | --- |
-| Harmony Hub | Firmware 4.15.600, rooted (`netservicestarter.lua` also includes compatibility shims for firmware 4.11.6, **not yet verified on a 4.11.6 hub**; `hal` patches such as `--two-screen` and `--multi-remote` require 4.15.600). The desktop Setup Wizard roots and installs Melodious on existing, new or reset hubs: macOS releases from `v2.5.0`, plus Windows releases from `v2.5.0` and Linux from source (Windows and Linux: **Not fully tested, needs confirmation**; see [Setup Guide](SETUP_GUIDE.md)). The bundled CLI, [`tools/hub-root/`](../tools/hub-root/README.md), works on all three platforms now; then run `install_webui.ps1` or `install_webui.py` ([fresh-hub CLI guide](FRESH_HUB_ACTIVATION.md)). The web and Android apps don't root hubs. |
+| Harmony Hub | Firmware 4.15.600 or 4.11.6 (4.11.6 tested and contributed by @jupbek, #176), rooted. `hal` patches such as `--two-screen` and `--multi-remote` require 4.15.600). The desktop Setup Wizard roots and installs Melodious on existing, new or reset hubs: macOS releases from `v2.5.0`, plus Windows releases from `v2.5.0` and Linux from source (Windows and Linux: **Not fully tested, needs confirmation**; see [Setup Guide](SETUP_GUIDE.md)). The bundled CLI, [`tools/hub-root/`](../tools/hub-root/README.md), works on all three platforms now; then run `install_webui.ps1` or `install_webui.py` ([fresh-hub CLI guide](FRESH_HUB_ACTIVATION.md)). The web and Android apps don't root hubs. |
 | SSH key & Hub ID | Created automatically by the Setup Wizard, or printed/saved by the root CLI (`harmony_owner_*` in `~/.ssh` or `%USERPROFILE%\.ssh` on Windows, plus the numeric Hub ID — never guess the Hub ID). |
 | Free flash | About 1.2–1.6 MB free on the hub's data flash (~0.65 MB for updates), checked automatically before writing anything — see [if the hub's flash is full](INSTALL.md#if-the-hubs-flash-is-full). |
 | Computer or host | macOS (Desktop app or Python 3), Windows (Desktop app — **Not fully tested, needs confirmation** — or PowerShell), Linux (Desktop app from source — **Not fully tested, needs confirmation** — or Python 3), or Docker/Unraid ([UNRAID.md](../UNRAID.md)). CLI installs need only `ssh`, not `scp` or `sftp`. |
@@ -54,7 +54,7 @@ Verified on a live hub, across hub control (IR/Bluetooth/network) and the HA int
 
 | Hardware | How it's controlled |
 | --- | --- |
-| Harmony Hub, firmware 4.15.600 | The hub itself, in both its 62 MB and 32 MB RAM versions (firmware 4.11.6 compatibility shims exist in `netservicestarter.lua`, not yet verified on a 4.11.6 hub) |
+| Harmony Hub, firmware 4.15.600 | The hub itself, in both its 62 MB and 32 MB RAM versions (firmware 4.11.6 also works, tested by @jupbek) |
 | Harmony Touch, Harmony Smart Control | Paired remotes (the Harmony Elite is community-tested too; see [Remotes](#remotes)) |
 | LG webOS OLED TV (`OLED65C4PUA`) | Via Home Assistant `webostv` with Wake-on-LAN: stable HDMI 1–4 port switching and live theater/ARC state; also by IR. Hub-native LAN control (`codex_webos`, `wss:3001`/`ws:3000` + WoL, no HA required) is **experimental**: it has known problems on this webOS 24 TV (app-list disconnects, standby detection) — see [WEBOS_TV.md](WEBOS_TV.md) |
 | Hisense Google TV (`75U8H`) | Natively over the network (`codex_androidtv`, TLS) with Wake-on-LAN — see [ANDROID_TV.md](ANDROID_TV.md) |

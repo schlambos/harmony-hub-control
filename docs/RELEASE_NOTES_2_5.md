@@ -1,27 +1,29 @@
 # Melodious 2.5
 
 Melodious 2.5 is the first full release since 2.0. (2.1 was 2.0 with a fix for the Windows
-installer.) It adds a guided setup in the desktop app, more remote and device options, a Windows
-desktop app, and fixes for the problems people reported.
+installer.) You can now set up a brand-new hub without Logitech at all, run two screen remotes on
+one hub at the same time, and customise far more of every remote. There's a Windows desktop app,
+and fixes for the problems people reported.
 
 Some parts are less tested than others. Each one is labelled where it is described, and
 [Known limitations](#known-limitations) lists what has only been checked by automated tests.
 
 ## What you will notice
 
-- **Guided setup.** The desktop app's Setup Wizard takes a hub that is new, factory reset,
-  second-hand or already set up, and leaves it rooted and running Melodious. No commands and no
-  Logitech account. Tested on macOS with a real hub. On Windows and Linux: **Not fully tested,
-  needs confirmation**. See the [Setup Guide](SETUP_GUIDE.md).
+- **Set up a hub with no Logitech at all.** The desktop app's Setup Wizard takes a hub that is
+  new, factory reset, second-hand or already set up, provisions it locally, roots it and leaves it
+  running Melodious, fully offline. No Logitech account, app or cloud, and no commands. Tested on
+  macOS with a real hub. On Windows and Linux: **Not fully tested, needs confirmation**. See the
+  [Setup Guide](SETUP_GUIDE.md).
+- **Two screen remotes at once.** Run a Touch and a 950, or two Ultimates, on one hub, kept in sync
+  ([guide](TWO_SCREEN_REMOTES.md)).
+- **More of every remote is yours.** The Home Control buttons on Companion, Elite and 950 remotes,
+  your own backgrounds on screen remotes, the `--` and `E` keys on remotes without a screen, and a
+  number pad on new activities for remotes with a screen.
 - **Saving works the first time.** The first Save after opening an editor no longer fails and
   then works on the second try.
-- **More buttons you can set.** The Home Control buttons on Companion, Elite and 950 remotes, the
-  `--` and `E` keys on remotes without a screen, and a number pad on new activities for remotes
-  with a screen.
-- **New kinds of device.** Nintendo Switch 2 wake (**tested**), saved Bluetooth keyboards, and
-  LG webOS TVs over the network (**experimental**).
-- **Logitech catalog codes that used to be skipped now import.** Codes that need an IR protocol
-  the hub did not have, such as some Samsung soundbars, bring the protocol with them.
+- **New kinds of device.** Saved Bluetooth keyboards and LG webOS TVs over the network
+  (**experimental**).
 
 ## What's new
 
@@ -61,9 +63,6 @@ Some parts are less tested than others. Each one is labelled where it is describ
 
 ### Devices
 
-- **Nintendo Switch 2 wake** (**tested**). The hub wakes a sleeping Switch 2 over Bluetooth when
-  an activity starts. It only wakes the console and does not control it. Controllers with their
-  own IDs, such as PowerA, are untested ([guide](SWITCH2_WAKE.md)).
 - **LG webOS TVs over the network** (**experimental**), without Home Assistant or IR. It has
   known problems on some newer LG TVs, such as 2024 (webOS 24) models ([guide](WEBOS_TV.md)).
 - **Android TV and Google TV.** Choose how each TV switches inputs in Settings → Inputs, with a
@@ -77,8 +76,9 @@ Some parts are less tested than others. Each one is labelled where it is describ
 - **Logitech catalog.** An import brings the IR protocol with it when the hub lacks it (#243),
   and imports work on a blank hub.
 - **Wired network over USB Ethernet** (**experimental**), in Settings → Experimental.
-  Traffic-tested with an ASIX AX88772C adapter; a Realtek RTL8153 binds, but its wired traffic
-  is not yet verified (@apnar, [guide](USB_ETHERNET.md)).
+  Tested with Realtek RTL8153 and ASIX AX88772C adapters (@apnar, [guide](USB_ETHERNET.md)).
+- **Nintendo Switch 2 wake** (**tested**, wake only). Controllers with their own IDs, such as
+  PowerA, are untested ([guide](SWITCH2_WAKE.md)).
 
 ### Activities
 
@@ -132,7 +132,8 @@ Some parts are less tested than others. Each one is labelled where it is describ
   (#172).
 - With the cloud blocker on, the hub now checks its Wi-Fi link and rejoins when it drops (#202).
 - System → Logs hides routine status polls and says its times are UTC (#194).
-- The hub software no longer stops at startup on firmware 4.11.6 (#176, with @jupbek).
+- Firmware 4.11.6 works: the hub software no longer stops at startup there (#176, tested and
+  contributed by @jupbek).
 - The PowerShell installer runs on Windows PowerShell 5.1 (#139, also in 2.1).
 - The Setup Wizard reports a download or unpack problem as that, and no longer blames the USB
   cable.
@@ -185,16 +186,15 @@ Your devices, activities, button assignments and settings are kept.
 
 **Checked by automated tests only, not yet on real hardware**
 
-- Saving: the first-Save fix (#218) and the faster save check that followed it (#224).
-- Logitech catalog imports that bring an IR protocol with them (#243).
+- Importing Logitech catalog codes the hub didn't know before, such as some Samsung soundbars
+  (#243).
 - Saved Bluetooth keyboards as devices, and their scripts as commands (#114).
 - Button fixes for imported activities and for remotes paired later (#86), and for hubs with
   only a remote with a screen (#250).
 - The full first sync of a never-activated Harmony Ultimate (#219). The start of it is confirmed
   by a user, the rest is not.
 - Old Logitech maps with duplicate menu positions (#178), and hold commands on digits (#190).
-- The `--` and `E` keys (#234) and the command picker layout (#216).
-- Firmware 4.11.6 support as merged (#176). The original patch ran on a 4.11.6 hub.
+- The command picker layout (#216).
 - The Extender package warning in the installer (#118).
 - The Home Assistant changes after integration 0.7.2, on the hub and in the integration.
 - Android: this release's changes are built and unit tested, not run on a phone.
