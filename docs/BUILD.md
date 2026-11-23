@@ -333,6 +333,18 @@ that the installer references the exact `activity/codexactivity.lua` candidate
 tools/activity_offline_guard.sh
 ```
 
+The pair agent's SDP edits have a host-side test against a fake BlueZ
+`sdpd` on a unix socket: the descriptor edits, continuation states, the
+update and remove requests, the btkeyboard gate and the event-driven watch
+(HCI events fed on stdin). To run it on the MIPS build too, use qemu user
+mode:
+
+```sh
+python3 tools/bt_sdp_battery_smoke.py
+AGENT_RUNNER=qemu-mips-static python3 tools/bt_sdp_battery_smoke.py \
+  "$OFFICIAL_ZIG cc -target mips-linux-musleabi -static"
+```
+
 The build script does not run these tests; run them yourself before
 rebuilding.
 
@@ -397,7 +409,7 @@ python3 -m unittest discover -s docker/tests      # the Docker manager
 for t in barrier device-screens ha-devices androidtv-devices bt-devices touch-controls ir-output; do
   luajit tools/touch-validator/codexactivity-$t-test.lua
 done                                              # the hub's writer: barrier, screens, Home Assistant, network TVs, Bluetooth keyboards, press modes
-sh tools/bluetooth_hid_smoke.sh                   # Bluetooth HID guards (authenticated links, local pairing, GET_REPORT, keyboard self-test)
+sh tools/bluetooth_hid_smoke.sh                   # Bluetooth HID guards (authenticated links, local pairing, GET_REPORT, keyboard self-test, the pair agent's SDP edits against a fake sdpd)
 python3 tools/bt_harmony_webui_smoke.py           # Consumer key reports and the Bluetooth Harmony device set (codex_webui, host build)
 python3 tools/androidtv/androidtv_smoke.py --codex-androidtv build/output/codex_androidtv-native   # codex_androidtv against a fake TV
 sh tools/androidtv/wol_test.sh                    # codex_androidtv's Wake-on-LAN, with fake interfaces (needs BearSSL)
