@@ -29,7 +29,9 @@ editor produces must pass the validation rules below before it is saved.
 - **Clock sync:** During a pull, the Touch asks the hub for the time
   (`harmony.engine?getTime`). While the blocker is on,
   `netservicestarter.lua` answers from the hub's NTP-set clock (once past
-  2026-01-01).
+  2026-01-01), with the time zone saved in System (`timezone.conf`) rather
+  than the stock `statedigest.tz` default, so the remote's clock follows
+  the saved zone offline.
 - **Content records (`CD_<device>`):** After pulling resources, the Touch
   requests `CD_<device>` for certain devices and aborts the pull (error 553)
   unless the answer is 200 or 304. Devices created on the hub have no

@@ -9,9 +9,11 @@ python3 tools/catalog/harmony_catalog.py Sony STR-DG720
 ```
 
 Then, in the web UI: open the device → **Import codes → Logitech catalog** →
-open the package. Only commands whose IR protocol your hub already has are
-imported (a Sony receiver's `Sony 15 Bit` set works out of the box on most
-hubs); the rest are listed in the sheet, not dropped silently.
+open the package. The package also bundles the IR protocol definitions
+its commands need (from your account's ProtocolList), so a set imports
+even on a hub that does not have its protocol yet — including a blank
+hub, which also has several common protocols built in. Anything still
+skipped is listed in the sheet with its reason, not dropped silently.
 
 ## Signing in (no APK, no password in the terminal)
 

@@ -1,6 +1,6 @@
 # Nintendo Switch 2 Wake
 
-Melodious can wake a sleeping **Nintendo Switch 2** directly from the Harmony Hub over Bluetooth Low Energy (BLE) when you start an activity or tap **Wake** on the device screen.
+Melodious can wake a sleeping **Nintendo Switch 2** directly from the Harmony Hub over Bluetooth Low Energy (BLE) when you start an activity or tap **Wake** on the device screen. Wake is **tested**; it is wake only — Melodious does not control the console afterwards.
 
 ## What it does (and does not do)
 

@@ -696,10 +696,17 @@ POST /api/catalog-import
 Content-Type: application/json
 ```
 
-The body carries `deviceId` and a `commands` list of rows with `name` and
-either `keycode` or `raw`. Each KeyCode is stored with the protocol named
-in its `G:<name>:` prefix, looked up in the hub's ProtocolList; a KeyCode
-for a protocol the hub lacks is refused. A row whose name already exists on
+The body carries `deviceId`, a `commands` list of rows with `name` and
+either `keycode` or `raw`, and optionally `protocols`: `IrProtocol`
+records bundled with the set. Bundled records are validated and appended
+to the hub's ProtocolList before the rows are stored (append-only: an
+existing `Id-` is never replaced; ProtocolList is backed up first). The
+hub's six built-in protocols (Toshiba 32 Bit, Sony 15 Bit, Sony 20 Bit,
+Saitek 11 Bit, MemorexO1 32 Bit, Samsung 16 and 20 Bit) are written to
+ProtocolList automatically when a row names one, so imports also work on
+a blank hub. Each KeyCode is stored with the protocol named in its
+`G:<name>:` prefix, looked up in the hub's ProtocolList; a KeyCode for a
+protocol the hub still lacks is refused. A row whose name already exists on
 the device is skipped. The response `message` counts submitted, imported,
 skipped-existing and rejected rows. An empty body, an invalid device, a
 missing commands list or an empty list gives `400`; an oversized body

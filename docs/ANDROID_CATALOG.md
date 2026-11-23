@@ -127,8 +127,8 @@ A Kotlin port of `desktop/src/catalog/{oauth,client}.js`, which ports
 | Operation table | `POST cf-svcs…/Discovery/Discovery.svc/json/GetJsonOperations` `{"clientTypeId":"Redbull 1.0"}`, header `x-logitech-api-version: 1`; cached for the session; `svcs`/`cf-svcs` addresses moved to `lb-svcs`, `json` → `json2` where the Mac does it; `GetGlobalLanguageCommands` falls back to the `GetCommands` sibling's address |
 | Model check (anonymous) | `GET svcs.myharmony.com/HarmonyPlatform/DeviceManager.svc/json2/SearchDevice/manf/<m>/model/<n>/iface/IR` → found or not, and the canonical spelling. No bearer, no cookies. |
 | Search | `SearchGlobalDevices` (json2) `{manufacturer, modelNumber, deviceType:0, searchType:2, maxResults:50}`. Each match becomes `{id (Id-), manufacturer, model (DeviceModel or Model), displayText (DisplayText or SelectedText), deviceType (the Mac's label table), description}`. |
-| Download | `GetGlobalDevices([id])` (exactly one device, with that id), then `GetGlobalLanguageCommands({globalLanguageVersionId:{Value: DefaultGlobalLanguageVersionId}})` |
-| Package | `schema_version` `0.2.0`, `source` `logitech-catalog-via-melodious-android`, `query`, and `resources` (`search_result`, `selected_match`, `global_device`, `global_language_commands`), each passed through the helper's `redact` rule (keys matching authorization, cookie, password, secret, access/refresh/id/auth token or account id) |
+| Download | `GetGlobalDevices([id])` (exactly one device, with that id), then `GetGlobalLanguageCommands({globalLanguageVersionId:{Value: DefaultGlobalLanguageVersionId}})`, then the account's `UserAccountDirector/ProtocolList` filtered to the valid `IrProtocol` records the device's KeyCodes need |
+| Package | `schema_version` `0.2.0`, `source` `logitech-catalog-via-melodious-android`, `query`, and `resources` (`search_result`, `selected_match`, `global_device`, `global_language_commands`, `protocols`), each passed through the helper's `redact` rule (keys matching authorization, cookie, password, secret, access/refresh/id/auth token or account id) |
 
 Transport, as on the Mac:
 - Its own `OkHttpClient`, separate from the hub client, with a 30 s call
@@ -202,17 +202,22 @@ is today.
 Two calls are added to `CodexHubRestClient`. Both use the saved endpoint
 and Basic header, as every hub call does:
 - `getHubProtocolNames(endpoint)`: `GET /export/protocols` →
-  `Protocols[].Name`, as `hubProtocolNames` does in the web UI. If it
-  can't be read, the preview says so ("…the hub's protocol list couldn't
-  be read, so no KeyCode can be checked yet") and imports nothing.
-- `importCatalogCommands(endpoint, deviceId, rows)`: `POST
+  `Protocols[].Name`, as `hubProtocolNames` does in the web UI, plus the
+  hub's built-in protocol names (which a blank hub's empty ProtocolList
+  does not list yet). If it can't be read, the preview says so ("…the
+  hub's protocol list couldn't be read, so no KeyCode can be checked
+  yet") and imports nothing.
+- `importCatalogCommands(endpoint, deviceId, rows, protocols)`: `POST
   /api/catalog-import` with JSON `{deviceId, commands:[{name, keycode, raw,
-  protocol}]}`, the same body the web sends. It goes through the existing
-  `postJson`, whose OkHttp body has a fixed `Content-Length`; `codex_webui`
+  protocol}], protocols:[…]}` (`protocols` only when the package bundles
+  records the hub lacks), the same body the web sends. It goes through
+  the existing `postJson`, whose OkHttp body has a fixed `Content-Length`;
+  `codex_webui`
   can't read chunked bodies.
-  - The hub answers `{ok, message}`: it backs up DeviceList, stores each
-    KeyCode with the protocol its `G:<name>:` prefix names, skips names the
-    device already has, and refuses protocols it lacks.
+  - The hub answers `{ok, message}`: it backs up DeviceList (and
+    ProtocolList when bundled records are appended), stores each KeyCode
+    with the protocol its `G:<name>:` prefix names, skips names the device
+    already has, and refuses protocols it still lacks.
   - A 404 shows "Your hub's Melodious software is older than this app;
     update the hub". Any other error shows the hub's message.
   - Afterwards the app reloads the config, closes the sheet and shows
@@ -232,8 +237,9 @@ does.
   behaviour change.
 - **Logitech catalog,** top to bottom, as on the Mac:
   1. The intro: "Use the code set from Logitech's own catalog for
-     <maker> <model>. Only commands whose IR protocol this hub already has
-     are imported; the rest are listed below, not dropped silently."
+     <maker> <model>. Commands whose IR protocol this hub has, knows
+     natively, or receives in the package are imported; any others are
+     listed below, not dropped silently."
   2. Account row: "Signed in to Logitech" with Sign out, or "Logitech
      account" with Sign in.
   3. Brand and Model fields (64 characters at most), pre-filled from the
@@ -243,7 +249,8 @@ does.
      device type and description, with a Download button on each row.
   5. The preview, as the web builds it:
      - the summary line from `describeCatalogRows` (importable count,
-       protocols, skipped count, protocols missing on the hub);
+       protocols, any protocols the package adds, skipped count, protocols
+       missing on the hub);
      - the first 24 importable commands with their protocol;
      - **every** skipped command with its reason, for example
        "protocol “RC6 Mode 0” is not on this hub".
@@ -331,8 +338,8 @@ can be read side by side.
   overrides.
 
 **What reaches the hub:** what the app sends today, plus `GET
-/export/protocols` and the `/api/catalog-import` body (`deviceId` and the
-command rows). Never a Logitech token.
+/export/protocols` and the `/api/catalog-import` body (`deviceId`, the
+command rows, and any bundled protocol records). Never a Logitech token.
 
 **What reaches Logitech:** the sign-in (in Chrome), the token calls,
 Harmony signin, discovery, the anonymous model check, search, and the one

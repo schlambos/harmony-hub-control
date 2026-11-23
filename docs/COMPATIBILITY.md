@@ -63,4 +63,4 @@ Verified on a live hub, across hub control (IR/Bluetooth/network) and the HA int
 | Chromecast Audio | Via Home Assistant (`cast`) |
 | Nakamichi Shockwafe soundbar | By IR, linked to the LG's HDMI ARC port for theater state |
 | Philips Hue lights | Via Home Assistant (`light`) |
-| Nintendo Switch 2 | BLE wake only ([SWITCH2_WAKE.md](SWITCH2_WAKE.md)); Switch 1 wake and Switch controller input are not supported |
+| Nintendo Switch 2 | BLE wake only, **tested** (custom controller PIDs untested; [SWITCH2_WAKE.md](SWITCH2_WAKE.md)); Switch 1 wake and Switch controller input are not supported |
