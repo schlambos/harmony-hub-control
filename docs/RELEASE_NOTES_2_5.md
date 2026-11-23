@@ -39,7 +39,6 @@ Some parts are less tested than others. Each one is labelled where it is describ
 - **`--turn-off` and `--turn-on`** (**experimental**) in the installers. Turn-off hands the hub
   back to Logitech's own software and keeps Melodious's files. Turn-on brings Melodious back. Not
   yet validated on a real hub, so back up first ([details](INSTALL.md#turn-melodious-off-and-on)).
-- The installer warns when an old Harmony Hub Extender package is using the hub's storage (#118).
 - **Time servers.** Set up to three NTP servers in System, or with `--ntp-server` (@mirsadone).
 - **`busybox-extra`.** 63 newer command-line tools on the hub for diagnostics (@apnar).
 
@@ -51,13 +50,10 @@ Some parts are less tested than others. Each one is labelled where it is describ
 - **Several remotes without a screen of the same model** (multi-remote, **experimental**), in
   Settings → Experimental. Needs firmware 4.15.600 (@apnar, [guide](MULTI_REMOTE.md)).
 - **Home Control buttons** on Companion (@Mugga6315), Elite and 950 (#154, #192). The buttons and
-  the `+`/`-` rocker can run any command, in one activity or in all of them. Old Logitech
-  assignments can be replaced or cleared ([guide](HOME_CONTROL_BUTTONS.md)).
+  the `+`/`-` rocker can run any command, in one activity or in all of them
+  ([guide](HOME_CONTROL_BUTTONS.md)).
 - **Background picture** for remotes with a screen (@Bergasha, [guide](REMOTE_BACKGROUNDS.md)).
-- The `--` and `E` keys on Smart Control and Companion remotes can be assigned (#234).
-- New activities get a number pad from any device in the activity, and a digit can have a hold
-  command (#191, #190).
-- A remote's clock follows the time zone saved in System when the hub is offline (@jrx-code).
+- A digit on the number pad can have a hold command (#190).
 - New guide: [moving a remote with a screen to a new hub](ACTIVITIES_GUIDE.md#moving-a-remote-with-a-screen-to-a-new-hub)
   (@apnar).
 
@@ -66,15 +62,12 @@ Some parts are less tested than others. Each one is labelled where it is describ
 - **LG webOS TVs over the network** (**experimental**), without Home Assistant or IR. It has
   known problems on some newer LG TVs, such as 2024 (webOS 24) models ([guide](WEBOS_TV.md)).
 - **Android TV and Google TV.** Choose how each TV switches inputs in Settings → Inputs, with a
-  Try button. Wake-on-LAN reaches TVs on every network the hub is on, and Hisense inputs switch
-  correctly (@apnar, [guide](ANDROID_TV.md)).
+  Try button (@apnar, [guide](ANDROID_TV.md)).
 - **Saved Bluetooth keyboards as devices.** A saved Bluetooth keyboard target can be a device in
   activities and on buttons, and its saved scripts become commands (#114, started by
   @OrganoidSchnitzel, [guide](BLUETOOTH_KEYBOARD.md)).
 - **IR output per device.** Send a device's commands from the hub, either blaster, all of them,
   or the remote's own emitter (@mirsadone).
-- **Logitech catalog.** An import brings the IR protocol with it when the hub lacks it (#243),
-  and imports work on a blank hub.
 - **Wired network over USB Ethernet** (**experimental**), in Settings → Experimental.
   Tested with Realtek RTL8153 and ASIX AX88772C adapters (@apnar, [guide](USB_ETHERNET.md)).
 - **Nintendo Switch 2 wake** (**tested**, wake only). Controllers with their own IDs, such as
@@ -84,7 +77,6 @@ Some parts are less tested than others. Each one is labelled where it is describ
 
 - **Time restrictions.** Block an activity from starting on the days and times you choose
   (@danielvijge, [guide](ACTIVITIES_GUIDE.md)).
-- The command picker stays usable with many devices and searches across all of them (#216).
 
 ### Apps
 
@@ -99,49 +91,111 @@ Some parts are less tested than others. Each one is labelled where it is describ
 
 ### Home Assistant
 
-- The [integration](https://github.com/schlambos/ha-melodious) is at 0.7.3. Single entities are
-  sent beside whole devices (#162). Hue devices with long or quoted model names, or with many
-  entities, no longer make the hub refuse a push. Accented command names keep their letters. The
-  `via_device` warning on Home Assistant 2026.11 is gone (#202).
-- When a push leaves out a device that an activity or button still uses, the hub keeps the
-  device and accepts the rest. Home Assistant shows a notice that names it.
+- The [integration](https://github.com/schlambos/ha-melodious) is at 0.7.3. Its fixes are listed
+  under [What's fixed](#home-assistant-1).
 
 ## What's fixed
 
 ### Saving and editing
 
-- The first Save after opening an editor failed with a conflict error (#218).
-- Saving in the Advanced Editor failed with "references missing sequence" (#201).
-- Old Logitech button maps with duplicate menu positions blocked unrelated edits (#178), and
-  editing an imported start or stop sequence failed (#189, #193).
-- Imported commands named like `VOLUME +` and `VOLUME -` now map to volume up and down
-  (@jrx-code).
+- The first Save after opening an editor failed with a conflict error (#218, @jluc2808).
+- Saving in the Advanced Editor failed with "references missing sequence" (#201, @jluc2808).
+- Old Logitech button maps with duplicate menu positions blocked unrelated edits (#178,
+  @TOMSTR3).
+- Editing an imported start or stop sequence failed (#189, #193, @jluc2808).
+- The command picker got too small to use with many devices. It now scrolls and searches across
+  all of them (#216, @jluc2808).
+- Imported commands named like `VOLUME +` and `VOLUME -` were not put on the volume buttons
+  (#239, @jrx-code).
 
 ### Remotes
 
 - Imported Logitech activities did not answer the remote until they were saved again, and a
-  remote paired after the activities existed got no buttons (#86).
+  remote paired after the activities existed got no buttons (#86, @dramatic-paws,
+  @danielvijge).
 - Activities whose remote buttons did nothing on hubs that only had a remote with a screen are
   repaired automatically when you update, and new activities get the remote's buttons right away
-  (#250).
-- A Harmony Ultimate no longer stalls at 58% when it syncs offline (#180). One that was never
-  activated with Logitech is no longer stuck on the setup screen (#219, with @jrx-code).
+  (#250, @ScottishB).
+- New activities on an Elite had no number pad (#191, @jluc2808).
+- Home Control buttons that Logitech had set up showed "Set up elsewhere" and could not be
+  changed or cleared (#154, @StreneSaco).
+- The `--` and `E` keys on Smart Control and Companion remotes could not be assigned (#234,
+  @danielvijge).
+- With the hub offline, a remote's clock ignored the time zone saved in System (#236,
+  @jrx-code).
+- A Harmony Ultimate stalled at 58% when it synced offline (#180, @thre3eye).
+- A Harmony Ultimate that was never activated with Logitech was stuck on the setup screen
+  (#219, @jrx-code).
 
 ### Hub and installers
 
-- A blank hub, or one cut off from the cloud, runs its first activity without an extra restart
-  (#172).
-- With the cloud blocker on, the hub now checks its Wi-Fi link and rejoins when it drops (#202).
-- System → Logs hides routine status polls and says its times are UTC (#194).
-- Firmware 4.11.6 works: the hub software no longer stops at startup there (#176, tested and
-  contributed by @jupbek).
-- The PowerShell installer runs on Windows PowerShell 5.1 (#139, also in 2.1).
-- The Setup Wizard reports a download or unpack problem as that, and no longer blames the USB
-  cable.
-- The installer removes dead legacy data left by older installs and the root tool automatically,
-  before checking whether the hub's flash has room. `--remove-root-tool-leftovers` is still
-  accepted, but does nothing extra now.
-- The hub's programs are about 310 KB smaller (@apnar).
+- A hub that had never been set up could not open the editors, and its remote's activity button
+  did nothing (#134).
+- A rooted hub that had lost its Logitech account could not be set up from the apps (#172,
+  @keanemachine).
+- With the cloud blocker on, the hub did not rejoin Wi-Fi when the connection dropped (#202,
+  @jluc2808).
+- System → Logs was flooded with routine status polls and did not say its times are UTC (#194,
+  @jluc2808).
+- The hub software stopped at startup on firmware 4.11.6 (#176, @jupbek).
+- The PowerShell installer failed with syntax errors on Windows PowerShell 5.1 (#139,
+  @nohjyk-art, @mfazio11).
+- The installer could stop for lack of room when the space was held by leftovers from older
+  installs and the root tool. It now removes them itself, so `--remove-root-tool-leftovers` is
+  still accepted but no longer needed (#258).
+- The installer counted the root tool's SSH program as spare space even when Melodious shared
+  it, so removing it freed nothing (#133, @apnar).
+- When an old Harmony Hub Extender package filled the hub's storage, the installer said there
+  was no room without saying why (#118, @danielvijge).
+- Importing from the Logitech catalog on a blank or factory-reset hub skipped every command
+  (#217).
+- Logitech catalog devices whose IR protocol the hub did not have, such as some Samsung
+  soundbars, could not be imported (#243, @timothyallan).
+- Wake-on-LAN did not wake an Android TV or Google TV from deep standby while the cloud blocker
+  was on (#113, @apnar).
+- Hisense TVs did not switch inputs, and a TV that was turning off or waking up could miss the
+  power-on or the input (#136, @apnar).
+- The USB Ethernet code was missing the copyright notice for the harmony-ng work it builds on
+  (#129, @iranl).
+- The hub's programs are about 310 KB smaller (#131, @apnar).
+
+### Home Assistant
+
+- Single entities, such as scripts and buttons, were not sent to the hub when whole devices
+  were also chosen (#162, @legoleigh).
+- A Hue device with a quoted or long model name, or with many entities, made the hub refuse the
+  whole push (#162, @legoleigh, @StreneSaco).
+- After the hub was removed and added again in Home Assistant, its devices' commands got broken
+  names (#162, @legoleigh, @StreneSaco).
+- When a push left out a device that an activity or button still used, the hub refused the
+  whole push. It now keeps that device, accepts the rest, and Home Assistant names it in a
+  notice (#162, #210, @StreneSaco, @legoleigh).
+- A Hue room could come back as a different device after a push (#162, @StreneSaco).
+- Accented command names lost letters, so `Détente` became `Dtente` (#162, @StreneSaco).
+- Newer Home Assistant versions logged a `via_device` deprecation warning for every mirrored
+  device (#202, @jluc2808).
+
+### Apps
+
+- The desktop app's Update hub refused every released hub zip (#155).
+
+### Also fixed in pre-release builds from main
+
+Some people ran `main` before this release and hit these. None of them were in an earlier
+release.
+
+- Saving restarted the hub and disconnected the app (#224, @jluc2808).
+- On some hubs every Save was refused as a conflict (#225, @jrx-code).
+- On a hub that had never been set up, the first activity failed until the hub was restarted,
+  while the app showed it as running (#165).
+- The Setup Wizard could lose the hub over USB after a restart and stop partway through (#169).
+- The Setup Wizard's install step blamed the USB cable for download and unpack problems (#242).
+- Switch 2 wake failed with an error and the console stayed asleep (#200).
+- With Wi-Fi off and the hub on USB Ethernet, Wake-on-LAN did not reach the TV (#126, @apnar).
+- Handing the network back from USB Ethernet to Wi-Fi broke the wired connection until it
+  restarted (#128, @apnar).
+- The extender light could show the wrong Ethernet state if the Ethernet service stopped in the
+  middle of a change (#143, @apnar).
 
 ## How to update
 
