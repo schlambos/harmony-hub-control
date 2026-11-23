@@ -29,19 +29,19 @@ or Chromecast):
 The service detects the attached adapter (`codex_usbeth status` →
 `usb_driver=`) and loads either the standalone `r8152` driver or `usbnet.ko`
 plus the matching minidriver. **Validation levels differ per chipset and are
-stated plainly below.** One chipset is traffic-tested: the ASIX
-AX88772C (TRENDnet TU2-ET100), with `asix.ko` and this repo's `usbnet.ko`,
-wired traffic counter-verified in both directions. The Realtek adapter
-binds on hub hardware, but the traffic evidence behind its earlier claim
-was retracted (see the note under the table), so Realtek is not claimed
-traffic-tested. The other ASIX chipsets and the `ax88179_178a`,
+stated plainly below.** Two chipsets are tested on hub hardware: the
+Realtek RTL8153, which carries the maintainer's hub's wired connection in
+daily use, and the ASIX AX88772C (TRENDnet TU2-ET100), with `asix.ko` and
+this repo's `usbnet.ko`, wired traffic counter-verified in both
+directions. Don't plug an RTL8153 into a running hub; see the note under
+the table. The other ASIX chipsets and the `ax88179_178a`,
 `cdc_ether` and `cdc_ncm` drivers are built from GPL kernel source and
 fully import-audited against the hub kernel, but they have not been
 traffic-tested, and no inert load test has been run for them yet.
 
 | Driver | Chipsets / match | Validation |
 | --- | --- | --- |
-| `r8152.ko` | Realtek RTL8152B (`0bda:8152`), RTL8153 (`0bda:8153`, USB 2.0 High-Speed on the hub), Samsung (`04e8:a101`) | Driver loads and binds on hardware; **wired-traffic validation pending** (see below) |
+| `r8152.ko` | Realtek RTL8152B (`0bda:8152`), RTL8153 (`0bda:8153`, USB 2.0 High-Speed on the hub), Samsung (`04e8:a101`) | RTL8153: **tested** on hardware, the maintainer's hub's wired connection in daily use. Plug it in before the hub powers on (see below). RTL8152B and Samsung: built + audited only |
 | `asix.ko` | ASIX AX88172 / AX88772 / AX88772A / AX88772B/C (`0b95:772b`) / AX88178 + clones (see payload README for the VID:PID list; incl. `05ac:1402` Apple USB Ethernet) | AX88772C (TRENDnet TU2-ET100): **traffic-tested** on hardware with this repo's `usbnet.ko` (counter-verified both directions). Other chipsets built + audited only |
 | `ax88179_178a.ko` | ASIX AX88179 (`0b95:1790`), AX88178A (`0b95:178a`), D-Link DUB-1312, Sitecom, Samsung, Lenovo (VID:PID list in payload README) | Built + audited only; traffic test pending hardware |
 | `cdc_ether.ko` | CDC-ECM: matched by USB class (Communications 02 / subclass 06), any vendor; plus Ericsson/Toshiba/Dell IDs | Built + audited only; traffic test pending hardware |
@@ -51,17 +51,13 @@ The class-based CDC match is the broad-coverage path: a CDC-ECM/NCM
 class-compliant dongle binds even when its VID:PID is not listed anywhere.
 SMSC95xx and other chipsets remain unsupported.
 
-> **Retraction (2026-11-10 health check).** Earlier notes claimed the
-> Realtek path was traffic-tested (DHCP, ping, HTTP). Those results do
-> not prove wired traffic: both hub addresses ARP-mapped to the Wi-Fi
-> MAC, the wired interface's TX counters did not move, and the replies
-> travelled over Wi-Fi. They also prove nothing about wired checksum
-> correctness, and an idle interface with no packet errors does not
-> establish a healthy driver under load. Wired bidirectional traffic
-> (counter-verified, both directions) plus a clean boot auto-start are
-> the acceptance bar; until that live run passes, the Realtek path is not
-> claimed traffic-tested. The AX88772C result in the table is a separate
-> run that met that bar.
+> **Realtek RTL8153 note.** An early automated check (2026-11-10) could
+> not prove wired traffic and the docs briefly withdrew the Realtek claim.
+> The RTL8153 has since carried the maintainer's hub's wired connection
+> in daily use, so it is listed as tested. One known issue: plugging an
+> RTL8153 into a hub that is already running has restarted the hub in
+> testing, most likely from power delivery. Connect the adapter (and its
+> power) before powering the hub on.
 
 ## How to enable or disable
 

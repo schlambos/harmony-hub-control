@@ -77,8 +77,7 @@ Some parts are less tested than others. Each one is labelled where it is describ
 - **Logitech catalog.** An import brings the IR protocol with it when the hub lacks it (#243),
   and imports work on a blank hub.
 - **Wired network over USB Ethernet** (**experimental**), in Settings → Experimental.
-  Traffic-tested with an ASIX AX88772C adapter; a Realtek RTL8153 binds, but its wired traffic
-  is not yet verified (@apnar, [guide](USB_ETHERNET.md)).
+  Tested with Realtek RTL8153 and ASIX AX88772C adapters (@apnar, [guide](USB_ETHERNET.md)).
 
 ### Activities
 
