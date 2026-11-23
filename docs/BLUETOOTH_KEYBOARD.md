@@ -24,6 +24,8 @@ Pair the hub with the target and test the keys before mapping them to buttons. A
 device's commands then work like any other device command: in activities, on hard keys, on-screen
 buttons, the number pad or gestures ([ACTIVITIES_GUIDE.md](ACTIVITIES_GUIDE.md)).
 
+<p align="center"><img src="screenshots/web/bluetooth-saved.png" alt="Settings → Bluetooth, Saved devices and commands: a saved keyboard target with Add to Harmony and the keyboard-script form" width="260"><br><sub>Settings → Bluetooth: a saved device, ready for keyboard scripts</sub></p>
+
 ## Chromecast with Google TV and other consumer-page keys
 
 Home and Back on a Chromecast with Google TV are consumer-page usages (`0x223` and `0x224`), not

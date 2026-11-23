@@ -148,6 +148,8 @@ either side of 0 on the Smart Control and Companion. The wizard never fills
 these two in for you; pick what they send. Remotes with a screen don't have
 them, so they stay off the Touch and Elite.
 
+<p align="center"><img src="screenshots/web/wizard-dash-enter.png" alt="The Numbers group of Check the buttons, with Dash (–) after 9 and Enter (E) after 0" width="260"><br><sub>Dash (–) and Enter (E) in the Numbers group</sub></p>
+
 ![Buttons step showing the automatically suggested command assignments](screenshots/guides/wizard-buttons-1280.png)
 
 **Ordinary press, all platforms:**
@@ -411,6 +413,8 @@ and apps using the hub's time zone. An activity already running is not
 stopped when a restriction begins. For a scheduled shutdown, Android has
 a **Sleep timer**; restrictions are not a substitute for one.
 
+<p align="center"><img src="screenshots/web/time-restrictions.png" alt="Time restrictions sheet for Nintendo Switch with one time: Saturday and Sunday, 06:00 to 09:00" width="260"><br><sub>Activities → ⋮ → Time restrictions</sub></p>
+
 ### Pair and customize remotes
 
 Open **Settings → Remotes** in Web/Desktop. Choose **Open pairing window**,
@@ -448,6 +452,12 @@ buttons** for a screenless remote's activity shortcuts, and the relevant
 activity's key editor for ordinary keys. Shared edits normally keep maps
 alike; **Only this remote** makes a deliberate override. Existing
 differences are shown so you do not overwrite them accidentally.
+
+A remote with keys that has no button setup for some activities is flagged
+on that page, with an **Add its keys** button. Hub updates and pairing
+normally add these on their own; the button is the manual fallback.
+
+<p align="center"><img src="screenshots/web/remotes-add-keys.png" alt="Settings → Remotes: a Harmony Companion with no keys for five activities, and the Add its keys button" width="260"><br><sub>A newly paired Companion, with Add its keys</sub></p>
 
 - [Multiple remotes of one model](MULTI_REMOTE.md): opt-in; same-model
   remotes share a button setup, not independent maps per physical unit.

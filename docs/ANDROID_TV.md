@@ -95,6 +95,11 @@ asks:
   brand. **Share this setup** shows yours as an entry for the presets file, to
   paste into an issue so others with that TV can start from it.
 
+<table><tr>
+<td align="center"><img src="screenshots/web/androidtv-inputs.png" alt="A network TV's inputs, HDMI 1 to 4, each with what it opens, a Try button and a menu" width="240"><br><sub>Settings → Inputs</sub></td>
+<td align="center"><img src="screenshots/web/androidtv-inputs-try.png" alt="After Try, the page asks whether the TV switched to HDMI 1: Yes, No, or It showed a different input" width="240"><br><sub>After ▶ Try</sub></td>
+</tr></table>
+
 Nothing is saved until **Save**, which writes how the TV switches inputs to
 codex_androidtv, then the inputs to the device, and only when the inputs part
 changed: saving power or timing alone leaves a TV with nothing saved on the

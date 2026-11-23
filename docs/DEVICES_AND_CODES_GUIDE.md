@@ -41,6 +41,8 @@ mini-blaster where the equipment can see its signal. Each IR device has an
 Hub's built-in emitters, external blaster 1 or 2, or the remote's IR blaster. Make a backup before
 large changes: **Settings → Backup** in Web/Desktop.
 
+<p align="center"><img src="screenshots/web/device-ir-output.png" alt="An IR device's settings with the IR output choices: all hub outputs, built-in emitters, external blaster 1 or 2, or the remote's IR blaster" width="260"><br><sub>A device's IR output setting</sub></p>
+
 | What you want to control | Start here |
 | --- | --- |
 | An ordinary IR TV, receiver, soundbar, cable box or Blu-ray player | Add an IR device below, then import or learn commands. An IR code cannot reproduce a Bluetooth-only key. |

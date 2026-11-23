@@ -23,6 +23,11 @@ the hub's own remote software.
   16417), so they get the same activities, buttons and screens.
 - Up to 6 remotes in total, as before.
 
+<table><tr>
+<td align="center"><img src="screenshots/web/two-screen-remotes.png" alt="Settings → Remotes with a Harmony Touch in slot 1 and a Harmony 950 in slot 2, each with the same buttons as the other" width="240"><br><sub>Settings → Remotes: a Touch and a 950 paired together</sub></td>
+<td align="center"><img src="screenshots/web/two-screen-shared.png" alt="The shared section for both screen remotes, listing the activities whose buttons they share" width="240"><br><sub>One section for both: the same activities and buttons</sub></td>
+</tr></table>
+
 ## Turning it on and off
 
 ```sh

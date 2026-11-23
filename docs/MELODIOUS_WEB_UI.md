@@ -266,6 +266,7 @@ such as `#devices/<id>`, so you can bookmark it.
 
 <table>
 <tr><td align="center"><img src="screenshots/web/activities.png" alt="The Activities tab with the running activity's card" width="200"><br><sub>Activities</sub></td><td align="center"><img src="screenshots/web/activity-menu.png" alt="An activity's menu" width="200"><br><sub>Activity menu</sub></td><td align="center"><img src="screenshots/web/wizard-devices.png" alt="The setup wizard's Devices step" width="200"><br><sub>Wizard: Devices</sub></td><td align="center"><img src="screenshots/web/wizard-buttons.png" alt="The setup wizard's Buttons step" width="200"><br><sub>Wizard: Buttons</sub></td></tr>
+<tr><td align="center"><img src="screenshots/web/wizard-dash-enter.png" alt="The Numbers group of the Buttons step, with Dash (–) and Enter (E)" width="200"><br><sub>Wizard: Dash and Enter</sub></td><td align="center"><img src="screenshots/web/time-restrictions.png" alt="The Time restrictions sheet for an activity" width="200"><br><sub>Time restrictions</sub></td><td></td><td></td></tr>
 </table>
 
 **Devices**
@@ -283,6 +284,7 @@ such as `#devices/<id>`, so you can bookmark it.
 <table>
 <tr><td align="center"><img src="screenshots/web/devices.png" alt="The Devices tab" width="200"><br><sub>Devices</sub></td><td align="center"><img src="screenshots/web/device-commands.png" alt="A device's Commands tab" width="200"><br><sub>Commands</sub></td><td align="center"><img src="screenshots/web/import-find.png" alt="The Import codes sheet" width="200"><br><sub>Import codes</sub></td><td align="center"><img src="screenshots/web/device-settings.png" alt="A device's settings" width="200"><br><sub>Device settings</sub></td></tr>
 <tr><td align="center"><img src="screenshots/web/devices-ha.png" alt="Devices with Home Assistant, Network, Bluetooth and IR badges" width="200"><br><sub>Devices (HA)</sub></td><td align="center"><img src="screenshots/web/add-device-androidtv.png" alt="Add a device: Android TV network pairing" width="200"><br><sub>Add: Android TV</sub></td><td align="center"><img src="screenshots/web/device-live-state.png" alt="A device with live power, input, and volume state from Home Assistant" width="200"><br><sub>Live state</sub></td><td align="center"><img src="screenshots/web/remote-fix-it-state.png" alt="Fix it sheet showing live device state" width="200"><br><sub>Fix it (live)</sub></td></tr>
+<tr><td align="center"><img src="screenshots/web/androidtv-inputs.png" alt="A network TV's inputs with Try buttons" width="200"><br><sub>Network TV inputs</sub></td><td align="center"><img src="screenshots/web/androidtv-inputs-try.png" alt="Asking whether the TV switched after Try" width="200"><br><sub>Inputs: Try</sub></td><td align="center"><img src="screenshots/web/device-ir-output.png" alt="An IR device's IR output setting" width="200"><br><sub>IR output</sub></td><td align="center"><img src="screenshots/web/bluetooth-saved.png" alt="A saved Bluetooth keyboard device" width="200"><br><sub>Bluetooth: saved device</sub></td></tr>
 </table>
 
 **Settings**
@@ -311,7 +313,8 @@ such as `#devices/<id>`, so you can bookmark it.
   discovery and reboot.
 
 <table>
-<tr><td align="center"><img src="screenshots/web/remotes-pairing.png" alt="Remotes page with paired Smart Control and Touch, showing the pairing UI" width="200"><br><sub>Remotes</sub></td><td align="center"><img src="screenshots/web/onscreen-buttons.png" alt="The on-screen buttons editor for Touch" width="200"><br><sub>On-screen buttons</sub></td><td align="center"><img src="screenshots/web/hold-command-picker.png" alt="The hold-command picker with device chips and command search" width="200"><br><sub>Hold command</sub></td><td></td></tr>
+<tr><td align="center"><img src="screenshots/web/remotes-pairing.png" alt="Remotes page with paired Smart Control and Touch, showing the pairing UI" width="200"><br><sub>Remotes</sub></td><td align="center"><img src="screenshots/web/onscreen-buttons.png" alt="The on-screen buttons editor for Touch" width="200"><br><sub>On-screen buttons</sub></td><td align="center"><img src="screenshots/web/hold-command-picker.png" alt="The hold-command picker with device chips and command search" width="200"><br><sub>Hold command</sub></td><td align="center"><img src="screenshots/web/two-screen-remotes.png" alt="A Harmony Touch and a Harmony 950 paired at the same time" width="200"><br><sub>Two screen remotes</sub></td></tr>
+<tr><td align="center"><img src="screenshots/web/home-control-buttons.png" alt="A Harmony Elite or 950's dot buttons and + / − rocker" width="200"><br><sub>Home control buttons</sub></td><td align="center"><img src="screenshots/web/remote-background.png" alt="A screen remote's Background card" width="200"><br><sub>Background</sub></td><td align="center"><img src="screenshots/web/remotes-add-keys.png" alt="A remote with no keys for some activities, with Add its keys" width="200"><br><sub>Add its keys</sub></td><td align="center"><img src="screenshots/web/system-ntp.png" alt="The time zone and custom NTP server on the System page" width="200"><br><sub>Time zone and NTP</sub></td></tr>
 </table>
 
 <details>

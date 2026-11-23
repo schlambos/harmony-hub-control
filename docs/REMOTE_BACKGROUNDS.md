@@ -20,6 +20,8 @@ The card also shows the pictures the hub keeps for this remote (the last
 five): tap one to make it the background again, or **Logitech's default** to
 go back to the stock picture. Each change needs **Sync remote** on the remote.
 
+<p align="center"><img src="screenshots/web/remote-background.png" alt="The Background card with the current picture, a kept picture below it, Logitech's default and Choose picture" width="260"><br><sub>The Background card (the picture is a plain example)</sub></p>
+
 The browser does the framing and scaling, so the hub only receives a
 240×320 PNG and the 60×80 thumbnail the remote's own settings page shows. A
 large photo never leaves your phone or computer at full size.
