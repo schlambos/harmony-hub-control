@@ -696,10 +696,6 @@
   object-fit: contain;
 }
 
-.fav-logo .m-tile--image:has(.m-tile-img) > .ic {
-  visibility: hidden;
-}
-
 .fav-logo-field {
   display: flex;
   align-items: center;

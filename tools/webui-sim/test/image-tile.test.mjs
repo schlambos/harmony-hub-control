@@ -33,6 +33,11 @@ describe("image tiles", () => {
     handlers["melodious:images-changed"]();
     assert.match(shell.imageTile(url, "tv", { size: 48 }), /<img/);
   });
+
+  it("hide their icon while the image is in the tile, so a transparent image doesn't show it", () => {
+    const css = readFileSync(new URL("../public/css/app.css", import.meta.url), "utf8");
+    assert.match(css, /\n\.m-tile--image:has\(\.m-tile-img\) > \.ic \{\s*visibility: hidden;\s*\}/);
+  });
 });
 
 describe("icon picker glyphs", () => {
