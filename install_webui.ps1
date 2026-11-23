@@ -33,9 +33,8 @@
   default upgrade, which preserves existing configuration unless a candidate
   explicitly replaces it.
 .PARAMETER RemoveRootToolLeftovers
-  Delete harmony-hub-root's leftover /data/codexssh_*_stage folders, and its
-  spare /data/rootssh/bin/dropbearmulti once SSH runs the installed Dropbear,
-  before installing.
+  Accepted for compatibility; no longer needed. Dead legacy data is removed
+  automatically before the capacity check.
 .PARAMETER SkipFlashCheck
   Install even when the measured free flash looks too small; the install
   still stops with no live changes if flash fills up.
@@ -100,7 +99,7 @@ param(
     [switch]$PreflightOnly,
     # -CleanInstall: explicit clean install regenerating configuration; default without this switch is upgrade preserving existing configuration
     [switch]$CleanInstall,
-    # -RemoveRootToolLeftovers: delete harmony-hub-root's leftover staging folders (and its spare Dropbear once SSH runs ours) before installing
+    # -RemoveRootToolLeftovers: accepted for compatibility; dead legacy data is removed automatically
     [switch]$RemoveRootToolLeftovers,
     # -SkipFlashCheck: install even when the measured free flash looks too small; phase 1 still stops safely if flash fills up
     [switch]$SkipFlashCheck,
@@ -192,6 +191,33 @@ d=/pkg/moosehead; if [ -d "$d" ] && [ ! -L "$d" ]; then set -- "$d"; while [ $# 
 $RootToolDropbearRemove = @'
 if [ -x /data/codex/bin/dropbear ] && grep /data/codex/bin/dropbear /usr/sbin/dropbear >/dev/null; then rm -f /data/rootssh/bin/dropbearmulti /data/rootssh/bin/dropbear /data/rootssh/bin/dropbearkey && echo removed; fi
 '@
+
+# Dead legacy data cleanup, same constants and hub commands as install_webui.py.
+$BackupKeep = 3
+$ResourceBackupRoot = "/data/codex/resource-backups"
+$BinDir = "/data/codex/bin"
+$ManagedBinFiles = @("dropbear", "dropbearkey", "hal_multiremote", "hal_remotes", "MANIFEST.txt")
+$BinDirScan = @'
+ls -l /data/codex/bin 2>/dev/null | awk '/^-/ {print "bin_file bytes="$5" name="$NF}'; awk '$1 ~ /^[0-9a-f][0-9a-f][0-9a-f][0-9a-f]/ && length($1) == 32 {print "old_manifest md5="$1" name="$2}' /data/codex/bin/MANIFEST.txt 2>/dev/null; for f in /data/codex/bin/*; do [ -f "$f" ] && [ ! -L "$f" ] && md5sum "$f"; done
+'@
+$BackupScan = @'
+for r in /data/codex/resource-backups /data/codex-backups /data/codex/update-backups; do [ -d "$r" ] && [ ! -L "$r" ] || continue; set -- "$r"; while [ $# -gt 0 ]; do d=$1; shift; for e in "$d"/* "$d"/.[!.]*; do if [ -d "$e" ] && [ ! -L "$e" ]; then set -- "$@" "$e"; elif [ -f "$e" ]; then sz=$(ls -l "$e" | awk '{print $5}'); echo "backup_file bytes=$sz path=$e"; fi; done; done; done
+'@
+$NeverRemovePrefixes = @("/data/resources", "/pkg/moosehead", "/usr", "/opt", "/etc", "/pkg", "/cache", "/home")
+
+function Assert-Removable([string]$Path, [string]$Kind) {
+    foreach ($prefix in $NeverRemovePrefixes) {
+        if ($Path -eq $prefix -or $Path.StartsWith("$prefix/")) { throw "refusing to remove protected path '$Path'" }
+    }
+    $name = $Path.Split('/')[-1]
+    $ok = $false
+    if ($Kind -eq "root_tool_stage") { $ok = $Path -cmatch $RootToolStagePattern }
+    elseif ($Kind -eq "root_tool_dropbear") { $ok = $Path -in @("/data/rootssh/bin/dropbearmulti", "/data/rootssh/bin/dropbear", "/data/rootssh/bin/dropbearkey") }
+    elseif ($Kind -eq "stale_binary") { $ok = $Path.StartsWith("$BinDir/") }
+    elseif ($Kind -eq "old_backup") { $ok = ($Path -cmatch ('^' + [regex]::Escape($HandoffRoot) + '/webui-handoff-\d{8}-\d{6}$')) -or ($Path.StartsWith("$ResourceBackupRoot/") -and ($name -cmatch '^\d{8}_\d{6}$' -or $name -cmatch '^settings_\d{8}_\d{6}$')) }
+    elseif ($Kind -eq "install_temp") { $ok = ($Path -cmatch ('^' + [regex]::Escape($HandoffRoot) + '/\.incomplete-webui-handoff-\d{8}-\d{6}$')) -or $Path.EndsWith($NewSuffix) -or $Path.EndsWith($RestoreSuffix) }
+    if (-not $ok) { throw "refusing to remove unclassified path '$Path' as $Kind" }
+}
 
 # Phase 1 could not write a new copy; every copy was removed, nothing live changed.
 class CapacityAbort : System.Exception { CapacityAbort([string]$m) : base($m) {} }
@@ -1292,6 +1318,9 @@ $MooseheadFiles = [long]0
 $DropbearCopies = @{}
 # Hard-link count of each, by path.
 $DropbearLinks = @{}
+# Dead legacy data items (@{Class; Path; Bytes; Files}) and temp probe paths.
+$LegacyItems = [System.Collections.ArrayList]::new()
+$TempProbePaths = @()
 # USB Ethernet driver modules (usb_eth_service.sh loads them from here), and
 # the module names in the hub's /proc/modules, read once when needed.
 $UsbNetModulesDir = "/data/codex/modules/usb-net/"
@@ -1822,7 +1851,8 @@ function Invoke-DestinationProbe() {
     Step "Probing destination state (BusyBox ls -l / md5sum)"
     $dests = @($Candidates | ForEach-Object { $_.Dest })
     foreach ($p in ($HandoffRequiredPaths + @($RootToolDropbear, $HalMultiDest))) { if ($dests -notcontains $p) { $dests += $p } }
-    $script:Probe = Get-FileStatus $dests
+    $script:TempProbePaths = @($dests | ForEach-Object { "$_$NewSuffix"; "$_$RestoreSuffix" })
+    $script:Probe = Get-FileStatus ($dests + $TempProbePaths)
     foreach ($cand in $Candidates) {
         $kind = $Probe[$cand.Dest]["kind"]
         if ($kind -in @("symlink", "other")) {
@@ -1936,6 +1966,134 @@ function Get-RootToolLeftovers() {
     }
 }
 
+function Get-LegacyCleanup() {
+    # Positively identify every dead-data class. Read-only.
+    $LegacyItems.Clear()
+    foreach ($s in $RootToolStages) {
+        $LegacyItems.Add(@{ Class = "root_tool_stage"; Path = [string]$s.Path; Bytes = [long]$s.Bytes; Files = [long]$s.Files }) | Out-Null
+    }
+    if (Test-RootToolDropbearRemovable) {
+        $LegacyItems.Add(@{ Class = "root_tool_dropbear"; Path = $RootToolDropbear; Bytes = [long]$Probe[$RootToolDropbear]["size"]; Files = [long]1 }) | Out-Null
+    }
+    $out = Invoke-Remote $BinDirScan $null 60000
+    $binFiles = @{}
+    $oldManifest = @{}
+    $binMd5 = @{}
+    foreach ($line in ($out -split "`n")) {
+        $line = $line.Trim()
+        if ($line -cmatch '^bin_file bytes=(\d+) name=(\S+)$') { $binFiles[$Matches[2]] = [long]$Matches[1]; continue }
+        if ($line -cmatch '^old_manifest md5=([0-9a-f]{32}) name=(\S+)$') { $oldManifest[$Matches[2]] = $Matches[1]; continue }
+        if ($line -cmatch '^([0-9a-f]{32})  (/data/codex/bin/\S+)$') { $binMd5[$Matches[2].Substring($BinDir.Length + 1)] = $Matches[1] }
+    }
+    $current = @(Get-BinManifestNames)
+    $dests = @($Candidates | ForEach-Object { $_.Dest })
+    foreach ($name in ($binFiles.Keys | Sort-Object)) {
+        $path = "$BinDir/$name"
+        if ($oldManifest.Contains($name) -and $current -notcontains $name -and $ManagedBinFiles -notcontains $name -and $dests -notcontains $path -and $binMd5[$name] -eq $oldManifest[$name]) {
+            $LegacyItems.Add(@{ Class = "stale_binary"; Path = $path; Bytes = [long]$binFiles[$name]; Files = [long]1 }) | Out-Null
+        }
+    }
+    $out = Invoke-Remote $BackupScan $null 60000
+    $gens = @{}
+    foreach ($line in ($out -split "`n")) {
+        if ($line.Trim() -cnotmatch '^backup_file bytes=(\d+) path=(\S+)$') { continue }
+        $size = [long]$Matches[1]
+        $path = $Matches[2]
+        $root = @("/data/codex/resource-backups", "/data/codex-backups", "/data/codex/update-backups") | Where-Object { $path.StartsWith("$_/") } | Select-Object -First 1
+        if (-not $root) { continue }
+        $gen = "$root/" + $path.Substring($root.Length + 1).Split('/')[0]
+        if (-not $gens.Contains($gen)) { $gens[$gen] = @{ Bytes = [long]0; Files = [long]0 } }
+        $gens[$gen].Bytes += $size
+        $gens[$gen].Files += 1
+    }
+    $byKind = @{}
+    foreach ($gen in ($gens.Keys | Sort-Object)) {
+        $name = $gen.Split('/')[-1]
+        if ($gen -cmatch ('^' + [regex]::Escape($HandoffRoot) + '/\.incomplete-webui-handoff-\d{8}-\d{6}$')) {
+            $LegacyItems.Add(@{ Class = "install_temp"; Path = $gen; Bytes = [long]$gens[$gen].Bytes; Files = [long]$gens[$gen].Files }) | Out-Null
+        } elseif ($gen -cmatch ('^' + [regex]::Escape($HandoffRoot) + '/webui-handoff-\d{8}-\d{6}$')) {
+            if (-not $byKind.Contains("handoff")) { $byKind["handoff"] = @() }
+            $byKind["handoff"] += $gen
+        } elseif ($gen.StartsWith("$ResourceBackupRoot/") -and $name -cmatch '^\d{8}_\d{6}$') {
+            if (-not $byKind.Contains("resource")) { $byKind["resource"] = @() }
+            $byKind["resource"] += $gen
+        } elseif ($gen.StartsWith("$ResourceBackupRoot/") -and $name -cmatch '^settings_\d{8}_\d{6}$') {
+            if (-not $byKind.Contains("settings")) { $byKind["settings"] = @() }
+            $byKind["settings"] += $gen
+        }
+        # update-backups generations are counted only, never removed.
+    }
+    foreach ($kind in $byKind.Keys) {
+        $group = @($byKind[$kind] | Sort-Object)
+        for ($i = 0; $i -lt [Math]::Max(0, $group.Count - $BackupKeep); $i++) {
+            $gen = $group[$i]
+            $LegacyItems.Add(@{ Class = "old_backup"; Path = $gen; Bytes = [long]$gens[$gen].Bytes; Files = [long]$gens[$gen].Files }) | Out-Null
+        }
+    }
+    foreach ($path in $TempProbePaths) {
+        if ($Probe.Contains($path) -and $Probe[$path]["kind"] -eq "regular") {
+            $LegacyItems.Add(@{ Class = "install_temp"; Path = $path; Bytes = [long]$Probe[$path]["size"]; Files = [long]1 }) | Out-Null
+        }
+    }
+}
+
+function Get-LegacyCredit() {
+    $credit = [long]0
+    foreach ($item in @($LegacyItems)) {
+        if ($item.Class -eq "root_tool_dropbear") {
+            $stages = [long]0
+            foreach ($s in $RootToolStages) { $stages += [long][Math]::Floor($s.Bytes * 3 / 5) }
+            $credit += (Get-LeftoverCredit) - $stages
+        } else {
+            $credit += [long][Math]::Floor([long]$item.Bytes * 3 / 5)
+        }
+    }
+    return $credit
+}
+
+function Remove-LegacyData() {
+    # Remove every positively identified dead-data item; log each one.
+    Step "Removing dead legacy data (automatic cleanup)"
+    $removedBytes = [long]0
+    foreach ($item in @($LegacyItems)) {
+        $path = [string]$item.Path
+        $kind = [string]$item.Class
+        Assert-Removable $path $kind
+        if ($kind -eq "root_tool_dropbear") {
+            $r = Invoke-RemoteRc $RootToolDropbearRemove $null 30000
+            if ($r.Code -eq 0 -and $r.Out.Trim() -eq "removed") {
+                KV "removed_legacy class=root_tool_dropbear bytes=$($item.Bytes) files=1 path=$path"
+                KV "removed_leftover=$path"
+                $removedBytes += [long]$item.Bytes
+            } else {
+                Info "kept ${path}: SSH doesn't run the installed Dropbear yet"
+            }
+            continue
+        }
+        $cmd = "rm -f " + (Remote-Quote $path)
+        if ($kind -in @("root_tool_stage", "old_backup") -or $path -cmatch '\.incomplete-webui-handoff-') { $cmd = "rm -rf " + (Remote-Quote $path) }
+        $r = Invoke-RemoteRc $cmd $null 120000
+        if ($r.Code -ne 0) { Info "warning: could not remove ${path}: $($r.Err.Trim())"; continue }
+        KV "removed_legacy class=$kind bytes=$($item.Bytes) files=$($item.Files) path=$path"
+        if ($kind -eq "root_tool_stage") { KV "removed_leftover=$path" }
+        Info "removed $path ($kind, $(Format-KB ([long]$item.Bytes)))"
+        $removedBytes += [long]$item.Bytes
+    }
+    if ($removedBytes -gt 0) {
+        KV "legacy_cleanup_removed_bytes=$removedBytes"
+        Info "Dead legacy data removed: $(Format-KB $removedBytes) in $($LegacyItems.Count) item(s)."
+    } else {
+        Info "No dead legacy data to remove."
+    }
+    Get-RootToolLeftovers
+    Get-LegacyCleanup
+    Measure-Flash
+    if ($null -ne $FlashAvail) {
+        KV "flash_free_after_cleanup_bytes=$FlashAvail"
+        Info "Flash free after cleanup: $(Format-KB $FlashAvail)."
+    }
+}
+
 # Measures /pkg/moosehead. Read-only: nothing here or later removes it.
 function Get-ExtenderPackage() {
     $script:MooseheadBytes = $null
@@ -2046,8 +2204,7 @@ function Build-Plans() {
 
 function Get-FlashAfter() {
     # Estimated free flash once the install (and any opted-in cleanup) is done.
-    $credit = [long]0
-    if ($RemoveRootToolLeftovers) { $credit = Get-LeftoverCredit }
+    $credit = Get-LegacyCredit
     $avail = [long]0
     if ($null -ne $FlashAvail) { $avail = $FlashAvail }
     return [long][Math]::Max(0, $avail + $credit - $FlashWritten + $FlashReleased)
@@ -2094,8 +2251,7 @@ function Get-HandoffEstimate() {
 
 function Set-Verdict() {
     if ($Verdict -eq $VerdictConfigUncertain) { return }
-    $credit = [long]0
-    if ($RemoveRootToolLeftovers) { $credit = Get-LeftoverCredit }
+    $credit = Get-LegacyCredit
     if ($RamFreeBytes -lt $RamRequiredBytes) {
         $script:Verdict = $VerdictRollbackCapacity
         $VerdictReasons.Add("free RAM $RamFreeBytes < rollback copies + margin $RamRequiredBytes") | Out-Null
@@ -2103,7 +2259,7 @@ function Set-Verdict() {
         $script:Verdict = $VerdictCapacity
         $script:CapacityStage = "preflight"
         $reason = "free flash $FlashAvail < estimated need $FlashRequired"
-        if ($credit -gt 0) { $reason += " (after about $credit freed from root-tool leftovers)" }
+        if ($credit -gt 0) { $reason += " (after about $credit freed by automatic legacy cleanup)" }
         $VerdictReasons.Add($reason) | Out-Null
     } else {
         $script:Verdict = $VerdictAllowed
@@ -2117,7 +2273,11 @@ function Show-PreflightReport() {
     # owned by InstallerCliUX; the KV key=value lines are the stable contract.
     Step "Preflight report"
     Info "Status so far uses private volatile staging under /var/volatile/codex-install-* only."
-    Info "No persistent hub paths have been written, pruned, handed off, installed, or restarted yet."
+    if ($PreflightOnly) {
+        Info "No persistent hub paths have been written, pruned, handed off, installed, or restarted yet."
+    } else {
+        Info "So far only dead legacy data (see removed_legacy lines) may have been removed; nothing has been handed off, installed, or restarted yet."
+    }
     if ($PreflightOnly) {
         Info "Mode: -PreflightOnly - stages, verifies, compares, and prints a terminal verdict; performs no persistent writes and no service actions."
     }
@@ -2204,20 +2364,18 @@ function Show-FlashReport() {
             Info "$($cand.Dest): harmony-hub-root's copy of the same Dropbear at $($cand.LinkSource) is reused as a hard link, so it takes no extra flash."
         }
     }
-    $leftovers = @()
-    foreach ($s in $RootToolStages) { $leftovers += ,@($s.Path, [long]$s.Bytes, [long]$s.Files) }
-    if (Test-RootToolDropbearRemovable) { $leftovers += ,@($RootToolDropbear, [long]$Probe[$RootToolDropbear]["size"], [long]1) }
-    foreach ($l in $leftovers) {
-        KV "root_tool_leftover bytes=$($l[1]) files=$($l[2]) path=$($l[0])"
-        $what = "staging files"
-        if ($l[0] -eq $RootToolDropbear) { $what = "a second copy of Dropbear that SSH no longer uses" }
-        Info "harmony-hub-root left $($l[0]) behind: $what, $(Format-KB $l[1]) in $($l[2]) file(s)."
+    foreach ($item in @($LegacyItems)) {
+        KV "legacy_cleanup class=$($item.Class) bytes=$($item.Bytes) files=$($item.Files) path=$($item.Path)"
+        if ($item.Class -in @("root_tool_stage", "root_tool_dropbear")) {
+            KV "root_tool_leftover bytes=$($item.Bytes) files=$($item.Files) path=$($item.Path)"
+        }
+        Info "Dead legacy data: $($item.Path) ($($item.Class), $(Format-KB ([long]$item.Bytes)) in $($item.Files) file(s))."
     }
-    if ($leftovers.Count -gt 0) {
-        if ($RemoveRootToolLeftovers -and -not $PreflightOnly) {
-            Info "They are removed before the install (-RemoveRootToolLeftovers)."
+    if ($LegacyItems.Count -gt 0) {
+        if ($PreflightOnly) {
+            Info "Dead legacy data is removed automatically when the install runs; preflight-only removes nothing."
         } else {
-            Info "Run the installer with -RemoveRootToolLeftovers to remove them and free that flash."
+            Info "Dead legacy data was removed automatically before the capacity check (see removed_legacy lines)."
         }
     }
     if ($null -ne $MooseheadBytes) {
@@ -2242,8 +2400,8 @@ function Show-Verdict() {
         $free = [long]0
         if ($null -ne $FlashAvail) { $free = $FlashAvail }
         Info "BLOCKED_CAPACITY - not enough free flash: about $(Format-KB $FlashRequired) needed, $(Format-KB $free) free. Nothing was installed."
-        if (($RootToolStages.Count -gt 0 -or (Test-RootToolDropbearRemovable)) -and -not $RemoveRootToolLeftovers) {
-            Info "Removing harmony-hub-root's leftovers (-RemoveRootToolLeftovers) frees about $(Format-KB (Get-LeftoverCredit))."
+        if ($LegacyItems.Count -gt 0) {
+            Info "Automatic cleanup removed $(Format-KB (Get-LegacyCredit)) of dead legacy data and it still does not fit."
         }
         if ($null -ne $MooseheadBytes) {
             Info "The Harmony Hub Extender package at $ExtenderPackage ($(Format-KB $MooseheadBytes)) is a likely cause of the shortfall. See ""If the hub's flash is full"" in docs/INSTALL.md; don't delete it if you still use an Extender."
@@ -2348,30 +2506,8 @@ function New-HandoffBackup() {
 }
 
 function Remove-RootToolLeftovers() {
-    # Delete harmony-hub-root's staging folders and, while SSH runs ours, its
-    # spare Dropbear. Opted in with -RemoveRootToolLeftovers; not rolled back,
-    # since nothing reads them.
-    Step "Removing harmony-hub-root leftovers"
-    foreach ($s in @($RootToolStages)) {
-        $path = [string]$s.Path
-        if ($path -cnotmatch $RootToolStagePattern) { throw "refusing to remove unexpected path '$path'" }
-        $r = Invoke-RemoteRc ("rm -rf " + (Remote-Quote $path)) $null 120000
-        if ($r.Code -ne 0) { Info "warning: could not remove ${path}: $($r.Err.Trim())" } else { KV "removed_leftover=$path" }
-    }
-    if (Test-RootToolDropbearRemovable) {
-        $r = Invoke-RemoteRc $RootToolDropbearRemove $null 30000
-        if ($r.Code -eq 0 -and $r.Out.Trim() -eq "removed") {
-            KV "removed_leftover=$RootToolDropbear"
-        } else {
-            Info "kept ${RootToolDropbear}: SSH doesn't run the installed Dropbear yet"
-        }
-    }
-    Get-RootToolLeftovers
-    Measure-Flash
-    if ($null -ne $FlashAvail) {
-        KV "flash_free_after_cleanup_bytes=$FlashAvail"
-        Info "Flash free after removing them: $(Format-KB $FlashAvail)."
-    }
+    # Compatibility alias: cleanup is automatic (Remove-LegacyData).
+    Remove-LegacyData
 }
 
 function Show-FlashAfterInstall() {
@@ -3097,6 +3233,7 @@ Get-ExtenderPackage
 
 Count-BackupGenerations
 Get-HandoffEstimate
+Get-LegacyCleanup
 if ($Verdict -eq $VerdictConfigUncertain) {
     Show-PreflightReport
     Remove-StagingTree
@@ -3104,6 +3241,12 @@ if ($Verdict -eq $VerdictConfigUncertain) {
 }
 
 Build-Plans
+if (-not $PreflightOnly -and $LegacyItems.Count -gt 0) {
+    # Dead legacy data goes first, automatically; capacity is judged only
+    # on what is free afterwards.
+    Remove-LegacyData
+    Build-Plans
+}
 Set-Verdict
 Show-PreflightReport
 
@@ -3114,22 +3257,8 @@ if ($PreflightOnly) {
 
 if ($Verdict -ne $VerdictAllowed) {
     Remove-StagingTree
-    Info "normal mode aborted before any persistent mutation"
+    Info "normal mode aborted before installing (dead legacy data, if any, was already removed)"
     exit 2
-}
-
-if ($RemoveRootToolLeftovers -and ($RootToolStages.Count -gt 0 -or (Test-RootToolDropbearRemovable))) {
-    Remove-RootToolLeftovers
-    if ((Get-ActiveCandidates).Count -gt 0 -and (Get-FlashShortfall) -gt 0 -and -not $SkipFlashCheck) {
-        $script:Verdict = $VerdictCapacity
-        $script:CapacityStage = "preflight"
-        $reason = "free flash $FlashAvail < estimated need $FlashRequired after removing the leftovers"
-        $VerdictReasons.Add($reason) | Out-Null
-        KV "verdict_reason=$reason"
-        Show-Verdict
-        Remove-StagingTree
-        exit 2
-    }
 }
 
 if ((Get-ActiveCandidates).Count -eq 0) {

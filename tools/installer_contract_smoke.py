@@ -31,8 +31,11 @@ Contract proven (Python behavioral):
   hub is blocked before any write, with a fallback when it can't be
   measured; harmony-hub-root's identical Dropbear is hard-linked (copied if
   the link fails) and survives rollback; its leftovers are reported and
-  removed only with --remove-root-tool-leftovers, the spare Dropbear only
-  while SSH runs ours.
+  removed automatically before the capacity check (the flag is a no-op
+  alias), the spare Dropbear only while SSH runs ours; plus stale binaries
+  the hub's own MANIFEST.txt records but this payload no longer ships,
+  backup generations past the newest three per kind, and interrupted-install
+  temp files -- never /data/resources, /pkg/moosehead, or stock files.
 
 Determinism: no randomness, no clock reads, fixed fake staging suffix,
 fixed fake timestamps. All hosts/IDs/credentials are obviously fake
@@ -291,6 +294,37 @@ class FakeHub:
             size, files = self.moosehead
             return 0, f"extender_package bytes={size} files={files} path={INST.EXTENDER_PACKAGE}\n", ""
 
+        if c == INST.BIN_DIR_SCAN:
+            lines = []
+            manifest = self.fs.get("/data/codex/bin/MANIFEST.txt")
+            old = {}
+            if manifest is not None:
+                for entry in manifest["data"].decode("utf-8", "replace").splitlines():
+                    parts = entry.split()
+                    if len(parts) == 2 and re.fullmatch(r"[0-9a-f]{32}", parts[0]):
+                        old[parts[1]] = parts[0]
+            for path in sorted(self.fs):
+                if path.startswith("/data/codex/bin/") and "/" not in path[len("/data/codex/bin/"):]:
+                    if path in self.symlinks:
+                        continue
+                    entry = self.fs[path]
+                    name = path[len("/data/codex/bin/"):]
+                    lines.append(f"bin_file bytes={len(entry['data'])} name={name}")
+                    lines.append(f"{md5_bytes(entry['data'])}  {path}")
+            for name, digest in sorted(old.items()):
+                lines.append(f"old_manifest md5={digest} name={name}")
+            return 0, "".join(line + "\n" for line in lines), ""
+
+        if c == INST.BACKUP_SCAN:
+            lines = []
+            for path in sorted(self.fs):
+                if any(path.startswith(root + "/") for root in
+                       ("/data/codex/resource-backups", "/data/codex-backups", "/data/codex/update-backups")):
+                    if path in self.symlinks:
+                        continue
+                    lines.append(f"backup_file bytes={len(self.fs[path]['data'])} path={path}")
+            return 0, "".join(line + "\n" for line in lines), ""
+
         if c == INST.ROOT_TOOL_DROPBEAR_REMOVE:
             wrapper = self.fs.get("/usr/sbin/dropbear")
             if INST.DROPBEAR_DEST in self.fs and wrapper and b"/data/codex/bin/dropbear" in wrapper["data"]:
@@ -352,7 +386,10 @@ class FakeHub:
             self.events.append(("rm_rf", target))
             for path in list(self.fs):
                 if path == target or path.startswith(target + "/"):
+                    self.release(path)
                     self.fs.pop(path, None)
+                    if path in self.backup_listing:
+                        self.backup_listing.remove(path)
             if target in self.backup_listing:
                 self.backup_listing.remove(target)
             if target in self.root_stages:
@@ -1679,7 +1716,7 @@ class PythonInstallerFlash(unittest.TestCase):
             self.assertEqual(code, 0, stderr or stdout)
             code, stdout, stderr = self.harness.run(self.harness.base_argv())
         self.assertEqual(code, 0, stderr or stdout)
-        self.assertIn(f"root_tool_leftover bytes={len(self.OTHER_BUILD)} files=1 path={INST.ROOT_TOOL_DROPBEAR}", stdout)
+        self.assertIn(f"removed_legacy class=root_tool_dropbear bytes={len(self.OTHER_BUILD)} files=1 path={INST.ROOT_TOOL_DROPBEAR}", stdout)
         # On a full hub, the advice names the credit: ours, not scaled up.
         ours_flash = next(int(flash) for dest, _action, flash in candidate_flash(stdout) if dest == INST.DROPBEAR_DEST)
         self.hub.fs[INST.WEBUI_DEST] = {"data": b"an older codex_webui\n", "mode": "755"}  # something to install
@@ -1687,8 +1724,8 @@ class PythonInstallerFlash(unittest.TestCase):
         with self.other_build_known():
             code, stdout, _stderr = self.harness.run(self.harness.base_argv())
         self.assertEqual(kv_value(stdout, "verdict"), INST.VERDICT_CAPACITY)
-        expect = INST.kib(ours_flash)
-        self.assertIn(f"--remove-root-tool-leftovers) frees about {expect}", stdout)
+        # The copy was already removed automatically by the run above.
+        self.assertNotIn(INST.ROOT_TOOL_DROPBEAR, self.hub.fs)
 
     def test_unknown_root_tool_dropbear_is_not_linked(self):
         """[PYTHON BEHAVIORAL] a root-tool Dropbear that is neither build gets
@@ -1746,20 +1783,22 @@ class PythonInstallerFlash(unittest.TestCase):
         self.assertEqual(self.hub.fs["/usr/sbin/dropbear"]["data"], ROOT_TOOL_WRAPPER)
         self.assertEqual(self.hub.leftovers(), [])
 
-    def test_leftovers_reported_but_kept_without_flag(self):
-        """[PYTHON BEHAVIORAL] root-tool staging folders are listed with their
-        size and a hint, and left alone."""
+    def test_leftovers_reported_and_removed_without_flag(self):
+        """[PYTHON BEHAVIORAL] root-tool staging folders are listed in
+        preflight, and a normal run removes them automatically: no flag."""
         stages = {"/data/codexssh_19f9ec4dbc1_094b_stage": (771_000, 556),
                   "/data/codexssh_19f9ed7731a_7bc7_stage": (771_000, 556)}
         self.root_tool_hub(stages)
-        code, stdout, stderr = self.harness.run(self.harness.base_argv("--hub-id", FAKE_HUB_ID))
+        code, stdout, stderr = self.harness.run(self.harness.base_argv("--hub-id", FAKE_HUB_ID, "--preflight-only"))
         self.assertEqual(code, 0, stderr or stdout)
         self.assertEqual(kv_multi(stdout, "root_tool_leftover bytes"),
                          [f"771000 files=556 path={p}" for p in sorted(stages)])
-        self.assertIn("--remove-root-tool-leftovers", stdout)
-        rm_rf_targets = [e[1] for e in self.hub.events if e[0] == "rm_rf"]
-        self.assertEqual(rm_rf_targets, [self.hub.stage])
         self.assertEqual(sorted(self.hub.root_stages), sorted(stages))
+        code, stdout, stderr = self.harness.run(self.harness.base_argv("--hub-id", FAKE_HUB_ID))
+        self.assertEqual(code, 0, stderr or stdout)
+        self.assertEqual(kv_multi(stdout, "removed_leftover"), sorted(stages))
+        self.assertNotIn("--remove-root-tool-leftovers", stdout)
+        self.assertEqual(self.hub.root_stages, {})
 
     def test_leftovers_removed_before_install_with_flag(self):
         """[PYTHON BEHAVIORAL] --remove-root-tool-leftovers deletes exactly the
@@ -1780,32 +1819,27 @@ class PythonInstallerFlash(unittest.TestCase):
 
     def test_leftover_removal_unblocks_a_short_hub(self):
         """[PYTHON BEHAVIORAL] a hub too full for the install fits once the
-        root tool's staging folder goes, and the block says so."""
+        root tool's staging folder is removed automatically, no flag."""
         stages = {"/data/codexssh_19f9ec4dbc1_094b_stage": (900_000, 640)}
         self.root_tool_hub(stages)
         self.hub.available_bytes = self.required("--hub-id", FAKE_HUB_ID) - 300_000
-        code, stdout, _ = self.harness.run(self.harness.base_argv("--hub-id", FAKE_HUB_ID))
-        self.assertEqual(code, 2, stdout)
-        self.assertEqual(kv_value(stdout, "verdict"), INST.VERDICT_CAPACITY)
-        self.assertIn("Removing harmony-hub-root's leftovers", stdout)
-        self.assertEqual(self.persistent_writes(), [])
-        code, stdout, stderr = self.harness.run(
-            self.harness.base_argv("--hub-id", FAKE_HUB_ID, "--remove-root-tool-leftovers"))
+        code, stdout, stderr = self.harness.run(self.harness.base_argv("--hub-id", FAKE_HUB_ID))
         self.assertEqual(code, 0, stderr or stdout)
         self.assertEqual(kv_value(stdout, "verdict"), INST.VERDICT_ALLOWED)
+        self.assertEqual(self.hub.root_stages, {})
+        self.assertIsNotNone(kv_value(stdout, "flash_free_after_cleanup_bytes"))
 
-    def test_too_little_even_after_cleanup_removes_nothing(self):
-        """[PYTHON BEHAVIORAL] when removing the leftovers wouldn't be enough
-        either, the preflight blocks before deleting anything."""
+    def test_too_little_even_after_cleanup_still_blocks(self):
+        """[PYTHON BEHAVIORAL] when the freed space still isn't enough, the
+        dead data is already gone but nothing is installed."""
         stages = {"/data/codexssh_19f9ec4dbc1_094b_stage": (900_000, 640)}
         self.root_tool_hub(stages)
         self.hub.available_bytes = self.required("--hub-id", FAKE_HUB_ID) - 700_000
-        code, stdout, _ = self.harness.run(
-            self.harness.base_argv("--hub-id", FAKE_HUB_ID, "--remove-root-tool-leftovers"))
+        code, stdout, _ = self.harness.run(self.harness.base_argv("--hub-id", FAKE_HUB_ID))
         self.assertEqual(code, 2, stdout)
         self.assertEqual(kv_value(stdout, "verdict"), INST.VERDICT_CAPACITY)
-        self.assertEqual(sorted(self.hub.root_stages), sorted(stages))
-        self.assertEqual(self.persistent_writes(), [])
+        self.assertEqual(self.hub.root_stages, {})
+        self.assertFalse(any(e[0] in ("handoff", "new_copy", "link") for e in self.hub.events))
 
     def test_preflight_only_never_removes_leftovers(self):
         """[PYTHON BEHAVIORAL] --preflight-only with the cleanup flag still
@@ -2009,6 +2043,146 @@ class PythonInstallerFlash(unittest.TestCase):
         probes = self.hub.indices(lambda e: e == ("flash_probe",))
         self.assertEqual(len(probes), 2)
         self.assertLess(probes[-1], self.hub.first_index(lambda e: e == ("rm_rf", self.hub.stage)))
+
+
+class PythonInstallerLegacyCleanup(unittest.TestCase):
+    """Automatic dead-legacy cleanup: every class, and the never-remove list."""
+
+    def setUp(self):
+        self.hub = FakeHub()
+        self.harness = InstallerHarness(self.hub)
+        self.addCleanup(self.harness.close)
+        prime_upgrade_hub(self.hub)
+
+    def run_install(self, *extra: str):
+        return self.harness.run(self.harness.base_argv(*extra))
+
+    def test_stale_binary_removed_only_with_manifest_match(self):
+        """[PYTHON BEHAVIORAL] a binary the hub's MANIFEST.txt records, that
+        this payload no longer ships and whose MD5 still matches, is removed;
+        an unrecorded file and a recorded-but-changed file are kept."""
+        stale = b"fake stale binary from an old release\n" * 8
+        changed = b"recorded but modified locally\n" * 8
+        unknown = b"never shipped by melodious\n" * 8
+        manifest = (
+            f"{md5_bytes(stale)}  codex_oldthing\n"
+            f"{md5_bytes(b'original recorded bytes')}  codex_changed\n"
+            f"{md5_bytes(b'x')}  codex_webui\n"
+        ).encode()
+        self.hub.fs["/data/codex/bin/MANIFEST.txt"] = {"data": manifest, "mode": "644"}
+        self.hub.fs["/data/codex/bin/codex_oldthing"] = {"data": stale, "mode": "755"}
+        self.hub.fs["/data/codex/bin/codex_changed"] = {"data": changed, "mode": "755"}
+        self.hub.fs["/data/codex/bin/codex_unknown"] = {"data": unknown, "mode": "755"}
+        code, stdout, stderr = self.run_install()
+        self.assertEqual(code, 0, stderr or stdout)
+        self.assertIn("removed_legacy class=stale_binary", stdout)
+        self.assertNotIn("/data/codex/bin/codex_oldthing", self.hub.fs)
+        self.assertIn("/data/codex/bin/codex_changed", self.hub.fs)
+        self.assertIn("/data/codex/bin/codex_unknown", self.hub.fs)
+        self.assertIn("/data/codex/bin/MANIFEST.txt", self.hub.fs)
+
+    def test_old_backups_pruned_to_newest_three_per_kind(self):
+        """[PYTHON BEHAVIORAL] resource and settings generations past the
+        newest three go; the newest three of each kind stay; an incomplete
+        handoff goes; update generations are never removed."""
+        for i in range(5):
+            gen = f"/data/codex/resource-backups/2026010{i + 1}_000000"
+            self.hub.fs[f"{gen}/DeviceList.json"] = {"data": b"{}" * 100, "mode": "644"}
+            self.hub.backup_listing.append(gen)
+        for i in range(4):
+            gen = f"/data/codex/resource-backups/settings_2026010{i + 1}_000000"
+            self.hub.fs[f"{gen}/config.json"] = {"data": b"{}" * 10, "mode": "644"}
+        self.hub.fs["/data/codex-backups/.incomplete-webui-handoff-20260101-000000/x"] = {"data": b"z" * 50, "mode": "644"}
+        self.hub.fs["/data/codex/update-backups/12345/file"] = {"data": b"u" * 50, "mode": "644"}
+        code, stdout, stderr = self.run_install()
+        self.assertEqual(code, 0, stderr or stdout)
+        removed = kv_multi(stdout, "removed_legacy class")
+        self.assertTrue(any(r.startswith("old_backup") and "20260101_000000" in r for r in removed), removed)
+        self.assertTrue(any("install_temp" in r and ".incomplete" in r for r in removed), removed)
+        for kept in ("20260103_000000", "20260104_000000", "20260105_000000"):
+            self.assertIn(f"/data/codex/resource-backups/{kept}/DeviceList.json", self.hub.fs)
+        self.assertNotIn("/data/codex/resource-backups/20260101_000000/DeviceList.json", self.hub.fs)
+        self.assertIn("/data/codex/update-backups/12345/file", self.hub.fs)
+        self.assertNotIn("/data/codex-backups/.incomplete-webui-handoff-20260101-000000/x", self.hub.fs)
+
+    def test_interrupted_install_temp_files_removed(self):
+        """[PYTHON BEHAVIORAL] .codex-new/.codex-rb next to installer
+        destinations are removed; the live destinations are untouched."""
+        self.hub.fs[INST.WEBUI_DEST + INST.NEW_SUFFIX] = {"data": b"partial new copy", "mode": "644"}
+        self.hub.fs["/data/codex/init.sh" + INST.RESTORE_SUFFIX] = {"data": b"partial restore", "mode": "644"}
+        self.hub.fs["/data/codex/init.sh.codex-old"] = {"data": b"not an installer suffix", "mode": "644"}
+        code, stdout, stderr = self.run_install()
+        self.assertEqual(code, 0, stderr or stdout)
+        self.assertNotIn(INST.WEBUI_DEST + INST.NEW_SUFFIX, self.hub.fs)
+        self.assertNotIn("/data/codex/init.sh" + INST.RESTORE_SUFFIX, self.hub.fs)
+        self.assertIn("/data/codex/init.sh.codex-old", self.hub.fs)
+        self.assertIn("/data/codex/init.sh", self.hub.fs)
+
+    def test_never_remove_list_survives(self):
+        """[PYTHON BEHAVIORAL] user resources, stock firmware, the running
+        SSH server, and anything unclassified survive a full cleanup run."""
+        self.hub.fs["/data/resources/DeviceList.json"] = {"data": b"{\"devices\":[]}", "mode": "644"}
+        self.hub.fs["/usr/bin/hal"] = {"data": b"stock hal bytes", "mode": "755"}
+        self.hub.moosehead = (5_557_453, 212)
+        for path in ("/data/resources/DeviceList.json", "/usr/bin/hal", INST.DROPBEAR_DEST, "/usr/sbin/dropbear"):
+            self.assertIn(path, self.hub.fs)
+        with self.assertRaises(RuntimeError):
+            INST.assert_removable("/data/resources/DeviceList.json", "old_backup")
+        with self.assertRaises(RuntimeError):
+            INST.assert_removable("/pkg/moosehead", "old_backup")
+        with self.assertRaises(RuntimeError):
+            INST.assert_removable("/usr/bin/hal", "stale_binary")
+
+    def test_flag_is_a_noop_alias(self):
+        """[PYTHON BEHAVIORAL] --remove-root-tool-leftovers is still accepted
+        and changes nothing about the automatic cleanup."""
+        self.hub.root_stages["/data/codexssh_19f9ec4dbc1_094b_stage"] = (771_000, 556)
+        code, stdout, stderr = self.run_install("--remove-root-tool-leftovers")
+        self.assertEqual(code, 0, stderr or stdout)
+        self.assertEqual(self.hub.root_stages, {})
+
+    # Sizes/names measured from Hub 1's backup
+    # (~/Repos/harmony/hub1-backup-pre-2.5-smoke/, tar SHA256 in its
+    # SHA256.txt): five resource generations of 492080, 492238, 538314,
+    # 562015 and 538314 bytes, plus the root tool's 577296-byte Dropbear.
+    HUB1_RESOURCE_GENS = [
+        ("20261119_041535", 492080), ("20261119_142004", 492238),
+        ("20261119_172510", 538314), ("20261119_174014", 562015),
+        ("20261121_124211", 538314),
+    ]
+
+    def test_hub1_backup_fixture_unblocks(self):
+        """[PYTHON BEHAVIORAL] a fixture built from Hub 1's backup: flash
+        300 KB short of the need, dead data from every Hub 1 class present.
+        On main this run is BLOCKED_CAPACITY without the flag; automatic
+        cleanup frees the room and the install succeeds."""
+        import random
+        rng = random.Random(15390924)
+        prime_current_hub(self.hub)
+        # Hub 1 runs an older webui, so there is something to install.
+        self.hub.fs[INST.WEBUI_DEST] = {"data": b"hub1 older codex_webui\n", "mode": "755"}
+        for name, size in self.HUB1_RESOURCE_GENS:
+            self.hub.fs[f"/data/codex/resource-backups/{name}/DeviceList.json"] = {
+                "data": rng.randbytes(size), "mode": "644"}
+        self.hub.fs[INST.ROOT_TOOL_DROPBEAR] = {"data": (INST.PAYLOAD / "bin" / "dropbearmulti").read_bytes(), "mode": "755"}
+        # Measure the need from a preflight, then set flash 300 KB short.
+        code, stdout, _ = self.run_install("--preflight-only")
+        self.assertEqual(code, 0, stdout)
+        need = int(kv_value(stdout, "flash_required_bytes"))
+        self.hub.available_bytes = need - 300_000
+        code, stdout, stderr = self.run_install()
+        self.assertEqual(code, 0, stderr or stdout)
+        self.assertEqual(kv_value(stdout, "verdict"), INST.VERDICT_ALLOWED)
+        removed = kv_multi(stdout, "removed_legacy class")
+        self.assertTrue(any(r.startswith("old_backup") for r in removed), removed)
+        self.assertTrue(any(r.startswith("root_tool_dropbear") for r in removed), removed)
+        # Newest three Hub 1 generations kept, oldest two gone.
+        for name, _size in self.HUB1_RESOURCE_GENS[:2]:
+            self.assertNotIn(f"/data/codex/resource-backups/{name}/DeviceList.json", self.hub.fs)
+        for name, _size in self.HUB1_RESOURCE_GENS[2:]:
+            self.assertIn(f"/data/codex/resource-backups/{name}/DeviceList.json", self.hub.fs)
+        self.assertNotIn(INST.ROOT_TOOL_DROPBEAR, self.hub.fs)
+        self.assertIn(INST.DROPBEAR_DEST, self.hub.fs)
 
 
 class PythonInstallerFileStatus(unittest.TestCase):
@@ -4456,6 +4630,11 @@ class PowerShellStaticContract(unittest.TestCase):
         same hub commands as Python, byte for byte."""
         self.assertEqual(self.ps_here_string("RootToolScan"), INST.ROOT_TOOL_SCAN)
         self.assertEqual(self.ps_here_string("RootToolDropbearRemove"), INST.ROOT_TOOL_DROPBEAR_REMOVE)
+        self.assertEqual(self.ps_here_string("BinDirScan"), INST.BIN_DIR_SCAN)
+        self.assertEqual(self.ps_here_string("BackupScan"), INST.BACKUP_SCAN)
+        self.assertIn("function Get-LegacyCleanup()", self.text)
+        self.assertIn("function Remove-LegacyData()", self.text)
+        self.assertIn("removed_legacy class=", self.text)
 
     def test_extender_package_parity(self):
         """[PS1 STATIC] /pkg/moosehead is scanned with Python's command, byte
@@ -4495,8 +4674,9 @@ class PowerShellStaticContract(unittest.TestCase):
         self.assertLess(main.index("Set-UpgradeGates"), main.index("Set-DropbearLink"))
         self.assertLess(main.index("Measure-Flash"), main.index("Build-Plans"))
         self.assertLess(main.index("Get-RootToolLeftovers"), main.index("Build-Plans"))
-        self.assertLess(main.index("if ($Verdict -ne $VerdictAllowed)"), main.index("Remove-RootToolLeftovers"))
-        self.assertLess(main.index("Remove-RootToolLeftovers"), main.index("Add-RollbackCopies"))
+        self.assertLess(main.index("Get-LegacyCleanup"), main.index("Remove-LegacyData"))
+        self.assertLess(main.index("Remove-LegacyData"), main.index("Set-Verdict"))
+        self.assertLess(main.index("Remove-LegacyData"), main.index("Add-RollbackCopies"))
         self.assertLess(main.index("Show-FlashAfterInstall"), main.rindex("Remove-StagingTree"))
         self.assertIn('$script:CapacityStage = "phase1"', main)
         write = self.text.split("function Write-NewCopies()", 1)[1].split("function Install-Sequence()", 1)[0]

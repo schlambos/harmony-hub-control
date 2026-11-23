@@ -34,6 +34,45 @@ HEALTH_WAIT=${HEALTH_WAIT:-60}
 HANDOFF_PATHS="/etc/init.d/rcS.local /opt/luaworks/tasks/connectserver/netservicestarter.lua /usr/sbin/dropbear /usr/sbin/dropbearkey /data/codex/hub_id /data/codex/cloud_blocker.conf /data/codex/offline_egress_guard.sh /data/codexmqtt/config.json /pkg/codexactivity/codexactivity.lua /pkg/codexactivity/manifest.json"
 
 md5_of() { md5sum "$1" 2>/dev/null | cut -d' ' -f1; }
+
+# Automatic dead-legacy cleanup, the installer's classes (install_webui.py):
+# harmony-hub-root staging folders, its spare Dropbear (only while SSH runs
+# the installed one and the copy has no other name), Melodious backup
+# generations past the newest 3 per kind, incomplete handoff folders, and
+# .codex-new/.codex-rb temp files next to plan destinations. Never touches
+# /data/resources, /pkg/moosehead, stock firmware, or anything else.
+cleanup_legacy() {
+  S=$1
+  say() { echo "$*" >> "$S/log"; }
+  for d in "$R"/data/codexssh_*_stage; do
+    [ -d "$d" ] || continue
+    rm -rf "$d" && say "STEP cleanup removed $d"
+  done
+  if [ -f "$R/data/rootssh/bin/dropbearmulti" ] && [ ! -L "$R/data/rootssh/bin/dropbearmulti" ] &&
+     [ -x "$R/data/codex/bin/dropbear" ] &&
+     grep /data/codex/bin/dropbear "$R/usr/sbin/dropbear" >/dev/null 2>&1; then
+    set -- $(ls -il "$R/data/rootssh/bin/dropbearmulti" 2>/dev/null)
+    if [ "${3:-}" = "1" ]; then
+      rm -f "$R/data/rootssh/bin/dropbearmulti" "$R/data/rootssh/bin/dropbear" "$R/data/rootssh/bin/dropbearkey" &&
+        say "STEP cleanup removed $R/data/rootssh/bin/dropbearmulti"
+    fi
+  fi
+  for pat in '[0-9][0-9][0-9][0-9][0-9][0-9][0-9][0-9]_[0-9][0-9][0-9][0-9][0-9][0-9]' 'settings_[0-9]*'; do
+    old=$(ls -d "$R/data/codex/resource-backups"/$pat 2>/dev/null | awk -v keep=3 '{ a[NR] = $0 } END {
+      for (i = 2; i <= NR; i++) { v = a[i]; j = i - 1; while (j > 0 && a[j] > v) { a[j + 1] = a[j]; j-- } a[j + 1] = v }
+      for (i = 1; i <= NR - keep; i++) print a[i] }')
+    for d in $old; do rm -rf "$d" && say "STEP cleanup removed $d"; done
+  done
+  for d in "$HANDOFF_ROOT"/.incomplete-webui-handoff-*; do
+    [ -d "$d" ] || continue
+    rm -rf "$d" && say "STEP cleanup removed $d"
+  done
+  if [ -f "$S/plan" ]; then
+    while read md5 mode reboot name dest; do
+      rm -f "$R$dest.codex-new" "$R$dest.codex-rb"
+    done < "$S/plan"
+  fi
+}
 # Usable RAM in kB, as install_webui.py counts it. The hub's 2.6.31 kernel has
 # no MemAvailable. Cached would also count the tmpfs files this update stages,
 # so credit only free memory plus what the kernel can reclaim: inactive file
@@ -139,6 +178,8 @@ apply() {
     return 1
   fi
 
+  cleanup_legacy "$S"
+
   say "STEP backing up"
   mkdir -p "$S/rb"
   while read md5 mode reboot name dest; do
@@ -234,5 +275,6 @@ apply() {
 case "${1:-}" in
   status) shift; status "$@" ;;
   apply) apply "$2" ;;
-  *) echo "usage: $0 status <dest>... | apply <stage>" >&2; exit 2 ;;
+  cleanup) mkdir -p "$2"; : >> "$2/log"; cleanup_legacy "$2" ;;
+  *) echo "usage: $0 status <dest>... | apply <stage> | cleanup <stage>" >&2; exit 2 ;;
 esac

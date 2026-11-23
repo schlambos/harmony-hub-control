@@ -107,7 +107,7 @@ Each run:
 | `--turn-on` | `-TurnOn` | **Experimental** (not yet validated on live hardware): removes `/etc/melodious-off` and restarts the hub back into Melodious with the cloud blocker and your saved settings restored. Supports `--preflight-only`. |
 | `--i-understand-experimental` | `-IUnderstandExperimental` | Acknowledges the EXPERIMENTAL `--turn-off`/`--turn-on` warning. Required for scripted (`--no-prompt`) turn-off/on runs; interactive runs acknowledge it in the confirmation prompt. `--preflight-only` never needs it. |
 | `--force` | `-Force` | With `--turn-off`, overrides the preflight refusals for duplicate remotes without a screen, a missing Wi-Fi `network={` block, or a local-account / unprovisioned hub. Never overrides the SSH survival check. |
-| `--remove-root-tool-leftovers` | `-RemoveRootToolLeftovers` | Deletes what harmony-hub-root left behind before installing (see below). |
+| `--remove-root-tool-leftovers` | `-RemoveRootToolLeftovers` | Accepted for compatibility; no longer needed. Dead legacy data is removed automatically before installing (see below). |
 | `--skip-flash-check` | `-SkipFlashCheck` | Installs even when the measured free flash looks too small. If flash really runs out, the install still stops with nothing in use changed. |
 | `--multi-remote on` / `off` / `force-off` | `-MultiRemote on` / `off` / `force-off` | Lets the hub keep more than one remote without a screen of the same model, such as two Smart Controls; they share one button setup. `off` restores the stock one-per-model rule. It's refused while two remotes of one model are paired (unpair the extra ones first), and together with `--no-apply-cloud-restart` while the multi-remote `hal` runs. `force-off` (`-MultiRemote force-off`) turns it off without asking the radio, for a radio that stopped answering. The installer reboots when the files change or the running `hal` isn't the one asked for, then checks it. The web app's Settings → Experimental switch does the same. Without it, an upgrade leaves the setting as it is. See [MULTI_REMOTE.md](MULTI_REMOTE.md). |
 | `--two-screen on` / `once` / `serial` / `serial-once` / `off` / `force-off` | `-TwoScreen on` / `once` / `serial` / `serial-once` / `off` / `force-off` | Lets the hub keep two remotes with a screen and serve both at once; they share one setup. `once` runs it for the next boot only, which is the way to try it. `serial` is the fallback mode. `off` (or `force-off`) restores the stock `hal`; remotes already paired stay paired, so unpair all but one afterwards. The installer reboots when the setting or the running `hal` changes, then checks it. See [TWO_SCREEN_REMOTES.md](TWO_SCREEN_REMOTES.md). |
@@ -123,13 +123,20 @@ Everything Melodious writes, and everything the hub keeps, shares one
 (`flash_required_bytes`). If the estimate doesn't fit, the run stops
 with `BLOCKED_CAPACITY` before writing anything.
 
-- **harmony-hub-root's leftovers.** The root tool doesn't delete its
-  staging folders, `/data/codexssh_*_stage`: about 0.5 MB each, one per
-  root attempt. Once Melodious runs SSH, its copy of Dropbear in
-  `/data/rootssh/bin` isn't used either. The preflight lists them;
-  `--remove-root-tool-leftovers` deletes them before installing. It
-  removes the root tool's Dropbear only while SSH runs Melodious's
-  copy.
+- **Dead legacy data (removed automatically).** Before the capacity
+  check, every install removes what Melodious or its rooting tools left
+  behind and nothing reads any more: harmony-hub-root's staging folders
+  (`/data/codexssh_*_stage`, about 0.5 MB each) and, once SSH runs
+  Melodious's Dropbear, its spare copy in `/data/rootssh/bin`; binaries
+  an earlier Melodious release installed that this one no longer ships
+  (identified by the hub's own `/data/codex/bin/MANIFEST.txt` and the
+  MD5 it records); Melodious backup generations past the newest three
+  per kind under `/data/codex/resource-backups` and
+  `/data/codex-backups`; and temp files from interrupted installs
+  (`<dest>.codex-new` / `.codex-rb`, incomplete handoff folders). The
+  log lists each removal (`removed_legacy`). Your resources
+  (`/data/resources`), the Dropbear SSH is running on, stock firmware
+  files, and the Extender package below are never removed.
 - **The Harmony Hub Extender package.** A hub that has ever had a
   Harmony Hub Extender (Zigbee/Z-Wave) connected keeps Logitech's
   runtime for it in `/pkg/moosehead`: about 5 MB, which can leave too
