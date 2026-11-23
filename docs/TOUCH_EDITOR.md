@@ -126,7 +126,7 @@ only. Editors work to these rules:
 
 | Map | Owned | Carried through |
 | --- | --- | --- |
-| `16417Activity<id>` | On-screen buttons, their sequences, hard keys, gestures (Touch & HA Control Studio, `#touch/<id>`) | Number pad, Touch-only actions |
+| `16417Activity<id>` | On-screen buttons, hard keys, gestures (Web/Desktop Touch & HA Control Studio, `#touch/<id>`); on-screen buttons and sequences (native Android app) | Number pad, Touch-only actions (and sequences in Web/Desktop) |
 | `16417Device<id>` made on the hub | The whole map, built from the device's commands (`POST /api/device-screen` or `POST /api/ha-devices`), with self-long on one-shot commands | Map and button IDs |
 | `16417Device<id>` made by Logitech | Nothing | The whole map |
 | `16414Activity<id>`, `16422Activity<id>`, `16423Activity<id>` | Hard keys (the same editor from Settings → Remotes, `#touch/<id>/<EquadID>`) | Everything else |
@@ -260,10 +260,13 @@ the hub validator over the same fixtures, so the two copies cannot drift.
 Activities → ⋮ → On-screen buttons (`#touch/<activityId>`) opens one
 activity's Touch screen. The running activity's card and the Remote
 tab's header have the same shortcut, so a running activity's on-screen
-buttons are one tap away. The editor's tabs are on-screen buttons, hard
-keys and gestures; the device picker groups Home Assistant devices, and
-each binding has a press mode. The Android app edits on-screen buttons
-and sequences; hard keys and gestures are edited in the web app. Its model is
+buttons are one tap away. The editor's tabs are on-screen buttons, hard keys and gestures; the device
+picker groups Home Assistant devices, and each binding has a press mode. The
+web and desktop editor does not create or edit sequences (it leaves existing
+sequences untouched); creating and editing sequences (**New sequence**) is in
+the native Android app (`melodious-*.apk`, not a phone browser), while hard
+keys and gestures are edited in the web and desktop app. The experimental iOS
+baseline app is control-only. Its model is
 `tools/webui-sim/public/js/views/touch-model.js`; it reads the activity's
 `16417Activity<id>` map and writes the whole `MapList` back through
 `POST /api/activity-save`, with `ActivityList` and `FunctionList` sent

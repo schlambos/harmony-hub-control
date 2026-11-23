@@ -1124,8 +1124,25 @@ Invoke-RestMethod "http://<hub-ip>:8080/api/remotes"
 
 - `reply` is hal's `rf.info` answer as text. `DeviceIndex` is the radio
   slot. `EquadID` is the kind of remote: 16414 Harmony Smart Control,
-  16417 a remote with a screen (`SkinId` 99 is the Harmony Touch), 16420
-  a keyboard, 16422/16423 Companion.
+  16417 a remote with a screen (its `SkinId` says which, see the table
+  below), 16420 a keyboard, 16422/16423 Companion. Remotes without a
+  screen report an empty `SkinId`.
+
+  | `SkinId` (EquadID 16417) | Remote |
+  | --- | --- |
+  | 99 | Harmony Touch |
+  | 100 | Harmony Ultimate |
+  | 102 | Harmony Ultimate One |
+  | 105 | Harmony Ultimate Home |
+  | 108 | Harmony Ultimate Home / Pro (with home control) |
+  | 111 | Harmony Elite |
+  | 112 | Harmony 950 |
+
+  The same number appears in the remote's own requests
+  (`sus://product/<skin>/...`) and in the hub log when it pairs
+  (`SkinId Write Success - <skin>`). Hub skins (97, 106, 109, see
+  [FRESH_HUB_ACTIVATION.md](FRESH_HUB_ACTIVATION.md)) are a separate
+  numbering.
 - `multiRemote` is true while the hub runs the multi-remote `hal`
   ([MULTI_REMOTE.md](MULTI_REMOTE.md)): `/usr/bin/hal` is bind-mounted.
   `slots` is the radio's slot count.
