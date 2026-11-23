@@ -194,7 +194,7 @@ Your devices, activities, button assignments and settings are kept.
 - The full first sync of a never-activated Harmony Ultimate (#219). The start of it is confirmed
   by a user, the rest is not.
 - Old Logitech maps with duplicate menu positions (#178), and hold commands on digits (#190).
-- The `--` and `E` keys (#234) and the command picker layout (#216).
+- The command picker layout (#216).
 - The Extender package warning in the installer (#118).
 - The Home Assistant changes after integration 0.7.2, on the hub and in the integration.
 - Android: this release's changes are built and unit tested, not run on a phone.
