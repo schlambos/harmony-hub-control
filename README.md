@@ -74,7 +74,8 @@ Then open `http://<hub-ip>:8080/` on your phone or computer.
   ([ANDROID_TV.md](docs/ANDROID_TV.md)), LG webOS TVs (experimental,
   [WEBOS_TV.md](docs/WEBOS_TV.md)), and the hub as a Bluetooth keyboard with saved scripts
   ([BLUETOOTH_KEYBOARD.md](docs/BLUETOOTH_KEYBOARD.md)).
-- **Apps:** the hub's web app, Android, and a desktop app for macOS, Windows and Linux.
+- **Apps:** the hub's web app, Android, iPhone and iPad (experimental), and a desktop app for
+  macOS, Windows and Linux.
 
 </td><td valign="top">
 

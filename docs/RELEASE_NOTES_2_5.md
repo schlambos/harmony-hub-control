@@ -17,9 +17,12 @@ Some parts are less tested than others. Each one is labelled where it is describ
   [Setup Guide](SETUP_GUIDE.md).
 - **Two screen remotes at once.** Run a Touch and a 950, or two Ultimates, on one hub, kept in sync
   ([guide](TWO_SCREEN_REMOTES.md)).
-- **More of every remote is yours.** The Home Control buttons on Companion, Elite and 950 remotes,
+- **More remote settings.** The Home Control buttons on Companion, Elite and 950 remotes,
   your own backgrounds on screen remotes, the `--` and `E` keys on remotes without a screen, and a
   number pad on new activities for remotes with a screen.
+- **iPhone and iPad app** (**experimental, sideload only**). Start activities and use it as a
+  remote ([guide](IOS_APP.md)).
+- **Windows desktop app**, Setup Wizard included ([guide](DESKTOP_APP.md)).
 - **Saving works the first time.** The first Save after opening an editor no longer fails and
   then works on the second try.
 - **New kinds of device.** Saved Bluetooth keyboards and LG webOS TVs over the network
@@ -76,7 +79,7 @@ Some parts are less tested than others. Each one is labelled where it is describ
 
 ### Activities
 
-- **Time restrictions.** Block an activity from starting on the days and times you choose
+- **Parental controls.** Block an activity from starting on the days and times you choose
   (@danielvijge, [guide](ACTIVITIES_GUIDE.md)).
 
 ### Apps
