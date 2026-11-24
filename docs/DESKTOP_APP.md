@@ -1,8 +1,8 @@
 # Melodious desktop: setup and Logitech catalog lookup
 
 Melodious runs on **macOS, Windows, and Linux**: the hub's web UI in a
-desktop window, a guided hub setup, and Logitech catalog lookup (Windows and
-Linux Desktop app and Setup Wizard: **Not fully tested, needs confirmation**).
+desktop window, a guided hub setup, and Logitech catalog lookup (Linux
+Desktop app and Setup Wizard: **Not fully tested, needs confirmation**).
 Windows and macOS have desktop downloads; Linux runs from source. The built-in
 Setup Wizard is in the Windows and macOS releases from `v2.5.0`. The bundled
 [CLI](../tools/hub-root/README.md) and
@@ -26,7 +26,7 @@ Setup Wizard is in the Windows and macOS releases from `v2.5.0`. The bundled
 
 - **Install:** choose your platform from the
   [release page](https://github.com/schlambos/harmony-hub-control/releases).
-  - **Windows 10/11 x64 (Not fully tested, needs confirmation):**
+  - **Windows 10/11 x64:**
     `Melodious-<version>-win-x64-setup.exe`, or extract
     `Melodious-<version>-win-x64.zip` and run `Melodious.exe`. The app is
     unsigned; SmartScreen may ask **More info → Run anyway**. Windows

@@ -41,8 +41,8 @@ Logitech's stock behaviour with nothing of Melodious's deleted
 New to Melodious? Follow the three guides in order:
 
 1. **[Set up your hub](docs/SETUP_GUIDE.md)** — the desktop Setup Wizard roots the
-   hub and installs Melodious over Wi-Fi or USB (macOS; Windows and Linux: **Not fully tested,
-   needs confirmation** — Windows and macOS releases from `v2.5.0`, Linux from source), or use the
+   hub and installs Melodious over Wi-Fi or USB (macOS and Windows; Linux from source: **Not fully tested,
+   needs confirmation**), or use the
    CLI: [`tools/hub-root/`](tools/hub-root/README.md) + `install_webui` ([INSTALL.md](docs/INSTALL.md)).
 2. **[Add devices & import IR codes](docs/DEVICES_AND_CODES_GUIDE.md)** — Logitech catalog, IRDB
    and other imports, learning, and the power, input and timing settings activities need.
@@ -119,7 +119,7 @@ One hub, four apps, one design ([DESIGN.md](DESIGN.md)):
 - **Android app** — the release's `melodious-<version>.apk`, adding a touchpad, sleep timer, phone
   extras and catalog lookup: [Android/README.md](Android/README.md) ·
   [ANDROID_CATALOG.md](docs/ANDROID_CATALOG.md).
-- **Desktop app (macOS; Windows and Linux: Not fully tested, needs confirmation)** — the web app
+- **Desktop app (macOS and Windows; Linux: Not fully tested, needs confirmation)** — the web app
   plus the Setup Wizard and Logitech catalog lookup: [DESKTOP_APP.md](docs/DESKTOP_APP.md) ·
   [desktop/README.md](desktop/README.md).
 - **iOS / iPadOS app (experimental)** — native SwiftUI remote for iPhone and iPad, sideloaded via

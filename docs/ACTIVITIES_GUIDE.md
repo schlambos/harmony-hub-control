@@ -10,7 +10,7 @@ Get each device's power, inputs and timing working directly first. An
 activity cannot fix an incorrect code or an input that was never configured.
 
 This guide covers **macOS, Windows, and Linux Desktop apps and browsers**
-(Windows and Linux Desktop app: **Not fully tested, needs confirmation**),
+(Linux Desktop app: **Not fully tested, needs confirmation**),
 plus the **Android app and Android browser**. Screenshots are clean
 simulator examples; they do not certify real equipment or remote hardware.
 

@@ -1,7 +1,7 @@
 # Activating a factory-fresh hub (no account, no Logitech cloud)
 
 Melodious supports **Windows, Linux and macOS**. Use the
-[desktop Setup Wizard](SETUP_GUIDE.md) (Windows and Linux: **Not fully tested,
+[desktop Setup Wizard](SETUP_GUIDE.md) (Linux: **Not fully tested,
 needs confirmation**) or the bundled CLI described here.
 The wizard is in the Windows and macOS desktop releases from `v2.5.0`;
 Linux runs it from source. The CLI in
@@ -50,7 +50,7 @@ join Wi-Fi, open the TDE gate, provision the local account, seed the
 starter config, root, install Melodious, and finish ready to pair a
 remote. Windows and macOS releases bundle Python and the USB backend;
 Linux uses the same wizard from source with dependencies installed
-(Desktop app and Setup Wizard on Windows and Linux: **Not fully tested,
+(Desktop app and Setup Wizard on Linux: **Not fully tested,
 needs confirmation**).
 The user guide is [SETUP_GUIDE.md](SETUP_GUIDE.md). This runbook is the
 command-line alternative on all three platforms and the historical

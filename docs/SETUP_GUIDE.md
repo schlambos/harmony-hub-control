@@ -4,8 +4,8 @@ Set up your Harmony Hub with Melodious on **macOS, Windows, or Linux**.
 This guide follows the desktop app's built-in Setup Wizard from first
 launch to a hub running Melodious, with your remote paired. Packaged
 Windows and macOS apps need no commands; Linux runs the same app from source.
-On Windows and Linux, the Desktop app and Setup Wizard are **Not fully tested,
-needs confirmation**.
+On Linux, the Desktop app and Setup Wizard are **Not fully tested, needs
+confirmation**.
 
 > **Availability.** The built-in Setup Wizard is in the Windows and macOS
 > desktop releases from `v2.5.0`. The `v2.1.0` app and older don't have
@@ -51,7 +51,7 @@ Install the app from the
 
 | Platform | Install and first launch |
 | --- | --- |
-| **Windows** | **Not fully tested, needs confirmation.** Download `Melodious-<version>-win-x64-setup.exe` and run it, or extract `Melodious-<version>-win-x64.zip` and open `Melodious.exe`. The app is unsigned; if SmartScreen warns, choose **More info → Run anyway** after checking the download's source. Python and the USB backend are bundled; no Python installation or HID driver replacement is needed. |
+| **Windows** | Download `Melodious-<version>-win-x64-setup.exe` and run it, or extract `Melodious-<version>-win-x64.zip` and open `Melodious.exe`. The app is unsigned; if SmartScreen warns, choose **More info → Run anyway** after checking the download's source. Python and the USB backend are bundled; no Python installation or HID driver replacement is needed. |
 | **macOS** | Download `Melodious-<version>-arm64.dmg` (Apple silicon) or `Melodious-<version>-x64.dmg` (Intel), open it and drag **Melodious** into **Applications**. The app has no Apple Developer ID: Control-click → **Open**, or **System Settings → Privacy & Security → Open Anyway**. Choose **Allow** when asked for local-network access. Python and the USB backend are bundled. |
 | **Linux** | **Not fully tested, needs confirmation.** Run the desktop app from source using [`desktop/README.md`](../desktop/README.md#linux-from-source). Install Python, the USB dependencies and USB access permissions first. No Linux desktop download is published. Or use the bundled CLI in [`tools/hub-root/`](../tools/hub-root/README.md), followed by `install_webui.py`. |
 

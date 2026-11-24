@@ -4,7 +4,7 @@ A release is a GitHub release `v<version>` ("Melodious <major.minor>") with:
 - the hub zip;
 - the Android APK;
 - the four macOS files;
-- the two Windows files (Not fully tested, needs confirmation; unsigned);
+- the two Windows files (unsigned);
 - the unsigned iOS / iPadOS IPA, `melodious-ios-<v>.ipa` (experimental, sideload-only; see [IOS_APP.md](IOS_APP.md));
 - BusyBox's upstream source tarball, `busybox-<version>.tar.bz2` (hub releases);
 - the GPL-2.0 hub kernel source archive, `Harmony.hub.4.3.48.mips-linux-2.6.31.tar.zip` (hub releases shipping `asix.ko`; see `third_party/linux-2.6.31-harmony/README.md`);
@@ -41,7 +41,7 @@ key, so losing that key means users uninstall and reinstall.
      run on the release commit, or from `npm run dist:win` on a Windows PC
      (`desktop/README.md`). Check the two files against the artifact's
      `SHA256SUMS-windows.txt`, then leave that file out of the folder. They
-     are unsigned (Windows Desktop app: Not fully tested, needs confirmation),
+     are unsigned,
      so SmartScreen warns before the first launch; say so in the release notes;
    - for a hub release, the BusyBox tarball that
      `third_party/busybox-<version>/README.md` names, as downloaded from

@@ -1,7 +1,7 @@
 # Melodious desktop (`desktop/`)
 
 The Melodious web app in a desktop window on macOS, Windows, and Linux,
-plus hub Setup Wizard and Logitech catalog lookup (Windows and Linux Desktop
+plus hub Setup Wizard and Logitech catalog lookup (Linux Desktop
 app and Setup Wizard: **Not fully tested, needs confirmation**). Windows and
 macOS releases include the wizard from `v2.5.0`; Linux can run it from
 source. The bundled CLI works on all three platforms. The
@@ -140,7 +140,7 @@ SHA-256-pinned Root & Setup Wizard Python + `hidapi` runtimes for `arm64` and
 - The `.zip.blockmap` files are for auto-update, which the app doesn't
   have. Don't attach them to a release.
 
-## Windows (Not fully tested, needs confirmation)
+## Windows
 
 The same app builds for Windows 10 and 11 (x64). It is built and tested on
 GitHub's Windows runner (`.github/workflows/desktop-windows.yml`), and
