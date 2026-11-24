@@ -4188,6 +4188,41 @@ class PowerShellStaticContract(unittest.TestCase):
         assert match, f"missing ${variable} array"
         return re.findall(r'"([^"]+)"', match.group(1))
 
+    def test_ssh_stdin_cannot_gain_a_bom(self):
+        """[PS1 STATIC] every ssh child starts with a BOM-less console input
+        encoding (issue #257).
+
+        On Windows PowerShell 5.1 with a UTF-8 console (chcp 65001), .NET
+        Framework's Process wraps the child's redirected stdin in a
+        StreamWriter over [Console]::InputEncoding and flushes it the moment
+        the child starts, prepending the EF BB BF preamble to whatever the
+        installer streams. The hub then staged 00-codex_dhcpd as
+        BOM + payload, whose MD5 is exactly the "got" digest in #257
+        (103e32167328f7443c390260f05d84b6), so every install aborted at the
+        staged-MD5 check while install_webui.py worked. Both ssh starters
+        must switch to a BOM-less input encoding before Start() and restore
+        the user's encoding afterwards.
+        """
+        self.assertIn("function Set-BomlessStdinEncoding(", self.text)
+        helper = self.text.split("function Set-BomlessStdinEncoding(", 1)[1].split("\nfunction ", 1)[0]
+        self.assertIn("[Console]::InputEncoding", helper)
+        self.assertIn("GetPreamble().Length", helper)
+        self.assertIn("[Text.UTF8Encoding]::new($false)", helper)
+        for starter, closer in (
+            ("function Invoke-RemoteRc(", "function Invoke-Remote("),
+            ("function Get-RemoteBytes(", "function Get-BytesMd5("),
+        ):
+            body = self.text.split(starter, 1)[1].split(closer, 1)[0]
+            self.assertIn("$restoreInputEncoding = Set-BomlessStdinEncoding", body, starter)
+            self.assertLess(body.index("Set-BomlessStdinEncoding"), body.index(".Start()"), starter)
+            self.assertIn("} finally {", body, starter)
+            self.assertIn("[Console]::InputEncoding = $restoreInputEncoding", body, starter)
+            # The encoding must stay switched until stdin is closed: on
+            # pwsh 7 the writer is created at the first StandardInput touch,
+            # not at Start().
+            self.assertLess(body.index("$proc.StandardInput.Close()"),
+                            body.index("[Console]::InputEncoding = $restoreInputEncoding"), starter)
+
     def test_ssh_key_hint_matches_python(self):
         """[PS1 STATIC] Invoke-Remote appends the same key hint as Python's
         run_remote when ssh answers "Permission denied"."""
