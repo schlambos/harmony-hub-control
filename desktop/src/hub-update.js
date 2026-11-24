@@ -61,6 +61,14 @@ const HUB_INVENTORY_FILES = new Set(["payload/bin/MANIFEST.txt", "payload/bin/FI
 // Run by the installers from the hub's RAM staging folder; never installed
 // and not used here. Must match HUB_INSTALLER_HELPERS in tools/releases/release.py.
 const HUB_INSTALLER_HELPERS = new Set(["payload/helpers/codex_flash_free"]);
+// Build-time patch inputs that release.py ships inside the hub zip (used by
+// install_webui.py to patch hal; the desktop path installs the prebuilt hal
+// binaries from HUB_FILES and does not consume these). They must be accepted,
+// not treated as unknown. Must match HUB_PATCH_INPUTS in tools/releases/release.py.
+const HUB_PATCH_INPUTS = new Set([
+  "payload/helpers/hal_multiremote_patch.json",
+  "payload/helpers/hal_remotes_patch.json",
+]);
 // Known builds of Dropbear, by MD5: version. Builds of one version are the
 // same program (2025.89 with the unloaded MIPS .pdr section stripped, as
 // built and as tools/hub-root ships it, and with only a plain strip, as older
@@ -153,7 +161,7 @@ async function unpackHubZip(zipPath, version) {
     const contents = {};
     for (const rel of files) contents[rel] = fs.readFileSync(path.join(top, rel));
     for (const rel of files) {
-      if (!HUB_FILES[rel] && !HUB_INVENTORY_FILES.has(rel) && !HUB_INSTALLER_HELPERS.has(rel)) {
+      if (!HUB_FILES[rel] && !HUB_INVENTORY_FILES.has(rel) && !HUB_INSTALLER_HELPERS.has(rel) && !HUB_PATCH_INPUTS.has(rel)) {
         throw new HubUpdateError(`The hub zip has ${rel}, which this app doesn't know how to install. Update this app first.`);
       }
     }
@@ -364,4 +372,4 @@ async function updateHub({
   }
 }
 
-module.exports = { DROPBEAR_BUILDS, HUB_FILES, HUB_INSTALLER_HELPERS, HubUpdateError, changedFiles, defaultSshPath, findHubKey, readHubPayload, readLocalHubZip, unzipCommand, updateHub };
+module.exports = { DROPBEAR_BUILDS, HUB_FILES, HUB_INSTALLER_HELPERS, HUB_PATCH_INPUTS, HubUpdateError, changedFiles, defaultSshPath, findHubKey, readHubPayload, readLocalHubZip, unzipCommand, updateHub };

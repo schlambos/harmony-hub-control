@@ -530,6 +530,74 @@ test("runWizardBridge parses fragmented NDJSON chunks, pipes stdinJson without l
   assert.equal(realOut.result?.classification?.verdict, "unknown");
 });
 
+test("runWizardBridge idle timeout is reset by stdout progress (never kills a steadily-progressing step) but fires on a true stall", async () => {
+  const makeChild = (schedule) => {
+    const child = new EventEmitter();
+    child.stdin = { on() {}, write() {}, end() {} };
+    child.stdout = new EventEmitter();
+    child.stderr = new EventEmitter();
+    child.killed = false;
+    child.kill = () => {
+      child.killed = true;
+      child.emit("close", null);
+    };
+    schedule(child);
+    return child;
+  };
+
+  // A) Steady heartbeats every 20ms keep the 60ms idle window from ever firing,
+  //    even though the whole run (~200ms) far exceeds that window. This is the
+  //    regression guard: the old absolute timer SIGKILLed a healthy upload.
+  const progressing = await runWizardBridge({
+    action: "usb-root",
+    confirmAction: "usb-root",
+    host: "192.168.0.5",
+    processTimeoutMs: 5000,
+    idleTimeoutMs: 60,
+    spawnImpl: () =>
+      makeChild((child) => {
+        let n = 0;
+        const t = setInterval(() => {
+          n += 1;
+          child.stdout.emit(
+            "data",
+            Buffer.from(`{"type":"progress","step":"usb-root","phase":"upload-chunks","index":${n},"total":10}\n`)
+          );
+          if (n >= 10) {
+            clearInterval(t);
+            child.stdout.emit(
+              "data",
+              Buffer.from('{"type":"result","action":"usb-root","ok":true,"root":{"ok":true}}\n')
+            );
+            child.emit("close", 0);
+          }
+        }, 20);
+      }),
+  });
+  assert.equal(progressing.timedOut, false);
+  assert.equal(progressing.ok, true);
+  assert.equal(progressing.killedByIdle, undefined);
+
+  // B) One event, then silence: the idle timer fires and reports "no progress"
+  //    (honest), not a cable fault.
+  const stalled = await runWizardBridge({
+    action: "usb-root",
+    confirmAction: "usb-root",
+    host: "192.168.0.5",
+    processTimeoutMs: 5000,
+    idleTimeoutMs: 60,
+    spawnImpl: () =>
+      makeChild((child) => {
+        setImmediate(() =>
+          child.stdout.emit("data", Buffer.from('{"type":"step","step":"usb-root"}\n'))
+        );
+      }),
+  });
+  assert.equal(stalled.timedOut, true);
+  assert.equal(stalled.timedOutReason, "idle");
+  assert.match(stalled.error, /no progress/i);
+});
+
 test("classifyHubSignals covers all five verdicts, offline USB getProvisionInfo classification, warn-on-mismatch, firmware gate, USB wedge, and masking", () => {
   // 1. Fresh hub + user picked "provisioned" -> mismatch warning
   const freshWithWrongIntent = classifyHubSignals({
@@ -1651,6 +1719,29 @@ test("runWizardAction gives usb-provision-local/usb-flash-firmware >=240000ms he
   assert.match(step1Html, /Erase &amp; set up from scratch…/);
 });
 
+test("runWizardAction gives usb-root an idle watchdog plus a multi-minute hard ceiling, so a progressing 500+ chunk upload is never SIGKILLed mid-stream", async () => {
+  const captured = {};
+  const fakeBridge = async (opts) => {
+    captured[opts.action] = opts;
+    return { ok: true, exitCode: 0, pythonPath: "python3", events: [], result: { ok: true } };
+  };
+
+  await runWizardAction({
+    action: "usb-root",
+    confirmAction: "usb-root",
+    host: "192.168.0.235",
+    runBridgeImpl: fakeBridge,
+  });
+  // Idle guard trips only on a true stall (no progress), not on a slow-but-
+  // steady upload; the absolute ceiling is generous enough for the whole run.
+  assert.equal(captured["usb-root"].idleTimeoutMs, 120000);
+  assert.ok(captured["usb-root"].processTimeoutMs >= 1200000);
+
+  // Short read-only actions keep no idle watchdog (null).
+  await runWizardAction({ action: "usb-wifi-scan", runBridgeImpl: fakeBridge });
+  assert.equal(captured["usb-wifi-scan"].idleTimeoutMs, null);
+});
+
 test("detectAndClassify isolates multi-hub SSDP from USB hub and strictly honors explicit host", async () => {
   // 1. Explicit host ("192.168.0.235") ALWAYS overrides SSDP ("192.168.0.234")
   const explicitWebUiHosts = [];
@@ -2190,4 +2281,18 @@ test("Screen 3 Step 3 non-USB failures match the real error instead of blaming t
   });
   assert.match(badHubId.notice, /Custom Hub ID/i);
   assert.doesNotMatch(badHubId.notice, /USB cable/i);
+
+  // 10. A real timeout/stall at the USB root step (Step 2) is honest: it does
+  // NOT claim the cable is loose (USB stays connected the whole upload); it
+  // gives re-plug + log-location guidance instead.
+  for (const error of [
+    "wizard_bridge timed out after 120000 ms with no progress",
+    "wizard_bridge timed out after 1200000 ms",
+    "USB hbus timed out without matching response for harmony.log?put; no retry made",
+  ]) {
+    const timeoutNotice = renderStepError({ failedStep: 2, error }).notice;
+    assert.match(timeoutNotice, /finish in time/i, error);
+    assert.match(timeoutNotice, /full log/i, error);
+    assert.doesNotMatch(timeoutNotice, /firmly connected/i, error);
+  }
 });

@@ -301,10 +301,15 @@ class JsonRootTransport:
         self.transport = transport
 
     def __enter__(self) -> "JsonRootTransport":
+        begin = getattr(self.transport, "begin_session", None)
+        if callable(begin):
+            begin()
         return self
 
     def __exit__(self, *args: Any) -> None:
-        pass
+        close = getattr(self.transport, "close_session", None)
+        if callable(close):
+            close()
 
     def call(self, cmd: str, body: Any = "", timeout: int = 20) -> XmppResponse:
         if isinstance(body, str):
@@ -1124,9 +1129,29 @@ def print_xmpp(label: str, resp: XmppResponse) -> None:
     print(f"{label}: code={resp.code or '?'} err={resp.error or '-'} payload_bytes={len(resp.payload.encode('utf-8'))}")
 
 
+# Optional structured-progress sink. When the desktop wizard_bridge drives this
+# module it installs a callback here so long USB phases (the 500+ chunk payload
+# upload and the post-install SSH wait) stream NDJSON heartbeats to the app
+# instead of vanishing into wizard_bridge.silence_library_stdout(). These
+# heartbeats keep the app's idle-timeout watchdog fresh and drive a real
+# progress indicator. Plain CLI use leaves this None (no-op).
+PROGRESS_HOOK: Any = None
+
+
+def emit_progress(**event: Any) -> None:
+    hook = PROGRESS_HOOK
+    if hook is None:
+        return
+    try:
+        hook(event)
+    except Exception:
+        pass
+
+
 def step(title: str) -> None:
     print("")
     print("== " + title + " ==")
+    emit_progress(type="progress", step="usb-root", phase="stage", stage=title)
 
 
 def info(message: str) -> None:
@@ -1527,11 +1552,16 @@ def upload_and_install(
 
     step("Uploading Persistent SSH Payload")
     info("This is the slow part. Chunks are deliberately small to avoid the firmware's silent log-write truncation.")
-    print(f"Uploading {len(chunks)} Dropbear payload chunks...")
+    total_chunks = len(chunks)
+    print(f"Uploading {total_chunks} Dropbear payload chunks...")
+    emit_progress(type="progress", step="usb-root", phase="upload-chunks", index=0, total=total_chunks)
     for index, name in enumerate(sorted(chunks), 1):
-        if index == 1 or index == len(chunks) or index % 25 == 0:
-            print(f"  chunk {index}/{len(chunks)}")
+        if index == 1 or index == total_chunks or index % 25 == 0:
+            print(f"  chunk {index}/{total_chunks}")
         raw_log_put(cache_traversal_path(stage_chunks_abs + "/" + name), chunks[name], f"chunk {name}", timeout=45, quiet=True)
+        # Heartbeat after every chunk: keeps the app's idle watchdog alive during
+        # this multi-minute phase and feeds an honest progress bar.
+        emit_progress(type="progress", step="usb-root", phase="upload-chunks", index=index, total=total_chunks)
 
     step("Running Hub-Side Installer")
     info("Triggering the temporary automation package so the hub writes files, sets executable modes, and starts Dropbear.")
@@ -1582,11 +1612,19 @@ def upload_and_install(
 
 def wait_for_port(host: str, port: int, timeout_s: int) -> bool:
     deadline = time.time() + timeout_s
+    start = time.time()
     while time.time() < deadline:
         try:
             with socket.create_connection((host, port), timeout=3):
                 return True
         except OSError:
+            emit_progress(
+                type="progress",
+                step="usb-root",
+                phase="ssh-wait",
+                elapsedS=round(time.time() - start, 1),
+                timeoutS=timeout_s,
+            )
             time.sleep(2)
     return False
 

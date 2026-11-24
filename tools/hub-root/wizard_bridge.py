@@ -28,10 +28,12 @@ import argparse
 import contextlib
 import io
 import json
+import os
 import pathlib
 import re
 import sys
 import time
+from datetime import datetime, timezone
 from typing import Any, Callable
 
 if sys.version_info < (3, 10):
@@ -544,6 +546,34 @@ def silence_library_stdout() -> Any:
     sink = io.StringIO()
     with contextlib.redirect_stdout(sink):
         yield sink
+
+
+def default_wizard_log_dir() -> pathlib.Path:
+    """Per-user directory for wizard run logs on each platform."""
+    if sys.platform.startswith("win"):
+        root = os.environ.get("LOCALAPPDATA") or str(pathlib.Path.home() / "AppData" / "Local")
+        return pathlib.Path(root) / "Melodious" / "logs"
+    if sys.platform == "darwin":
+        return pathlib.Path.home() / "Library" / "Logs" / "Melodious"
+    root = os.environ.get("XDG_STATE_HOME") or str(pathlib.Path.home() / ".local" / "state")
+    return pathlib.Path(root) / "melodious" / "logs"
+
+
+def open_run_log(action: str) -> pathlib.Path | None:
+    """Create a timestamped per-run log file (header only) and return its path,
+    or None if it can't be created. Never fatal: a run is never blocked by
+    logging. Events are appended later so no file handle is held open."""
+    try:
+        base = os.environ.get("MELODIOUS_WIZARD_LOG_DIR", "").strip()
+        directory = pathlib.Path(base) if base else default_wizard_log_dir()
+        directory.mkdir(parents=True, exist_ok=True)
+        stamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%S%fZ")
+        path = directory / f"wizard-{action}-{stamp}.log"
+        with open(path, "w", encoding="utf-8") as handle:
+            handle.write(f"# Melodious wizard_bridge  action={action}  start={datetime.now(timezone.utc).isoformat()}\n")
+        return path
+    except Exception:
+        return None
 
 
 def make_emitter(stream: Any = None, secrets: list[str] | None = None) -> Callable[[dict[str, Any]], None]:
@@ -1992,6 +2022,11 @@ def run_root_action(
         }
     )
 
+    # Stream the root installer's long-phase heartbeats (chunk upload, SSH wait)
+    # out as NDJSON so the desktop app sees steady progress and its idle-timeout
+    # watchdog stays fresh. emit() writes to sys.__stdout__, so it is unaffected
+    # by silence_library_stdout() (which only redirects sys.stdout).
+    lan.PROGRESS_HOOK = emit
     try:
         with silence_library_stdout():
             lan.main(lan_argv)
@@ -2017,6 +2052,8 @@ def run_root_action(
         wedge = is_usb_wedge_error(str(exc))
         emit({"type": "progress", "step": action, "status": "failed", "error": msg, "usbWedge": wedge, "experimental": experimental})
         return False, {"ok": False, "transport": transport_mode, "experimental": experimental, "error": msg, "usbWedge": wedge}
+    finally:
+        lan.PROGRESS_HOOK = None
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -2094,6 +2131,26 @@ def run_wizard_bridge(
     if args.timeout_ms <= 0:
         emit({"type": "error", "step": "args", "code": "invalid_timeout", "message": "--timeout-ms must be positive"})
         return 2
+
+    # Tee every NDJSON event to a timestamped on-disk log (all platforms). The
+    # log's location rides out on the terminal `result` event (logPath) rather
+    # than as a separate event, so the pre-flight error contract — exactly one
+    # error event on a rejected run — is preserved. The file itself records the
+    # full run, including the root upload's per-chunk progress.
+    _run_log_path = open_run_log(args.action)
+    if _run_log_path is not None:
+        _wire_emit = emit
+        _log_path_str = str(_run_log_path)
+
+        def emit(event: dict[str, Any], _base: Callable[[dict[str, Any]], None] = _wire_emit, _lp: str = _log_path_str) -> None:  # noqa: F811
+            if isinstance(event, dict) and event.get("type") == "result" and "logPath" not in event:
+                event = {**event, "logPath": _lp}
+            _base(event)
+            try:
+                with open(_lp, "a", encoding="utf-8") as _log:
+                    _log.write(datetime.now(timezone.utc).isoformat() + " " + json.dumps(event, separators=(",", ":"), ensure_ascii=True) + "\n")
+            except Exception:
+                pass
 
     if args.action in MUTATING_ACTIONS:
         if args.confirm_action != args.action:

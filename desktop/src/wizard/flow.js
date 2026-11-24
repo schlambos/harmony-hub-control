@@ -1035,6 +1035,15 @@
     if (wedged) {
       return "Unplug the USB cable from your computer for 15 seconds, plug it back in, wait about 3 minutes for the light to settle, then click Try Again.";
     }
+    // A timeout (the step ran long or stalled) is NOT evidence of a loose cable:
+    // during the USB root upload the cable stays connected the whole time. Give
+    // honest guidance and point at the on-disk log instead of blaming hardware.
+    if (/timed out|no progress|no retry made|USB hbus timed out/i.test(rawErr)) {
+      if (usesUsbForPrepOrRoot) {
+        return "Setting up your hub over USB didn't finish in time. Unplug the hub's USB cable for 15 seconds, plug it back in, wait for the light to settle, then click Try Again. The full log for this run is saved on this computer — open Show technical details for its location.";
+      }
+      return "This step didn't finish in time. Give your hub a moment, then click Try Again. The full log for this run is saved on this computer — open Show technical details for its location.";
+    }
     if (usesUsbForPrepOrRoot) {
       return "Make sure the USB cable is firmly connected to this computer and the hub has power, then click Try Again.";
     }

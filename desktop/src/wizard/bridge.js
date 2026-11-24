@@ -388,6 +388,7 @@ function runWizardBridge({
   usbDevicePath = "",
   timeoutMs = 12000,
   processTimeoutMs = 35000,
+  idleTimeoutMs = null,
   hbusPort = 8088,
   xmppPort = 5222,
   sshPort = 22,
@@ -467,11 +468,13 @@ function runWizardBridge({
     let stderrText = "";
     let settled = false;
     let timedOut = false;
+    let timedOutReason = null;
 
     const finish = (outcome) => {
       if (settled) return;
       settled = true;
-      clearTimeout(timer);
+      clearTimeout(hardTimer);
+      if (idleTimer) clearTimeout(idleTimer);
       resolve(outcome);
     };
 
@@ -539,14 +542,39 @@ function runWizardBridge({
       } catch {}
     }
 
-    const timer = setTimeout(() => {
+    // Two independent guards:
+    //  * hardTimer  — absolute ceiling, so a truly wedged child can never hang
+    //                 forever (processTimeoutMs).
+    //  * idleTimer  — fires only after idleTimeoutMs of NO stdout activity, and
+    //                 is reset by every stdout chunk. Long but steadily-
+    //                 progressing USB steps (e.g. the 500+ chunk root upload)
+    //                 must emit progress to stay alive; a genuine stall still
+    //                 trips it. This replaces the old single absolute timer that
+    //                 SIGKILLed a healthy, progressing step mid-upload.
+    const hardCapMs = Math.max(1000, Number(processTimeoutMs) || 35000);
+    const idleCapMs =
+      idleTimeoutMs !== null &&
+      Number.isFinite(Number(idleTimeoutMs)) &&
+      Number(idleTimeoutMs) > 0
+        ? Math.max(1000, Number(idleTimeoutMs))
+        : 0;
+    const killChild = (reason) => {
       timedOut = true;
+      timedOutReason = reason;
       try {
         child.kill("SIGKILL");
       } catch {}
-    }, Math.max(1000, Number(processTimeoutMs) || 35000));
+    };
+    const hardTimer = setTimeout(() => killChild("hard"), hardCapMs);
+    let idleTimer = idleCapMs ? setTimeout(() => killChild("idle"), idleCapMs) : null;
+    const resetIdleTimer = () => {
+      if (!idleCapMs || settled || timedOut) return;
+      if (idleTimer) clearTimeout(idleTimer);
+      idleTimer = setTimeout(() => killChild("idle"), idleCapMs);
+    };
 
     child.stdout?.on("data", (chunk) => {
+      resetIdleTimer();
       stdoutRemainder += Buffer.isBuffer(chunk) ? chunk.toString("utf8") : String(chunk);
       let newlineIdx = stdoutRemainder.indexOf("\n");
       while (newlineIdx >= 0) {
@@ -602,6 +630,10 @@ function runWizardBridge({
         }
       }
       const exitCode = typeof code === "number" ? code : -1;
+      const logCarrier =
+        (resultEvent && resultEvent.logPath && resultEvent) ||
+        [...events].reverse().find((e) => e && e.logPath);
+      const logPath = logCarrier ? String(logCarrier.logPath) : null;
       const errorEvent = [...events].reverse().find((e) => e && e.type === "error");
       const failedProgressEvent = [...events]
         .reverse()
@@ -636,8 +668,12 @@ function runWizardBridge({
         events,
         result: resultEvent,
         stderr: cleanStderr,
+        logPath,
+        timedOutReason: timedOut ? timedOutReason : null,
         error: timedOut
-          ? `wizard_bridge timed out after ${processTimeoutMs} ms`
+          ? timedOutReason === "idle"
+            ? `wizard_bridge timed out after ${idleCapMs} ms with no progress`
+            : `wizard_bridge timed out after ${hardCapMs} ms`
           : rawFallbackErr
             ? scrubSecretText(rawFallbackErr, secretToScrub)
             : null,

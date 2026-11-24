@@ -158,11 +158,17 @@ BACKUP_ROOTS = [RESOURCE_BACKUP_ROOT, HANDOFF_ROOT, "/data/codex/update-backups"
 # Melodious install) records it with the MD5 the file still has.
 MANAGED_BIN_FILES = {"dropbear", "dropbearkey", "hal_multiremote", "hal_remotes", "MANIFEST.txt"}
 BIN_DIR = "/data/codex/bin"
+# Read-only scan; its VALUE is the parsed stdout, not its exit code. On a freshly
+# erased hub /data/codex/bin is empty, so the `for` glob stays literal and its
+# final `[ -f ]` test is false, making the whole command exit 1. run_remote()
+# treats any non-zero exit as fatal, so the trailing `:` pins the remote exit to
+# 0. A real SSH/transport failure still surfaces (the ssh client returns 255
+# before the remote `:` ever runs).
 BIN_DIR_SCAN = (
     "ls -l /data/codex/bin 2>/dev/null | awk '/^-/ {print \"bin_file bytes=\"$5\" name=\"$NF}'; "
     "awk '$1 ~ /^[0-9a-f][0-9a-f][0-9a-f][0-9a-f]/ && length($1) == 32 "
     "{print \"old_manifest md5=\"$1\" name=\"$2}' /data/codex/bin/MANIFEST.txt 2>/dev/null; "
-    "for f in /data/codex/bin/*; do [ -f \"$f\" ] && [ ! -L \"$f\" ] && md5sum \"$f\"; done"
+    "for f in /data/codex/bin/*; do [ -f \"$f\" ] && [ ! -L \"$f\" ] && md5sum \"$f\"; done; :"
 )
 # Every regular file under the backup roots, one line each; the installer
 # aggregates them into generations and prunes past BACKUP_KEEP. The walk

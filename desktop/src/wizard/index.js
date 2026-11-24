@@ -555,6 +555,17 @@ async function runWizardAction({
     }
   }
 
+  // The USB root step streams a 500+ chunk Dropbear payload over HID; its total
+  // duration varies with HID throughput and must not be bounded by a flat
+  // wall-clock kill. Give it a generous absolute ceiling plus an idle guard
+  // that only trips on a genuine stall (no progress for idleTimeoutMs). The
+  // Python side emits a heartbeat per batch of chunks and during the SSH wait.
+  let effectiveIdleTimeoutMs = null;
+  if (cleanAction === "usb-root" || cleanAction === "lan-root-xmpp" || cleanAction === "post-root") {
+    effectiveProcessTimeoutMs = Math.max(effectiveProcessTimeoutMs, 1_200_000);
+    effectiveIdleTimeoutMs = 120_000;
+  }
+
   const outcome = await runBridgeImpl({
     action: cleanAction,
     confirmAction: MUTATING_BRIDGE_ACTIONS.has(cleanAction) ? cleanAction : "",
@@ -564,6 +575,7 @@ async function runWizardAction({
     usbDevicePath,
     timeoutMs,
     processTimeoutMs: effectiveProcessTimeoutMs,
+    idleTimeoutMs: effectiveIdleTimeoutMs,
     mask: mask !== false,
     showSsids: Boolean(showSsids),
     firmwareFile: cleanAction === "usb-flash-firmware" ? firmwareFile : "",
