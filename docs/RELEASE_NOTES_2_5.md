@@ -69,7 +69,8 @@ Some parts are less tested than others. Each one is labelled where it is describ
 - **IR output per device.** Send a device's commands from the hub, either blaster, all of them,
   or the remote's own emitter (@mirsadone).
 - **Wired network over USB Ethernet** (**experimental**), in Settings → Experimental.
-  Tested with Realtek RTL8153 and ASIX AX88772C adapters (@apnar, [guide](USB_ETHERNET.md)).
+  Tested with Realtek RTL8153 and ASIX AX88772C adapters. ASIX support and the wired-connection
+  options by @apnar ([guide](USB_ETHERNET.md)).
 - **Nintendo Switch 2 wake** (**tested**, wake only). Controllers with their own IDs, such as
   PowerA, are untested ([guide](SWITCH2_WAKE.md)).
 
