@@ -199,7 +199,7 @@ $RepairRemoteMapsFlag = "/data/codex/repair_remote_maps"
 $BinDir = "/data/codex/bin"
 $ManagedBinFiles = @("dropbear", "dropbearkey", "hal_multiremote", "hal_remotes", "MANIFEST.txt")
 $BinDirScan = @'
-ls -l /data/codex/bin 2>/dev/null | awk '/^-/ {print "bin_file bytes="$5" name="$NF}'; awk '$1 ~ /^[0-9a-f][0-9a-f][0-9a-f][0-9a-f]/ && length($1) == 32 {print "old_manifest md5="$1" name="$2}' /data/codex/bin/MANIFEST.txt 2>/dev/null; for f in /data/codex/bin/*; do [ -f "$f" ] && [ ! -L "$f" ] && md5sum "$f"; done
+ls -l /data/codex/bin 2>/dev/null | awk '/^-/ {print "bin_file bytes="$5" name="$NF}'; awk '$1 ~ /^[0-9a-f][0-9a-f][0-9a-f][0-9a-f]/ && length($1) == 32 {print "old_manifest md5="$1" name="$2}' /data/codex/bin/MANIFEST.txt 2>/dev/null; for f in /data/codex/bin/*; do [ -f "$f" ] && [ ! -L "$f" ] && md5sum "$f"; done; :
 '@
 $BackupScan = @'
 for r in /data/codex/resource-backups /data/codex-backups /data/codex/update-backups; do [ -d "$r" ] && [ ! -L "$r" ] || continue; set -- "$r"; while [ $# -gt 0 ]; do d=$1; shift; for e in "$d"/* "$d"/.[!.]*; do if [ -d "$e" ] && [ ! -L "$e" ]; then set -- "$@" "$e"; elif [ -f "$e" ]; then sz=$(ls -l "$e" | awk '{print $5}'); echo "backup_file bytes=$sz path=$e"; fi; done; done; done

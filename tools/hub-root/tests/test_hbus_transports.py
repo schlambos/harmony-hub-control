@@ -86,7 +86,7 @@ class HbusTransportTests(unittest.TestCase):
         handle = Mock()
         device = usb.DeviceInfo(backend="hidapi", path="chosen", vendor_id=0x046D, product_id=0xC129)
         transport = usb.UsbHbusTransport(usb.parse_args(["--device-path", "chosen"]))
-        def exchange(handle, device, frames, timeout, expect, stop):
+        def exchange(handle, device, frames, timeout, expect, stop, **kwargs):
             request = usb.hbus_response_messages(b"".join(frames))[0]
             notification = b"".join(usb.hbus_command_frames({"id": "other", "code": 200}, 0))
             response = b"".join(usb.hbus_command_frames({"id": request["id"], "code": 200, "data": {}}, 0))

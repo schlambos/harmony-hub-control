@@ -10,7 +10,7 @@ import { createRequire } from "node:module";
 import { fileURLToPath } from "node:url";
 
 const require = createRequire(import.meta.url);
-const { DROPBEAR_BUILDS, HUB_FILES, HUB_INSTALLER_HELPERS, changedFiles, defaultSshPath, findHubKey, readHubPayload, readLocalHubZip, unzipCommand, updateHub } = require("../src/hub-update.js");
+const { DROPBEAR_BUILDS, HUB_FILES, HUB_INSTALLER_HELPERS, HUB_PATCH_INPUTS, changedFiles, defaultSshPath, findHubKey, readHubPayload, readLocalHubZip, unzipCommand, updateHub } = require("../src/hub-update.js");
 const ROOT = fileURLToPath(new URL("../..", import.meta.url));
 const mac = process.platform === "darwin";
 const win = process.platform === "win32";
@@ -56,6 +56,17 @@ test("the installers' helpers are skipped, as in tools/releases/release.py", () 
   assert.deepEqual([...HUB_INSTALLER_HELPERS].sort(), [...block.matchAll(/"([^"]+)"/g)].map((m) => m[1]).sort());
   assert.ok(HUB_INSTALLER_HELPERS.size > 0);
   for (const rel of HUB_INSTALLER_HELPERS) assert.equal(HUB_FILES[rel], undefined, `${rel} is never installed`);
+});
+
+test("the hub zip's patch inputs are accepted, not treated as unknown, matching tools/releases/release.py", () => {
+  const py = fs.readFileSync(path.join(ROOT, "tools/releases/release.py"), "utf8");
+  const block = py.match(/^HUB_PATCH_INPUTS = \{([^}]*)\}/m)[1];
+  // The desktop app must know the same patch inputs release.py ships in the zip,
+  // or unpackHubZip rejects a valid current hub zip with "doesn't know how to
+  // install". (This surfaced once the Windows USB root step started completing.)
+  assert.deepEqual([...HUB_PATCH_INPUTS].sort(), [...block.matchAll(/"([^"]+)"/g)].map((m) => m[1]).sort());
+  assert.ok(HUB_PATCH_INPUTS.size > 0);
+  for (const rel of HUB_PATCH_INPUTS) assert.equal(HUB_FILES[rel], undefined, `${rel} is a build input, never installed`);
 });
 
 test("another build of the same Dropbear counts as current, as in install_webui.py", () => {

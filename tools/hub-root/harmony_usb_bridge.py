@@ -379,6 +379,12 @@ class HidHandle:
     def read(self, length: int, timeout_ms: int) -> bytes:
         raise NotImplementedError
 
+    def flush_input(self) -> None:
+        # Drop any unread input reports left from a previous exchange. Only
+        # meaningful when a handle is reused across calls (see UsbHbusTransport
+        # session mode); the default is a harmless no-op.
+        return None
+
     def close(self) -> None:
         raise NotImplementedError
 
@@ -859,6 +865,13 @@ class WindowsHidHandle(HidHandle):
             return b""
         return bytes(buffer.raw[:read])
 
+    def flush_input(self) -> None:
+        if self._read_handle is not None:
+            try:
+                self._api.hid.HidD_FlushQueue(self._read_handle)
+            except Exception:
+                pass
+
     def close(self) -> None:
         self._close_io_handles()
 
@@ -1189,32 +1202,91 @@ class UsbHbusTransport:
     def __init__(self, args: argparse.Namespace) -> None:
         self.bridge = HarmonyUsbBridge(args)
         self.last_exchange: dict[str, Any] = {}
+        self._session_handle: HidHandle | None = None
+        self._session_device: DeviceInfo | None = None
+
+    def _resolve_device(self) -> None:
+        if not self.bridge.args.device_path and self.bridge._device is None:
+            devices = self.bridge.enumerate_devices()
+            if len(devices) != 1:
+                raise UsbBridgeError(f"hbus requires exactly one USB device, found {len(devices)}; specify --usb-device-path")
+            self.bridge.args.device_path = devices[0].path
+            self.bridge.args.backend = devices[0].backend
+
+    def begin_session(self) -> None:
+        """Open one HID handle and keep it open for every call() until
+        close_session().
+
+        The root payload upload issues 500+ hbus writes. Opening and closing a
+        fresh HID handle per call (the default below) means 500+ interface
+        claim/release cycles, which has been observed to wedge the hub's USB
+        endpoint on Windows partway through the upload (recoverable only by a
+        physical re-plug). Reusing a single handle removes that churn.
+
+        Windows (winhid) only. hidapi on macOS and Linux keeps the per-call
+        handle path that the macOS Setup Wizard was certified on.
+        """
+        if self._session_handle is not None:
+            return
+        with usb_process_lock():
+            self._resolve_device()
+            handle, device = self.bridge.open_handle()
+            if device.backend != "winhid":
+                handle.close()
+                return
+            self._session_handle = handle
+            self._session_device = device
+
+    def close_session(self) -> None:
+        handle = self._session_handle
+        self._session_handle = None
+        self._session_device = None
+        if handle is not None:
+            try:
+                handle.close()
+            except Exception:
+                pass
 
     def call(self, cmd: str, params: Any, timeout: int = 20) -> dict[str, Any]:
         call_id = os.urandom(8).hex()
         message = {"id": call_id, "cmd": cmd, "data": params, "timeout": timeout}
         sequence = self.bridge.new_raw_sequence() & 0x3F
         frames = hbus_command_frames(message, sequence)
+
+        def matched(raw: bytes) -> bool:
+            if len(raw) > 2_000_000:
+                raise UsbBridgeError("USB hbus response exceeds 2 MB")
+            return any(str(item.get("id")) == call_id and "code" in item for item in hbus_response_messages(raw))
+
+        def run(handle: HidHandle, device: DeviceInfo) -> dict[str, Any]:
+            # hbus is strict request/response, so read the reply sequentially
+            # after writing (read_during_write=False) rather than via the winhid
+            # background reader. The background reader polls in 250 ms slices and
+            # its post-match join waits out the in-flight slice, costing ~0.25 s
+            # per call — which on a 500+ chunk root upload stretched the session
+            # to minutes and let the hub's USB gadget wedge mid-upload. The
+            # sequential path returns the moment the reply arrives (how hidapi on
+            # macOS already behaves, where this flow has always worked) and is
+            # the same path the firmware write command uses.
+            raw, reports = self.bridge.exchange_reports(
+                handle, device, frames, (timeout + 8) * 1000, True, matched, read_during_write=False
+            )
+            self.last_exchange = {"requestId": call_id, "rawHex": hex_string(raw), "reports": reports}
+            for reply in hbus_response_messages(raw):
+                if str(reply.get("id")) == call_id and "code" in reply:
+                    return reply
+            raise UsbBridgeError(f"USB hbus timed out without matching response for {cmd}; no retry made")
+
         with usb_process_lock():
-            if not self.bridge.args.device_path and self.bridge._device is None:
-                devices = self.bridge.enumerate_devices()
-                if len(devices) != 1:
-                    raise UsbBridgeError(f"hbus requires exactly one USB device, found {len(devices)}; specify --usb-device-path")
-                self.bridge.args.device_path = devices[0].path
-                self.bridge.args.backend = devices[0].backend
+            self._resolve_device()
+            if self._session_handle is not None and self._session_device is not None:
+                # Reuse the persistent handle; clear any residual input left by
+                # the previous exchange before issuing this command.
+                self._session_handle.flush_input()
+                return run(self._session_handle, self._session_device)
             handle, device = self.bridge.open_handle()
             try:
-                def matched(raw: bytes) -> bool:
-                    if len(raw) > 2_000_000:
-                        raise UsbBridgeError("USB hbus response exceeds 2 MB")
-                    return any(str(item.get("id")) == call_id and "code" in item for item in hbus_response_messages(raw))
-
-                raw, reports = self.bridge.exchange_reports(handle, device, frames, (timeout + 8) * 1000, True, matched)
-                self.last_exchange = {"requestId": call_id, "rawHex": hex_string(raw), "reports": reports}
-                for reply in hbus_response_messages(raw):
-                    if str(reply.get("id")) == call_id and "code" in reply:
-                        return reply
-                raise UsbBridgeError(f"USB hbus timed out without matching response for {cmd}; no retry made")
+                return run(handle, device)
             finally:
                 handle.close()
 
