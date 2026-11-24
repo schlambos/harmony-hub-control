@@ -1,13 +1,14 @@
 # Continuous integration
 
 Every pull request and every push to `main` runs `.github/workflows/ci.yml`.
-It has two jobs. Neither touches a hub or uses a secret, so pull requests
+It has three jobs. None touches a hub or uses a secret, so pull requests
 from forks run it too.
 
 | Job | What it proves | Runs |
 | --- | --- | --- |
 | Test suites | the suites that need no hub and no network pass | `sh tools/ci/run_suites.sh` on an Ubuntu runner |
 | Pins and reproducible builds | every pin matches its committed file, and every committed binary is what its source builds | `python3 tools/ci/verify_pins.py`, then `sh tools/ci/rebuild_check.sh`, in a Debian container |
+| Python 3.10 floor | the Python a user runs (installer, hub-root, catalog, Docker manager, hardware regression) compiles on the documented minimum, Python 3.10 | `python3 tools/ci/check_python_floor.py` under a real Python 3.10 |
 
 The design behind it, and what comes next, is in
 [CI_BUILD_RELEASE_DESIGN.md](CI_BUILD_RELEASE_DESIGN.md).
@@ -20,11 +21,11 @@ the `melodious-windows-x64` artifact. Nothing is signed or published.
 
 ## Test suites
 
-`tools/ci/run_suites.sh` holds the 43 suites: the simulator and desktop tests,
+`tools/ci/run_suites.sh` holds the 45 suites: the simulator and desktop tests,
 the hygiene and shell checks, the installer contract, the BusyBox links, the
 release tools, the Docker manager, `hub-root` and hardware-regression offline
 tests, Bluetooth and Home Assistant checks, USB Ethernet, the HBus and activity
-checks, and the 18 Lua suites (`lua-*`, covering `codexactivity.lua`,
+checks, and the 19 Lua suites (`lua-*`, covering `codexactivity.lua`,
 `netservicestarter.lua`, and `codexmqtt.lua`). Run it the same way before you
 push:
 
@@ -38,6 +39,11 @@ Every suite runs even after one fails, so one run shows every failure.
 The list also holds `hwreg-offline`, the hardware regression suite's offline
 unit tests (`tools/hw-regression/`); they need no hub. The live suite itself
 is a manual hardware gate — see `tools/hw-regression/README.md`.
+
+The list also holds `python-floor`, which compiles the user-run Python
+with whatever interpreter runs the suites; that keeps its file list
+honest, and the CI job above runs the same script under Python 3.10
+itself, which is the compile that counts.
 
 **Quarantine.** `tools/ci/quarantine.txt` lists any suites that already fail
 on `main`. CI reports them and doesn't count them. When a listed suite
@@ -205,11 +211,12 @@ about two.
 
 CI reports on every pull request once this is merged. To make it block a
 merge, add a branch protection rule for `main` that requires the checks
-`Test suites` and `Pins and reproducible builds`.
+`Test suites`, `Pins and reproducible builds` and `Python 3.10 floor`.
 
 ## Actions used
 
 Only GitHub's own, pinned by commit: `actions/checkout`,
-`actions/setup-node`, `actions/cache` and `actions/upload-artifact`. When
+`actions/setup-node`, `actions/setup-python`, `actions/cache` and
+`actions/upload-artifact`. When
 the build check fails, the built files are kept as the `rebuild-output`
 artifact so they can be compared with the committed ones.

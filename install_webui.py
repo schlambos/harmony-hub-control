@@ -457,6 +457,13 @@ UPGRADE_PROTECTED_PATHS = [
 VERDICT_ALLOWED = "ALLOWED"
 VERDICT_CAPACITY = "BLOCKED_CAPACITY"
 VERDICT_ROLLBACK_CAPACITY = "BLOCKED_ROLLBACK_CAPACITY"
+
+# Appended when ssh answers "Permission denied": a hub rooted by another
+# tool holds that tool's key in authorized_keys, not the harmony_owner_*
+# default this installer looks for.
+SSH_KEY_HINT = (
+    "hint: the hub refused this SSH key. If the hub was rooted with a different tool (harmony-hub-root, harmony-ng), its authorized_keys holds that tool's key, not this one - pass it with --key-path (PowerShell: -KeyPath)."
+)
 VERDICT_CONFIG_UNCERTAIN = "BLOCKED_CONFIGURATION_UNCERTAINTY"
 VERDICT_VALIDATION = "BLOCKED_VALIDATION_FAILURE"
 
@@ -1536,14 +1543,15 @@ class Installer:
     ) -> str:
         code, stdout, stderr = self.run_remote_rc(command, input_bytes, timeout)
         if code != 0:
-            raise RuntimeError(
-                "ssh failed with exit {code}\ncommand={cmd}\nstdout={out}\nstderr={err}".format(
-                    code=code,
-                    cmd=command,
-                    out=stdout,
-                    err=stderr,
-                )
+            message = "ssh failed with exit {code}\ncommand={cmd}\nstdout={out}\nstderr={err}".format(
+                code=code,
+                cmd=command,
+                out=stdout,
+                err=stderr,
             )
+            if "Permission denied" in stderr:
+                message += "\n" + SSH_KEY_HINT
+            raise RuntimeError(message)
         if stderr.strip() and not quiet:
             print(stderr.strip())
         return stdout
@@ -2889,6 +2897,11 @@ class Installer:
         kv("multi_remote_off_check=ok")
 
     def start_services(self) -> None:
+        # Hoisted out of the f-strings below: Python before 3.12 forbids a
+        # backslash (and the f-string's own quote) inside an f-string
+        # expression, and this installer runs on the user's Python 3.10+.
+        discover_activity = remote_quote('{"gatewayType":"codexactivity"}')
+        discover_mqtt = remote_quote('{"gatewayType":"codexmqtt"}')
         start = (
             "killall codex_webui 2>/dev/null || true; killall codex_bthid_keyboard 2>/dev/null || true; "
             # A running egress guard keeps its old code until the hub restarts:
@@ -2912,9 +2925,9 @@ class Installer:
             "if [ -x /data/codex/webos_service.sh ]; then /data/codex/webos_service.sh >/dev/null 2>&1 & fi; "
             "sleep 1; "
             f"/data/codex/bin/codex_hbus {remote_quote(self.hub_id)} harmony.automation?discover "
-            f"{remote_quote('{\"gatewayType\":\"codexactivity\"}')} >> /cache/codex-init.log 2>&1 || true; "
+            f"{discover_activity} >> /cache/codex-init.log 2>&1 || true; "
             f"/data/codex/bin/codex_hbus {remote_quote(self.hub_id)} harmony.automation?discover "
-            f"{remote_quote('{\"gatewayType\":\"codexmqtt\"}')} >> /cache/codex-init.log 2>&1 || true; "
+            f"{discover_mqtt} >> /cache/codex-init.log 2>&1 || true; "
             "ps | grep '[c]odex_webui' || true; ps | grep '[c]odex_bthid_keyboard' || true; ps | grep '[d]ropbear' || true; "
             "ps | grep '[a]tv_service.sh' || true"
         )

@@ -188,16 +188,30 @@ def authorize_url(cid: str, challenge: str, state: str) -> str:
     return f"{OAUTH_AUTHORIZE_URL}?{query}"
 
 
+_EMBEDDED_CALLBACK = re.compile(
+    r"com\.logitech\.harmony://lidsoauth\?[^\s'\"<>]+", re.IGNORECASE)
+
+
 def parse_callback(text: str, *, expected_state: str) -> str:
     """The authorization code out of a callback address.
 
     Takes the full com.logitech.harmony://lidsoauth?code=...&state=...
-    address (or just its query string). The state must match what this run
-    sent: a callback from any other sign-in attempt is refused, not
-    exchanged. A bare string is refused too: it can't be checked, and the
-    nonce on Logitech's id.logi.com/launch.html page looks just like a code.
+    address (or just its query string). Text around one embedded address
+    is fine too - Chrome and Edge hide the address when no Harmony app is
+    installed to receive it, and the place it surfaces is the browser
+    console's "Failed to launch 'com.logitech.harmony://...'" message,
+    which users paste whole. Two different embedded addresses are refused.
+    The state must match what this run sent: a callback from any other
+    sign-in attempt is refused, not exchanged. A bare string is refused
+    too: it can't be checked, and the nonce on Logitech's
+    id.logi.com/launch.html page looks just like a code.
     """
     candidate = (text or "").strip()
+    embedded = _EMBEDDED_CALLBACK.findall(candidate)
+    if embedded:
+        if len(set(embedded)) > 1:
+            raise CatalogError("that paste holds more than one callback address; paste only the latest one")
+        candidate = embedded[0]
     if not candidate:
         raise CatalogError("nothing was pasted; paste the callback address from your browser")
     try:
@@ -271,7 +285,14 @@ button{margin-top:.6rem;cursor:pointer}.hint{color:#666;font-size:.9rem}</style>
 <body><h1>One more step</h1>
 <p>After you sign in, your browser tries to open the Harmony app and lands
 on an address starting with <code>com.logitech.harmony://lidsoauth</code>.
-Copy that whole address from the address bar and paste it here:</p>
+Copy that whole address from the address bar and paste it here.</p>
+<p><strong>Stuck on Logitech's "Launch Application" page, where the button
+does nothing?</strong> That page hands the address to an app Chrome and
+Edge don't have, so nothing opens and the address never shows. Get it from
+the browser console instead: on that page press F12 (Ctrl-Shift-J), open
+the Console tab, click "Launch Application" once more, and copy the whole
+red "Failed to launch 'com.logitech.harmony://lidsoauth?...'" message -
+paste that whole message here.</p>
 <form method="post" action="/callback">
 <input name="callback" autocomplete="off" spellcheck="false"
  placeholder="com.logitech.harmony://lidsoauth?code=...&amp;state=...">
@@ -338,6 +359,9 @@ def browser_signin(client: JsonClient, cid: str, *, opener=None, input_fn=None) 
         if server is not None:
             print(f"After signing in, paste the callback address at http://127.0.0.1:{BRIDGE_PORT}/ "
                   "(it starts with com.logitech.harmony://lidsoauth).")
+        print("If Logitech's page shows \"Launch Application\" and clicking does nothing:")
+        print("on that page open the browser console (F12, then Console), click the button")
+        print("again, and paste the whole red \"Failed to launch 'com.logitech.harmony://...'\" message.")
         print("Or paste that address here and press Enter (Ctrl-C to cancel):")
         callback = ""
         if server is not None:

@@ -52,6 +52,7 @@ hygiene|node tools/shipped_copy_hygiene.mjs
 shell-smoke|node tools/harmony_shell_smoke.mjs
 payload-inventory|node tools/payload_bin_inventory.mjs --check
 repin-absorb|python3 -m unittest tools/ci/test_repin_absorb.py
+python-floor|python3 tools/ci/check_python_floor.py
 activity-ui-model|node tools/activity_ui_model_smoke.mjs
 installer-contract|python3 tools/ci/unittest_except.py tools/installer_contract_smoke.py $INSTALLER_SKIP
 busybox-links|python3 tools/busybox_links_smoke.py
