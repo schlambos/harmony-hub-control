@@ -357,11 +357,17 @@ Logitech directly. On **Windows, Linux or macOS**, run the
 python tools/catalog/harmony_catalog.py Sony STR-DG720
 ```
 
-Use your Python 3 launcher (`py -3` on Windows or `python3` on Linux/macOS
+Use your Python 3.10+ launcher (`py -3` on Windows or `python3` on Linux/macOS
 if needed). Follow the helper's sign-in instructions: sign in on Logitech's
 page, then paste the resulting `com.logitech.harmony://…` redirect into
 the helper's local bridge page or terminal. Never post that redirect or
 your token file in an issue.
+
+Needs Python 3.10 or newer. If Logitech's sign-in ends on a **Launch
+Application** page whose button does nothing, the callback is in the
+browser console's "Failed to launch" message — paste that whole
+message into the helper; the [catalog README](../tools/catalog/README.md)
+walks through it.
 
 The helper writes a `harmony-catalog-*.json` package. Open your device's
 **Import codes → Logitech catalog → Open a catalog package…**, select it,

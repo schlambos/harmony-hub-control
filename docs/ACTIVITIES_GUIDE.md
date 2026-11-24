@@ -455,6 +455,23 @@ differences are shown so you do not overwrite them accidentally.
   feature with prerequisites and hardware coverage described in that guide.
 - [Touch editor](TOUCH_EDITOR.md): map sharing, overrides and local sync.
 
+#### If the remote says "Place remote on cradle" or "account conflict"
+
+A screen remote that was set up on another hub, or that has never
+finished its first sync with this one, can pair over the radio and
+then refuse to go further. Depending on the model it sits on **Place
+remote on cradle**, **Set up remote using Harmony app**, or **An
+account conflict between your Harmony Remote and hub has been
+detected**. All three mean the same thing: the remote is still
+holding the old hub's setup (or none) and won't pull this hub's.
+Re-pairing with Menu + Mute doesn't clear that. Work through the four
+steps above instead — factory-reset the remote, restart it with the
+15-second **Off** hold, then pair — and let it sit near the hub (on
+its cradle is fine) while it pulls the hub's activities and maps on
+its first sync. For a never-activated Harmony Ultimate the cradle is
+required for that first sync, not just convenient
+([SETUP_GUIDE.md](SETUP_GUIDE.md)).
+
 ## Everyday troubleshooting
 
 ### Something did not turn on or switch input: Fix it

@@ -12,10 +12,10 @@ confirmation**).
 | Requirement | Details |
 | --- | --- |
 | Harmony Hub | Rooted with [harmony-hub-root](https://github.com/Ripthulhu/harmony-hub-root), bundled in [`tools/hub-root/`](../tools/hub-root/README.md) (see below), or by the desktop [Setup Wizard](SETUP_GUIDE.md). The installer itself doesn't root hubs. |
-| SSH key | The root tool's private key, `harmony_owner_*`, in `~/.ssh` (`%USERPROFILE%\.ssh` on Windows). |
+| SSH key | The root tool's private key, `harmony_owner_*`, in `~/.ssh` (`%USERPROFILE%\.ssh` on Windows). A hub rooted with a different tool (the standalone harmony-hub-root, harmony-ng) holds that tool's key in its `authorized_keys` instead: pass it with `--key-path` (PowerShell: `-KeyPath`). If ssh answers `Permission denied (publickey)`, that mismatch is why. |
 | Hub ID | The numeric Hub ID the root tool prints. Don't guess it: Melodious sends it with every command to the hub's engine. |
 | Free flash | About 1.6 MB of the hub's 5 MB data flash for the first install, or about 1.2 MB when the root tool's Dropbear can be reused. Each later web app update needs about 0.65 MB free (the first one that adds BusyBox, about 0.25 MB more). The installer measures it and stops before writing anything if there isn't enough (see [If the hub's flash is full](#if-the-hubs-flash-is-full)). |
-| Install computer | Windows with PowerShell, Linux or macOS with Python 3, or a Docker or Unraid host. The installer needs only `ssh`, not `scp` or `sftp`. |
+| Install computer | Windows with PowerShell, Linux or macOS with Python 3.10 or newer, or a Docker or Unraid host. The installer needs only `ssh`, not `scp` or `sftp`. |
 | Network | A trusted home network. The web app is plain HTTP. |
 
 Root the hub first with the bundled root tool. It is in this repository,
@@ -207,6 +207,37 @@ Android app likewise downloads the release APK and installs it over
 itself only when you tap Install, after checking the checksum and the
 signing key. Nothing updates until you opt in and confirm. See
 [SECURITY.md](SECURITY.md) for how downloads are checked.
+
+## If the web app answers 502, or a hub on another VLAN goes quiet
+
+These two look like a dead hub and usually aren't.
+
+- **HTTP 502 in the web app, on every page.** The web app is running,
+  but it can't reach the hub's engine. The usual cause is a missing
+  Hub ID: the engine commands carry it, and without
+  `/data/codex/hub_id` on the hub every one fails (the answer's body
+  says "Hub ID is missing"). That happens when an install didn't
+  finish — run the installer again with the numeric Hub ID the root
+  tool printed. A 502 on one action only (starting an activity,
+  pairing a remote) means that one engine or radio call failed; the
+  message says which.
+- **HTTP 404 from `curl`.** The hub's addresses are lowercase and
+  case-sensitive: `http://<hub-ip>:8080/api/activity-state` works,
+  `/API/activity-state` does not.
+- **The hub stops answering from another VLAN when the cloud blocker
+  is on.** The blocker removes the hub's default route, so the hub
+  can't reach the internet — and, without help, couldn't answer
+  anything off its own subnet either. Melodious keeps routes to the
+  private ranges (10.0.0.0/8, 172.16.0.0/12, 192.168.0.0/16) through
+  your router, so a phone, Home Assistant or MQTT broker on another
+  private VLAN still reaches the hub and gets its replies. What does
+  not cross a VLAN is discovery: the multicast the apps use to find
+  hubs stays on one subnet, so from another VLAN type the hub's
+  address in by hand. Clients that reach the hub from a public
+  address (a VPN that hands out public IPs, say) get no reply while
+  the blocker is on, by design. The hub's clock sync has the same
+  shape: point it at a time server on your own network in
+  **System → Custom NTP server** if the defaults can't be reached.
 
 ## Turn Melodious off and on
 

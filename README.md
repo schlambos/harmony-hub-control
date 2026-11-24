@@ -98,7 +98,7 @@ How the pieces fit, and how presses and gestures are timed: [ARCHITECTURE.md](do
 - **Harmony Hub** on firmware 4.15.600 or 4.11.6 (tested and contributed by @jupbek), rooted by
   the Setup Wizard or the bundled root tool ([COMPATIBILITY.md](docs/COMPATIBILITY.md)).
 - **A computer** to install from: macOS, Windows, or Linux (Desktop app — Windows and Linux: **Not
-  fully tested, needs confirmation** — PowerShell, or Python 3), or Docker/Unraid
+  fully tested, needs confirmation** — PowerShell, or Python 3.10+), or Docker/Unraid
   ([UNRAID.md](UNRAID.md)).
 - **A trusted home network:** the web app is plain HTTP ([SECURITY.md](docs/SECURITY.md)).
 - **Home Assistant** (optional), with [HACS](https://hacs.xyz/).
