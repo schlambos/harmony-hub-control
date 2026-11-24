@@ -78,7 +78,7 @@ Some parts are less tested than others. Each one is labelled where it is describ
 
 ### Activities
 
-- **Time restrictions.** Block an activity from starting on the days and times you choose
+- **Parental controls.** Block an activity from starting on the days and times you choose
   (@danielvijge, [guide](ACTIVITIES_GUIDE.md)).
 
 ### Apps
