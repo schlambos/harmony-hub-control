@@ -34,6 +34,36 @@ OAuth flow the Harmony desktop app uses (authorization code + PKCE):
 Tokens are kept at `~/.melodious/harmony_token.json` (mode `0600`), so
 later runs refresh silently and usually skip the browser entirely.
 
+### If Logitech's page shows "Launch Application" and clicking does nothing
+
+That page (`id.logi.com/launch.html`) hands the
+`com.logitech.harmony://lidsoauth?...` callback to the Harmony desktop
+app. Without that app installed, Chrome and Edge have nothing to open:
+the button looks dead and the callback never appears in the address
+bar. The sign-in itself worked — only the hand-off has nowhere to go.
+
+Get the callback from the browser console instead:
+
+1. Stay on the "Launch Application" page and open the developer tools
+   (F12), then the **Console** tab.
+2. Click **Launch Application** once more.
+3. Copy the whole red message, `Failed to launch
+   'com.logitech.harmony://lidsoauth?code=...&state=...' because the
+   scheme does not have a registered handler.`
+4. Paste that whole message into the helper's bridge page or terminal.
+   The helper takes the callback out of it (and checks it belongs to
+   this sign-in attempt, like any other paste).
+
+Or skip the browser dance: the Melodious desktop app and the Android
+app sign in inside the app and catch the callback themselves
+(**Import codes → Logitech catalog → Sign in**).
+
+One more format note: the import opens only the packages this helper
+(or the apps) write — a `harmony-catalog-*.json` with
+`schema_version: "0.2.0"`. A raw JSON dump saved from MyHarmony or the
+Harmony app is a different shape and is refused as the wrong format;
+run the helper for that maker and model instead.
+
 `--list` shows the catalog matches for a maker/model without downloading.
 
 ## How it behaves
