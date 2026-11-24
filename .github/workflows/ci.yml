@@ -74,3 +74,17 @@ jobs:
             build/output/
             build/toolchains/build.log
           if-no-files-found: ignore
+
+  python-floor:
+    name: Python 3.10 floor
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7.1.0
+        with:
+          python-version: "3.10"
+      # The documented minimum is Python 3.10; compile the Python a user
+      # runs with a real 3.10 so 3.12-only syntax can't ship (docs/CI.md).
+      - name: Every user-run Python file compiles on 3.10
+        run: python3 tools/ci/check_python_floor.py

@@ -797,6 +797,22 @@ class PythonInstallerPreflight(unittest.TestCase):
         self.assertEqual(self.hub.paths_under_stage(), [])
         self.assertEqual(kv_value(self._stdout, "staging_removed"), self.hub.stage)
 
+    def test_ssh_permission_denied_names_the_key_fix(self):
+        """[PYTHON BEHAVIORAL] a hub rooted by another tool holds that tool's
+        key in authorized_keys; ssh's bare "Permission denied" must come with
+        the --key-path hint, and other ssh failures must not get it."""
+        installer = object.__new__(INST.Installer)
+        installer.run_remote_rc = lambda command, input_bytes=None, timeout=90: (
+            255, "", "root@192.0.2.1: Permission denied (publickey).")
+        with self.assertRaises(RuntimeError) as denied:
+            installer.run_remote("id; uname -a")
+        self.assertIn(INST.SSH_KEY_HINT, str(denied.exception))
+        installer.run_remote_rc = lambda command, input_bytes=None, timeout=90: (
+            255, "", "ssh: connect to host 192.0.2.1 port 22: Connection refused")
+        with self.assertRaises(RuntimeError) as refused:
+            installer.run_remote("id; uname -a")
+        self.assertNotIn(INST.SSH_KEY_HINT, str(refused.exception))
+
     def test_preflight_only_allowed_no_mutation(self):
         """[PYTHON BEHAVIORAL] preflight stages in a 0700 volatile tree without
         mktemp, verifies MD5 strictly, probes destinations with one BusyBox
@@ -4171,6 +4187,14 @@ class PowerShellStaticContract(unittest.TestCase):
         match = re.search(rf"\${re.escape(variable)} = @\((.*?)\)", self.text, re.S)
         assert match, f"missing ${variable} array"
         return re.findall(r'"([^"]+)"', match.group(1))
+
+    def test_ssh_key_hint_matches_python(self):
+        """[PS1 STATIC] Invoke-Remote appends the same key hint as Python's
+        run_remote when ssh answers "Permission denied"."""
+        self.assertEqual(self.ps_scalar("SshKeyHint"), INST.SSH_KEY_HINT)
+        invoke = self.text.split("function Invoke-Remote(", 1)[1].split("function Get-RemoteBytes", 1)[0]
+        self.assertIn('"*Permission denied*"', invoke)
+        self.assertIn("$SshKeyHint", invoke)
 
     def test_dropbear_builds_match_python(self):
         """[PS1 STATIC] $DropbearBuilds lists the same builds as DROPBEAR_BUILDS."""

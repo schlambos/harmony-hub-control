@@ -310,6 +310,9 @@ $UpgradeProtectedPaths = @(
 $VerdictAllowed = "ALLOWED"
 $VerdictCapacity = "BLOCKED_CAPACITY"
 $VerdictRollbackCapacity = "BLOCKED_ROLLBACK_CAPACITY"
+
+# Appended when ssh answers "Permission denied" (see install_webui.py).
+$SshKeyHint = "hint: the hub refused this SSH key. If the hub was rooted with a different tool (harmony-hub-root, harmony-ng), its authorized_keys holds that tool's key, not this one - pass it with --key-path (PowerShell: -KeyPath)."
 $VerdictConfigUncertain = "BLOCKED_CONFIGURATION_UNCERTAINTY"
 $VerdictValidation = "BLOCKED_VALIDATION_FAILURE"
 
@@ -1098,7 +1101,9 @@ function Invoke-RemoteRc([string]$Command, [byte[]]$InputBytes = $null, [int]$Ti
 function Invoke-Remote([string]$Command, [byte[]]$InputBytes = $null, [int]$TimeoutMs = 90000) {
     $r = Invoke-RemoteRc $Command $InputBytes $TimeoutMs
     if ($r.Code -ne 0) {
-        throw "ssh failed with exit $($r.Code)`ncommand=$Command`nstdout=$($r.Out)`nstderr=$($r.Err)"
+        $message = "ssh failed with exit $($r.Code)`ncommand=$Command`nstdout=$($r.Out)`nstderr=$($r.Err)"
+        if ($r.Err -like "*Permission denied*") { $message += "`n$SshKeyHint" }
+        throw $message
     }
     return $r.Out
 }

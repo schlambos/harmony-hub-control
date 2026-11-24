@@ -49,6 +49,32 @@ class CallbackTests(unittest.TestCase):
         for prefix in ("com.logitech.harmony://lidsoauth?", "?", ""):
             self.assertEqual(parse_callback(prefix + "code=fixture&state=expected", expected_state="expected"), "fixture")
 
+    def test_embedded_in_browser_console_text(self):
+        # Chrome/Edge with no Harmony app installed: Logitech's
+        # "Launch Application" page does nothing, and the only place the
+        # callback appears is this console message, pasted whole.
+        message = (
+            "Failed to launch 'com.logitech.harmony://lidsoauth?code=fixture&state=expected' "
+            "because the scheme does not have a registered handler."
+        )
+        self.assertEqual(parse_callback(message, expected_state="expected"), "fixture")
+        # The same address twice (message plus a repeated log line) is one callback.
+        self.assertEqual(parse_callback(message + "\n" + message, expected_state="expected"), "fixture")
+
+    def test_embedded_refusals(self):
+        # Two different callbacks in one paste: never guess which to exchange.
+        two = (
+            "com.logitech.harmony://lidsoauth?code=one&state=expected "
+            "com.logitech.harmony://lidsoauth?code=two&state=expected"
+        )
+        with self.assertRaises(CatalogError):
+            parse_callback(two, expected_state="expected")
+        # An embedded callback from another sign-in attempt is still refused.
+        with self.assertRaises(CatalogError):
+            parse_callback(
+                "Failed to launch 'com.logitech.harmony://lidsoauth?code=fixture&state=wrong'",
+                expected_state="expected")
+
     def test_refusals(self):
         for value in (
             "", "bare-nonce", "code=fixture", "state=expected", "code=&state=expected",

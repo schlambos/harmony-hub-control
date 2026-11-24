@@ -212,9 +212,10 @@ no signing key, no hub.
   `activity_offline_guard.sh`.
 - **15 tests need a macOS host** and are left out on Linux; `usb-eth` is
   flaky. See [CI.md](CI.md).
-- **`install_webui.py` needs Python 3.12.** An f-string with a backslash in
-  its expression (the statement ending at line 2620) is a syntax error on
-  Python 3.11 and older, and no document states the requirement.
+- **Fixed after Phase 2:** `install_webui.py` used to need Python 3.12
+  (an f-string with a backslash in its expression). The documented
+  minimum is Python 3.10, and CI now compiles the user-run Python under
+  a real 3.10 (`tools/ci/check_python_floor.py`).
 - **Fixed in Phase 2:** `BUILD.md` previously called `dropbearmulti`
   unverified; it now documents the reproducible Bootlin + Dropbear 2025.89
   build verified in CI against `build/pins/dropbearmulti`.
