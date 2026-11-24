@@ -1070,6 +1070,24 @@ function Get-SshArgs() {
     return $args
 }
 
+# .NET Framework wraps a child's redirected stdin in a StreamWriter over
+# [Console]::InputEncoding and flushes it as the child starts, which emits
+# the encoding's preamble ahead of our bytes. On a UTF-8 console (chcp
+# 65001, the Windows Terminal default) that prepends EF BB BF to every file
+# streamed to the hub, so each staged candidate fails its MD5 check (#257).
+# Switch to the BOM-less form before starting ssh; the caller restores the
+# returned encoding (assigning InputEncoding also sets the console code
+# page, which outlives this window if left changed). Returns $null when the
+# current encoding has no preamble or the console cannot be queried.
+function Set-BomlessStdinEncoding() {
+    try {
+        $current = [Console]::InputEncoding
+        if ($current.GetPreamble().Length -eq 0) { return $null }
+        [Console]::InputEncoding = [Text.UTF8Encoding]::new($false)
+        return $current
+    } catch { return $null }
+}
+
 function Invoke-RemoteRc([string]$Command, [byte[]]$InputBytes = $null, [int]$TimeoutMs = 90000) {
     $psi = [System.Diagnostics.ProcessStartInfo]::new()
     $psi.FileName = "ssh"
@@ -1081,12 +1099,19 @@ function Invoke-RemoteRc([string]$Command, [byte[]]$InputBytes = $null, [int]$Ti
     $psi.UseShellExecute = $false
     $proc = [System.Diagnostics.Process]::new()
     $proc.StartInfo = $psi
-    $proc.Start() | Out-Null
-    if ($null -ne $InputBytes) {
-        $stdin = $proc.StandardInput.BaseStream
-        $stdin.Write($InputBytes, 0, $InputBytes.Length)
+    $restoreInputEncoding = Set-BomlessStdinEncoding
+    try {
+        $proc.Start() | Out-Null
+        if ($null -ne $InputBytes) {
+            $stdin = $proc.StandardInput.BaseStream
+            $stdin.Write($InputBytes, 0, $InputBytes.Length)
+        }
+        $proc.StandardInput.Close()
+    } finally {
+        if ($null -ne $restoreInputEncoding) {
+            try { [Console]::InputEncoding = $restoreInputEncoding } catch {}
+        }
     }
-    $proc.StandardInput.Close()
     $stdoutTask = $proc.StandardOutput.ReadToEndAsync()
     $stderrTask = $proc.StandardError.ReadToEndAsync()
     if (-not $proc.WaitForExit($TimeoutMs)) {
@@ -1120,8 +1145,15 @@ function Get-RemoteBytes([string]$Path, [int]$TimeoutMs = 120000) {
     $psi.UseShellExecute = $false
     $proc = [System.Diagnostics.Process]::new()
     $proc.StartInfo = $psi
-    $proc.Start() | Out-Null
-    $proc.StandardInput.Close()
+    $restoreInputEncoding = Set-BomlessStdinEncoding
+    try {
+        $proc.Start() | Out-Null
+        $proc.StandardInput.Close()
+    } finally {
+        if ($null -ne $restoreInputEncoding) {
+            try { [Console]::InputEncoding = $restoreInputEncoding } catch {}
+        }
+    }
     $buffer = [IO.MemoryStream]::new()
     $copyTask = $proc.StandardOutput.BaseStream.CopyToAsync($buffer)
     $stderrTask = $proc.StandardError.ReadToEndAsync()

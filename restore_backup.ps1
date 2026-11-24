@@ -56,6 +56,17 @@ function Get-SshArgs() {
     )
 }
 
+# Same guard as install_webui.ps1 (#257): on a UTF-8 console, .NET
+# Framework's stdin StreamWriter prepends EF BB BF to the child's stdin.
+function Set-BomlessStdinEncoding() {
+    try {
+        $current = [Console]::InputEncoding
+        if ($current.GetPreamble().Length -eq 0) { return $null }
+        [Console]::InputEncoding = [Text.UTF8Encoding]::new($false)
+        return $current
+    } catch { return $null }
+}
+
 function Invoke-Remote([string]$Command, [int]$TimeoutMs = 90000) {
     $psi = [System.Diagnostics.ProcessStartInfo]::new()
     $psi.FileName = "ssh"
@@ -65,8 +76,15 @@ function Invoke-Remote([string]$Command, [int]$TimeoutMs = 90000) {
     $psi.RedirectStandardOutput = $true
     $psi.RedirectStandardError = $true
     $psi.UseShellExecute = $false
-    $p = [System.Diagnostics.Process]::Start($psi)
-    $p.StandardInput.Close()
+    $restoreInputEncoding = Set-BomlessStdinEncoding
+    try {
+        $p = [System.Diagnostics.Process]::Start($psi)
+        $p.StandardInput.Close()
+    } finally {
+        if ($null -ne $restoreInputEncoding) {
+            try { [Console]::InputEncoding = $restoreInputEncoding } catch {}
+        }
+    }
     if (-not $p.WaitForExit($TimeoutMs)) {
         try { $p.Kill() } catch {}
         throw "ssh timed out while running: $Command"
