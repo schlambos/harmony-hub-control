@@ -13,7 +13,7 @@ Some parts are less tested than others. Each one is labelled where it is describ
 - **Set up a hub with no Logitech at all.** The desktop app's Setup Wizard takes a hub that is
   new, factory reset, second-hand or already set up, provisions it locally, roots it and leaves it
   running Melodious, fully offline. No Logitech account, app or cloud, and no commands. Tested on
-  macOS with a real hub. On Windows and Linux: **Not fully tested, needs confirmation**. See the
+  macOS and Windows with real hubs. On Linux: **Not fully tested, needs confirmation**. See the
   [Setup Guide](SETUP_GUIDE.md).
 - **Two screen remotes at once.** Run a Touch and a 950, or two Ultimates, on one hub, kept in sync
   ([guide](TWO_SCREEN_REMOTES.md)).
@@ -80,8 +80,8 @@ Some parts are less tested than others. Each one is labelled where it is describ
 
 ### Apps
 
-- **Desktop app for Windows** 10/11 x64, and Linux from source: **Not fully tested, needs
-  confirmation**. The Windows app is unsigned, so SmartScreen warns before the first launch
+- **Desktop app for Windows** 10/11 x64, tested with a real hub, and Linux from source (**Not
+  fully tested, needs confirmation**). The Windows app is unsigned, so SmartScreen warns before the first launch
   ([guide](DESKTOP_APP.md)).
 - **iPhone and iPad app** (**experimental, sideload only**). It starts activities and works as a
   remote, with no editors. Install the `.ipa` with AltStore or SideStore, or build it in Xcode
@@ -190,6 +190,10 @@ release.
   while the app showed it as running (#165).
 - The Setup Wizard could lose the hub over USB after a restart and stop partway through (#169).
 - The Setup Wizard's install step blamed the USB cable for download and unpack problems (#242).
+- On Windows, the Setup Wizard hung while setting up local hub access over USB, and Try again
+  could not recover it (#268).
+- The desktop app refused the 2.5 hub zip, and installing on a freshly erased hub stopped
+  partway (#268).
 - Switch 2 wake failed with an error and the console stayed asleep (#200).
 - With Wi-Fi off and the hub on USB Ethernet, Wake-on-LAN did not reach the TV (#126, @apnar).
 - Handing the network back from USB Ethernet to Wi-Fi broke the wired connection until it
@@ -231,7 +235,8 @@ Your devices, activities, button assignments and settings are kept.
 | Feature | Status |
 | --- | --- |
 | Nintendo Switch 2 wake | Tested |
-| Desktop app and Setup Wizard on Windows and Linux | Not fully tested, needs confirmation |
+| Desktop app and Setup Wizard on Windows | Tested |
+| Desktop app and Setup Wizard on Linux | Not fully tested, needs confirmation |
 | LG webOS TVs over the network | Experimental |
 | `--turn-off` and `--turn-on` | Experimental |
 | Multi-remote | Experimental |
