@@ -1,7 +1,7 @@
 # Melodious 2.5
 
 Melodious 2.5 is the first full release since 2.0. (2.1 was 2.0 with a fix for the Windows
-installer.) You can now set up a brand-new hub without Logitech at all, run two screen remotes on
+installer.) You can now set up a brand-new hub without Logitech at all, run two remotes with screens on
 one hub at the same time, and customise far more of every remote. There's a Windows desktop app,
 and fixes for the problems people reported.
 
@@ -15,10 +15,10 @@ Some parts are less tested than others. Each one is labelled where it is describ
   running Melodious, fully offline. No Logitech account, app or cloud, and no commands. Tested on
   macOS and Windows with real hubs. On Linux: **Not fully tested, needs confirmation**. See the
   [Setup Guide](SETUP_GUIDE.md).
-- **Two screen remotes at once.** Run a Touch and a 950, or two Ultimates, on one hub, kept in sync
+- **Two remotes with screens at once.** Run a Touch and a 950, or two Ultimates, on one hub, kept in sync
   ([guide](TWO_SCREEN_REMOTES.md)).
 - **More remote settings.** The Home Control buttons on Companion, Elite and 950 remotes,
-  your own backgrounds on screen remotes, the `--` and `E` keys on remotes without a screen, and a
+  your own backgrounds on remotes with screens, the `--` and `E` keys on remotes without a screen, and a
   number pad on new activities for remotes with a screen.
 - **iPhone and iPad app** (**experimental, sideload only**). Start activities and use it as a
   remote ([guide](IOS_APP.md)).
@@ -47,7 +47,7 @@ Some parts are less tested than others. Each one is labelled where it is describ
 
 ### Remotes
 
-- **Two remotes with a screen on one hub**, with `--two-screen` in the installers. Tested with a
+- **Two remotes with screens on one hub**, with `--two-screen` in the installers. Tested with a
   Touch and a 950, and confirmed by a user with two Ultimates and a Companion. It is off unless
   you turn it on, and needs firmware 4.15.600 ([guide](TWO_SCREEN_REMOTES.md)).
 - **Several remotes without a screen of the same model** (multi-remote, **experimental**), in

@@ -36,7 +36,7 @@ Two or more remotes of the same model (e.g. two Smart Controls) can share a hub:
 **Settings → Experimental → Multiple remotes of one model** (or install with `--multi-remote on`).
 They share one button setup. See [MULTI_REMOTE.md](MULTI_REMOTE.md).
 
-Two remotes with a screen (Touch, Ultimate, Elite, 950) can share a hub too and stay in sync: an
+Two remotes with screens (Touch, Ultimate, Elite, 950) can share a hub too and stay in sync: an
 activity started on one shows on both. It is off unless you turn it on (`--two-screen once` in
 `install_webui.py` or `-TwoScreen once` in `install_webui.ps1`, firmware 4.15.600) and was run on a
 Touch with a 950 and confirmed on two Ultimates with a Companion. See
