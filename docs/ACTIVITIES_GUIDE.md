@@ -248,7 +248,7 @@ over work made from another app. Avoid simultaneous edits while learning.
 
 These are for remotes with screens: **Touch, Ultimate, Elite and 950**.
 Hardware validation varies by model; see [Touch editor](TOUCH_EDITOR.md)
-and [two-screen remotes](TWO_SCREEN_REMOTES.md). Screenless remotes do not
+and [two remotes with screens](TWO_SCREEN_REMOTES.md). Screenless remotes do not
 gain a touchscreen by adding these buttons.
 
 ### Add useful screen buttons

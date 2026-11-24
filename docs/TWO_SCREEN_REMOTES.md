@@ -1,11 +1,11 @@
-# Two remotes with a screen
+# Two remotes with screens
 
 The stock hub keeps one remote with a screen (Harmony Touch, Ultimate, Elite,
 950). Pair a second and it unpairs the first. `--two-screen on` lets the hub
 keep two and serve both at the same time.
 
 **Status: proven on hardware for everyday use (Gate C, 2026-11-10), with the
-known limitations below.** Two screen remotes (a Touch and a 950) worked at
+known limitations below.** Two remotes with screens (a Touch and a 950) worked at
 the same time on one hub, and the setting is on there now. It is off unless
 you turn it on, it works from both installers (`--two-screen` in
 `install_webui.py` and `-TwoScreen` in `install_webui.ps1`), and it changes
@@ -13,11 +13,11 @@ the hub's own remote software.
 
 ## What you get
 
-- Both screen remotes stay paired, across restarts.
+- Both remotes with screens stay paired, across restarts.
 - Either can be used at any time. Their messages interleave; neither waits for
   the other.
 - An activity started on one shows on both: every state update goes to each
-  screen remote that is awake.
+  remote with a screen that is awake.
 - The hub answers each remote's own requests, so each syncs for itself.
 - **They share one setup.** Both are the same model to the hub (EquadID
   16417), so they get the same activities, buttons and screens.
@@ -25,7 +25,7 @@ the hub's own remote software.
 
 <table><tr>
 <td align="center"><img src="screenshots/web/two-screen-remotes.png" alt="Settings → Remotes with a Harmony Touch in slot 1 and a Harmony 950 in slot 2, each with the same buttons as the other" width="240"><br><sub>Settings → Remotes: a Touch and a 950 paired together</sub></td>
-<td align="center"><img src="screenshots/web/two-screen-shared.png" alt="The shared section for both screen remotes, listing the activities whose buttons they share" width="240"><br><sub>One section for both: the same activities and buttons</sub></td>
+<td align="center"><img src="screenshots/web/two-screen-shared.png" alt="The shared section for both remotes with screens, listing the activities whose buttons they share" width="240"><br><sub>One section for both: the same activities and buttons</sub></td>
 </tr></table>
 
 ## Turning it on and off
@@ -61,8 +61,8 @@ Or from PowerShell on Windows:
 
 ### Pairing the second remote
 
-Turn two-screen on first; then pair from Settings → Remotes with the first
-remote asleep.
+Turn on two remotes with screens (`--two-screen`) first; then pair from
+Settings → Remotes with the first remote asleep.
 
 - A Harmony 950 or Elite opens its own pairing screen with **Menu + Mute**
   held together. It isn't in the remote's Settings menu.
@@ -87,7 +87,7 @@ transport on the hub's 2.4 GHz radio, carrying requests and replies both ways.
 The radio has six slots and tags every frame with its slot. The limit is in
 `hal`, the hub's stock hardware daemon, which has **one** HOT context: one set
 of sequence numbers, one object being received, one link flag, one "send to"
-slot. With two screen remotes paired:
+slot. With two remotes with screens paired:
 
 - their sequence numbers collide, and each collision costs the sender a
   2-second resend;
@@ -97,7 +97,7 @@ slot. With two screen remotes paired:
 The changed `hal` keeps the stock HOT code and its one thread, and gives each
 screen-remote slot its own context:
 
-| | Stock | Two-screen |
+| | Stock | Two remotes with screens |
 | --- | --- | --- |
 | Context | one | one per screen-remote slot. The first slot heard keeps the stock one. |
 | An incoming frame | overwrites the peer slot | goes to its slot's context |
@@ -153,10 +153,10 @@ functions at their stock addresses.
   [MULTI_REMOTE.md](MULTI_REMOTE.md) are included unchanged. Its same-model
   unpair is replaced by one that asks both settings:
 
-  | Model | Both off | Multi-remote | Two-screen |
+  | Model | Both off | Multi-remote | Two remotes with screens |
   | --- | --- | --- | --- |
   | USB dongle (34830) | keep | keep | keep |
-  | Screen remote (16417) | unpair the older | unpair the older | **keep** |
+  | Remote with a screen (16417) | unpair the older | unpair the older | **keep** |
   | 16418–16420, keyboard included | unpair | unpair | unpair |
   | Any other | unpair | **keep** | unpair |
 
@@ -167,7 +167,7 @@ which `tools/build_hal_remotes.py` writes from the source:
 | | md5 | Size |
 | --- | --- | --- |
 | Stock `hal` (firmware 4.15.600) | `a3fdd823440c43f36e235fe51c45f008` | 363,640 |
-| Two-screen `hal` | `904560dfaa3dc84a175524c2a80ec240` | 363,640 |
+| `hal` for two remotes with screens | `904560dfaa3dc84a175524c2a80ec240` | 363,640 |
 
 ### Delivery
 
@@ -188,8 +188,8 @@ As for multi-remote, with four additions.
   says `1`, `once`, `serial` or `serial-once` and both files have exactly the
   md5s above. The stock file is never modified.
 - **Gates.** `rcS.local` writes `/var/run/codex_hal_gates` before it binds the
-  copy: `1` or `0` for two-screen, multi-remote, serial. `hal` reads that file
-  once and nothing else. Without it every hook takes the stock path, so the
+  copy: `1` or `0` for two remotes with screens, multi-remote, serial. `hal`
+  reads that file once and nothing else. Without it every hook takes the stock path, so the
   copy behaves as the stock `hal`.
 - **One boot.** For `once`, `rcS.local` writes `0` to the setting and reads it
   back before it binds.
@@ -200,16 +200,17 @@ As for multi-remote, with four additions.
 
 ### With multi-remote
 
-One copy carries both. While two-screen is on, `rcS.local` binds this copy and
-passes it the multi-remote setting; the multi-remote copy stays on the hub for
-when two-screen goes off.
+One copy carries both. While the setting for two remotes with screens is on,
+`rcS.local` binds this copy and passes it the multi-remote setting; the
+multi-remote copy stays on the hub for when it goes off.
 
-- Turning multi-remote on while two-screen runs saves the setting only. Its
-  own copy can't be built then (it needs the stock file), so
+- Turning multi-remote on while two remotes with screens is on saves the
+  setting only. Its own copy can't be built then (it needs the stock file),
+  so
   `--two-screen off` is refused until multi-remote is off too.
 - The web app's Settings page shows "Multiple remotes of one model" as active
-  whenever any copy is bound, and its switch refuses to turn it on while
-  two-screen runs. Use the installer.
+  whenever any copy is bound, and its switch refuses to turn it on while two
+  remotes with screens is on. Use the installer.
 
 ## Checking it
 
@@ -274,8 +275,8 @@ Known limitations (Gate C):
   broadcasting an activity change to a web-app socket that had closed. The
   radio and remotes kept working through both stalls, and the changed
   `hal` had delivered its part before each one; this looks like the stock
-  engine's web-socket broadcast, not the two-screen change, but it has not
-  been reproduced on the stock `hal`. While it lasts, an activity change's
+  engine's web-socket broadcast, not the change for two remotes with screens,
+  but it has not been reproduced on the stock `hal`. While it lasts, an activity change's
   final state can arrive a minute late with the web app open.
 - `MSG SEQ ERROR` ran at 8 in 615 objects (1.3%) over the first evening,
   against 0 in 109 in a single-Touch baseline capture. Every one was a

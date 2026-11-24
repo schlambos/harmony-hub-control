@@ -60,7 +60,7 @@ Then open `http://<hub-ip>:8080/` on your phone or computer.
 - **Set up a hub with no Logitech at all:** the Setup Wizard provisions a new or reset hub
   locally, roots it and installs Melodious. No account, no app, no cloud
   ([SETUP_GUIDE.md](docs/SETUP_GUIDE.md)).
-- **Two screen remotes at once:** a Touch and a 950, or two Ultimates, on one hub and kept in
+- **Two remotes with screens at once:** a Touch and a 950, or two Ultimates, on one hub and kept in
   sync ([TWO_SCREEN_REMOTES.md](docs/TWO_SCREEN_REMOTES.md)).
 - **Runs offline:** Logitech's cloud is blocked and every paired remote syncs from the hub.
 - **Your remote, your way:** any command on any button or gesture, screen buttons and sequences,
@@ -150,7 +150,7 @@ updating.
 | Category | Documents |
 | --- | --- |
 | **User guides** | [Setup Guide](docs/SETUP_GUIDE.md) · [Devices & codes](docs/DEVICES_AND_CODES_GUIDE.md) · [Activities](docs/ACTIVITIES_GUIDE.md) · [Install, update, roll back](docs/INSTALL.md) · [Home Assistant](docs/HOME_ASSISTANT.md) · [Web app](docs/MELODIOUS_WEB_UI.md) · [Android app](Android/README.md) · [Android catalog](docs/ANDROID_CATALOG.md) · [Desktop app](docs/DESKTOP_APP.md) · [iOS app (experimental)](docs/IOS_APP.md) · [Bluetooth keyboard](docs/BLUETOOTH_KEYBOARD.md) · [Network TVs](docs/ANDROID_TV.md) · [LG webOS TV (experimental)](docs/WEBOS_TV.md) · [Switch 2 wake](docs/SWITCH2_WAKE.md) · [Remote backgrounds](docs/REMOTE_BACKGROUNDS.md) · [Docker and Unraid](UNRAID.md) |
-| **Remotes & hardware** | [Compatibility](docs/COMPATIBILITY.md) · [Home control buttons](docs/HOME_CONTROL_BUTTONS.md) · [Two-screen remotes](docs/TWO_SCREEN_REMOTES.md) · [Multiple remotes (experimental)](docs/MULTI_REMOTE.md) · [Fresh hub activation](docs/FRESH_HUB_ACTIVATION.md) · [Root tool](tools/hub-root/README.md) · [USB Ethernet (experimental)](docs/USB_ETHERNET.md) · [BusyBox](docs/BUSYBOX.md) |
+| **Remotes & hardware** | [Compatibility](docs/COMPATIBILITY.md) · [Home control buttons](docs/HOME_CONTROL_BUTTONS.md) · [Two remotes with screens](docs/TWO_SCREEN_REMOTES.md) · [Multiple remotes (experimental)](docs/MULTI_REMOTE.md) · [Fresh hub activation](docs/FRESH_HUB_ACTIVATION.md) · [Root tool](tools/hub-root/README.md) · [USB Ethernet (experimental)](docs/USB_ETHERNET.md) · [BusyBox](docs/BUSYBOX.md) |
 | **Technical reference** | [Architecture](docs/ARCHITECTURE.md) · [HTTP API](docs/API.md) · [Protocols](docs/PROTOCOLS.md) · [Security](docs/SECURITY.md) · [Touch editor](docs/TOUCH_EDITOR.md) · [Design system](DESIGN.md) · [Catalog CLI](tools/catalog/README.md) · [HA devices design](docs/HA_DEVICES_DESIGN.md) |
 | **Development** | [Building](docs/BUILD.md) · [CI](docs/CI.md) · [CI/build/release design](docs/CI_BUILD_RELEASE_DESIGN.md) · [Releasing](docs/RELEASING.md) · [Desktop app source](desktop/README.md) · [Simulator](tools/webui-sim/README.md) · [Hub emulator](tools/hub-emu/README.md) · [Hardware regression](tools/hw-regression/README.md) · [Contributing](CONTRIBUTING.md) |
 

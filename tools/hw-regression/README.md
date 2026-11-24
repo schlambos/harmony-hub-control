@@ -167,7 +167,7 @@ buckets:
 | --- | --- | --- | --- | --- |
 | **Core: Boot, SSH, RAM, TDE, dmesg** | `core.boot_and_ssh` | Automatable | `safe` | **Slice 1 (Built)** |
 | **Core: Daemons, `/proc/exe` MD5, Web UI & HBus** | `core.services_and_webui` | Automatable | `safe` | **Slice 1 (Built)** |
-| **Core: `hal` identity (stock / multi / two-screen / `once`), gates & `-h` load-check** | `core.hal_identity` | Automatable | `safe` | **Slice 1 (Built)** |
+| **Core: `hal` identity (stock / multi / two remotes with screens / `once`), gates & `-h` load-check** | `core.hal_identity` | Automatable | `safe` | **Slice 1 (Built)** |
 | **Core: Cloud blocker WAN suppression, multicast & 2.2s route-flap check** | `core.cloud_blocker_and_routes` | Automatable | `safe` | **Slice 1 (Built)** |
 | **Remote -> Engine: `rf.info` slot policy, `Root` + `Activity` maps, 0 action-less buttons** | `remote.rf_inventory_and_maps` | Automatable | `safe` | **Slice 1 (Built)** |
 | **Remote -> Engine: `hot.stats` per-slot radio error counters & `TS SLOTS` mask** | `remote.hot_radio_counters` | Automatable | `safe` | **Slice 1 (Built)** |
@@ -178,8 +178,8 @@ buckets:
 | **USB Ethernet: Counter-verified bidirectional wire traffic & BE TCP checksums** | `usb_eth.traffic_on_wire` | Automatable | `safe` | **Slice 1 (Built)** |
 | **Cross: USB-Eth + Cloud Blocker <-> Android TV WoL interface binding (+ opt-in live WoL)** | `cross.usb_eth_wol_binding` | Automatable | `safe` / `active` | **Slice 1 (Built)** |
 | **Cross: USB-Eth + Cloud Blocker <-> HA webhook / TV / gateway routes & PR #128 hand-back** | `cross.lan_peer_reachability` | Automatable | `safe` | **Slice 1 (Built)** |
-| **Two-Screen: Simultaneous presses + cross-remote screen follow** | `hitl.two_screen_simultaneous_and_follow` | HITL + `hot.stats` | `active` | **Slice 1 (Built)** |
-| **Two-Screen: Sleep/wake link drop & resync** | `hitl.two_screen_sleep_wake` | HITL + `hot.stats` | `active` | **Slice 1 (Built)** |
+| **Two remotes with screens: simultaneous presses + cross-remote screen follow** | `hitl.two_screen_simultaneous_and_follow` | HITL + `hot.stats` | `active` | **Slice 1 (Built)** |
+| **Two remotes with screens: sleep/wake link drop & resync** | `hitl.two_screen_sleep_wake` | HITL + `hot.stats` | `active` | **Slice 1 (Built)** |
 | **Cross: Patched `hal` <-> handset built-in IR emitter (`hot.1` / `ts_pick_target`)** | `hitl.patched_hal_remote_ir_emitter` | HITL + `hot.stats` | `active` | **Slice 1 (Built)** |
 | **Cross: Patched `hal` <-> local config sync / HOT file session** | `hitl.patched_hal_remote_sync` | HITL + `hot.stats` | `active` | **Slice 1 (Built)** |
 | **Cross: USB-Eth active <-> physical Android TV wake from deep standby** | `hitl.usb_eth_wol_physical_tv_wake` | HITL + WoL log | `active` | **Slice 1 (Built)** |

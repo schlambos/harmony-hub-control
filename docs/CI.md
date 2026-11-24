@@ -165,7 +165,7 @@ sh tools/absorb_main.sh --pr 134 --push # absorb main and push to PR #134
 `tools/ci/rebuild_check.sh` builds from source and compares bytes:
 
 1. It regenerates `harmony_shell_assets.h` (bun 1.3.14) and
-   `activity_ui_assets.h`, and checks the two-screen `hal` edits
+   `activity_ui_assets.h`, and checks the `hal` edits for two remotes with screens
    (`tools/build_hal_remotes.py --check`). Each must come out as committed.
 2. It runs `build/build_harmony_tools_kali.sh`, which stops on the first
    binary that misses its pin.
