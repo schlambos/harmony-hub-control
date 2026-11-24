@@ -1222,12 +1222,18 @@ class UsbHbusTransport:
         claim/release cycles, which has been observed to wedge the hub's USB
         endpoint on Windows partway through the upload (recoverable only by a
         physical re-plug). Reusing a single handle removes that churn.
+
+        Windows (winhid) only. hidapi on macOS and Linux keeps the per-call
+        handle path that the macOS Setup Wizard was certified on.
         """
         if self._session_handle is not None:
             return
         with usb_process_lock():
             self._resolve_device()
             handle, device = self.bridge.open_handle()
+            if device.backend != "winhid":
+                handle.close()
+                return
             self._session_handle = handle
             self._session_device = device
 
