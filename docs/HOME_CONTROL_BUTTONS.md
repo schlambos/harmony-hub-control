@@ -161,6 +161,8 @@ as read, and was run on a Harmony 950 (skin 112) on 2026-11-13. The Harmony
 Elite (skin 111) shares the firmware and dot cluster and is expected to match,
 but is not hardware-verified here.
 
+<p align="center"><img src="screenshots/web/home-control-buttons.png" alt="Home control buttons for a Harmony Elite or 950: the four dot buttons and the + and − rocker, with what each sends" width="260"><br><sub>Settings → Remotes → Home control buttons on a 950</sub></p>
+
 Logitech numbers the `HomeControl` keys column-major while silkscreening the
 dots row-major, so the physical dot buttons map to `HomeControl` keys in a
 crossed order:
