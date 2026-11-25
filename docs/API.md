@@ -819,6 +819,57 @@ zero-valued report through the local HCI control channel. It also reloads
 saved link keys at startup, so this compatibility path survives a Hub
 reboot without cloud access.
 
+That reply can still lose the race, because HAL answers first on its own
+L2CAP socket. Some hosts then time the request out and retry forever
+without creating the keyboard: an Amlogic Android 14 box (Homatics Box R
+4K Plus) did. Report `0xAC` exists only because the `btkeyboard` HID
+descriptor has a top-level collection whose sole input is Battery
+Strength. So the agent removes that collection from the HID record in the
+Hub's local SDP database (`/var/run/sdp`, BlueZ `SDP_SVC_UPDATE_REQ`), and
+the host never sees a battery to ask about. It only cuts a collection when
+the rest of the descriptor parses the same without it. Hosts cache the
+descriptor when they bond, so a host that bonded earlier must forget the
+keyboard and pair again.
+
+The same box then froze its whole Bluetooth stack: a Google service on
+it connects GATT over BR/EDR to the new keyboard, the box reads the Hub's
+ATT records from SDP, and its Bluetooth thread spins until it reboots.
+bluetoothd registers three such records at adapter init: GAP `0x1800`,
+GATT `0x1801` and the Harmony BLE setup service. The agent removes exactly
+those (ATT on L2CAP PSM `0x1F`) from SDP. LE GATT, the Harmony app's BLE
+setup and bluetoothd's ATT listener are untouched.
+
+Both edits run only for a `btkeyboard` target: a saved Bluetooth device of
+that type, `/data/codex/bthid_target` saying so, or the pairing helper in
+that mode. On a Hub without one the agent never opens `/var/run/sdp`. There
+is no timer; they run on events:
+
+- The battery strip runs at start, after HAL registers its HID record
+  again (it then sends HCI Write Class Of Device `0x0C24` and Write Current
+  IAC LAP `0x0C3A`), and on every incoming or completed connection.
+- The GATT records go once per bluetoothd start. The daemon keeps an idle
+  connection to bluetoothd's SDP socket. A new connection, made at start,
+  when that socket closes, or on HCI LE Set Advertising Data `0x2008`, is a
+  new bluetoothd, and the records are removed within a 5 s settle. A
+  daemon that started before any `btkeyboard` target existed makes that
+  connection when it first sees one.
+
+To inspect or apply them by hand:
+
+```sh
+/data/codex/bin/codex_bt_pair_agent btkeyboard 10 --sdp-hid-check
+/data/codex/bin/codex_bt_pair_agent btkeyboard 10 --sdp-hid-strip-battery
+/data/codex/bin/codex_bt_pair_agent btkeyboard 10 --sdp-att-check
+/data/codex/bin/codex_bt_pair_agent btkeyboard 10 --sdp-att-hide
+```
+
+The `check` modes change nothing. They print each record as hex, each HID
+collection with whether it would be cut, and each record an ATT search
+returns, with its service, PSM and handle range. The daemon logs to
+`/var/volatile/codex-bt-hid-control.log`: `sdp-hid active`/`idle`,
+`sdp-hid battery-report-removed …`, `sdp-att record … removed` and
+`sdp-hid bluetoothd-sdp-closed` lines.
+
 The WebGUI remote-control endpoint also recognizes DeviceList entries
 whose transport is Bluetooth HID (`Transport: 32`). When one of those
 devices is disconnected, `/api/ir-send` first establishes and verifies a
