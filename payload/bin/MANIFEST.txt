@@ -1,6 +1,6 @@
 -rwxr-xr-x 1 codex codex 418688 1970-01-01 00:00 busybox-extra
 -rwxr-xr-x 1 codex codex 233496 1970-01-01 00:00 codex_androidtv
--rwxr-xr-x 1 codex codex 103336 Nov 23 19:11 codex_bt_pair_agent
+-rwxr-xr-x 1 codex codex 103336 1970-01-01 00:00 codex_bt_pair_agent
 -rwxr-xr-x 1 codex codex 89544 1970-01-01 00:00 codex_bthid_keyboard
 -rwxr-xr-x 1 codex codex 31464 1970-01-01 00:00 codex_dhcpd
 -rwxr-xr-x 1 codex codex 53848 1970-01-01 00:00 codex_hal_ltcp
