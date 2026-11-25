@@ -27,6 +27,7 @@ be exercised under qemu user mode:
 """
 
 import os
+import random
 import shlex
 import socket
 import struct
@@ -350,6 +351,106 @@ class FakeSdpd:
             os.unlink(self.path)
 
 
+class ScriptedSdpd:
+    """An sdpd that answers each request with whatever reply(pdu, tid,
+    params) returns: raw bytes, or None to accept and never answer."""
+
+    def __init__(self, path, reply):
+        self.path = path
+        self.reply = reply
+        self.conns = []
+        self.server = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+        self.server.bind(path)
+        self.server.listen(4)
+        threading.Thread(target=self.serve, daemon=True).start()
+
+    def serve(self):
+        while True:
+            try:
+                conn, _ = self.server.accept()
+            except OSError:
+                return
+            self.conns.append(conn)
+            threading.Thread(target=self.session, args=(conn,),
+                             daemon=True).start()
+
+    def session(self, conn):
+        try:
+            while True:
+                hdr = conn.recv(5, socket.MSG_PEEK)
+                if len(hdr) != 5:
+                    return
+                pdu, tid, plen = struct.unpack(">BHH", hdr)
+                data = conn.recv(5 + plen)
+                out = self.reply(pdu, tid, data[5:])
+                if out is None:
+                    conn.recv(1)  # until the agent gives up and closes
+                    return
+                conn.sendall(out)
+        except OSError:
+            pass
+        finally:
+            conn.close()
+
+    def close(self):
+        self.server.close()
+        for conn in self.conns:
+            try:
+                conn.shutdown(socket.SHUT_RDWR)
+            except OSError:
+                pass
+        if os.path.exists(self.path):
+            os.unlink(self.path)
+
+
+def search_reply(tid, chunk, cstate=b"\x00", plen=None):
+    body = struct.pack(">H", len(chunk)) + chunk + cstate
+    return struct.pack(">BHH", 0x07, tid, len(body) if plen is None else plen) + body
+
+
+def build_sanitized(cc, workdir, sock_path):
+    """The agent with ASan and UBSan, or None if the compiler can't."""
+    if RUNNER:
+        return None
+    exe = os.path.join(workdir, "codex_bt_pair_agent_asan")
+    p = subprocess.run(shlex.split(cc) + ["-std=gnu99", "-O1", "-g",
+                       "-fsanitize=address,undefined",
+                       "-fno-sanitize-recover=all",
+                       '-DSDP_LOCAL_SOCKET_PATH="%s"' % sock_path,
+                       '-DBT_DEVICE_STORE_PATH="%s"' % os.path.join(workdir, "bt-devices.json"),
+                       '-DBT_TARGET_PATH="%s"' % os.path.join(workdir, "bthid_target"),
+                       "-o", exe, SOURCE], capture_output=True)
+    if p.returncode != 0:
+        return None
+    try:
+        subprocess.run([exe, "btkeyboard", "10", "--sdp-hid-filter"],
+                       input=b"", capture_output=True, timeout=20)
+    except (OSError, subprocess.TimeoutExpired):
+        return None
+    return [exe]
+
+
+def mutate(rng, data):
+    """One random edit: flip, overwrite, insert, delete or truncate."""
+    data = bytearray(data)
+    for _ in range(rng.randint(1, 4)):
+        op = rng.randrange(5)
+        pos = rng.randrange(len(data)) if data else 0
+        if op == 0 and data:
+            data[pos] ^= 1 << rng.randrange(8)
+        elif op == 1 and data:
+            data[pos] = rng.choice((0x00, 0x01, 0x7f, 0x80, 0xfe, 0xff,
+                                    0x35, 0x36, 0x37, 0x25, 0x26, 0x27,
+                                    0xa1, 0xc0, 0x85, rng.randrange(256)))
+        elif op == 2:
+            data[pos:pos] = bytes([rng.randrange(256)])
+        elif op == 3 and data:
+            del data[pos]
+        else:
+            del data[rng.randrange(len(data) + 1):]
+    return bytes(data)
+
+
 def check(condition, message):
     if not condition:
         raise SystemExit("FAIL " + message)
@@ -394,6 +495,13 @@ def main():
         status, _ = run_filter(exe, hid_record(
             0x10004, KEYBOARD + bytes.fromhex("A4B4") + BATTERY + SYSTEM))
         check(status == "descriptor-unparsed", "push/pop status: " + status)
+
+        # A descriptor whose last item is cut short is left alone, even
+        # though the bytes after it in the record would complete it.
+        status, _ = run_filter(exe, hid_record(
+            0x10008, KEYBOARD + BATTERY + SYSTEM + b"\x26"))
+        check(status == "descriptor-unparsed",
+              "truncated descriptor item status: " + status)
 
         # No battery collection at all.
         status, _ = run_filter(exe, hid_record(0x10005, clean))
@@ -659,6 +767,183 @@ def main():
         finally:
             stop(watch)
             sdpd.close()
+
+        def set_gate(store_text, target_text):
+            for path, text_ in ((store, store_text), (target, target_text)):
+                if os.path.exists(path):
+                    os.unlink(path)
+                if text_ is not None:
+                    with open(path, "w") as handle:
+                        handle.write(text_)
+
+        # 6. Other profiles never open the gate.
+        nexus = ('{"version":1,"devices":[{"id":"bt_1_2","name":"Nexus",'
+                 '"type":"btkeyboard-nexus","bdaddr":"AA:BB:CC:DD:EE:FF",'
+                 '"commands":[]}]}')
+        for store_text, target_text in (
+                (None, None),
+                (nexus, None),
+                (None, "type=ps3\nbdaddr=AA:BB:CC:DD:EE:FF\n"),
+                (None, "type=btkeyboard-nexus\nbdaddr=AA:BB:CC:DD:EE:FF\n"),
+                (None, "type=fire\nbdaddr=AA:BB:CC:DD:EE:FF\n")):
+            set_gate(store_text, target_text)
+            sdpd = hub_sdpd()
+            watch = start_watch()
+            try:
+                for line in ("cmd 0c24", "cmd 0c3a", "conn", "cmd 2008"):
+                    send(watch, line)
+                time.sleep(0.8)
+                check(sdpd.accepted == 0,
+                      "gate opened for store=%r target=%r" %
+                      (store_text, target_text))
+            finally:
+                stop(watch)
+                sdpd.close()
+
+        # 7. A btkeyboard target saved while the daemon runs: the next event
+        # strips the HID record and hides this bluetoothd's GATT records,
+        # with no 0x2008 and no bluetoothd restart.
+        set_gate(None, None)
+        sdpd = hub_sdpd()
+        watch = start_watch()
+        try:
+            send(watch, "conn")
+            time.sleep(0.5)
+            check(sdpd.accepted == 0, "the watch touched SDP before a target")
+            set_gate('{"version":1,"devices":[{"id":"bt_1_2","name":"Box",'
+                     '"type":"btkeyboard","bdaddr":"AA:BB:CC:DD:EE:FF",'
+                     '"commands":[]}]}', None)
+            send(watch, "conn")
+            check(wait_for(lambda: clean_state(sdpd), 3),
+                  "a target saved mid-run did not hide the GATT records: %r" %
+                  sorted(sdpd.records))
+        finally:
+            stop(watch)
+            sdpd.close()
+        set_gate(None, None)
+
+        # 8. A broken or stuck sdpd: every check fails cleanly and quickly.
+        asan = build_sanitized(cc, workdir, sock_path)
+        agents = [exe] + ([asan] if asan else [])
+        good = seq(hid_record(0x10001, KEYBOARD + BATTERY + SYSTEM))
+        broken = [
+            ("wrong transaction id",
+             lambda pdu, tid, p: search_reply(tid ^ 1, good)),
+            ("length beyond the buffer",
+             lambda pdu, tid, p: struct.pack(">BHH", 7, tid, 0xffff) + b"\0" * 64),
+            ("chunk past the PDU",
+             lambda pdu, tid, p: struct.pack(">BHH", 7, tid, 5) + b"\xff\x00\x35\x00\x00"),
+            ("continuation over 16 bytes",
+             lambda pdu, tid, p: search_reply(tid, b"", b"\x11" + b"\0" * 17)),
+            ("endless continuation",
+             lambda pdu, tid, p: search_reply(tid, b"", b"\x02\x00\x00")),
+            ("records over 8 KiB",
+             lambda pdu, tid, p: search_reply(tid, b"\x00" * 8000, b"\x02\x00\x00")),
+            ("error response",
+             lambda pdu, tid, p: struct.pack(">BHHH", 1, tid, 2, 3)),
+            ("empty error response",
+             lambda pdu, tid, p: struct.pack(">BHH", 1, tid, 0)),
+            ("wrong response PDU",
+             lambda pdu, tid, p: struct.pack(">BHH", 0x05, tid, 3) + b"\0\0\0"),
+            ("not a sequence",
+             lambda pdu, tid, p: search_reply(tid, b"\x09\x00\x01")),
+            ("record overruns the list",
+             lambda pdu, tid, p: search_reply(tid, b"\x35\x05\x35\x10\x09\x00\x00")),
+            ("record of the wrong type",
+             lambda pdu, tid, p: search_reply(tid, b"\x35\x03\x09\x00\x00")),
+            ("half an answer",
+             lambda pdu, tid, p: search_reply(tid, good)[:9]),
+            ("no answer", lambda pdu, tid, p: None),
+        ]
+        for name, reply in broken:
+            for agent in agents:
+                for mode in ("--sdp-hid-check", "--sdp-att-check"):
+                    server = ScriptedSdpd(sock_path, reply)
+                    try:
+                        started = time.time()
+                        p = subprocess.run(agent + ["btkeyboard", "10", mode],
+                                           capture_output=True, timeout=15)
+                        took = time.time() - started
+                    finally:
+                        server.close()
+                    check(p.returncode == 1 and took < 5,
+                          "%s %s: rc=%d in %.1fs %r" % (name, mode,
+                          p.returncode, took, p.stderr[-300:]))
+
+        # A stuck sdpd does not wedge the daemon: it stays alive, answers
+        # events, and stops on SIGTERM.
+        set_gate('{"version":1,"devices":[{"id":"bt_1_2","name":"Box",'
+                 '"type":"btkeyboard","bdaddr":"AA:BB:CC:DD:EE:FF",'
+                 '"commands":[]}]}', None)
+        server = ScriptedSdpd(sock_path, lambda pdu, tid, p: None)
+        watch = start_watch()
+        try:
+            for line in ("conn", "cmd 0c24", "cmd 2008", "conn"):
+                send(watch, line)
+            time.sleep(2.0)
+            check(watch.poll() is None, "the watch exited on a stuck sdpd")
+            started = time.time()
+            out = stop(watch)
+            check(time.time() - started < 3 and watch.returncode == 0,
+                  "the watch did not stop promptly: rc=%r" % watch.returncode)
+            check("check failed" in out, "stuck sdpd not logged: " + out)
+        finally:
+            if watch.poll() is None:
+                watch.kill()
+            server.close()
+        set_gate(None, None)
+
+        # 9. Seeded fuzz: mutated records through the offline filter, and
+        # through both checks over the socket.  Nothing may crash (the
+        # sanitizer build, when the compiler has one, also catches overruns),
+        # and a well-formed record must come out well-formed.
+        rng = random.Random(264)
+        fuzz_agent = asan or exe
+        seeds = [hid_record(0x10001, full), HUB_RECORD, hub_prefix,
+                 hid_record(0x10002, big, desc_size_index=6),
+                 hid_record(0x10003, KEYBOARD + CONSUMER + BATTERY + SYSTEM_NO_SIZE)]
+        for i in range(300):
+            record = mutate(rng, rng.choice(seeds))
+            p = subprocess.run(fuzz_agent + ["btkeyboard", "10", "--sdp-hid-filter"],
+                               input=record.hex().encode(), capture_output=True,
+                               timeout=20)
+            check(p.returncode in (0, 1),
+                  "filter crashed (rc=%d) on %s: %r" %
+                  (p.returncode, record.hex(), p.stderr[-600:]))
+            lines = p.stdout.decode().strip().splitlines()
+            if lines and lines[0].startswith("removed"):
+                try:
+                    decode(record)
+                    well_formed = True
+                except (AssertionError, IndexError, KeyError):
+                    well_formed = False
+                if well_formed:
+                    try:
+                        decode(bytes.fromhex(lines[1].replace(" ", "")))
+                    except (AssertionError, IndexError, KeyError):
+                        check(False, "strip broke a well-formed record: " +
+                              record.hex())
+
+        att_seeds = [gatt, vendor, gap, battery_svc, other_psm, hub_prefix]
+        sdpd = FakeSdpd(sock_path, {}, chunk=40)
+        try:
+            for i in range(150):
+                records = {0x10000 + n: mutate(rng, rec) if rng.random() < 0.7
+                           else rec for n, rec in enumerate(att_seeds)}
+                sdpd.records = records
+                sdpd.search = {0x1124: sorted(records), 0x0007: sorted(records)}
+                for mode in ("--sdp-att-check", "--sdp-hid-check"):
+                    p = subprocess.run(fuzz_agent + ["btkeyboard", "10", mode],
+                                       capture_output=True, timeout=20)
+                    check(p.returncode in (0, 1),
+                          "%s crashed (rc=%d): %r" % (mode, p.returncode,
+                                                      p.stderr[-600:]))
+            check(not sdpd.updates and not sdpd.removed,
+                  "a check mode changed the database")
+        finally:
+            sdpd.close()
+        if not asan:
+            print("note: no sanitizer build here; fuzz ran on the plain build")
 
         # No SDP server at all: a clear error, not a hang.
         p = subprocess.run(exe + ["btkeyboard", "10", "--sdp-hid-check"],
