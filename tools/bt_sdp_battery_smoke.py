@@ -242,6 +242,20 @@ def run_filter(exe, record):
     return lines[0], patched
 
 
+def stop_listening(server, path):
+    """Stop accepting before any session drops, as a real bluetoothd exit
+    does. On Linux close() alone leaves a listener that another thread is
+    blocked in accept() on still accepting, so the agent's instant
+    reconnect on EOF could reach the old server; shutdown() wakes it."""
+    if os.path.exists(path):
+        os.unlink(path)
+    try:
+        server.shutdown(socket.SHUT_RDWR)
+    except OSError:
+        pass
+    server.close()
+
+
 class FakeSdpd:
     """Enough of BlueZ 4 sdpd: search-attr with continuation, update."""
 
@@ -341,14 +355,12 @@ class FakeSdpd:
 
     def close(self):
         """Like bluetoothd exiting: the listener and every session close."""
-        self.server.close()
+        stop_listening(self.server, self.path)
         for conn in self.conns:
             try:
                 conn.shutdown(socket.SHUT_RDWR)
             except OSError:
                 pass
-        if os.path.exists(self.path):
-            os.unlink(self.path)
 
 
 class ScriptedSdpd:
@@ -393,14 +405,12 @@ class ScriptedSdpd:
             conn.close()
 
     def close(self):
-        self.server.close()
+        stop_listening(self.server, self.path)
         for conn in self.conns:
             try:
                 conn.shutdown(socket.SHUT_RDWR)
             except OSError:
                 pass
-        if os.path.exists(self.path):
-            os.unlink(self.path)
 
 
 def search_reply(tid, chunk, cstate=b"\x00", plen=None):
@@ -422,6 +432,9 @@ def build_sanitized(cc, workdir, sock_path):
                        "-o", exe, SOURCE], capture_output=True)
     if p.returncode != 0:
         return None
+    # LeakSanitizer's exit scan costs ~0.5 s a run in a container and finds
+    # nothing that matters for these short runs.
+    os.environ.setdefault("ASAN_OPTIONS", "detect_leaks=0")
     try:
         subprocess.run([exe, "btkeyboard", "10", "--sdp-hid-filter"],
                        input=b"", capture_output=True, timeout=20)
