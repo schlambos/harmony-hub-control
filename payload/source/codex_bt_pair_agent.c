@@ -1284,7 +1284,12 @@ static int sdp_strip_hid(int flags, char *err, size_t errlen) {
 #define SDP_PSM_ATT 0x001f
 #define SDP_UUID_GAP 0x1800
 #define SDP_UUID_GATT 0x1801
-/* The Harmony BLE setup service bluetoothd publishes over BR/EDR too. */
+/*
+ * The Harmony BLE setup service bluetoothd publishes over BR/EDR too.
+ * bluetoothd names it 7e220000-04c0-4909-bd23-665c48550a83, but BlueZ 4's
+ * attribute server copies the ATT (little-endian) value into the SDP UUID,
+ * so the record carries the bytes reversed.
+ */
 #define SDP_UUID_HARMONY_BLE "830a55485c6623bd0949c0040000227e"
 
 struct sdp_att_record {
