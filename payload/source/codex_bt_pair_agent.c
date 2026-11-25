@@ -1592,7 +1592,8 @@ static int btkeyboard_target_saved(void) {
  * so the records are hidden once then: at the first try 300 ms later, or
  * within 5 s.  The connection closes when bluetoothd exits; connecting
  * again is tried at once and on HCI LE Set Advertising Data (0x2008),
- * which bluetoothd sends as it brings the adapter up.
+ * which bluetoothd sends as it brings the adapter up.  A daemon that
+ * started without a target connects when one is first seen.
  */
 #define SDP_HID_SETTLE_MS 150
 #define SDP_ATT_SETTLE_MS 300
@@ -1627,12 +1628,18 @@ static void sdp_watch_init(struct sdp_watch *watch, int pairing_btkeyboard,
     watch->active_logged = -1;
 }
 
+static void sdp_watch_connect_monitor(struct sdp_watch *watch);
+
 static int sdp_watch_active(struct sdp_watch *watch) {
     int active = watch->pairing_btkeyboard || btkeyboard_target_saved();
     if (active != watch->active_logged) {
+        int opened = active && watch->active_logged == 0;
         printf("pair-agent sdp-hid %s\n", active ?
             "active: btkeyboard target" : "idle: no btkeyboard target");
         watch->active_logged = active;
+        /* A target saved while the daemon runs: bluetoothd's records are
+           still there, so follow this bluetoothd from now on. */
+        if (opened) sdp_watch_connect_monitor(watch);
     }
     if (!active && watch->monitor_fd >= 0) {
         close(watch->monitor_fd);

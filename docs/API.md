@@ -850,7 +850,9 @@ is no timer; they run on events:
 - The GATT records go once per bluetoothd start. The daemon keeps an idle
   connection to bluetoothd's SDP socket. A new connection, made at start,
   when that socket closes, or on HCI LE Set Advertising Data `0x2008`, is a
-  new bluetoothd, and the records are removed within a 5 s settle.
+  new bluetoothd, and the records are removed within a 5 s settle. A
+  daemon that started before any `btkeyboard` target existed makes that
+  connection when it first sees one.
 
 To inspect or apply them by hand:
 
