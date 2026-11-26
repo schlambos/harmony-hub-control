@@ -34,10 +34,40 @@ export const IR_OUTPUTS = Object.freeze([
 ]);
 const IR_OUTPUT_VALUES = new Set(IR_OUTPUTS.map((o) => o.value));
 
-/* Only IR devices (Transport 1, the default when missing) have an output. */
+/* Device.Transport is a bitmask: 1 IR, 32 Bluetooth (the hub as a HID
+   keyboard), 64 IP. A stock Sony TV is 65: IP control with an IR fallback.
+   Missing reads as IR, the stock default; anything but a positive whole
+   number, text such as "65" included, has no bits, as codexactivity reads
+   it. */
+export const TRANSPORT_IR = 1;
+export const TRANSPORT_BLUETOOTH = 32;
+export const TRANSPORT_IP = 64;
+
+export function transportBits(value) {
+  if (value === undefined || value === null) return TRANSPORT_IR;
+  return Number.isInteger(value) && value > 0 ? value : 0;
+}
+
+export function hasTransport(value, bit) {
+  return (transportBits(value) & bit) !== 0;
+}
+
+/* Devices with IR (alone or as a fallback, like Sony's 65) have an output. */
 export function isIrDevice(entry) {
-  const transport = entry?.Device?.Transport;
-  return transport === undefined || transport === null || Number(transport) === 1;
+  return hasTransport(entry?.Device?.Transport, TRANSPORT_IR);
+}
+
+/* The Devices list badge for one state.devices() entry. The hub's own IP
+   devices come first, since each also has the IP bit; then Home Assistant,
+   Bluetooth and any other network device; plain IR last. */
+export function deviceBadge(d) {
+  if (d.isAndroidTv) return { cls: "badge-network", label: "Network" };
+  if (d.isWebOs) return { cls: "badge-network", label: "LG webOS" };
+  if (d.isSwitch2) return { cls: "badge-bluetooth", label: "BLE Wake" };
+  if (d.isHa) return { cls: "badge-ha", label: "Home Assistant" };
+  if (d.isBluetooth) return { cls: "badge-bluetooth", label: "Bluetooth" };
+  if (d.isNetwork) return { cls: "badge-network", label: "Network" };
+  return { cls: "", label: "IR" };
 }
 
 export const MAX_INPUTS = 32;

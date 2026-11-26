@@ -1176,8 +1176,11 @@ local function deviceSettingsFrom(entry, settings)
   -- left alone when absent.
   if settings.irOutput ~= nil and settings.irOutput ~= json.null then
     local device = type(entry) == "table" and entry.Device or nil
-    -- A missing Transport means IR, as the editors read it.
-    if type(device) ~= "table" or (device.Transport ~= nil and device.Transport ~= json.null and device.Transport ~= 1) then
+    -- Transport is a bitmask (1 IR, 32 Bluetooth, 64 IP): any device with the
+    -- IR bit has an output, a Sony TV's 65 too. Missing means IR, as the
+    -- editors read it.
+    if type(device) ~= "table" or (device.Transport ~= nil and device.Transport ~= json.null and
+        not (type(device.Transport) == "number" and device.Transport >= 1 and device.Transport % 2 == 1)) then
       return nil, "irOutput applies only to IR devices"
     end
     if not IR_OUTPUTS[settings.irOutput] then

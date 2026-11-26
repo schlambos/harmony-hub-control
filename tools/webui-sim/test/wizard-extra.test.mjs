@@ -13,7 +13,7 @@ function device(id, names) {
 const player = device(10, ["Play", "Pause", "PowerToggle"]);
 const volume = device(20, ["VolumeUp", "Mute"]);
 const haLamp = device(99, ["PowerOn", "PowerOff", "PowerToggle", "BrightnessUp"]);
-haLamp.transport = 64;
+haLamp.isHa = true;
 
 const roles = [
   { deviceId: "10", roleType: "PlayMovieActivityRole" },

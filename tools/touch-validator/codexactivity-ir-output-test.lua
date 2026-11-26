@@ -247,6 +247,33 @@ local function resetStore()
         Device = { ["Id-"] = 39000030, Name = "Old Amp", ControlPort = 1 },
         Commands = {{ Name = "PowerOn", ["Id-"] = 39000031, TransportType = 1 }},
         DeviceFeatures = {}
+      },
+      -- Transport is a bitmask: a stock Sony TV is 65, IP with an IR fallback.
+      {
+        Device = { ["Id-"] = 39000040, Name = "Sony TV", Transport = 65, ControlPort = 7 },
+        Commands = {{ Name = "PowerOn", ["Id-"] = 39000041, TransportType = 1 }},
+        DeviceFeatures = {}
+      },
+      {
+        Device = { ["Id-"] = 39000050, Name = "Shield", Transport = 32, ControlPort = 7 },
+        Commands = {{ Name = "Home", ["Id-"] = 39000051, TransportType = 32 }},
+        DeviceFeatures = {}
+      },
+      {
+        Device = { ["Id-"] = 39000060, Name = "Console", Transport = 33, ControlPort = 7 },
+        Commands = {{ Name = "PowerOn", ["Id-"] = 39000061, TransportType = 1 }},
+        DeviceFeatures = {}
+      },
+      -- Neither a fraction nor text is a bitmask; the web app reads them the same way.
+      {
+        Device = { ["Id-"] = 39000070, Name = "Fraction", Transport = 65.5, ControlPort = 7 },
+        Commands = {{ Name = "PowerOn", ["Id-"] = 39000071, TransportType = 1 }},
+        DeviceFeatures = {}
+      },
+      {
+        Device = { ["Id-"] = 39000080, Name = "Text", Transport = "65", ControlPort = 7 },
+        Commands = {{ Name = "PowerOn", ["Id-"] = 39000081, TransportType = 1 }},
+        DeviceFeatures = {}
       }
     }
   })
@@ -315,5 +342,23 @@ check("non-IR ControlPort untouched", controlPort(2) == 7, controlPort(2))
 local noTransport = commit(39000030, 4, nil)
 check("missing Transport counts as IR", noTransport.ok == true, noTransport.error)
 check("missing Transport writes ControlPort", controlPort(3) == 4, controlPort(3))
+
+local sony = commit(39000040, 2, nil)
+check("a device with the IR bit (Sony's 65) takes an output", sony.ok == true, sony.error)
+check("65 writes ControlPort", controlPort(4) == 2, controlPort(4))
+
+local shield = commit(39000050, 2, nil)
+check("rejects irOutput on a Bluetooth-only device (32)", shield.ok == false)
+check("32 ControlPort untouched", controlPort(5) == 7, controlPort(5))
+
+local console = commit(39000060, 1, nil)
+check("Bluetooth with the IR bit (33) takes an output", console.ok == true, console.error)
+check("33 writes ControlPort", controlPort(6) == 1, controlPort(6))
+
+for index, id in pairs({ [7] = 39000070, [8] = 39000080 }) do
+  local res = commit(id, 2, nil)
+  check("rejects irOutput on Transport " .. tostring(getResource("DeviceList").DevicesWithFeatures[index].Device.Transport), res.ok == false)
+  check("ControlPort untouched " .. index, controlPort(index) == 7, controlPort(index))
+end
 
 print(string.format("PASS codexactivity-ir-output-test (%d checks)", passed))
