@@ -9,17 +9,25 @@
    stop the handset from transmitting for keyboard devices. The bundle also
    writes every other resource and setting, so it carries the same
    device-list risk plus more.
+   Resource and bundle restores stay locked until GET /api/config-ready says
+   the hub is ready (it refuses them with 503 before that): a restore that
+   lands before the hub's first-boot setup leaves the engine without an
+   account and every command failing. "Restore without waiting" sends
+   force=1, the way out when the hub can never become ready.
    Safe DOM only: dynamic values go through textContent / el(). */
 
-import { postHubForm, getText } from "../api.js";
+import { getConfigReady, postHubForm, getText } from "../api.js";
 import { clear, dangerGuard, el, notice, setText, viewHead } from "../setup-kit.js";
 import {
   BUNDLE_FILES,
+  FORCE_CONSEQUENCE,
   IMPORT_LABELS,
   RESOURCES,
   exportHref,
   formatBytes,
+  importReadiness,
   preflightImport,
+  readyPollDelay,
   utf8ByteLength,
 } from "./backup-model.js";
 
@@ -200,6 +208,23 @@ export function createBackupView(section) {
     },
   });
 
+  const readinessBox = el("div", {
+    className: "setup-status",
+    attrs: { id: "backupReadiness", role: "status", "aria-live": "polite" },
+  });
+
+  /* Last /api/config-ready answer: null until known, an Error if the probe
+     failed (the hub still refuses unready restores itself). */
+  let readyState = null;
+  let readyTimer = null;
+  let readyPolls = 0;        // polls since the last show or refusal (backoff)
+  let shown = true;
+  let busy = false;
+  let override = false;      // "Restore without waiting" chosen
+  let buttonMode = null;     // "idle" | "locked" | "busy": the label shown
+  let readinessShown = null; // what readinessBox shows, so polls don't re-announce it
+  let readinessToggle = null; // its "Restore without waiting" / "Wait" button
+
   const preflightBox = el("div", {
     className: "setup-status",
     attrs: { id: "backupPreflight", role: "status", "aria-live": "polite" },
@@ -241,6 +266,7 @@ export function createBackupView(section) {
         className: "setup-field-hint",
         text: "Loading a file only puts its contents in the box above for review — nothing is uploaded until you confirm a restore.",
       }),
+      readinessBox,
       preflightBox,
       guardSlot,
       resultBox,
@@ -279,10 +305,86 @@ export function createBackupView(section) {
     resultBox.appendChild(el("p", { className: "help", text }));
   }
 
-  function setBusy(busy) {
+  function readinessLock() {
+    return importReadiness(targetSelect.value, readyState, { override });
+  }
+
+  function idleLabel() {
+    return readinessLock().force ? "Restore without waiting" : "Restore backup";
+  }
+
+  /* The label changes only with the mode, so an armed guard's confirm label
+     is never overwritten; disarm() puts the idle label back, so it runs
+     before the locked label is set. */
+  function applyButtonState() {
     if (!guardButton) return;
-    guardButton.disabled = busy;
-    setText(guardButton, busy ? "Restoring…" : "Restore backup");
+    const { locked } = readinessLock();
+    guardButton.disabled = busy || locked;
+    const mode = busy ? "busy" : locked ? "locked" : "idle";
+    if (mode === buttonMode) return;
+    if (mode === "locked" && guard) guard.disarm();
+    setText(guardButton, mode === "busy" ? "Restoring…" : mode === "locked" ? "Waiting for the hub…" : idleLabel());
+    buttonMode = mode;
+  }
+
+  function setOverride(value) {
+    if (override === value) return;
+    override = value;
+    rebuildGuard(); // the guard's consequence and label depend on it
+  }
+
+  function renderReadiness() {
+    const lock = readinessLock();
+    // The hub became ready (or the target needs no wait): forget the choice.
+    if (override && !lock.force) {
+      setOverride(false);
+      return;
+    }
+    const key = `${lock.message}|${lock.canOverride}|${lock.force}`;
+    if (key !== readinessShown) {
+      readinessShown = key;
+      clear(readinessBox);
+      readinessToggle = null;
+      if (lock.message) readinessBox.appendChild(notice("warn", lock.message));
+      if (lock.canOverride) {
+        const toggle = el("button", {
+          className: "btn btn-quiet btn-sm",
+          attrs: { type: "button" },
+          text: lock.force ? "Wait for the hub instead" : "Restore without waiting…",
+        });
+        toggle.addEventListener("click", () => {
+          setOverride(!lock.force);
+          readinessToggle?.focus(); // the box was rebuilt; keep keyboard focus on the toggle
+        });
+        readinessToggle = toggle;
+        readinessBox.appendChild(el("div", { className: "setup-actions", children: [toggle] }));
+      }
+    }
+    applyButtonState();
+  }
+
+  function stopReadyPolling() {
+    if (readyTimer) clearTimeout(readyTimer);
+    readyTimer = null;
+  }
+
+  async function refreshReadiness() {
+    stopReadyPolling();
+    try {
+      readyState = await getConfigReady();
+    } catch (error) {
+      readyState = error instanceof Error ? error : new Error(String(error));
+    }
+    if (!shown) return;
+    renderReadiness();
+    if (readyState && !(readyState instanceof Error) && !readyState.ready) {
+      readyTimer = setTimeout(refreshReadiness, readyPollDelay(readyPolls++));
+    }
+  }
+
+  function setBusy(isBusy) {
+    busy = isBusy;
+    applyButtonState();
   }
 
   async function verifyExport(target, gen) {
@@ -306,16 +408,23 @@ export function createBackupView(section) {
       renderResult("error", check.message);
       return;
     }
+    const fields = readinessLock().force ? { target, payload, force: "1" } : { target, payload };
     renderResult("ok", `Sending ${formatBytes(check.requestBytes)} to the hub…`);
     setBusy(true);
     try {
-      const reply = await postHubForm("/import", { target, payload });
+      const reply = await postHubForm("/import", fields);
       if (gen !== generation) return;
       renderResult("ok", reply.msg || `${IMPORT_LABELS[target]} imported.`);
       await verifyExport(target, gen);
     } catch (error) {
       if (gen !== generation) return;
       renderResult("error", `Import failed: ${error.message}`);
+      if (error && error.status === 503) {
+        readyState = { ready: false, reason: "refused", message: error.message };
+        readyPolls = 0;
+        renderReadiness();
+        refreshReadiness();
+      }
     } finally {
       if (gen === generation) setBusy(false);
     }
@@ -328,18 +437,22 @@ export function createBackupView(section) {
     if (guard) guard.disarm();
     clear(guardSlot);
     const target = targetSelect.value;
+    const forcing = readinessLock().force;
     guardButton = el("button", {
       className: "btn btn-danger",
       attrs: { type: "button" },
-      text: "Restore backup",
+      text: idleLabel(),
     });
+    buttonMode = "idle";
+    readinessShown = null;
     guardSlot.appendChild(guardButton);
     guard = dangerGuard(guardButton, {
-      consequence: consequenceFor(target),
+      consequence: forcing ? `${FORCE_CONSEQUENCE} ${consequenceFor(target)}` : consequenceFor(target),
       confirmLabel: "Confirm restore",
       typedPhrase: target === "devices" ? DEVICES_PHRASE : target === "bundle" ? BUNDLE_PHRASE : undefined,
       onConfirm: runImport,
     });
+    renderReadiness();
   }
 
   targetSelect.addEventListener("change", () => {
@@ -372,15 +485,22 @@ export function createBackupView(section) {
   renderTargetHint();
   renderPreflight();
   rebuildGuard();
+  refreshReadiness();
 
   return {
     onShow() {
       generation += 1;
+      shown = true;
+      readyPolls = 0;
       renderPreflight();
+      refreshReadiness();
     },
     onHide() {
       generation += 1;
+      shown = false;
+      stopReadyPolling();
       if (guard) guard.disarm();
+      if (override) setOverride(false);
     },
   };
 }

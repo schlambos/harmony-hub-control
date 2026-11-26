@@ -1054,6 +1054,65 @@ button still uses. The saved device records `"harmony": true`. Deleting
 it, or changing its keyboard type, is refused until it is removed from
 Harmony. Renaming it renames the Harmony device.
 
+## Restore readiness
+
+Whether the hub may take a restore of a bundle or a resource list yet
+(`render_config_ready_json()`). The Backup view polls it and keeps those
+restores locked until it answers `ready: true`.
+
+```text
+GET /api/config-ready
+```
+
+```json
+{"ok": true, "ready": false, "reason": "starting", "message": "The hub is still starting up. ..."}
+```
+
+`POST /import` writes resource files straight to `/data/resources` and then
+asks the codexactivity plugin to reload them. A file written before the
+plugin's first-boot check of a never-set-up hub has no resource-index entry,
+so the check takes the hub for one that was set up, never creates the
+entries, and the engine boots without an account: every command then fails
+with `560 "Account config data is not available"`. So `POST /import` of
+`bundle`, `devices`, `functions`, `protocols`, `activities`, `maps` or
+`automation` answers `503` with `message` until the hub is ready. The
+settings targets (`mqtt`, `wifi`, `cloud`, `bluetooth`, `restrictions`) are
+accepted at any time.
+
+The form field `force=1` restores anyway. It is the way out when the hub can
+never become ready (its engine or plugin won't start): the Backup view offers
+it as "Restore without waiting", behind its usual confirmation, and the result
+then says the hub was not ready. On a hub that is still preparing its first
+start, a forced restore leaves the files without index entries; to recover,
+move the restored files out of `/data/resources`, reboot, wait for `ready` and
+restore again.
+
+The blank-hub check only runs in local mode (cloud blocker on). A bundle that
+turns the blocker on for a hub in cloud mode saves the blocker first and waits
+up to 30 s for the plugin to report local mode and `ready`, then writes the
+rest; if that takes longer it answers `503` with the blocker saved and nothing
+else written, and the restore can simply be repeated. Restoring lists one at a
+time onto a fresh hub in cloud mode has no such ordering: restore `cloud`
+first.
+
+The plugin's worker writes `/var/volatile/codex-config-ready.json` (RAM)
+about every 2 s, replacing it with a rename: `ready` once the engine listens
+for `config_new`, no stock sync owns the resources, its blank-hub check has
+run (local mode) and no reload is pending; `localMode` says whether the
+blocker is on. `reason` is one of:
+
+| `reason` | Meaning |
+|---|---|
+| `ready` | Restores are accepted. |
+| `starting` | No report yet in the first 10 minutes after boot (the plugin starts about a minute after the hub). |
+| `engine-starting` | The Harmony engine is not listening yet. |
+| `resource-sync` | A stock resource sync is running. |
+| `blank-hub-check` | The plugin has not checked a possibly never-set-up hub yet. |
+| `store-setup-failed` | The blank-hub check could not create the empty resources; it runs again at the next boot. |
+| `reload-pending` | A reload codex_webui asked for has not run yet. |
+| `plugin-not-running` | No report 10 minutes after boot: the plugin is not running, so a restore would not be loaded. |
+| `plugin-not-responding` | The report is over 150 s old (a large save holds the worker; or it stopped). |
+
 ## System status
 
 Read the bounded, non-mutating data shown by the modern System view
@@ -1638,7 +1697,7 @@ carries.
 | POST | `/mqtt` | `handle_mqtt()` | `enabled`, `haDiscovery`, `host`, `port`, `username`, `password`, `keep_password`, `baseTopic`, `discoveryPrefix`, `clientId`, `name`, `pollSeconds`, `keepAlive` | Saves the MQTT bridge configuration and requests discovery. |
 | POST | `/wifi` | `handle_wifi()` | `ssid`, `password`, `keep_password`, `hidden`, `open`, `apply` | Saves the Wi-Fi configuration; `apply=reboot` reboots. An empty SSID, or a secured network with no password, is refused in the page message. |
 | POST | `/system` | `handle_system()` | `action` plus the fields for that action | `reboot`; `cloud`/`cloud_reboot` with `cloudBlocker`; `auth` with `authEnabled`, `authUsername`, `authPassword`; `timezone` with `timezone`, `tzPosix`; `ntp` with `ntpServers` (custom NTP servers: up to 3 host names or IPv4 addresses, comma, space or newline separated; empty clears); `rediscover`. |
-| POST | `/import` | `handle_import()` | `target`, `payload` | Imports one target: `bundle`, `devices`, `functions`, `protocols`, `activities`, `maps`, `automation`, `mqtt`, `wifi`, `cloud`, `bluetooth`, `restrictions`. The payload is validated for its target before anything is written. |
+| POST | `/import` | `handle_import()` | `target`, `payload` | Imports one target: `bundle`, `devices`, `functions`, `protocols`, `activities`, `maps`, `automation`, `mqtt`, `wifi`, `cloud`, `bluetooth`, `restrictions`. The payload is validated for its target before anything is written. `bundle` and the resource lists answer `503` until `GET /api/config-ready` is ready, unless `force=1` ([Restore readiness](#restore-readiness)). |
 | POST | `/ir/send` | `handle_ir_send()` | `deviceId`, `command` | Sends one saved IR command. |
 | POST | `/ir/device` | `handle_ir_device()` | `deviceId`, `name`, `manufacturer`, `model`, `type` | Updates a device's details. |
 | POST | `/ir/new-device` | `handle_ir_new_device()` | `name`, `manufacturer`, `model`, `type` | Creates a device. |
@@ -1675,6 +1734,7 @@ carries.
 | POST | `/api/activity-sync` | `render_activity_sync_json()` |
 | GET | `/api/inventory` | `render_inventory_json()` |
 | GET | `/api/state` | `render_state_json()` |
+| GET | `/api/config-ready` | `render_config_ready_json()` |
 | GET | `/api/system-status` | `render_system_status_json()` |
 | GET, POST | `/api/device-commands` | `render_device_commands_json()` |
 | GET, POST | `/api/remotecentral-fetch` | `render_remotecentral_fetch_json()` |

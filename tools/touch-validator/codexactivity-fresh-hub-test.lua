@@ -138,6 +138,7 @@ end
 local RESOURCES = "/data/resources/"
 local BLOCKER = "/data/codex/cloud_blocker.conf"
 local RELOAD_FLAG = "/data/codex/reload_resources"
+local CONFIG_READY = "/var/volatile/codex-config-ready.json"
 local REQUEST = "/var/volatile/codex-activity-request.json"
 local RESPONSE = "/var/volatile/codex-activity-response.json"
 
@@ -172,6 +173,10 @@ local function resetHub()
     pending = nil, -- a request codex_webui leaves for the worker's next pass
     passes = 0,
     limit = 1,
+    readyLog = {}, -- the readiness file at the end of each pass
+    readyWrites = 0, -- renames onto the readiness file
+    readyRemoves = 0,
+    onPass = nil, -- called with the pass number at the end of each pass
   }
 end
 
@@ -192,6 +197,8 @@ package.preload["system"] = function()
     -- The worker sleeps once a pass; the test ends it after `limit` passes.
     sleep = function()
       hub.passes = hub.passes + 1
+      hub.readyLog[hub.passes] = hub.fs[CONFIG_READY] or false
+      if hub.onPass then hub.onPass(hub.passes) end
       if hub.pending then
         hub.fs[REQUEST] = hub.pending
         hub.pending = nil
@@ -295,11 +302,13 @@ io.open = function(path, mode)
 end
 os.remove = function(path)
   if not onHub(path) then return realRemove(path) end
+  if path == CONFIG_READY then hub.readyRemoves = hub.readyRemoves + 1 end
   hub.fs[path] = nil
   return true
 end
 os.rename = function(from, to)
   if not onHub(from) then return realRename(from, to) end
+  if to == CONFIG_READY then hub.readyWrites = hub.readyWrites + 1 end
   hub.fs[to], hub.fs[from] = hub.fs[from], nil
   return true
 end
@@ -565,6 +574,137 @@ run(2)
 check("the next boot makes only what is still missing",
   table.concat(hub.saves, ",") == "FunctionList,MapList" and allEmpty() and activityConfigStatus() == 200,
   table.concat(hub.saves, ","))
+
+-- Import readiness (/var/volatile/codex-config-ready.json): codex_webui's
+-- /import writes resource files directly, and a file written before the
+-- blank-hub check has no index entry, so the engine boots without an account.
+-- The worker reports when such writes are safe.
+local function readyAt(pass)
+  local text = hub.readyLog[pass]
+  if not text then return nil end
+  return decodeJson(text)
+end
+local function lastReady() return readyAt(#hub.readyLog) end
+
+resetHub()
+hub.engineListening = false
+boot()
+run(2)
+do
+  local r = lastReady() or {}
+  check("imports wait while the engine is not listening",
+    r.ready == false and r.reason == "engine-starting" and type(r.uptime) == "number", encodeJson(r))
+end
+
+resetHub()
+hub.sync = true
+boot()
+run(2)
+check("imports wait during a stock sync", (lastReady() or {}).reason == "resource-sync", encodeJson(lastReady() or {}))
+
+resetHub()
+boot()
+run(1)
+check("on a blank hub imports wait for the full reload the seeding asked for",
+  (readyAt(1) or {}).reason == "reload-pending", encodeJson(readyAt(1) or {}))
+run(2)
+check("and are allowed once the base resources are indexed and loaded",
+  (lastReady() or {}).ready == true and hub.index.DeviceList ~= nil and hub.account ~= nil,
+  encodeJson(lastReady() or {}))
+
+resetHub()
+for _, name in ipairs({ "ProtocolList", "DeviceList", "ActivityList", "FunctionList", "MapList" }) do
+  put(name, '{"x":[1]}')
+end
+boot()
+run(1)
+check("a hub that was set up is ready after the worker's first pass",
+  (readyAt(1) or {}).ready == true, encodeJson(readyAt(1) or {}))
+
+resetHub()
+hub.fs[BLOCKER] = "0\n"
+boot()
+run(1)
+check("with the blocker off (no blank-hub check) the engine alone decides",
+  (readyAt(1) or {}).ready == true, encodeJson(readyAt(1) or {}))
+
+resetHub()
+for _, name in ipairs({ "ProtocolList", "DeviceList", "ActivityList", "FunctionList", "MapList" }) do
+  put(name, '{"x":[1]}')
+end
+hub.engineListening = false
+hub.fs[RELOAD_FLAG] = "DeviceList\n"
+boot()
+run(1)
+check("a reload codex_webui asked for keeps imports waiting until it ran",
+  (readyAt(1) or {}).ready == false, encodeJson(readyAt(1) or {}))
+hub.engineListening = true
+run(2)
+check("and releases them after", (lastReady() or {}).ready == true and hub.fs[RELOAD_FLAG] == nil,
+  encodeJson(lastReady() or {}))
+check("a stopped worker removes the readiness file", hub.fs[CONFIG_READY] == nil)
+
+-- localMode tells codex_webui whether the blank-hub check applies: a bundle
+-- that turns cloud blocking on waits for a report that says local.
+local function setUp()
+  for _, name in ipairs({ "ProtocolList", "DeviceList", "ActivityList", "FunctionList", "MapList" }) do
+    put(name, '{"x":[1]}')
+  end
+end
+resetHub()
+setUp()
+boot()
+run(1)
+check("the report says local mode while the blocker is on", (readyAt(1) or {}).localMode == true,
+  encodeJson(readyAt(1) or {}))
+
+resetHub()
+setUp()
+hub.fs[BLOCKER] = "0\n"
+hub.onPass = function(pass) if pass == 1 then hub.fs[BLOCKER] = "1\n" end end
+boot()
+run(3)
+check("and cloud mode while it is off, rewritten on the next pass after it changes",
+  (readyAt(1) or {}).localMode == false and (readyAt(2) or {}).localMode == true and
+    (readyAt(2) or {}).ready == true,
+  encodeJson(readyAt(1) or {}) .. " -> " .. encodeJson(readyAt(2) or {}))
+
+-- A cloud-mode blank hub turned local: the check runs on the next pass and
+-- the report stays not ready until the full reload it asked for.
+resetHub()
+hub.fs[BLOCKER] = "0\n"
+hub.onPass = function(pass) if pass == 1 then hub.fs[BLOCKER] = "1\n" end end
+boot()
+run(4)
+check("a blank hub switched to local mode is seeded before it reports local and ready",
+  (readyAt(1) or {}).ready == true and (readyAt(1) or {}).localMode == false and
+    (readyAt(2) or {}).ready == false and (readyAt(2) or {}).localMode == true and
+    (lastReady() or {}).ready == true and allEmpty(),
+  encodeJson(readyAt(1) or {}) .. " -> " .. encodeJson(readyAt(2) or {}) .. " -> " .. encodeJson(lastReady() or {}))
+
+-- A blank-hub check that could not finish runs no more that boot: imports
+-- stay refused rather than landing on a half-made store.
+resetHub()
+hub.failSave = "FunctionList"
+boot()
+run(3)
+check("a failed blank-hub check keeps imports refused for that boot",
+  (lastReady() or {}).ready == false and (lastReady() or {}).reason == "store-setup-failed",
+  encodeJson(lastReady() or {}))
+boot()
+run(3)
+check("and the next boot that finishes it reports ready", (lastReady() or {}).ready == true,
+  encodeJson(lastReady() or {}))
+
+-- The report is replaced by a rename alone: a missing file reads as a stopped
+-- plugin, so it is only removed when the worker stops.
+resetHub()
+setUp()
+boot()
+run(45)
+check("the readiness file is refreshed without being removed until the worker stops",
+  hub.readyWrites >= 3 and hub.readyRemoves == 1,
+  string.format("writes %d, removes %d", hub.readyWrites, hub.readyRemoves))
 
 print(string.format("%d/%d checks passed", count - failures, count))
 os.exit(failures == 0 and 0 or 1)
