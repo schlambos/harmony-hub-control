@@ -109,6 +109,10 @@ def main():
         bt_status = os.path.join(work, "bthid_status")
         bt_target = os.path.join(work, "bthid_target")
         bt_profile = os.path.join(work, "bthid_profile")
+        # Saving a device backs up the resources and settings first; without
+        # this the harness writes (and rotates) the build machine's real
+        # /data/codex/resource-backups.
+        backup_dir = os.path.join(work, "resource-backups")
         fake_bin = os.path.join(work, "bin")
         os.makedirs(fake_bin, exist_ok=True)
         fake_hal = os.path.join(fake_bin, "codex_hal_ltcp")
@@ -124,6 +128,7 @@ def main():
                              '-DBT_TEXT_STATUS="%s"' % bt_status,
                              '-DBT_TARGET_FILE="%s"' % bt_target,
                              '-DBT_PROFILE_FILE="%s"' % bt_profile,
+                             '-DRESOURCE_BACKUP_DIR="%s"' % backup_dir,
                              '-DCODEX_HAL_LTCP_BIN="%s"' % fake_hal,
                              "-o", exe, os.path.join(ROOT, "tools/bt_harmony_webui_harness.c")],
                        check=True)
@@ -441,6 +446,7 @@ print('{"id":1,"code":200}')
                                  '-DBT_TEXT_STATUS="%s"' % bt_status,
                                  '-DBT_TARGET_FILE="%s"' % bt_target,
                                  '-DBT_PROFILE_FILE="%s"' % bt_profile,
+                                 '-DRESOURCE_BACKUP_DIR="%s"' % backup_dir,
                                  '-DCODEX_HAL_LTCP_BIN="%s"' % fake_hal,
                                  "-o", bad_lock_exe, os.path.join(ROOT, "tools/bt_harmony_webui_harness.c")],
                            check=True)
@@ -547,6 +553,11 @@ print('{"id":1,"code":200}')
                                          text=True, check=True, env=env).stdout.splitlines()
             check("webhook HTTP/1.1 404 Not Found" in cleaned_res,
                   "fully cleaned token should no longer resolve: %r" % cleaned_res)
+            # The device saves above took their backups in the temp dir.
+            check(os.path.isdir(backup_dir) and
+                  any(name.startswith("settings_") for name in os.listdir(backup_dir)),
+                  "device saves must back up into the harness's own RESOURCE_BACKUP_DIR: %r" %
+                  (os.listdir(backup_dir) if os.path.isdir(backup_dir) else None))
         finally:
             fifo_stop.set()
             reader_thread.join(timeout=1.0)
