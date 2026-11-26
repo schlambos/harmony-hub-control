@@ -15287,23 +15287,29 @@ static void handle_client(int client) {
         (req.path[13] == 0 || req.path[13] == '?')) {
         render_ha_state_get_json(client, &req);
     } else if (strcmp(req.method, "POST") == 0 && strcmp(req.path, "/api/androidtv/devices") == 0) {
-        render_androidtv_devices_json(client, &req);
+        if (request_same_origin_json(&req)) render_androidtv_devices_json(client, &req);
+        else send_cross_site_refused(client);
     } else if (strcmp(req.method, "GET") == 0 && strcmp(req.path, "/api/androidtv/status") == 0) {
         render_androidtv_proxy(client, &req, "GET", "/status");
     } else if (strcmp(req.method, "GET") == 0 && strcmp(req.path, "/api/androidtv/discover") == 0) {
         render_androidtv_proxy(client, &req, "GET", "/discover");
     } else if (strcmp(req.method, "POST") == 0 && strcmp(req.path, "/api/androidtv/pair-start") == 0) {
-        render_androidtv_proxy(client, &req, "POST", "/pair/start");
+        if (request_same_origin_json(&req)) render_androidtv_proxy(client, &req, "POST", "/pair/start");
+        else send_cross_site_refused(client);
     } else if (strcmp(req.method, "GET") == 0 && strcmp(req.path, "/api/androidtv/pair-status") == 0) {
         render_androidtv_proxy(client, &req, "GET", "/pair/status");
     } else if (strcmp(req.method, "POST") == 0 && strcmp(req.path, "/api/androidtv/pair-finish") == 0) {
-        render_androidtv_proxy(client, &req, "POST", "/pair/finish");
+        if (request_same_origin_json(&req)) render_androidtv_proxy(client, &req, "POST", "/pair/finish");
+        else send_cross_site_refused(client);
     } else if (strcmp(req.method, "POST") == 0 && strcmp(req.path, "/api/androidtv/pair-cancel") == 0) {
-        render_androidtv_proxy(client, &req, "POST", "/pair/cancel");
+        if (request_same_origin_json(&req)) render_androidtv_proxy(client, &req, "POST", "/pair/cancel");
+        else send_cross_site_refused(client);
     } else if (strcmp(req.method, "POST") == 0 && strcmp(req.path, "/api/androidtv/forget") == 0) {
-        render_androidtv_proxy(client, &req, "POST", "/forget");
+        if (request_same_origin_json(&req)) render_androidtv_proxy(client, &req, "POST", "/forget");
+        else send_cross_site_refused(client);
     } else if (strcmp(req.method, "POST") == 0 && strcmp(req.path, "/api/androidtv/rename") == 0) {
-        render_androidtv_proxy(client, &req, "POST", "/rename");
+        if (request_same_origin_json(&req)) render_androidtv_proxy(client, &req, "POST", "/rename");
+        else send_cross_site_refused(client);
     } else if (strcmp(req.method, "GET") == 0 && strncmp(req.path, "/api/androidtv/inputs", 21) == 0 &&
         (req.path[21] == 0 || req.path[21] == '?')) {
         render_androidtv_inputs_get(client, &req);
@@ -15316,7 +15322,8 @@ static void handle_client(int client) {
     } else if (strcmp(req.method, "GET") == 0 && strcmp(req.path, "/api/androidtv/input-presets") == 0) {
         render_androidtv_presets(client);
     } else if (strcmp(req.method, "POST") == 0 && strcmp(req.path, "/api/switch2/devices") == 0) {
-        render_switch2_devices_json(client, &req);
+        if (request_same_origin_json(&req)) render_switch2_devices_json(client, &req);
+        else send_cross_site_refused(client);
     } else if (strcmp(req.method, "POST") == 0 && strcmp(req.path, "/api/switch2/cmd") == 0) {
         if (switch2_loopback || request_same_origin_json(&req)) render_switch2_cmd_json(client, &req);
         else send_cross_site_refused(client);

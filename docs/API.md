@@ -486,6 +486,11 @@ it unchanged (`render_androidtv_proxy()`). Every answer is HTTP 200 with JSON, a
 refusal as `{"ok":false,"error":...}`; `503` means codex_androidtv isn't running.
 See [ANDROID_TV.md](ANDROID_TV.md).
 
+Every POST takes only a JSON request (`Content-Type: application/json`) whose
+`Origin`, when the browser sends one, is the hub itself; anything else gets
+`403`, so another web page can't start a pairing, forget a TV or replace the
+devices. `/api/switch2/devices` follows the same rule.
+
 | Method | Path | Body | Answer |
 | --- | --- | --- | --- |
 | GET | `/api/androidtv/status` | | `identity` (`ready`, `preparing` or `none`) and `tvs`: each `id`, `name`, `vendor`, `model` (as the TV reports them once connected; empty before), `host`, `mac`, `connected`, `on`, `volume`, `volumeMax`, `muted`, `keysSent`, `connects`, `appLinks` (the TV takes app links, so input links can work), `inputs` (how it switches inputs: `keys`, `link`, `menu`, `none`, or `builtin` when nothing has been saved), `error` |

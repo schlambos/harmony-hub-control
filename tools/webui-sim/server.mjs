@@ -2744,9 +2744,22 @@ function handleExport(res, pathname) {
 }
 
 /* Like codex_webui's request_same_origin_json(): the routes that change the
-   radio or reboot the hub take only application/json, and a browser's Origin,
-   when sent, must be this host. */
-const SAME_ORIGIN_JSON_ROUTES = new Set(["POST /api/multi-remote", "POST /api/remote-unpair", "POST /api/remote-background", "POST /api/usb-eth", "POST /api/activity-restrictions"]);
+   radio, pair or forget a TV, replace a device set or reboot the hub take
+   only application/json, and a browser's Origin, when sent, must be this
+   host. */
+const SAME_ORIGIN_JSON_ROUTES = new Set([
+  "POST /api/multi-remote", "POST /api/remote-unpair", "POST /api/remote-background", "POST /api/usb-eth",
+  "POST /api/activity-restrictions",
+  // Pairing and the network TV and Switch 2 device sets.
+  "POST /api/androidtv/pair-start", "POST /api/androidtv/pair-finish", "POST /api/androidtv/pair-cancel",
+  "POST /api/androidtv/forget", "POST /api/androidtv/rename", "POST /api/androidtv/devices",
+  "POST /api/switch2/devices",
+  // Checked by the hub already: Android TV inputs, and the webOS changes
+  // (webos/cmd and switch2/cmd also take loopback, so the sim leaves them).
+  "POST /api/androidtv/inputs", "POST /api/androidtv/try",
+  "POST /api/webos/devices", "POST /api/webos/save", "POST /api/webos/pair-start", "POST /api/webos/pair-cancel",
+  "POST /api/webos/refresh", "POST /api/webos/forget",
+]);
 const SAME_ORIGIN_JSON_ERROR =
   "This change takes a JSON request (Content-Type: application/json) from the hub's own web app.";
 
