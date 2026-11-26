@@ -213,6 +213,9 @@ No Linux desktop download or bundled Linux Python runtime is published.
 The [CLI](../tools/hub-root/README.md) plus `install_webui.py` is an equal
 alternative on Windows, Linux and macOS.
 
+On Gentoo, the ebuild in [`packaging/gentoo/`](../packaging/gentoo/README.md)
+installs the app this way, along with the CLI tools.
+
 The app icon is `resources/icon.png`, made from the Melodious artwork:
 
 ```sh

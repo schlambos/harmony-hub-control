@@ -1,0 +1,16 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE pkgmetadata SYSTEM "https://www.gentoo.org/dtd/metadata.dtd">
+<pkgmetadata>
+	<maintainer type="person">
+		<email>SDNick484@users.noreply.github.com</email>
+		<name>Nick Andrade</name>
+	</maintainer>
+	<use>
+		<flag name="gui">Install the Melodious desktop app and Setup Wizard, on a prebuilt Electron</flag>
+		<flag name="usb">Pull in <pkg>dev-python/hidapi</pkg> to set up a hub over its USB cable</flag>
+	</use>
+	<upstream>
+		<remote-id type="github">schlambos/harmony-hub-control</remote-id>
+		<bugs-to>https://github.com/schlambos/harmony-hub-control/issues</bugs-to>
+	</upstream>
+</pkgmetadata>
