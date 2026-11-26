@@ -32,8 +32,12 @@
 #include "harmony_shell_assets.h"
 #include "remote_skin_jpg.h"
 
+#ifndef MQTT_CONFIG
 #define MQTT_CONFIG "/data/codexmqtt/config.json"
+#endif
+#ifndef WPA_CONFIG
 #define WPA_CONFIG "/etc/wpa_supplicant.conf"
+#endif
 /* Placeholder served in place of the Wi-Fi / MQTT password in export
    responses while web UI sign-in is off. Restoring a file that contains it
    keeps the secret already stored on the hub. */
@@ -41,7 +45,9 @@
 #ifndef HUB_ID_FILE
 #define HUB_ID_FILE "/data/codex/hub_id"
 #endif
+#ifndef CLOUD_BLOCKER_CONFIG
 #define CLOUD_BLOCKER_CONFIG "/data/codex/cloud_blocker.conf"
+#endif
 #define TIMEZONE_CONFIG "/data/codex/timezone.conf"
 /* Custom NTP servers the clock sync in netservicestarter.lua asks instead of
    the default public ones: one host or IPv4 address per line. */
@@ -70,14 +76,30 @@
 #ifndef WEBUI_AUTH_CONFIG /* tools/bt_harmony_webui_harness.c points it elsewhere */
 #define WEBUI_AUTH_CONFIG "/data/codex/webui_auth.conf"
 #endif
+#ifndef DEVICE_LIST
 #define DEVICE_LIST "/data/resources/DeviceList.json"
+#endif
+#ifndef FUNCTION_LIST
 #define FUNCTION_LIST "/data/resources/FunctionList.json"
+#endif
+#ifndef PROTOCOL_LIST
 #define PROTOCOL_LIST "/data/resources/ProtocolList.json"
+#endif
+#ifndef ACTIVITY_LIST
 #define ACTIVITY_LIST "/data/resources/ActivityList.json"
+#endif
+#ifndef MAP_LIST
 #define MAP_LIST "/data/resources/MapList.json"
+#endif
+#ifndef AUTOMATION_CONFIG
 #define AUTOMATION_CONFIG "/data/resources/AutomationConfig.json"
+#endif
+#ifndef OFFLINE_EGRESS_GUARD
 #define OFFLINE_EGRESS_GUARD "/data/codex/offline_egress_guard.sh"
+#endif
+#ifndef RESOURCE_RELOAD_FLAG
 #define RESOURCE_RELOAD_FLAG "/data/codex/reload_resources"
+#endif
 #ifndef RESOURCE_BACKUP_DIR
 #define RESOURCE_BACKUP_DIR "/data/codex/resource-backups"
 #endif
@@ -450,7 +472,9 @@ static int load_cloud_blocker(void) {
    blocker is on, that name points at the hub itself and the probe sink
    below accepts those connects. Only hal resolves this name: the hub's own
    online check resolves its discovery server instead. */
+#ifndef HOSTS_FILE
 #define HOSTS_FILE "/etc/hosts"
+#endif
 #define TOUCH_PROBE_MARK "# codex: Harmony Touch sync probe"
 #define TOUCH_PROBE_LINE "127.0.0.1\tping.myharmony.com\t" TOUCH_PROBE_MARK
 
@@ -9852,7 +9876,179 @@ static int bundle_extract(const char *bundle, const char *key, char *out, size_t
     return 0;
 }
 
-static void handle_import_bundle(int fd, const char *payload) {
+/* Import readiness. /import writes resource files straight to /data/resources
+ * and only then asks the codexactivity plugin to reload them. A file written
+ * before the plugin's blank-hub check has run has no resource-index entry, so
+ * the check takes the hub for one that was set up, never creates the entries,
+ * and harmonyengine boots without an account: every command then answers 560
+ * "Account config data is not available". The plugin's worker reports when
+ * direct writes are safe (payload/activity/codexactivity.lua, configReady):
+ * engine listening, no stock sync, blank-hub check done, no reload pending.
+ * Its file carries the boot uptime it was written at; the worker rewrites it
+ * about every 2 s, so a file that has not moved for CONFIG_READY_STALE_S
+ * means the worker is stuck or gone (a save can hold it for over 45 s).
+ * The form field force=1 restores anyway: the way out when the engine or the
+ * plugin never comes up, which would otherwise block restores for good. */
+#ifndef CONFIG_READY_FILE
+#define CONFIG_READY_FILE "/var/volatile/codex-config-ready.json"
+#endif
+#ifndef CONFIG_READY_UPTIME_FILE
+#define CONFIG_READY_UPTIME_FILE "/proc/uptime"
+#endif
+#define CONFIG_READY_STALE_S 150
+#define CONFIG_READY_BOOT_GRACE_S 600
+/* How long a bundle that turns cloud blocking on waits for the plugin to run
+   its blank-hub check under the new setting (handle_import_bundle). */
+#ifndef CONFIG_READY_MODE_WAIT_S
+#define CONFIG_READY_MODE_WAIT_S 30
+#endif
+#define CONFIG_READY_STARTING_MSG \
+    "The hub is still starting up. Restoring a backup is possible once its setup " \
+    "engine is running, usually within two minutes of a reboot."
+/* Appended to the result of a restore forced while the hub was not ready. */
+#define CONFIG_READY_FORCED_NOTE \
+    " The hub was not ready yet: reboot it and check that its devices respond."
+
+static long boot_uptime_seconds(void) {
+    char uptime[128];
+    if (read_text(CONFIG_READY_UPTIME_FILE, uptime, sizeof(uptime)) <= 0) return -1;
+    return atol(uptime);
+}
+
+/* The plugin's report when it exists and is fresh: 1 with its text in `text`,
+ * 0 when there is none, -1 when it is stale (the worker is stuck or gone). */
+static int config_ready_report(char *text, size_t text_len) {
+    long now = boot_uptime_seconds(), stamp;
+    if (read_text(CONFIG_READY_FILE, text, text_len) <= 0) return 0;
+    stamp = json_top_int(text, "uptime", -1);
+    if (now >= 0 && (stamp < 0 || stamp > now || now - stamp > CONFIG_READY_STALE_S)) return -1;
+    return 1;
+}
+
+/* 1 when imports may run. Otherwise 0, with a stable reason code and a
+ * sentence for the person importing. */
+static int hub_config_ready(char *reason, size_t reason_len, char *message, size_t message_len) {
+    char text[256], code[48];
+    long now = boot_uptime_seconds();
+    int report = config_ready_report(text, sizeof(text));
+    code[0] = 0;
+    if (report == 0) {
+        if (now >= 0 && now < CONFIG_READY_BOOT_GRACE_S) {
+            snprintf(reason, reason_len, "starting");
+            snprintf(message, message_len, CONFIG_READY_STARTING_MSG);
+        } else {
+            snprintf(reason, reason_len, "plugin-not-running");
+            snprintf(message, message_len,
+                "The hub's activity plugin is not running, so a restored backup could not be "
+                "loaded. Reboot the hub, wait two minutes and try again.");
+        }
+        return 0;
+    }
+    if (report < 0) {
+        snprintf(reason, reason_len, "plugin-not-responding");
+        snprintf(message, message_len,
+            "The hub's activity plugin has not reported for a while: it may still be saving a "
+            "large change. Try again in a minute, or reboot the hub if this persists.");
+        return 0;
+    }
+    /* Top-level readers: the plugin's JSON encoder orders keys freely, and
+       json_bool() would match "ready" inside "reason":"ready". */
+    if (json_top_bool(text, "ready", 0)) {
+        snprintf(reason, reason_len, "ready");
+        if (message_len) message[0] = 0;
+        return 1;
+    }
+    if (json_top_string(text, "reason", code, sizeof(code)) != 1 || strcmp(code, "ready") == 0) {
+        snprintf(code, sizeof(code), "starting");
+    }
+    snprintf(reason, reason_len, "%s", code);
+    if (strcmp(code, "resource-sync") == 0) {
+        snprintf(message, message_len,
+            "The hub is syncing its setup. Try again when the sync has finished.");
+    } else if (strcmp(code, "blank-hub-check") == 0) {
+        snprintf(message, message_len,
+            "The hub is still preparing its configuration store (first start after an install "
+            "or a reset). Try again in a minute.");
+    } else if (strcmp(code, "store-setup-failed") == 0) {
+        snprintf(message, message_len,
+            "The hub could not prepare its configuration store on this start. Reboot the hub, "
+            "wait two minutes and try again.");
+    } else if (strcmp(code, "reload-pending") == 0) {
+        snprintf(message, message_len,
+            "The hub is still loading its last change. Try again in a few seconds.");
+    } else {
+        snprintf(message, message_len, CONFIG_READY_STARTING_MSG);
+    }
+    return 0;
+}
+
+/* Whether the plugin's fresh report says it runs in local mode (cloud
+ * blocker on): 1 or 0, or -1 when there is no fresh report or no such field. */
+static int config_ready_local_mode(void) {
+    char text[256];
+    if (config_ready_report(text, sizeof(text)) != 1) return -1;
+    return json_top_bool(text, "localMode", -1);
+}
+
+/* Targets that land in /data/resources and need the engine to load them. The
+ * settings targets (Wi-Fi, MQTT, cloud blocker, Bluetooth, time restrictions)
+ * are read by their own services and are safe at any time. */
+static int import_target_needs_ready_hub(const char *target) {
+    return strcmp(target, "bundle") == 0 || strcmp(target, "devices") == 0 ||
+        strcmp(target, "functions") == 0 || strcmp(target, "protocols") == 0 ||
+        strcmp(target, "activities") == 0 || strcmp(target, "maps") == 0 ||
+        strcmp(target, "automation") == 0;
+}
+
+/* GET /api/config-ready: what the Backup view polls before it unlocks a
+ * restore. Read-only and cheap (one small RAM file and /proc/uptime). */
+static void render_config_ready_json(int fd) {
+    char reason[48], message[256];
+    int ready = hub_config_ready(reason, sizeof(reason), message, sizeof(message));
+    FILE *f = send_json_start(fd, "200 OK");
+    if (!f) return;
+    fprintf(f, "{\"ok\":true,\"ready\":%s,\"reason\":", ready ? "true" : "false");
+    json_write_string(f, reason);
+    fputs(",\"message\":", f);
+    json_write_string(f, message);
+    fputs("}\n", f);
+    fclose(f);
+}
+
+/* The readiness gate for one import. Answers 503 with the reason and returns
+ * 1 (the caller writes nothing) when `target` needs a ready hub, the hub is
+ * not ready and the form did not ask to restore anyway. Otherwise returns 0,
+ * with *forced set when the restore goes ahead on a hub that was not ready. */
+static int import_readiness_gate(int fd, const char *target, int force, int *forced) {
+    char reason[48], message[256];
+    *forced = 0;
+    if (!import_target_needs_ready_hub(target)) return 0;
+    if (hub_config_ready(reason, sizeof(reason), message, sizeof(message))) return 0;
+    if (force) {
+        *forced = 1;
+        return 0;
+    }
+    render_message(fd, "503 Service Unavailable", message);
+    return 1;
+}
+
+/* After a bundle turned cloud blocking on for a hub in cloud mode: whether
+ * the plugin reports local mode and ready within CONFIG_READY_MODE_WAIT_S,
+ * which means its blank-hub check has run under the new setting. */
+static int wait_for_local_mode_ready(void) {
+    char reason[48], message[256];
+    int i;
+    for (i = 0; i <= CONFIG_READY_MODE_WAIT_S * 4; i++) {
+        if (config_ready_local_mode() == 1 &&
+            hub_config_ready(reason, sizeof(reason), message, sizeof(message))) {
+            return 1;
+        }
+        if (i < CONFIG_READY_MODE_WAIT_S * 4) usleep(250000);
+    }
+    return 0;
+}
+
+static void handle_import_bundle(int fd, const char *payload, int force) {
     char msg[256] = "";
     char cloud[32] = "";
     char *cloud_value;
@@ -9860,6 +10056,7 @@ static void handle_import_bundle(int fd, const char *payload) {
     char *mqtt, *wifi, *bluetooth, *restrictions;
     char *mqtt_restored = NULL, *wifi_restored = NULL;
     const char *mqtt_out = NULL, *wifi_out = NULL;
+    int refused = 0, forced = 0;
     int is_v2 = strstr(payload, "harmony-owner-bundle-v2") != NULL;
     devices = (char *)malloc(MAX_REQUEST_BODY);
     functions = (char *)malloc(MAX_REQUEST_BODY);
@@ -9921,6 +10118,30 @@ static void handle_import_bundle(int fd, const char *payload) {
     if (cloud_value[0] && validate_import_payload("cloud", cloud_value, msg, sizeof(msg)) != 0) {
         goto done;
     }
+    /* After the per-file checks, so a malformed bundle gets its own error;
+       before any backup or write. */
+    if (import_readiness_gate(fd, "bundle", force, &forced)) {
+        refused = 1;
+        goto done;
+    }
+    /* The blank-hub check only runs in local mode. A bundle that turns cloud
+       blocking on for a hub in cloud mode saves the blocker first and waits
+       for the plugin to run the check under it: with the blocker written
+       last, the check would find the restored files, take the hub for one
+       that was set up and leave them without index entries. */
+    if (cloud_value[0] && cloud_value_enabled(cloud_value) && config_ready_local_mode() == 0) {
+        if (save_cloud_blocker(1) != 0) {
+            snprintf(msg, sizeof(msg), "Failed to save the cloud blocker setting; nothing was restored.");
+            goto done;
+        }
+        if (!force && !wait_for_local_mode_ready()) {
+            render_message(fd, "503 Service Unavailable",
+                "Cloud blocking is now on, as the backup asks, and the hub is preparing its local "
+                "configuration store. Nothing else was restored yet: restore the backup again in a minute.");
+            refused = 1;
+            goto done;
+        }
+    }
     /* A redacted backup (exported with sign-in off) keeps the secrets
        already stored on this hub instead of overwriting them. */
     mqtt_restored = mqtt_payload_with_restored_password(mqtt);
@@ -9956,10 +10177,11 @@ static void handle_import_bundle(int fd, const char *payload) {
         goto done;
     }
     request_resource_reload_names("DeviceList\nFunctionList\nProtocolList\nActivityList\nMapList\nAutomationConfig\n");
-    snprintf(msg, sizeof(msg), "Backup bundle imported. Reboot when ready if Wi-Fi settings changed.");
+    snprintf(msg, sizeof(msg), "Backup bundle imported. Reboot when ready if Wi-Fi settings changed.%s",
+        forced ? CONFIG_READY_FORCED_NOTE : "");
 
 done:
-    render_page(fd, msg[0] ? msg : "Bundle import failed.");
+    if (!refused) render_page(fd, msg[0] ? msg : "Bundle import failed.");
     free(devices); free(functions); free(protocols);
     free(activities); free(maps); free(automation);
     free(mqtt); free(wifi); free(bluetooth); free(restrictions);
@@ -9967,15 +10189,18 @@ done:
 }
 
 static void handle_import(int fd, const struct request *req) {
-    char target[64], msg[256];
+    char target[64], msg[256], force_value[8];
     char *payload_buf, *payload;
     const char *path;
     size_t len;
+    int force, forced = 0;
     if (req->body_truncated) {
         render_page(fd, "Import payload was too large for this device-side form. Use a smaller file or import one resource at a time.");
         return;
     }
     form_value(req->body, "target", target, sizeof(target));
+    form_value(req->body, "force", force_value, sizeof(force_value));
+    force = strcmp(force_value, "1") == 0;
     path = import_path_for_target(target);
     if (!path && strcmp(target, "bundle") != 0) {
         render_page(fd, "Unknown import target.");
@@ -9994,7 +10219,14 @@ static void handle_import(int fd, const struct request *req) {
         return;
     }
     if (strcmp(target, "bundle") == 0) {
-        handle_import_bundle(fd, payload);
+        handle_import_bundle(fd, payload, force);
+        free(payload_buf);
+        return;
+    }
+    /* After validation, so a malformed file gets its own error; before any
+       write. The bundle checks inside handle_import_bundle(), after its
+       per-file validation. */
+    if (import_readiness_gate(fd, target, force, &forced)) {
         free(payload_buf);
         return;
     }
@@ -10054,7 +10286,8 @@ static void handle_import(int fd, const struct request *req) {
         } else {
             request_resource_reload();
         }
-        snprintf(msg, sizeof(msg), "Imported %s and requested a Harmony resource reload.", import_label_for_target(target));
+        snprintf(msg, sizeof(msg), "Imported %s and requested a Harmony resource reload.%s",
+            import_label_for_target(target), forced ? CONFIG_READY_FORCED_NOTE : "");
         render_page(fd, msg);
     }
     free(payload_buf);
@@ -15038,6 +15271,8 @@ static void handle_client(int client) {
         strncmp(req.path, "/api/state", 10) == 0 &&
         (req.path[10] == 0 || req.path[10] == '?')) {
         render_state_json(client, &req);
+    } else if (strcmp(req.method, "GET") == 0 && strcmp(req.path, "/api/config-ready") == 0) {
+        render_config_ready_json(client);
     } else if (strcmp(req.method, "GET") == 0 && strcmp(req.path, "/api/system-status") == 0) {
         render_system_status_json(client);
     } else if ((strcmp(req.method, "GET") == 0 || strcmp(req.method, "POST") == 0) &&

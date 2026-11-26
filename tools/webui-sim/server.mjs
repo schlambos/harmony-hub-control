@@ -22,6 +22,7 @@ import {
 import { LIMITS, isSafeLabel } from "./public/js/views/ir-model.js";
 import { MAX_ACTIVITIES, isRestrictableId, normalizeWindows, restrictedAt } from "./public/js/views/restrictions-model.js";
 import { validateStatic } from "./public/js/views/ethernet-model.js";
+import { IMPORT_LABELS, validateImportPayload } from "./public/js/views/backup-model.js";
 import { MAX_SLOTS, parseProfile, slotCommand, slotOf } from "./public/js/views/androidtv-inputs-model.js";
 import {
   buildSwitch2WakePayload,
@@ -743,6 +744,12 @@ let simRemotes = [];
 let simPairing = false;
 let simNextRfid = 3000000001;
 let simMultiRemote = false; // the multi-remote hal runs (bind-mounted)
+// GET /api/config-ready (codex_webui.c: render_config_ready_json). The hub
+// answers from the codexactivity worker's readiness report; POST /import of a
+// bundle or resource list is refused with 503 until it is ready.
+const SIM_CONFIG_READY = Object.freeze({ ready: true, reason: "ready", message: "" });
+const SIM_READY_TARGETS = new Set(["bundle", "devices", "functions", "protocols", "activities", "maps", "automation"]);
+let simConfigReady = { ...SIM_CONFIG_READY };
 let simMultiEnabled = false; // multi_remote.conf says 1
 let simHalSupported = true; // /usr/bin/hal is the stock 4.15.600 build
 let simOffPendingUntil = 0; // like codex_webui's pending-restart guard: no pairing until then
@@ -2623,6 +2630,37 @@ function sameOriginJson(req) {
   return Boolean(o && host && o[1].toLowerCase() === host.toLowerCase());
 }
 
+// POST /import (a form route, not under /api/). The sim stores nothing; like
+// codex_webui's handle_import it rejects an unknown target, then checks the
+// payload's shape (backup-model.js mirrors validate_import_payload), and only
+// then refuses a bundle or resource list with 503 while the hub is not ready,
+// unless the form asks to restore anyway (force=1). Answers in the hub's
+// form-page shape (<div class='msg'>).
+function handleImportForm(res, params) {
+  const target = String(params.target || "");
+  const payload = String(params.payload || "");
+  let status = 200;
+  let msg;
+  if (!Object.hasOwn(IMPORT_LABELS, target)) {
+    msg = "Unknown import target.";
+  } else {
+    const shape = validateImportPayload(target, payload);
+    const notReady = SIM_READY_TARGETS.has(target) && !simConfigReady.ready;
+    if (!shape.ok) {
+      msg = shape.message;
+    } else if (notReady && params.force !== "1") {
+      status = 503;
+      msg = simConfigReady.message;
+    } else {
+      msg = `Imported ${IMPORT_LABELS[target]} (simulated: nothing was written).` +
+        (notReady ? " The hub was not ready yet: reboot it and check that its devices respond." : "");
+    }
+  }
+  const escaped = msg.replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" })[c]);
+  res.writeHead(status, { "Content-Type": "text/html; charset=utf-8", "Cache-Control": "no-store" });
+  res.end(`<!doctype html><html><body><div class='msg'>${escaped}</div></body></html>`);
+}
+
 async function handleApi(req, res, pathname, url) {
   if (req.method === "POST" && pathname === "/api/ha-state") {
     await handleHaStatePost(req, res);
@@ -2689,6 +2727,7 @@ async function handleApi(req, res, pathname, url) {
         resetSimRemotes();
         resetSimBackground();
         state.events.length = 0;
+        simConfigReady = { ...SIM_CONFIG_READY };
         captureArmed = false;
         canceledRuns.clear();
         sendJson(res, 200, { ok: true, revision: state.revision, currentActivityId: state.currentActivityId });
@@ -2896,6 +2935,20 @@ async function handleApi(req, res, pathname, url) {
       sendJson(res, 200, { ok: true, slot, code: 200, reply: JSON.stringify({ id: 1, code: 200 }), before, after: simRfInfo() });
       return;
     }
+    case "GET /api/config-ready":
+      sendJson(res, 200, { ok: true, ...simConfigReady });
+      return;
+    case "POST /api/sim/config-ready":
+      // Sim only: {"ready": bool, "reason": code, "message": text} — what the
+      // hub's readiness report says (reasons: engine-starting, resource-sync,
+      // blank-hub-check, reload-pending, starting, plugin-not-running, ...).
+      simConfigReady = {
+        ready: Boolean(params.ready),
+        reason: String(params.reason || (params.ready ? "ready" : "starting")),
+        message: params.ready ? "" : String(params.message || "The hub is still starting up."),
+      };
+      sendJson(res, 200, { ok: true, ...simConfigReady });
+      return;
     case "POST /api/sim/multi-remote":
       // Sim only: {"on": bool} runs that hal; optional "enabled" (the saved setting, e.g. on but
       // not running after a firmware update), "halSupported" and "radioHung" (rf.info hangs).
@@ -3129,6 +3182,15 @@ const server = http.createServer((req, res) => {
         return;
       }
       handleExport(res, pathname);
+      return;
+    }
+    if (pathname === "/import" && req.method === "POST") {
+      parseParams(req, url)
+        .then((params) => handleImportForm(res, params))
+        .catch((error) => {
+          if (!res.headersSent) sendError(res, error.status || 413, error.message || "bad request body");
+          else res.end();
+        });
       return;
     }
     if (pathname.startsWith("/ir/") && req.method === "POST") {

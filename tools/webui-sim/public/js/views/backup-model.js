@@ -75,6 +75,60 @@ export const CLOUD_ENABLE_VALUES = ["1", "on", "true", "enabled"];
    preflight rejects them so the upload never reaches the hub. */
 export const CLOUD_DISABLE_VALUES = ["0", "off", "false", "disabled", "allow", "allowed"];
 
+/* Targets that write /data/resources and need the engine to load them:
+   the hub refuses them (503) until GET /api/config-ready says ready, because
+   a resource file written before the hub's blank-hub check has no index entry
+   and the engine then boots without an account (codex_webui.c:
+   import_target_needs_ready_hub). The settings targets are always allowed. */
+export const READY_TARGETS = new Set(["bundle", "devices", "functions", "protocols", "activities", "maps", "automation"]);
+
+/* What the restore button should do for `target` given the last
+   /api/config-ready answer (null while it is still unknown, or an Error when
+   the probe failed) and whether the person chose to restore without waiting.
+   locked: keep the restore disabled; message: why; canOverride: offer
+   "Restore without waiting" (the hub answered and is not ready); force: send
+   force=1, which the hub needs to take a restore before it is ready. */
+export function importReadiness(target, state, { override = false } = {}) {
+  const open = { locked: false, message: "", canOverride: false, force: false };
+  if (!READY_TARGETS.has(target)) return open;
+  if (state === null || state === undefined) {
+    return { ...open, locked: true, message: "Checking whether the hub is ready to restore…" };
+  }
+  if (state instanceof Error || state.ready) return open;
+  const base = String(state.message || "The hub is still starting up.");
+  if (override) {
+    return {
+      locked: false,
+      message: `${base} You chose to restore without waiting: do that only if the hub can't become ready.`,
+      canOverride: true,
+      force: true,
+    };
+  }
+  return {
+    locked: true,
+    message: `${base} The restore unlocks by itself when the hub is ready.`,
+    canOverride: true,
+    force: false,
+  };
+}
+
+/* Delay before the next readiness poll: every 3 s for the first minute, then
+   every 10 s, so a hub that never becomes ready isn't asked forever at the
+   fast rate (each request is a fork on a 30 MB hub). */
+export const READY_POLL_FAST_MS = 3000;
+export const READY_POLL_SLOW_MS = 10000;
+export const READY_POLL_FAST_COUNT = 20;
+export function readyPollDelay(attempt) {
+  return attempt < READY_POLL_FAST_COUNT ? READY_POLL_FAST_MS : READY_POLL_SLOW_MS;
+}
+
+/* Said first in the restore guard when the person restores without waiting. */
+export const FORCE_CONSEQUENCE =
+  "The hub isn't ready to load a restore. Use this only when it can't become ready, for example " +
+  "when its engine or activity plugin won't start. On a hub that is still preparing its first " +
+  "start, a restore now can leave every device failing until the hub's resource files are cleared " +
+  "and the backup is restored again.";
+
 export function resourceByTarget(target) {
   return RESOURCES.find((r) => r.target === target) ?? null;
 }

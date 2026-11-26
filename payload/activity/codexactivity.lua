@@ -4768,7 +4768,7 @@ local function seedBlankHub()
     if not ok or baseResourceState(entry) ~= "empty" then
       log.warning("codexactivity: could not create an empty", entry.name,
         tostring(detail or "verification failed"))
-      return
+      return "failed"
     end
     table.insert(names, entry.name)
   end
@@ -4782,6 +4782,80 @@ local function seedBlankHub()
   log.notice("codexactivity: blank hub; created empty", table.concat(names, ", "))
 end
 
+-- Whether codex_webui may write resource files directly (its /import route).
+-- A file it writes before this hub's blank-hub check has run has no index
+-- entry, so the check takes the hub for one that was set up, never creates
+-- the entries, and harmonyengine boots without an account: every command then
+-- fails with "Account config data is not available". So imports wait until
+-- the engine listens, no stock sync owns the resources, the blank-hub check
+-- has run (in local mode, the only mode it runs in) and no reload is pending.
+-- The answer goes to a RAM file with this boot's uptime as a heartbeat; a
+-- missing or stale file reads as not ready, so a stopped worker blocks
+-- imports instead of letting them land unloaded. localMode says whether the
+-- check applies at all: a bundle that turns cloud blocking on waits for it
+-- (codex_webui.c: handle_import_bundle).
+-- One table, not seven locals: this chunk is at Lua's 200-local limit.
+local configReady = {
+  file = "/var/volatile/codex-config-ready.json",
+  refreshPasses = 20, -- rewritten about every 2 s at one pass per 100 ms
+  written = nil,
+  passes = 0,
+  seedFailed = false, -- the blank-hub check ran and could not finish
+}
+
+function configReady.state()
+  if not system.isMessageRegistered("config_new") then
+    return false, "engine-starting"
+  end
+  if resources.isAnySyncInProgress() then
+    return false, "resource-sync"
+  end
+  if configReady.seedFailed then
+    return false, "store-setup-failed"
+  end
+  if blockerActive() and not blankHubChecked then
+    return false, "blank-hub-check"
+  end
+  if needFullEngineLoad or readFile(RESOURCE_RELOAD_FLAG) then
+    return false, "reload-pending"
+  end
+  return true, "ready"
+end
+
+-- Replaced with a rename alone, never removed first: codex_webui reads a
+-- missing file as a stopped plugin.
+function configReady.publish()
+  local ready, reason = configReady.state()
+  local localMode = blockerActive()
+  local state = (ready and "1:" or "0:") .. reason .. (localMode and ":local" or ":cloud")
+  configReady.passes = configReady.passes + 1
+  if state == configReady.written and configReady.passes < configReady.refreshPasses then
+    return
+  end
+  configReady.passes = 0
+  local uptime = (readFile("/proc/uptime") or ""):match("^(%d+)")
+  local encoded = json.encode({
+    ready = ready, reason = reason, localMode = localMode, uptime = tonumber(uptime) or 0
+  })
+  local temporary = configReady.file .. ".new"
+  local f = io.open(temporary, "wb")
+  if not f then
+    return
+  end
+  local wrote = f:write(encoded, "\n")
+  f:close()
+  if wrote and os.rename(temporary, configReady.file) then
+    configReady.written = state
+  else
+    os.remove(temporary)
+  end
+end
+
+function configReady.clear()
+  os.remove(configReady.file)
+  configReady.written = nil
+end
+
 local function workerLoop()
   os.remove(REQUEST_FILE)
   os.remove(RESPONSE_FILE)
@@ -4789,6 +4863,15 @@ local function workerLoop()
     local seeded, seedError = pcall(seedBlankHub)
     if not seeded then
       log.error("codexactivity blank hub setup failed:", tostring(seedError))
+    end
+    -- Once the check has started it never runs again this boot, so a failure
+    -- keeps imports refused instead of reporting a half-made store as ready.
+    if seedError == "failed" or (not seeded and blankHubChecked) then
+      configReady.seedFailed = true
+    end
+    local published, publishError = pcall(configReady.publish)
+    if not published then
+      log.error("codexactivity readiness report failed:", tostring(publishError))
     end
     local repaired, repairError = pcall(remoteMapRepair.checkAuto)
     if not repaired then
@@ -4821,6 +4904,8 @@ local function workerLoop()
     end
     system.sleep(100)
   end
+  -- A stopped worker answers no reloads: imports must not read it as ready.
+  configReady.clear()
   workerTask = nil
 end
 

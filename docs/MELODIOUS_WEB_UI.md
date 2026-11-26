@@ -193,7 +193,7 @@ on Apple, Segoe on Windows. That costs 0 bytes. Sizes follow the app:
 - **Settings pages:**
   - Wi-Fi;
   - MQTT;
-  - Backup: owner bundle, single exports, restore with typed guards;
+  - Backup: owner bundle, single exports, restore with typed guards; a bundle or resource restore stays locked until the hub has finished starting (`GET /api/config-ready`), with "Restore without waiting" for a hub that never gets there;
   - System: status, logs, cloud blocker, time zone, custom NTP server, sign-in,
     software update, HA rediscovery, reboot.
 - **IR tools:**

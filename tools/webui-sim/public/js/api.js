@@ -119,6 +119,13 @@ export function saveDeviceScreen({ deviceId, remove = false }) {
   });
 }
 
+// Whether the hub may take a resource restore yet: { ready, reason, message }.
+// codex_webui answers from the codexactivity worker's readiness report
+// (render_config_ready_json); POST /import refuses with 503 until ready.
+export function getConfigReady() {
+  return request("/api/config-ready");
+}
+
 // The hub's RF remotes: { pairing } while a pairing window is open, else
 // { reply } with hal's raw rf.info answer (remotes-model.js parses it).
 export function getRemotes() {
