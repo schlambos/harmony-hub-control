@@ -10,6 +10,7 @@ ${CC:-cc} -std=gnu99 -O1 -w -I payload/source \
   -DTEST_DIR="\"$dir\"" \
   -DDEVICE_LIST="\"$dir/DeviceList.json\"" \
   -DENGINE_COOKIES="\"$dir/cookies\"" \
+  -DENGINE_SETTINGS="\"$dir/settings\"" \
   -DPAIRING_MARKER_DIR="\"$dir/markers\"" \
   -o "$dir/test" tools/pairing-status-test/test_pairing_status.c
 cp tools/webui-sim/fixtures/pairing-kinds.json "$dir/kinds.json"

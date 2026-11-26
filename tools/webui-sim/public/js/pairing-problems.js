@@ -25,10 +25,11 @@ export function notePairingProblem(needsPairing, command = "") {
 }
 
 /* A send worked: the device leaves the list when it was the command that
-   failed (or the failure came from an activity start, which names none). */
+   failed (or the failure came from an activity start, which names none). A
+   Bluetooth connect failure goes on any send that worked: the link is back. */
 export function noteSendWorked(deviceId, command) {
   const p = problems.get(String(deviceId ?? ""));
-  if (p && (!p.command || p.command === String(command ?? ""))) clearPairingProblem(deviceId);
+  if (p && (p.reason === "bt-not-connected" || !p.command || p.command === String(command ?? ""))) clearPairingProblem(deviceId);
 }
 
 /* The person dismissed the notice. */

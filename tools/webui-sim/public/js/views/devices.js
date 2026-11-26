@@ -30,7 +30,7 @@ import { resolveSkinPowerAction } from "./control-power.js";
 import { openImportSheet } from "./device-import.js";
 import { createDeviceSettings } from "./device-settings.js";
 import { PAIRING_BANNER_SLOT, mountPairingBanners } from "./pairing-banner.js";
-import { PAIRING_KINDS, pairingFiles, pairingKindOf, pairingStateLabel, pairingStatus } from "./pairing-model.js";
+import { PAIRING_KINDS, needsPairingList, pairingFiles, pairingIsTheFix, pairingKindOf, pairingStateLabel, pairingStatus } from "./pairing-model.js";
 import { openPairingSheet } from "./pairing-sheet.js";
 import { changeNote, hubChange, openCommandSheet, openDeviceSheet, openLearnSheet, storedCommand } from "./device-sheets.js";
 import { createDeviceSweep } from "./device-sweep.js";
@@ -100,13 +100,15 @@ export function createDevicesView(section) {
     canPair: (id) => Boolean(PAIRING_KINDS[pairingKindOf(hub.deviceById(id)?.entry)]?.canPair),
     onPair: (id) => {
       const d = hub.deviceById(id);
-      if (d) track(openPairingSheet({ device: d }), "[data-pairing-pair]");
+      const opened = d ? openPairingSheet({ device: d }) : null;
+      if (opened) track(opened, "[data-pairing-pair]");
     },
   });
   // The status line follows this tab's failed sends, like the banner does.
   onPairingProblems(() => {
     const kind = page === "device" && device ? pairingKindOf(device.entry) : "";
     if (kind && root.querySelector("[data-pairing-status]")) showPairingStatus(device, kind);
+    if (page === "list" && !section.hidden) showPairingNeeded();
   });
   const settings = createDeviceSettings({ root, track });
   const sweep = createDeviceSweep({ root });
@@ -171,6 +173,7 @@ export function createDevicesView(section) {
     const add = `<button type="button" class="icon-btn icon-btn-secondary" data-act="add-device" aria-haspopup="dialog" aria-label="Add a device" title="Add a device">${icon("add")}</button>`;
     root.innerHTML = `<div class="page">
         ${screenTitle("Devices", { action: add })}
+        <div id="pairingNeeded"></div>
         <label class="search-field">${icon("search", { size: 22 })}<input type="search" id="deviceSearch" value="${escapeHtml(query)}" placeholder="Search devices or commands" aria-label="Search devices or commands"></label>
         <div id="deviceRows">${rowsMarkup()}</div>
         <div id="strandedTvs"></div>
@@ -186,6 +189,55 @@ export function createDevicesView(section) {
         <p class="list-note">${all.length} of ${LIMITS.devices} devices · ${commands} command${commands === 1 ? "" : "s"} in all</p>
       </div>`;
     showStrandedTvs();
+    showPairingNeeded();
+  }
+
+  /* Devices that need pairing with this hub now: not paired (after a restore
+     or a hub swap, say), or a send was refused for want of pairing. Each has
+     Pair, or says where it pairs. A state the hub's files can't tell, or a
+     Bluetooth device that only didn't connect, isn't listed, so this doesn't
+     nag about a device that's only off. */
+  let pairingNeededRun = 0;
+  async function showPairingNeeded() {
+    const run = ++pairingNeededRun;
+    let list = [];
+    try {
+      list = needsPairingList(await getPairing());
+    } catch (_) {
+      // An older hub: this tab's own failures still count.
+    }
+    const box = root.querySelector("#pairingNeeded");
+    if (run !== pairingNeededRun || !box?.isConnected || page !== "list") return;
+    list = list.filter((p) => hub.deviceById(p.deviceId));
+    for (const p of pairingProblemsFor(hub.devices().map((d) => d.id))) {
+      if (pairingIsTheFix(p.reason) && !list.some((x) => x.deviceId === p.deviceId)) {
+        list.push({ deviceId: p.deviceId, kind: pairingKindOf(hub.deviceById(p.deviceId)?.entry) || p.kind, state: "needs-attention", name: hub.deviceName(p.deviceId) });
+      }
+    }
+    if (!list.length) {
+      box.innerHTML = "";
+      return;
+    }
+    const rows = list.map((p) => {
+      const meta = PAIRING_KINDS[p.kind] ?? { label: "Pairing", canPair: false };
+      const name = hub.deviceName(p.deviceId) || p.name;
+      const action = meta.canPair
+        ? `<button type="button" class="btn btn-text" data-pair-device="${escapeHtml(p.deviceId)}" aria-haspopup="dialog" aria-label="Pair ${escapeHtml(name)}">Pair…</button>`
+        : meta.where
+          ? `<a class="btn btn-text" href="${meta.where}">${escapeHtml(meta.whereLabel)}</a>`
+          : "";
+      return listRow({
+        title: name,
+        subtitle: `${meta.label} · ${pairingStateLabel(p.state)}`,
+        leading: iconTile(p.kind === "bluetooth" || p.kind === "bt-keyboard" ? "bluetooth" : "tv", { size: 40 }),
+        trailing: action,
+      });
+    }).join("");
+    box.innerHTML = `<section class="pairing-needed" aria-label="Devices that need pairing">
+        ${sectionLabel(list.length === 1 ? "1 device needs pairing with this hub" : `${list.length} devices need pairing with this hub`)}
+        <div class="m-list">${rows}</div>
+        <p class="list-note">Until it's paired again, a device ignores the hub's commands that go over the network or Bluetooth.</p>
+      </section>`;
   }
 
   /* Network TVs the hub is still paired with that no device uses, each with
@@ -339,7 +391,7 @@ export function createDevicesView(section) {
         : switch2
           ? `<p class="list-note s2-status">Switch 2 wake · ${escapeHtml(controllerTypeLabel(s2cfg?.pid))} · Wake only (2 s BLE beacon). Power Off is a no-op — sleep is handled by TV HDMI-CEC standby or the console itself.</p>`
           : pairKind
-            ? `<p class="list-note pairing-status" data-pairing-status>${escapeHtml(PAIRING_KINDS[pairKind].label)} · checking whether it's paired…</p>`
+            ? `<div class="webos-status-bar"><p class="list-note pairing-status" data-pairing-status>${escapeHtml(PAIRING_KINDS[pairKind].label)} · checking whether it's paired…</p>${PAIRING_KINDS[pairKind].canPair ? `<div class="webos-status-actions"><button type="button" class="btn btn-outlined" data-act="pair-again" aria-haspopup="dialog">Pair again…</button></div>` : ""}</div>`
             : "";
     const cmdTools = androidtv
       ? `<p class="list-note">A network TV's commands come with it; the hub sends them over the network.</p>`
@@ -443,7 +495,7 @@ export function createDevicesView(section) {
     const status = pairingStatus({ kind, file, problem: pairingProblemsFor([d.id])[0] ?? null });
     const meta = PAIRING_KINDS[kind];
     const where = meta.where ? ` <a href="${meta.where}">Pair it on the ${escapeHtml(meta.whereLabel)}</a>.` : "";
-    line.innerHTML = `${escapeHtml(meta.label)} · <strong>${escapeHtml(pairingStateLabel(status.state))}</strong>${status.text ? ` · ${escapeHtml(status.text)}` : ""}${where}`;
+    line.innerHTML = `${escapeHtml(meta.label)} · <strong>${escapeHtml(status.label ?? pairingStateLabel(status.state))}</strong>${status.text ? ` · ${escapeHtml(status.text)}` : ""}${where}`;
   }
 
   function showWebOsStatus(d) {
@@ -811,6 +863,13 @@ export function createDevicesView(section) {
         unpairStrandedTv(unpair.dataset.unpairTv, unpair.dataset.unpairName);
         return;
       }
+      const pairButton = event.target.closest("[data-pair-device]");
+      if (pairButton) {
+        const d = hub.deviceById(pairButton.dataset.pairDevice);
+        const opened = d ? openPairingSheet({ device: d, onDone: () => showPairingNeeded() }) : null;
+        if (opened) track(opened, `[data-pair-device="${pairButton.dataset.pairDevice}"]`);
+        return;
+      }
       const act = event.target.closest("[data-act]")?.dataset.act;
       if (act === "add-device") {
         track(openDeviceSheet({
@@ -848,7 +907,16 @@ export function createDevicesView(section) {
     else if (act === "learn") track(openLearnSheet({ device }), "[data-act='learn']");
     else if (act === "import") track(openImportSheet({ device }), "[data-act='import']");
     else if (act === "webos-edit") track(openWebOsSheet({ device }), "[data-act='webos-edit']");
-    else if (act === "pair-again") track(openPairingSheet({ device }), "[data-act='pair-again']");
+    else if (act === "pair-again") {
+      const opened = openPairingSheet({
+        device,
+        onDone: () => {
+          const kind = pairingKindOf(device.entry);
+          if (kind && root.querySelector("[data-pairing-status]")) showPairingStatus(device, kind);
+        },
+      });
+      if (opened) track(opened, "[data-act='pair-again']");
+    }
     else if (act === "webos-refresh") refreshWebOsDevice(device);
   });
 

@@ -11,8 +11,10 @@
    Network TV (codex_androidtv): pairing the same TV again keeps its id, so its
    hub device works again; a different TV (or one that was reset) is refused
    and its pairing undone, leaving the device as it was. LG webOS keeps its
-   own sheet, which pairs and edits in one place. Other kinds can't be paired
-   from here yet (pairing-model.js PAIRING_KINDS). */
+   own sheet, which pairs and edits in one place. A Sony TV and a stock
+   Bluetooth device pair through the hub (pairing-hub-sheet.js). A Bluetooth
+   keyboard target pairs on the Bluetooth page (pairing-model.js
+   PAIRING_KINDS). */
 
 import {
   cancelTvPairing,
@@ -45,6 +47,7 @@ import {
   keepPolling,
   pairingKindOf,
 } from "./pairing-model.js";
+import { openHubPairingSheet } from "./pairing-hub-sheet.js";
 import { openWebOsSheet } from "./webos-sheet.js";
 
 const DISCOVER_FOR_MS = 7000;
@@ -56,6 +59,7 @@ export function openPairingSheet({ device, onDone } = {}) {
   const kind = pairingKindOf(device?.entry);
   if (kind === "webos") return openWebOsSheet({ device, onDone });
   if (kind === "androidtv") return openAndroidTvRepair({ device, onDone });
+  if (kind === "ip-register" || kind === "bluetooth") return openHubPairingSheet({ device, kind, onDone });
   return null;
 }
 

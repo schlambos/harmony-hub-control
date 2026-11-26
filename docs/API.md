@@ -652,7 +652,7 @@ A failed hold `press` or `hold` (`502`) and a failed `/api/activity-run`
 | `kind` | `reason` | When |
 | --- | --- | --- |
 | `ip-register` | `ip-reauth` | An IP device registered with a PIN (a Sony TV) answers `403` "Reauthentication Required": the hub was replaced, or the device refused to renew the hub's registration. |
-| `bluetooth` | `bt-not-connected` | The hub couldn't connect to a Bluetooth (`Transport` 32) device before sending, or the engine answered `506` "Bluetooth connection timeout". |
+| `bluetooth` | `bt-not-connected` | The hub couldn't connect to a Bluetooth (`Transport` 32) device before sending, or the engine answered `506` "Bluetooth connection timeout". For one of the hub's Bluetooth keyboard targets, `kind` is `bt-keyboard`. |
 
 Older hubs send neither member and no `sent`; treat a missing `sent` as
 unknown, not as a failure.
@@ -665,26 +665,95 @@ can ask whenever it draws:
 
 ```json
 {"ok":true,"devices":[
-  {"deviceId":"<device-id>","kind":"ip-register","state":"not-paired"},
-  {"deviceId":"<device-id>","kind":"bluetooth","state":"needs-attention","reason":"bt-not-connected"},
-  {"deviceId":"<device-id>","kind":"androidtv","state":"unknown"}]}
+  {"deviceId":"<device-id>","kind":"ip-register","state":"not-paired","name":"Sony TV"},
+  {"deviceId":"<device-id>","kind":"bluetooth","state":"needs-attention","reason":"bt-not-connected","name":"Shield"},
+  {"deviceId":"<device-id>","kind":"androidtv","state":"unknown","name":"Den TV"}]}
 ```
 
 | `kind` | Which devices | `state` from files |
 | --- | --- | --- |
 | `androidtv`, `webos` | the hub's network TVs (`AutoDetectedDevice.Id` `melodious-androidtv-…`, `melodious-webos-…`) | `unknown`: ask `/api/androidtv/status` or `/api/webos/status` |
 | `bt-keyboard` | the hub's Bluetooth keyboard targets (`melodious-bt-…`) | `unknown` |
-| `ip-register` | an IP device with a registration template (`Transport` has 64 and `RegisterSection` isn't null: a Sony TV) | `paired` when the engine holds a registration for it, else `not-paired` (after a hub swap, or a renewal the device refused). Only presence is reported, never the registration itself |
-| `bluetooth` | a stock Bluetooth device (`Transport` has 32) | `not-paired` without a `BTAddress`; `unknown` with one, since it may be another hub's |
+| `ip-register` | an IP device with a registration template (`Transport` has 64 and `RegisterSection` is an object: a Sony TV) | `paired` when the engine holds a registration for it, else `not-paired` (after a hub swap, or a renewal the device refused). Only presence is reported, never the registration itself |
+| `bluetooth` | a stock Bluetooth device (`Transport` has 32) | `not-paired` without a `BTAddress`; `paired` when the engine's own record (`harmonyengine/settings` `btAddresses`, not in a backup) has the device at that address; otherwise `unknown`, since it may be another hub's |
 
 Any of them is `needs-attention`, with the `reason` from
 [Send failures](#send-failures), after a send from this web app failed with
 `needsPairing`; it goes back once the command that failed works again (a
 hold, once it has run its course). One an activity start left names no
-command, so any send to the device that works clears it. Dismissing the web
+command, and a Bluetooth connect failure says nothing about one command (the
+device may only have been off), so for those any send to the device that
+works clears it. Dismissing the web
 app's banner doesn't. That note lives in RAM
 (`/var/volatile/codex-pairing/<deviceId>`) and doesn't see the paired remote's
 presses. Other devices (IR, Home Assistant, Switch 2) aren't listed.
+
+### Pairing
+
+The stock engine keeps the pairing for two kinds, and these routes pair them
+the way the Harmony app did, writing the engine's own files. Network TVs and
+LG TVs pair through their own routes (`/api/androidtv/pair-*`,
+`/api/webos/pair-*`); a Bluetooth keyboard target through `/api/bt-call`.
+
+| Route | Body | Answers |
+| --- | --- | --- |
+| `GET /api/pairing/find?deviceId=` | | `{"ok":true,"searched":true,"found":[{"host":"<tv-ip>","match":true}]}`: an SSDP search (2.5 s) for the device's search target, from its `AutoDetectedDevice.USN`; only answers that name that search target count (some devices answer every search); `match` is true for the address whose USN carries the device's UDN. `searched` is false when the device has no USN, so there's nothing to search for |
+| `POST /api/pairing/start` | `{"deviceId", "host"}` (`host` for `ip-register` only) | `{"ok":true,"step":"code"}` (the TV shows a code), `{"ok":true,"step":"select"}` (the hub offers itself as "Harmony Keyboard"), or `{"ok":true,"step":"done"}` when it paired at once (a TV that knows the hub already, below; a Bluetooth device that connected straight away) |
+| `POST /api/pairing/finish` | `{"deviceId", "host", "code"}` (`host` and `code` for `ip-register` only) | `{"ok":true,"step":"done"}`; for `bluetooth`, `{"ok":true,"step":"select","waiting":true}` until the device picks the hub |
+| `POST /api/pairing/cancel` | `{"deviceId"}` | `{"ok":true}`; for `bluetooth`, the hub stops being discoverable. Start's `bluetoothunpairing` made the engine forget the device, but the device keeps its bond, so cancel asks `bluetoothpairing` once more (first connecting to the DeviceList address, as before a send, when the link has dropped): when that answers 200, the engine saves the address again and cancel answers `{"ok":true,"step":"done"}`; otherwise the device stays unpaired until it is paired again |
+
+All three POSTs take a same-origin JSON request only. Errors are
+`{"ok":false,"error"}` with 400 (a bad body), 404 (no such device), 409 (a
+kind these routes don't pair, a template the hub won't send or that is too
+long, a wrong code, or a TV that knows the hub already but there's no code to
+keep), 502 (the TV or the engine didn't answer as it should; a Bluetooth
+failure adds the engine's `engineCode`) or 500. Each call stands alone: no
+process lives between start and finish, so finish takes `host` again and
+checks it again.
+
+**`ip-register` (a Sony TV).** The hub sends the device's own
+`RegisterSection` request, filling `{IP}` with `host`, `{clientId}` with the
+hub's Wi-Fi MAC and `{clientName}` with `Logitech Harmony`, as the engine
+does: the TV binds the registration to that client id, and the engine renews
+with it. Without a code the TV answers 401 and shows one; with
+`Authorization: Basic base64(":" + code)` it answers 200 and
+`Set-Cookie: auth=…`. The hub then stores the cookie and the code in the
+engine's `/data/luaworks/harmonyengine/cookies` (keeping every other
+device's entry; the engine renews the cookie with the code) and asks for a
+full engine reload, so `finish` answers `"reloading":true`: the paired remote
+resyncs, as after any full reload. A wrong code is 409 with
+`"wrongCode":true`; a Sony shows a new code after one, so start again. A TV
+that knows this hub already answers the first request with 200 and a cookie,
+and shows no code: the hub keeps the code the engine already holds for the
+device and answers `done`, or, with none, answers 409 with
+`"alreadyRegistered":true` (remove "Logitech Harmony" from the TV's remote
+devices, then start again). Only a cookie named `auth`, first in its
+`Set-Cookie` header and made of cookie characters, is taken.
+- `host` must be a private (RFC 1918) dotted-quad address, and the template's
+  `Url` must begin `http://{IP}` (an optional `:port`, then the path): the
+  request goes to the address the person chose and nowhere else.
+- No answer carries the cookie, the code or the `Authorization` header, and
+  nothing logs them: the code is a long-lived credential. The cookies file
+  isn't in exports or bundles, which is why a restored or replaced hub has to
+  pair again.
+- A 403 from the TV says its IP control (or its authentication) is off.
+- The engine's own `harmony.engine?startippair`/`finishippair` aren't used:
+  `finishippair` never finished (607; the TV answered 401).
+
+**`bluetooth` (a stock Bluetooth device, such as a Shield).** `start` asks
+the engine for `harmony.engine?bluetoothunpairing`, which clears the old
+target, then `bluetoothpairing`: the hub advertises "Harmony Keyboard" and the
+engine answers 401, meaning waiting. The person picks it on the device; then
+`finish` asks `bluetoothpairing` again, which answers 200 with the address
+once the device has paired, and the engine saves it. The hub also writes that
+address to the device's `BTAddress` in DeviceList, which the Bluetooth
+pre-connect uses (and reloads DeviceList, as other device edits do), and
+stops being discoverable; a failed finish stops it too, and so does a time
+limit of 3 minutes after `start` (for a tab that closed without cancelling;
+the web app also cancels as the page goes away). `finish` doesn't run by
+itself (each call makes the engine advertise again), so the web app asks once
+the person says they picked the hub. A paired device's `needs-attention` note
+goes on `done`, for either kind.
 
 Send a cancellable batch (`render_ir_batch_send_json()`):
 
@@ -1750,6 +1819,10 @@ carries.
 | GET, POST | `/api/capture` | `render_capture_json()` |
 | POST | `/api/ir-send` | `render_ir_send_json()` |
 | GET | `/api/pairing` | `render_pairing_json()` |
+| GET | `/api/pairing/find?deviceId=` | `render_pairing_find()` |
+| POST | `/api/pairing/start` | `render_pairing_start()` |
+| POST | `/api/pairing/finish` | `render_pairing_finish()` |
+| POST | `/api/pairing/cancel` | `render_pairing_cancel()` |
 | POST | `/api/led` | `render_led_json()` |
 | GET | `/api/remotes` | `render_remotes_json()` |
 | POST | `/api/remote-pair` | `render_remote_pair_json()` |

@@ -95,8 +95,12 @@ Set `PORT=<n>` to change the port (default 8787).
   `/api/sim/reset` clears them too.
 - `POST /api/sim/pairing` — `{"deviceId", "cookie": true}` makes
   `GET /api/pairing` report that IP device (a Sony TV) as registered with the
-  hub; `"cookie": false` undoes it; `{"clear": true}` drops every registration
-  and failure marker.
+  hub; `"cookie": false` undoes it; `{"addSony": true}` adds a Sony TV device
+  (it answers its `deviceId`); `{"deviceId", "btSelected": true}` makes a
+  stock Bluetooth device pick the hub at once (otherwise it does 4 s after
+  `/api/pairing/start`); `{"clear": true}` drops every registration and
+  failure marker. The fake Sony TV for `/api/pairing/*` is at `192.168.1.60`
+  and wants code `1234`.
 
 ## Production packaging (flash-safe embed)
 

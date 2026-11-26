@@ -13,9 +13,18 @@ import {
   androidTvPairStep,
   androidTvRepairProblem,
   androidTvRepairResult,
+  bluetoothSelectSteps,
   closeUndoTvId,
+  hubPairingIntro,
+  hubPairStep,
+  isPairingHost,
   keepPolling,
+  needsPairingList,
+  normalizePin,
+  pairingIsTheFix,
+  pairableAfterRestore,
   pairingFiles,
+  pairingFoundHosts,
   pairingKindOf,
   pairingStateLabel,
   pairingStatus,
@@ -24,7 +33,7 @@ import {
 import { pairingBannersMarkup } from "../public/js/views/send-problem-model.js";
 import { pairingToUndo } from "../public/js/views/androidtv-model.js";
 import { mountPairingBanners } from "../public/js/views/pairing-banner.js";
-import { notePairingProblem, resetPairingProblems } from "../public/js/pairing-problems.js";
+import { hasPairingProblems, notePairingProblem, noteSendWorked, resetPairingProblems } from "../public/js/pairing-problems.js";
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));
 const SIM_DIR = path.join(HERE, "..");
@@ -69,9 +78,11 @@ describe("pairingStatus", () => {
     const sony = pairingStatus({ kind: "ip-register", file: files.get("102") });
     assert.equal(sony.state, "not-paired");
     assert.match(sony.text, /after the hub is replaced/);
-    assert.equal(sony.canPair, false, "PR 4 pairs these");
+    assert.equal(sony.canPair, true, "the hub pairs a Sony TV itself");
     const shield = pairingStatus({ kind: "bluetooth", file: files.get("201") });
     assert.equal(shield.state, "needs-attention");
+    assert.equal(shield.label, "Didn't connect", "not \"needs pairing\": it may only be off");
+    assert.equal(pairingStatus({ kind: "ip-register", problem: { reason: "ip-reauth" } }).label, "Needs pairing");
     assert.match(shield.text, /Bluetooth/);
     assert.equal(pairingStatus({ kind: "bluetooth", file: { state: "unknown" } }).state, "unknown");
     assert.equal(pairingStatus({ kind: "" }), null);
@@ -207,6 +218,82 @@ function startSim() {
   });
 }
 
+describe("pairing what the stock engine pairs", () => {
+  it("sends only to a TV on the LAN, as the hub checks", () => {
+    for (const h of ["192.168.1.30", "10.0.0.5", "172.16.0.1", "172.31.255.254"]) assert.equal(isPairingHost(h), true, h);
+    for (const h of ["8.8.8.8", "172.32.0.1", "192.169.0.1", "127.0.0.1", "192.168.1.4:80", "tv.local", "", "192.168.1", "192.168.1.256"]) {
+      assert.equal(isPairingHost(h), false, h);
+    }
+  });
+
+  it("takes the TV's code as 4 to 8 digits", () => {
+    assert.deepEqual(normalizePin(" 12 34 "), { code: "1234", error: "" });
+    assert.match(normalizePin("").error, /Type the code/);
+    assert.match(normalizePin("12a4").error, /4 digits/);
+    assert.match(normalizePin("123").error, /4 digits/);
+  });
+
+  it("lists the device's own address first, once, and only LAN ones", () => {
+    const hosts = pairingFoundHosts({ found: [
+      { host: "192.168.1.9", match: false },
+      { host: "192.168.1.60", match: true },
+      { host: "192.168.1.60", match: true },
+      { host: "8.8.8.8", match: true },
+    ] });
+    assert.deepEqual(hosts, [{ host: "192.168.1.60", match: true }, { host: "192.168.1.9", match: false }]);
+    assert.deepEqual(pairingFoundHosts(null), []);
+  });
+
+  it("reads each answer's step", () => {
+    assert.equal(hubPairStep({ ok: true, step: "code" }), "code");
+    assert.equal(hubPairStep({ ok: true, step: "select", waiting: true }), "select");
+    assert.equal(hubPairStep({ ok: true, step: "done" }), "done");
+    assert.equal(hubPairStep({ ok: true }), "failed");
+    assert.equal(hubPairStep({ step: "explode" }), "failed");
+  });
+
+  it("says what pairing does, per kind", () => {
+    assert.match(hubPairingIntro("ip-register", "Sony TV"), /4-digit code/);
+    assert.match(hubPairingIntro("bluetooth", "Shield"), /forgets its old pairing with Shield.*Harmony Keyboard/);
+    assert.match(bluetoothSelectSteps("Shield").join(" "), /Harmony Keyboard.*Done/);
+  });
+
+  it("lists what needs pairing now, and after a restore everything that pairs", () => {
+    const reply = { devices: [
+      { deviceId: "1", kind: "ip-register", state: "not-paired", name: "Sony TV" },
+      { deviceId: "2", kind: "bluetooth", state: "unknown", name: "Shield" },
+      { deviceId: "3", kind: "androidtv", state: "needs-attention", reason: "x", name: "Den TV" },
+      { deviceId: "4", kind: "made-up", state: "not-paired", name: "?" },
+      { deviceId: "5", kind: "bluetooth", state: "paired" },
+    ] };
+    assert.deepEqual(needsPairingList(reply).map((d) => [d.deviceId, d.name]), [["1", "Sony TV"], ["3", "Den TV"]]);
+    assert.deepEqual(pairableAfterRestore(reply).map((d) => d.deviceId), ["1", "2", "3", "5"]);
+    assert.equal(pairableAfterRestore(reply).at(-1).name, "Device 5", "a nameless entry still reads");
+  });
+
+  it("doesn't nag about a Bluetooth device that only didn't connect", () => {
+    assert.equal(pairingIsTheFix("bt-not-connected"), false);
+    assert.equal(pairingIsTheFix("ip-reauth"), true);
+    const reply = { devices: [
+      { deviceId: "1", kind: "bluetooth", state: "needs-attention", reason: "bt-not-connected" },
+      { deviceId: "2", kind: "ip-register", state: "needs-attention", reason: "ip-reauth" },
+    ] };
+    assert.deepEqual(needsPairingList(reply).map((d) => d.deviceId), ["2"]);
+  });
+
+  it("drops a Bluetooth connect failure on any send that works, an IP refusal only on its own command", () => {
+    resetPairingProblems();
+    notePairingProblem({ deviceId: "7", kind: "bluetooth", reason: "bt-not-connected" }, "Home");
+    noteSendWorked("7", "Back");
+    assert.equal(hasPairingProblems(), false);
+    notePairingProblem({ deviceId: "8", kind: "ip-register", reason: "ip-reauth" }, "VolumeUp");
+    noteSendWorked("8", "PowerOn");
+    assert.equal(hasPairingProblems(), true, "IR still works while IP is refused");
+    noteSendWorked("8", "VolumeUp");
+    assert.equal(hasPairingProblems(), false);
+  });
+});
+
 describe("simulator pairing status", () => {
   let sim;
   let bluetoothId = "";
@@ -238,16 +325,27 @@ describe("simulator pairing status", () => {
     assert.equal(reply.devices.length, [...kinds.values()].filter(Boolean).length);
   });
 
-  it("marks a device whose send needed pairing, until the command that failed works", async (t) => {
+  it("marks a device whose Bluetooth connect failed, until any send works", async (t) => {
     if (!bluetoothId) return t.skip("the fixture has no Bluetooth device");
     await json("/api/sim/send-failure", { deviceId: bluetoothId, btFailed: true });
     await form("/api/ir-send", { deviceId: bluetoothId, command: "Home" });
-    assert.deepEqual(await entryFor(bluetoothId), { deviceId: bluetoothId, kind: "bluetooth", state: "needs-attention", reason: "bt-not-connected" });
+    assert.deepEqual(await entryFor(bluetoothId), { deviceId: bluetoothId, kind: "bluetooth", state: "needs-attention", reason: "bt-not-connected", name: "NVIDIA Game Console" });
     await json("/api/sim/send-failure", { deviceId: bluetoothId, clear: true });
     await form("/api/ir-send", { deviceId: bluetoothId, command: "Back" });
-    assert.equal((await entryFor(bluetoothId)).state, "needs-attention", "another command proves little");
-    await form("/api/ir-send", { deviceId: bluetoothId, command: "Home" });
-    assert.notEqual((await entryFor(bluetoothId)).state, "needs-attention");
+    assert.notEqual((await entryFor(bluetoothId)).state, "needs-attention", "the link works again");
+  });
+
+  it("marks a refused IP command until that command works", async () => {
+    const { deviceId } = await json("/api/sim/pairing", { addSony: true });
+    await json("/api/sim/send-failure", { deviceId, engineCode: "403", msg: "Request Forbidden Reauthentication Required" });
+    const sent = await form("/api/ir-send", { deviceId, command: "VolumeUp" });
+    assert.equal(sent.engineCode, 403);
+    assert.equal(sent.needsPairing.reason, "ip-reauth");
+    await json("/api/sim/send-failure", { deviceId, clear: true });
+    await form("/api/ir-send", { deviceId, command: "PowerOn" });
+    assert.equal((await entryFor(deviceId)).state, "needs-attention", "another command proves little (IR still works)");
+    await form("/api/ir-send", { deviceId, command: "VolumeUp" });
+    assert.notEqual((await entryFor(deviceId)).state, "needs-attention");
   });
 
   it("clears a held key's marker once the hold ran its course", async (t) => {
@@ -265,5 +363,46 @@ describe("simulator pairing status", () => {
   it("drops every marker and registration on reset", async () => {
     await json("/api/sim/pairing", { deviceId: "999", cookie: true });
     assert.deepEqual((await json("/api/sim/pairing", { clear: true })).cookies, []);
+  });
+
+  const post = async (p, body, headers = { "Content-Type": "application/json" }) => {
+    const res = await fetch(`${sim.base}${p}`, { method: "POST", headers, body: JSON.stringify(body) });
+    return { status: res.status, body: await res.json() };
+  };
+
+  it("pairs a Sony TV: find it, a code on screen, the right code", async () => {
+    const { deviceId } = await json("/api/sim/pairing", { addSony: true });
+    assert.equal((await entryFor(deviceId)).state, "not-paired", "no registration yet");
+    const found = await json(`/api/pairing/find?deviceId=${deviceId}`);
+    assert.deepEqual(found, { ok: true, searched: true, found: [{ host: "192.168.1.60", match: true }] });
+    assert.equal((await post("/api/pairing/start", { deviceId, host: "8.8.8.8" })).status, 400, "only a LAN address");
+    assert.equal((await post("/api/pairing/start", { deviceId, host: "192.168.1.61" })).status, 502, "nothing there");
+    assert.deepEqual((await post("/api/pairing/start", { deviceId, host: "192.168.1.60" })).body, { ok: true, step: "code" });
+    const wrong = await post("/api/pairing/finish", { deviceId, host: "192.168.1.60", code: "9999" });
+    assert.equal(wrong.status, 409);
+    assert.equal(wrong.body.wrongCode, true);
+    assert.deepEqual((await post("/api/pairing/finish", { deviceId, host: "192.168.1.60", code: "1234" })).body, { ok: true, step: "done", reloading: true });
+    assert.equal((await entryFor(deviceId)).state, "paired");
+  });
+
+  it("pairs a stock Bluetooth device once it picks the hub", async (t) => {
+    if (!bluetoothId) return t.skip("the fixture has no Bluetooth device");
+    assert.deepEqual((await post("/api/pairing/finish", { deviceId: bluetoothId })).body, { ok: true, step: "select", waiting: true }, "nothing started");
+    assert.deepEqual((await post("/api/pairing/start", { deviceId: bluetoothId })).body, { ok: true, step: "select" });
+    assert.equal((await post("/api/pairing/finish", { deviceId: bluetoothId })).body.waiting, true, "not picked yet");
+    await json("/api/sim/pairing", { deviceId: bluetoothId, btSelected: true });
+    assert.deepEqual((await post("/api/pairing/finish", { deviceId: bluetoothId })).body, { ok: true, step: "done" });
+    assert.equal((await entryFor(bluetoothId)).state, "paired", "the engine's record says this hub");
+    assert.deepEqual((await post("/api/pairing/cancel", { deviceId: bluetoothId })).body, { ok: true, step: "done" }, "a still-connected device keeps its pairing");
+  });
+
+  it("refuses devices it doesn't pair, and other sites", async () => {
+    assert.equal((await post("/api/pairing/start", {})).status, 400);
+    assert.equal((await post("/api/pairing/start", { deviceId: "1" })).status, 404);
+    const config = await json("/api/activity-config");
+    const ir = config.deviceList.DevicesWithFeatures.find((e) => !pairingKindOf(e));
+    assert.equal((await post("/api/pairing/start", { deviceId: String(ir.Device["Id-"]) })).status, 409);
+    assert.equal((await post("/api/pairing/start", { deviceId: "1" }, { "Content-Type": "text/plain" })).status, 403);
+    assert.equal((await post("/api/pairing/start", { deviceId: "1" }, { "Content-Type": "application/json", Origin: "http://evil.example" })).status, 403);
   });
 });

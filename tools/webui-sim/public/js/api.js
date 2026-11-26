@@ -220,6 +220,35 @@ export function getPairing() {
   return request("/api/pairing");
 }
 
+/* Pairing a device the stock engine pairs (a Sony TV, a stock Bluetooth
+   device): docs/API.md "Pairing". Each answers { ok, step }. */
+export function findPairingHost(deviceId) {
+  return request(`/api/pairing/find?deviceId=${encodeURIComponent(deviceId)}`);
+}
+
+export function startPairing({ deviceId, host }) {
+  return request("/api/pairing/start", { method: "POST", body: host ? { deviceId, host } : { deviceId } });
+}
+
+export function finishPairing({ deviceId, host, code }) {
+  const body = { deviceId };
+  if (host) body.host = host;
+  if (code) body.code = code;
+  return request("/api/pairing/finish", { method: "POST", body });
+}
+
+export function cancelPairing(deviceId) {
+  return request("/api/pairing/cancel", { method: "POST", body: { deviceId } });
+}
+
+/* The same, as the page goes away: keepalive lets the request outlive it. */
+export function cancelPairingOnExit(deviceId) {
+  fetch("/api/pairing/cancel", {
+    method: "POST", keepalive: true, cache: "no-store",
+    headers: { "Content-Type": "application/json" }, body: JSON.stringify({ deviceId }),
+  }).catch(() => {});
+}
+
 // Sim-only debug log (the simulator serves it at /api/sim/events). The path is
 // assembled at runtime so no routable /sim/ URL survives into the production
 // bundle; the production shell never calls this (gated on HARMONY_SIM).

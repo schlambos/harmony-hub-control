@@ -78,18 +78,28 @@ int main(void) {
     put("cookies", "{\"cookie\":{\"101\":{\"{cookie}\":\"auth=SECRETCOOKIE\",\"{renewpin}\":\"102\"}}}");
 
     body = pairing();
-    expect_has("a Sony TV with a cookie is paired", body, "{\"deviceId\":\"101\",\"kind\":\"ip-register\",\"state\":\"paired\"}");
-    expect_has("a Sony TV without one isn't", body, "{\"deviceId\":\"102\",\"kind\":\"ip-register\",\"state\":\"not-paired\"}");
+    expect_has("a Sony TV with a cookie is paired", body, "{\"deviceId\":\"101\",\"kind\":\"ip-register\",\"state\":\"paired\"");
+    expect_has("a Sony TV without one isn't", body, "{\"deviceId\":\"102\",\"kind\":\"ip-register\",\"state\":\"not-paired\"");
     expect_not("an IP device with no registration template pairs with nothing", body, "\"103\"");
-    expect_has("a Bluetooth device without an address isn't paired", body, "{\"deviceId\":\"201\",\"kind\":\"bluetooth\",\"state\":\"not-paired\"}");
-    expect_has("one with an address is unknown (maybe another hub's)", body, "{\"deviceId\":\"202\",\"kind\":\"bluetooth\",\"state\":\"unknown\"}");
-    expect_has("an Android TV is left to its live status", body, "{\"deviceId\":\"301\",\"kind\":\"androidtv\",\"state\":\"unknown\"}");
-    expect_has("a webOS TV too", body, "{\"deviceId\":\"302\",\"kind\":\"webos\",\"state\":\"unknown\"}");
-    expect_has("a Bluetooth keyboard target", body, "{\"deviceId\":\"303\",\"kind\":\"bt-keyboard\",\"state\":\"unknown\"}");
+    expect_has("a Bluetooth device without an address isn't paired", body, "{\"deviceId\":\"201\",\"kind\":\"bluetooth\",\"state\":\"not-paired\"");
+    expect_has("one with an address is unknown (maybe another hub's)", body, "{\"deviceId\":\"202\",\"kind\":\"bluetooth\",\"state\":\"unknown\"");
+    expect_has("an Android TV is left to its live status", body, "{\"deviceId\":\"301\",\"kind\":\"androidtv\",\"state\":\"unknown\"");
+    expect_has("a webOS TV too", body, "{\"deviceId\":\"302\",\"kind\":\"webos\",\"state\":\"unknown\"");
+    expect_has("a Bluetooth keyboard target", body, "{\"deviceId\":\"303\",\"kind\":\"bt-keyboard\",\"state\":\"unknown\"");
     expect_not("Home Assistant devices pair with nothing", body, "\"304\"");
     expect_not("IR devices pair with nothing", body, "\"401\"");
     expect_not("nor do ones with no Transport", body, "\"402\"");
     expect_not("the cookie never leaves the hub", body, "SECRET");
+    /* The engine's record of pairing a Bluetooth device at its address says
+     * it's this hub; an emptied record ([]) or another address doesn't. */
+    put("settings", "{\"btAddresses\":{\"202\":\"00:04:4b:12:34:56\"}}");
+    expect_has("the engine paired it at that address: paired", pairing(), "{\"deviceId\":\"202\",\"kind\":\"bluetooth\",\"state\":\"paired\"");
+    put("settings", "{\"btAddresses\":{\"202\":\"00:04:4B:00:00:01\"}}");
+    expect_has("at another address: unknown", pairing(), "{\"deviceId\":\"202\",\"kind\":\"bluetooth\",\"state\":\"unknown\"");
+    put("settings", "{\"btAddresses\":[]}");
+    expect_has("an emptied record: unknown", pairing(), "{\"deviceId\":\"202\",\"kind\":\"bluetooth\",\"state\":\"unknown\"");
+    body = pairing();
+    expect_has("each entry has the device's name", body, "\"state\":\"paired\",\"name\":\"Sony TV\"}");
     expect_has("the answer is one JSON object", body, "{\"ok\":true,\"devices\":[");
 
     /* A failed send that needs pairing leaves a marker; a good one removes it. */
@@ -104,8 +114,8 @@ int main(void) {
         free(got);
     }
     body = pairing();
-    expect_has("a refused send marks a paired TV", body, "{\"deviceId\":\"101\",\"kind\":\"ip-register\",\"state\":\"needs-attention\",\"reason\":\"ip-reauth\"}");
-    expect_has("a failed Bluetooth connect marks the device", body, "{\"deviceId\":\"201\",\"kind\":\"bluetooth\",\"state\":\"needs-attention\",\"reason\":\"bt-not-connected\"}");
+    expect_has("a refused send marks a paired TV", body, "{\"deviceId\":\"101\",\"kind\":\"ip-register\",\"state\":\"needs-attention\",\"reason\":\"ip-reauth\"");
+    expect_has("a failed Bluetooth connect marks the device", body, "{\"deviceId\":\"201\",\"kind\":\"bluetooth\",\"state\":\"needs-attention\",\"reason\":\"bt-not-connected\"");
     checks++;
     if (pairing_marker_read("401", reason, sizeof(reason))) {
         printf("FAIL an unknown command leaves no marker\n");
@@ -116,10 +126,10 @@ int main(void) {
     expect_has("another command working leaves the marker (IR still works)", body, "{\"deviceId\":\"101\",\"kind\":\"ip-register\",\"state\":\"needs-attention\"");
     pairing_marker_clear("101", "VolumeUp");
     body = pairing();
-    expect_has("the command that failed working clears it", body, "{\"deviceId\":\"101\",\"kind\":\"ip-register\",\"state\":\"paired\"}");
+    expect_has("the command that failed working clears it", body, "{\"deviceId\":\"101\",\"kind\":\"ip-register\",\"state\":\"paired\"");
     put("markers/202", "garbage");
     body = pairing();
-    expect_has("a marker with an unknown reason is ignored", body, "{\"deviceId\":\"202\",\"kind\":\"bluetooth\",\"state\":\"unknown\"}");
+    expect_has("a marker with an unknown reason is ignored", body, "{\"deviceId\":\"202\",\"kind\":\"bluetooth\",\"state\":\"unknown\"");
     {
         char *got = NULL;
         size_t len = 0;
@@ -130,7 +140,7 @@ int main(void) {
     }
     pairing_marker_clear("102", "AnyCommand");
     body = pairing();
-    expect_has("an activity start's marker names no command: any good send clears it", body, "{\"deviceId\":\"102\",\"kind\":\"ip-register\",\"state\":\"not-paired\"}");
+    expect_has("an activity start's marker names no command: any good send clears it", body, "{\"deviceId\":\"102\",\"kind\":\"ip-register\",\"state\":\"not-paired\"");
     checks++;
     pairing_marker_set("../etc", "ip-reauth", "x");
     if (access(TEST_DIR "/etc", F_OK) == 0) {
@@ -141,7 +151,7 @@ int main(void) {
     /* No cookies file, an empty DeviceList: still a valid answer. */
     put("cookies", "");
     body = pairing();
-    expect_has("no cookies: the TV isn't paired", body, "{\"deviceId\":\"101\",\"kind\":\"ip-register\",\"state\":\"not-paired\"}");
+    expect_has("no cookies: the TV isn't paired", body, "{\"deviceId\":\"101\",\"kind\":\"ip-register\",\"state\":\"not-paired\"");
     put("DeviceList.json", "");
     expect_has("no devices: an empty list", pairing(), "{\"ok\":true,\"devices\":[]}");
 

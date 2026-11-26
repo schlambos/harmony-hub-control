@@ -11,7 +11,7 @@
    device-list risk plus more.
    Safe DOM only: dynamic values go through textContent / el(). */
 
-import { postHubForm, getText } from "../api.js";
+import { getPairing, postHubForm, getText } from "../api.js";
 import { clear, dangerGuard, el, notice, setText, viewHead } from "../setup-kit.js";
 import {
   BUNDLE_FILES,
@@ -22,6 +22,7 @@ import {
   preflightImport,
   utf8ByteLength,
 } from "./backup-model.js";
+import { PAIRING_KINDS, pairableAfterRestore, pairingStateLabel } from "./pairing-model.js";
 
 /* Layout built from design tokens only — no raw lengths. */
 const ROW_STYLE = "display:grid;grid-template-columns:minmax(0,1fr) auto;gap:var(--space-3);align-items:center;padding:var(--space-2) 0;border-bottom:1px solid var(--border-default)";
@@ -279,6 +280,33 @@ export function createBackupView(section) {
     resultBox.appendChild(el("p", { className: "help", text }));
   }
 
+  /* After restoring devices: the ones that pair with the hub itself (a Sony
+     TV, a Shield, a network TV). Their pairings aren't in a backup, so on a
+     new or replaced hub each has to be paired again. */
+  async function listPairable(gen) {
+    let list = [];
+    try {
+      list = pairableAfterRestore(await getPairing());
+    } catch (_) {
+      return; // an older hub
+    }
+    if (gen !== generation || !list.length) return;
+    const n = list.length;
+    resultBox.appendChild(el("p", {
+      className: "help",
+      text: `${n === 1 ? "1 device pairs" : `${n} devices pair`} with the hub itself, and pairings aren't in a backup. If this hub is new or replaced, pair ${n === 1 ? "it" : "each"} again from its page:`,
+    }));
+    resultBox.appendChild(el("ul", {
+      className: "help",
+      children: list.map((p) => el("li", {
+        children: [
+          el("a", { attrs: { href: `#devices/${encodeURIComponent(p.deviceId)}` }, text: p.name }),
+          el("span", { text: ` · ${PAIRING_KINDS[p.kind]?.label ?? "Pairing"} · ${pairingStateLabel(p.state)}` }),
+        ],
+      })),
+    }));
+  }
+
   function setBusy(busy) {
     if (!guardButton) return;
     guardButton.disabled = busy;
@@ -313,6 +341,7 @@ export function createBackupView(section) {
       if (gen !== generation) return;
       renderResult("ok", reply.msg || `${IMPORT_LABELS[target]} imported.`);
       await verifyExport(target, gen);
+      if (target === "bundle" || target === "devices") await listPairable(gen);
     } catch (error) {
       if (gen !== generation) return;
       renderResult("error", `Import failed: ${error.message}`);

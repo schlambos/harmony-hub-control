@@ -1,10 +1,11 @@
 /*
- * The network TV and Switch 2 routes that pair, forget or replace devices
+ * The network TV, Switch 2 and pairing routes that pair, forget or replace devices
  * take only a same-origin JSON request (request_same_origin_json), so another
  * web page can't drive them with a form or a text/plain POST. Includes the
  * real source and runs each request through handle_client over a socketpair;
  * nothing touches a hub, and codex_androidtv isn't running, so an accepted
- * request ends at the relay (never 403).
+ * request ends at the relay (never 403); the pairing routes answer 400, as
+ * the body names no device.
  */
 #define main codex_webui_main
 #include "../../payload/source/codex_webui.c"
@@ -46,7 +47,7 @@ int main(void) {
     static const char *const routes[] = {
         "/api/androidtv/pair-start", "/api/androidtv/pair-finish", "/api/androidtv/pair-cancel",
         "/api/androidtv/forget", "/api/androidtv/rename", "/api/androidtv/devices",
-        "/api/switch2/devices",
+        "/api/switch2/devices", "/api/pairing/start", "/api/pairing/finish", "/api/pairing/cancel",
     };
     char name[160];
     size_t i;
