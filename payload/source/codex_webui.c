@@ -4728,6 +4728,8 @@ static void render_activity_state_json(int fd) {
 }
 
 static int engine_reply_code(const char *reply);
+static int engine_reply_code_or(const char *reply, int missing);
+static void write_send_problem(FILE *f, const char *device_id, const char *reply, int bt_failed);
 
 /* netservicestarter.lua answers a start inside the activity's time
  * restrictions with code 568 from its startactivity handler, in place of the
@@ -4774,6 +4776,7 @@ static void render_activity_run_json(int fd, const struct request *req) {
     if (rc == 0 && engine_code != 200) {
         fputs(",\"error\":", f);
         json_write_string(f, engine_error);
+        write_send_problem(f, NULL, reply, 0);
     }
     fputs(",\"activityId\":", f);
     json_write_string(f, activity_id);
@@ -7094,7 +7097,14 @@ static void format_ir_action(char *buf, size_t len, const char *device_id, const
     snprintf(buf, len, "{\\\"type\\\":\\\"IRCommand\\\",\\\"deviceId\\\":\\\"%s\\\",\\\"command\\\":\\\"%s\\\"}", device_id, command);
 }
 
-static void send_ir_command_action_ex(const char *device_id, const char *command, const char *source, const char *run_id, char *out, size_t outlen) {
+/* What a tap came to: SEND_OK once the engine answers 200. */
+#define SEND_OK 0
+#define SEND_REFUSED 1
+#define SEND_BT_FAILED 2
+#define SEND_NOT_SENT 3
+static int send_result_of(const char *reply);
+
+static int send_ir_command_action_ex(const char *device_id, const char *command, const char *source, const char *run_id, char *out, size_t outlen) {
     char hub_id[64];
     char action[512], params[768], esc_id[128], esc_params[1024], cmd[1400];
     char bt_detail[256];
@@ -7102,14 +7112,14 @@ static void send_ir_command_action_ex(const char *device_id, const char *command
     if (!load_hub_id(hub_id, sizeof(hub_id))) {
         snprintf(out, outlen, "Hub ID is missing. Re-run the root tool or reinstall with the numeric Hub ID printed as hub_id=...");
         log_ir_event(source, run_id, device_id, command, out);
-        return;
+        return SEND_NOT_SENT;
     }
     bt_connection = ensure_ir_bluetooth_connection(device_id, bt_detail, sizeof(bt_detail));
     if (bt_connection < 0) {
         snprintf(out, outlen, "%s", bt_detail[0] ? bt_detail :
             "Bluetooth target could not be connected before sending the command.");
         log_ir_event(source, run_id, device_id, command, out);
-        return;
+        return SEND_BT_FAILED;
     }
     if (bt_connection > 0) {
         log_ir_note_event("bt_preconnect", source, run_id, bt_detail);
@@ -7121,6 +7131,7 @@ static void send_ir_command_action_ex(const char *device_id, const char *command
     snprintf(cmd, sizeof(cmd), "/data/codex/bin/codex_hbus '%s' harmony.engine?holdaction '%s' 2>&1", esc_id, esc_params);
     run_cmd(cmd, out, outlen);
     log_ir_event(source, run_id, device_id, command, out && out[0] ? out : "no response");
+    return send_result_of(out);
 }
 
 static void send_ir_command_action(const char *device_id, const char *command, char *out, size_t outlen) {
@@ -7301,6 +7312,64 @@ static int engine_reply_code(const char *reply) {
         p++;
     }
     return 200;
+}
+
+/* Extra members for a reply about a send or start that failed
+ * (docs/API.md "Send failures"), so a client can tell the person what
+ * happened instead of showing the engine's text:
+ *   engineCode    the engine's own code, when it answered;
+ *   needsPairing  {deviceId, kind, reason} when pairing the device with the
+ *                 hub again is the fix.
+ * The engine names the device in data.deviceId; device_id is the fallback.
+ * Every reply keeps its status and its ok, so older clients are unaffected. */
+#define ENGINE_CODE_IP_FORBIDDEN 403
+#define ENGINE_CODE_BT_TIMEOUT 506
+static void write_send_problem(FILE *f, const char *device_id, const char *reply, int bt_failed) {
+    const char *kind = NULL, *reason = NULL, *data;
+    char msg[160], named[64];
+    int code = engine_reply_code_or(reply, -1);
+    if (code >= 0) fprintf(f, ",\"engineCode\":%d", code);
+    msg[0] = 0;
+    if (reply && json_top_string(reply, "msg", msg, sizeof(msg)) != 1) msg[0] = 0;
+    if (bt_failed || code == ENGINE_CODE_BT_TIMEOUT) {
+        /* Melodious's own connect before the send, or the engine's
+         * "Bluetooth connection timeout" (a profile with no saved address). */
+        kind = "bluetooth";
+        reason = "bt-not-connected";
+    } else if (code == ENGINE_CODE_IP_FORBIDDEN && strstr(msg, "Reauthentication")) {
+        /* An IP device registered with a PIN (a Sony TV) no longer knows the
+         * hub: after a hub swap, or a renewal the device refused. */
+        kind = "ip-register";
+        reason = "ip-reauth";
+    }
+    if (!reason) return;
+    named[0] = 0;
+    data = reply ? json_top_member(reply, "data") : NULL;
+    if (data && *data == '{') {
+        /* A data.deviceId that isn't a plain label is ignored: the request's
+         * device, if any, stands. */
+        if (json_top_string(data, "deviceId", named, sizeof(named)) != 1 || !safe_label(named)) named[0] = 0;
+    }
+    if (named[0]) device_id = named;
+    if (!device_id || !safe_label(device_id)) return;
+    fputs(",\"needsPairing\":{\"deviceId\":", f);
+    json_write_string(f, device_id);
+    fprintf(f, ",\"kind\":\"%s\",\"reason\":\"%s\"}", kind, reason);
+}
+
+/* engine_reply_code, but `missing` when the reply has no top-level code or
+ * isn't the engine's at all (codex_hbus's own error text), so a caller can
+ * tell "the engine said 200" from "nobody answered". */
+static int engine_reply_code_or(const char *reply, int missing) {
+    const char *v = reply ? json_top_member(reply, "code") : NULL;
+    if (!v) return missing;
+    if (*v == '"') v++;
+    return isdigit((unsigned char)*v) ? atoi(v) : missing;
+}
+
+/* What a tap's engine answer means: SEND_OK only for code 200. */
+static int send_result_of(const char *reply) {
+    return engine_reply_code_or(reply, -1) == 200 ? SEND_OK : SEND_REFUSED;
 }
 
 static int hold_send_all(int fd, const unsigned char *data, size_t len) {
@@ -7521,7 +7590,7 @@ static void hold_run(const char *hold_id, const char *device_id, const char *com
     long lease_size, size;
     const char *ended = NULL;
     struct hold_rx *rx = calloc(1, sizeof(*rx));
-    int fd, seq = 0, bt;
+    int fd, seq = 0, bt, bt_failed = 0;
     err[0] = 0;
     snprintf(id_prefix, sizeof(id_prefix), "codex-hold-%s", hold_id);
     {
@@ -7540,6 +7609,7 @@ static void hold_run(const char *hold_id, const char *device_id, const char *com
     bt = ensure_ir_bluetooth_connection(device_id, bt_detail, sizeof(bt_detail));
     if (bt < 0) {
         snprintf(err, sizeof(err), "%s", bt_detail[0] ? bt_detail : "Bluetooth target could not be connected.");
+        bt_failed = 1;
         goto fail;
     }
     repair_known_protocols_for_current_commands();
@@ -7636,7 +7706,8 @@ static void hold_run(const char *hold_id, const char *device_id, const char *com
 fail:
     free(rx);
     log_ir_event("api-hold", hold_id, device_id, command, err);
-    if (write(report_fd, "error ", 6) < 0 || write(report_fd, err, strlen(err)) < 0) {}
+    if (write(report_fd, bt_failed ? "bterror " : "error ", bt_failed ? 8 : 6) < 0 ||
+        write(report_fd, err, strlen(err)) < 0) {}
     close(report_fd);
     hold_unlink(hold_id, "lease");
     hold_unlink(hold_id, "release");
@@ -7644,7 +7715,8 @@ fail:
 }
 
 /* Start a hold: returns 0 once the press is out, -2 if a newer press took
- * over first (nothing was sent), else -1 with the reason. */
+ * over first (nothing was sent), -3 if the Bluetooth connect before it
+ * failed, else -1 with the reason. */
 static int hold_start(const char *hold_id, const char *device_id, const char *command, char *out, size_t outlen) {
     char lock_path[160];
     int pipefd[2], fd, lock_fd;
@@ -7735,6 +7807,10 @@ static int hold_start(const char *hold_id, const char *device_id, const char *co
     if (strncmp(out, "gone ", 5) == 0) {
         memmove(out, out + 5, strlen(out + 5) + 1);
         return -2;
+    }
+    if (strncmp(out, "bterror ", 8) == 0) {
+        memmove(out, out + 8, strlen(out + 8) + 1);
+        return -3;
     }
     if (strncmp(out, "error ", 6) == 0) {
         memmove(out, out + 6, strlen(out + 6) + 1);
@@ -10076,6 +10152,7 @@ static void handle_ir_send(int fd, const struct request *req) {
 
 static void render_ir_send_json(int fd, const struct request *req) {
     char device_id[64], command[128], status[16], hold_id[48], reply[4096];
+    int sent;
     FILE *f;
     form_value(req->body, "deviceId", device_id, sizeof(device_id));
     form_value(req->body, "command", command, sizeof(command));
@@ -10104,6 +10181,7 @@ static void render_ir_send_json(int fd, const struct request *req) {
         if (!f) return;
         fputs(rc == 0 ? "{\"ok\":true" : "{\"ok\":false,\"error\":", f);
         if (rc != 0) json_write_string(f, reply);
+        if (rc != 0 && !gone) write_send_problem(f, device_id, reply, rc == -3);
         fputs(",\"status\":", f); json_write_string(f, status);
         fputs(",\"holdId\":", f); json_write_string(f, hold_id);
         fputs("}\n", f);
@@ -10111,11 +10189,15 @@ static void render_ir_send_json(int fd, const struct request *req) {
         return;
     }
     repair_known_protocols_for_current_commands();
-    send_ir_command_action_ex(device_id, command, "api", "", reply, sizeof(reply));
+    sent = send_ir_command_action_ex(device_id, command, "api", "", reply, sizeof(reply));
+    /* Always 200 and ok:true, as the apps expect (docs/API.md): "sent" and
+     * the members write_send_problem adds tell whether it went out. */
     f = send_json_start(fd, "200 OK");
     if (!f) return;
     fputs("{\"ok\":true,\"deviceId\":", f); json_write_string(f, device_id);
     fputs(",\"command\":", f); json_write_string(f, command);
+    fprintf(f, ",\"sent\":%s", sent == SEND_OK ? "true" : "false");
+    if (sent != SEND_OK) write_send_problem(f, device_id, reply, sent == SEND_BT_FAILED);
     fputs(",\"reply\":", f); json_write_string(f, reply[0] ? reply : "no response");
     fputs("}\n", f);
     fclose(f);

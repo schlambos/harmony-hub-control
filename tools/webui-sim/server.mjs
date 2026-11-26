@@ -394,6 +394,17 @@ function handleActivityRun(res, params) {
     });
     return;
   }
+  const failure = simSendFailures.get(`activity:${activityId}`);
+  if (failure && Number.isInteger(failure.engineCode)) {
+    // Like render_activity_run_json: any other engine code is a 502.
+    const reply = simEngineReply("harmony.engine?startactivity", failure, failure.dataDeviceId);
+    logEvent({ kind: "activity-run", activityId, message: `refused: engine code ${failure.engineCode}` });
+    sendJson(res, 502, {
+      ok: false, error: failure.msg || `Harmony activity engine returned code ${failure.engineCode}.`,
+      ...simSendProblem("", reply, false), activityId, reply,
+    });
+    return;
+  }
   const previousActivityId = String(state.currentActivityId);
   state.currentActivityId = activityId;
   logEvent({ kind: "activity-run", activityId });
@@ -562,6 +573,74 @@ function handleDeviceCommands(res, params) {
 
 const holds = new Map();
 
+/* Sim only: sends and starts that fail the way the hub's do (POST
+   /api/sim/send-failure). Key "device:<id>" or "activity:<id>" → { engineCode,
+   msg, btFailed }. */
+const simSendFailures = new Map();
+
+/* The engine's answer for an injected failure, as codex_hbus prints it. */
+function simEngineReply(cmd, failure, deviceId) {
+  return JSON.stringify({
+    cmd, code: failure.engineCode, id: "codex-sim", msg: failure.msg ?? "",
+    ...(deviceId ? { data: { deviceId } } : {}),
+  });
+}
+
+/* codex_webui.c write_send_problem: engineCode, and needsPairing when pairing
+   is the fix. */
+function simSendProblem(deviceId, reply, btFailed) {
+  const out = {};
+  let parsed = null;
+  try { parsed = JSON.parse(reply); } catch (_) {}
+  const code = Number.isInteger(parsed?.code) ? parsed.code : null;
+  if (code !== null) out.engineCode = code;
+  let kind = "", reason = "";
+  if (btFailed || code === 506) [kind, reason] = ["bluetooth", "bt-not-connected"];
+  else if (code === 403 && String(parsed?.msg ?? "").includes("Reauthentication")) [kind, reason] = ["ip-register", "ip-reauth"];
+  const named = typeof parsed?.data?.deviceId === "string" ? parsed.data.deviceId : "";
+  const id = named || deviceId;
+  if (reason && id) out.needsPairing = { deviceId: id, kind, reason };
+  return out;
+}
+
+function handleSimSendFailure(res, params) {
+  const deviceId = String(params.deviceId ?? "");
+  const activityId = String(params.activityId ?? "");
+  const key = deviceId ? `device:${deviceId}` : activityId ? `activity:${activityId}` : "";
+  if (!key) {
+    if (params.clear) {
+      simSendFailures.clear();
+      sendJson(res, 200, { ok: true, failures: [] });
+      return;
+    }
+    sendError(res, 400, "deviceId or activityId is required");
+    return;
+  }
+  const engineCode = Number(params.engineCode);
+  const btFailed = Boolean(params.btFailed);
+  if (params.clear || (!btFailed && !Number.isInteger(engineCode))) simSendFailures.delete(key);
+  else {
+    simSendFailures.set(key, {
+      engineCode: Number.isInteger(engineCode) ? engineCode : null, msg: String(params.msg ?? ""), btFailed,
+      // A start's reply may name the member device that failed (data.deviceId).
+      dataDeviceId: String(params.dataDeviceId ?? ""),
+    });
+  }
+  sendJson(res, 200, { ok: true, failures: [...simSendFailures.keys()] });
+}
+
+/* An injected failure for one send: { reply, btFailed } or null. */
+function simSendFailure(deviceId, holdId) {
+  const failure = simSendFailures.get(`device:${deviceId}`);
+  // The hub counts only the engine's 200 as sent: an injected 200 is a send that works.
+  if (!failure || (!failure.btFailed && failure.engineCode === 200)) return null;
+  if (failure.btFailed) {
+    return { reply: `Could not connect Bluetooth device ${deviceId} at 00:11:22:33:44:55 (native code 500).`, btFailed: true };
+  }
+  const reply = simEngineReply("harmony.engine?holdaction", failure, holdId ? deviceId : "");
+  return { reply: holdId ? reply : `${reply}\n`, btFailed: false };
+}
+
 function handleIrSend(res, params) {
   const deviceId = String(params.deviceId ?? "").trim();
   const command = String(params.command ?? "").trim();
@@ -578,8 +657,14 @@ function handleIrSend(res, params) {
     return;
   }
   if (!status) {
-    logEvent({ kind: "ir", deviceId, command });
-    sendJson(res, 200, { ok: true, deviceId, command, reply: "sim sent" });
+    // Always 200 and ok:true, like the hub; "sent" says whether it went out.
+    const failure = simSendFailure(deviceId, "");
+    logEvent({ kind: "ir", deviceId, command, ...(failure ? { message: failure.reply.trim() } : {}) });
+    if (failure) {
+      sendJson(res, 200, { ok: true, deviceId, command, sent: false, ...simSendProblem(deviceId, failure.reply, failure.btFailed), reply: failure.reply });
+      return;
+    }
+    sendJson(res, 200, { ok: true, deviceId, command, sent: true, reply: JSON.stringify({ cmd: "harmony.engine?holdaction", code: 200, id: "codex-sim", msg: "OK" }) + "\n" });
     return;
   }
   const now = Date.now();
@@ -588,6 +673,12 @@ function handleIrSend(res, params) {
   }
   if (status === "press") {
     holds.clear();
+    const failure = simSendFailure(deviceId, holdId);
+    if (failure) {
+      logEvent({ kind: "ir", deviceId, command, status, holdId, message: failure.reply });
+      sendJson(res, 502, { ok: false, error: failure.reply, ...simSendProblem(deviceId, failure.reply, failure.btFailed), status, holdId });
+      return;
+    }
     holds.set(holdId, { started: now, lease: now });
   } else if (status === "hold") {
     const hold = holds.get(holdId);
@@ -2691,6 +2782,7 @@ async function handleApi(req, res, pathname, url) {
         state.events.length = 0;
         captureArmed = false;
         canceledRuns.clear();
+        simSendFailures.clear();
         sendJson(res, 200, { ok: true, revision: state.revision, currentActivityId: state.currentActivityId });
       } catch (error) {
         sendError(res, 500, `fixture reload failed: ${error.message}`);
@@ -2896,6 +2988,13 @@ async function handleApi(req, res, pathname, url) {
       sendJson(res, 200, { ok: true, slot, code: 200, reply: JSON.stringify({ id: 1, code: 200 }), before, after: simRfInfo() });
       return;
     }
+    case "POST /api/sim/send-failure":
+      // Sim only: {"deviceId"|"activityId", "engineCode", "msg", "btFailed",
+      // "dataDeviceId"} makes that device's sends (or that activity's starts)
+      // fail as the hub's do; {"deviceId", "clear": true} or {"clear": true}
+      // undoes it.
+      handleSimSendFailure(res, params);
+      return;
     case "POST /api/sim/multi-remote":
       // Sim only: {"on": bool} runs that hal; optional "enabled" (the saved setting, e.g. on but
       // not running after a firmware update), "halSupported" and "radioHung" (rf.info hangs).

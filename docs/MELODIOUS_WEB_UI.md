@@ -166,7 +166,15 @@ on Apple, Segoe on Windows. That costs 0 bytes. Sizes follow the app:
   set it like any other key, as the app does (approved 2026-10-21).
 - Phones get a short vibration where the browser supports it; desktops get a
   pressed state.
-- Errors show as a snackbar.
+- Errors show as a snackbar, in plain words: a tap the engine refused shows as
+  failed (the hub's `"sent": false`), and an engine code becomes a sentence,
+  not the engine's JSON ([API: Send failures](API.md#send-failures)).
+- A device whose send fails because it needs pairing with the hub again (a
+  Sony TV that no longer knows the hub, a Bluetooth device that won't connect)
+  gets a banner on the remote (or the "Everything's off" screen, after a start
+  that failed) and on its own page. It stays until the command that failed
+  works again or it is dismissed; another command working proves little, since
+  a Sony TV's IR commands keep working while its IP ones are refused.
 - The web's resolved "device · command" line stays as a quiet status line
   under the mode tabs. On desktop it also shows a preview on hover or focus.
 - Keyboard and screen readers: every key and row is a real button with a

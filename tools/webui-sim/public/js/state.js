@@ -1,4 +1,5 @@
 import * as api from "./api.js";
+import { notePairingProblem } from "./pairing-problems.js";
 import { inputNames } from "./views/device-settings-model.js";
 import { describeHaDeviceState, haDeviceKey } from "./views/remote-model.js";
 
@@ -348,6 +349,8 @@ export async function setRunning(id) {
   } catch (error) {
     if (state.pendingId === target) state.pendingId = "";
     state.runError = error;
+    // A member device that needs pairing gets the remote's banner too.
+    if (error?.data?.needsPairing) notePairingProblem(error.data.needsPairing);
     try {
       await refreshState();
     } catch (_) {}

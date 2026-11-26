@@ -7,10 +7,12 @@
    (key-repeat.js); unmapped keys are dimmed. */
 
 import * as api from "../api.js";
+import { notePairingProblem, noteSendWorked } from "../pairing-problems.js";
 import * as hub from "../state.js";
 import { escapeHtml, icon, snackbar, statusDot, vibrate } from "../ui/shell.js";
 import { MAX_REPEAT_MS, REPEATABLE_KEYS, startRepeat } from "./key-repeat.js";
 import { KEY_LABELS, describeHaDeviceState, describeTheaterLink, isHaCommandRedundant, sendsHome } from "./remote-model.js";
+import { describeSendFailure } from "./send-problem-model.js";
 
 const HOLD_MS = 500;
 const LOG_MAX = 60;
@@ -68,14 +70,22 @@ export async function sendCommand(action, { label, activityId, status, note } = 
     const extra = note ? note() : "";
     status?.(extra ? `${line} · ${extra}` : line, "ok");
     addLog({ target: `${hub.deviceName(action.deviceId)} · ${action.command}`, note: extra || "sent", ok: true });
+    noteSendWorked(action.deviceId, action.command);
     return true;
   } catch (error) {
-    const message = error?.message || "network error";
-    status?.(`${line} · ${message}`, "error");
-    snackbar(`Couldn't send ${action.command} to ${hub.deviceName(action.deviceId)} — ${message}`, { error: true });
-    addLog({ target: `${hub.deviceName(action.deviceId)} · ${action.command}`, note: message, ok: false });
+    reportFailure(action, line, error, status);
     return false;
   }
+}
+
+/* A failed send: the status line, a snackbar, the send log, and the
+   "needs pairing" banner when that's the fix. */
+function reportFailure(action, line, error, status) {
+  const failure = describeSendFailure(error, { deviceName: hub.deviceName(action.deviceId), command: action.command });
+  status?.(`${line} · ${failure.note}`, "error");
+  snackbar(failure.text, { error: true });
+  addLog({ target: `${hub.deviceName(action.deviceId)} · ${action.command}`, note: failure.note, ok: false });
+  if (failure.needsPairing) notePairingProblem(failure.needsPairing, action.command);
 }
 
 /**
@@ -117,16 +127,16 @@ export function repeatCommand(action, { label, activityId, status, note } = {}) 
           status?.(`${line} · ${why}`, "ok");
           return;
         }
-        const message = error?.message || "network error";
-        status?.(`${line} · ${message}`, "error");
-        snackbar(`Couldn't send ${action.command} to ${hub.deviceName(action.deviceId)} — ${message}`, { error: true });
-        addLog({ target, note: message, ok: false });
+        reportFailure(action, line, error, status);
       },
     },
   );
   return () => {
     stop().then(() => {
       if (ended || !sent) return;
+      // Only a hold that ran its course: a refusal can arrive after the
+      // press was answered (the hub waits 150 ms for one).
+      noteSendWorked(action.deviceId, action.command);
       const extra = note ? note() : "";
       status?.(extra ? `${line} · ${extra}` : line, "ok");
     });

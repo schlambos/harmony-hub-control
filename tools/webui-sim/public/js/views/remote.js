@@ -29,6 +29,7 @@ import {
   fixItDevices,
   softButtons,
 } from "./remote-model.js";
+import { PAIRING_BANNER_SLOT, mountPairingBanners } from "./pairing-banner.js";
 import { startFailureText } from "./restrictions-model.js";
 import {
   describe,
@@ -78,6 +79,15 @@ export function createRemoteView(section) {
 
   section.innerHTML = `<div class="remote-root" id="remoteRoot"></div>`;
   const root = section.querySelector("#remoteRoot");
+  // On an activity's remote: its devices. On the "nothing is on" screen, after
+  // a start that failed: any device that needs pairing.
+  let bannerScope = "none";
+  const banners = mountPairingBanners(root, {
+    deviceIds: () => bannerScope === "remote" ? ctx?.devices.map((d) => d.id) ?? []
+      : bannerScope === "off" ? hub.devices().map((d) => d.id) : [],
+    nameOf: hub.deviceName,
+    focusAfter: "#remoteStatus, .off-title",
+  });
 
   /* -- state → screen --------------------------------------------------------- */
 
@@ -110,6 +120,8 @@ export function createRemoteView(section) {
     else if (p.kind === "busy") root.innerHTML = busyMarkup(p.id);
     else if (p.kind === "off") root.innerHTML = offMarkup();
     else renderRemote(p);
+    bannerScope = p.kind === "remote" || p.kind === "off" ? p.kind : "none";
+    banners.update();
   }
 
   function loadingMarkup() {
@@ -158,6 +170,7 @@ export function createRemoteView(section) {
     return `<div class="off">
         <h2 class="off-title">Everything's off</h2>
         <p class="off-sub">What do you want to do?</p>
+        ${PAIRING_BANNER_SLOT}
         ${err}
         <div class="off-list">${cards}</div>
       </div>`;
@@ -198,6 +211,7 @@ export function createRemoteView(section) {
           ${head}
           ${preview}
           <div id="remoteHaStrip">${haStrip}</div>
+          ${PAIRING_BANNER_SLOT}
           <p class="remote-status" id="remoteStatus" role="status" aria-live="polite"></p>
           <div class="seg-tabs" role="tablist" aria-label="Remote mode">
             <button type="button" role="tab" class="seg-tab" data-mode="buttons" aria-selected="${mode === "buttons"}">Buttons</button>
@@ -283,7 +297,7 @@ export function createRemoteView(section) {
     if (err) {
       snackbar(id === "-1"
         ? `Couldn't turn everything off — ${err.message || "hub error"}`
-        : startFailureText(hub.activityName(hub.activityById(id)), err), { error: true });
+        : startFailureText(hub.activityName(hub.activityById(id)), err, hub.deviceName), { error: true });
     }
   }
 

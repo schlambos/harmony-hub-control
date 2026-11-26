@@ -195,8 +195,10 @@ export function importCatalog({ deviceId, commands, protocols }) {
 
 // `status` and `holdId` are for hold-to-repeat only (views/key-repeat.js):
 // "press" | "hold" | "release" for one hold. A plain send leaves them out
-// and the hub presses and releases once.
-export function irSend({ deviceId, command, functionId, activityId, status, holdId }) {
+// and the hub presses and releases once. A tap always answers ok:true; one
+// that didn't go out says "sent": false (docs/API.md "Send failures") and
+// throws here like a failed hold, with the reply in error.data.
+export async function irSend({ deviceId, command, functionId, activityId, status, holdId }) {
   const form = {
     deviceId: String(deviceId),
     command: String(command),
@@ -205,7 +207,11 @@ export function irSend({ deviceId, command, functionId, activityId, status, hold
   if (activityId != null && activityId !== "") form.activityId = String(activityId);
   if (status) form.status = String(status);
   if (holdId) form.holdId = String(holdId);
-  return request("/api/ir-send", { method: "POST", form });
+  const reply = await request("/api/ir-send", { method: "POST", form });
+  if (reply?.sent === false) {
+    throw new ApiError(typeof reply.reply === "string" && reply.reply ? reply.reply : "The command wasn't sent.", 200, reply);
+  }
+  return reply;
 }
 
 // Sim-only debug log (the simulator serves it at /api/sim/events). The path is

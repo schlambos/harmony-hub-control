@@ -64,7 +64,9 @@ Invoke-RestMethod "http://<hub-ip>:8080/api/activity-run" -Method Post -Body @{
 
 `/api/activity-run` takes the form field `activityId`. Use `-1` as the
 activity ID to run `PowerOff`. An invalid ID gives `400`; an engine failure
-gives `502`. A start the hub refuses because of the activity's
+gives `502`, with the engine's code and, when pairing a device again is the
+fix, the device (see [Send failures](#send-failures)). A start the hub
+refuses because of the activity's
 [time restrictions](#activity-time-restrictions) gives `409` with
 `"ok": false, "restricted": true`, an `error` text, and the engine's own
 answer (code `568`) in `reply`.
@@ -616,6 +618,39 @@ and a `holdId` you choose (8 to 40 letters and digits, new for each hold):
 
 The hub runs one hold at a time; a new `press` releases the previous one.
 An invalid device, command, status or `holdId` gives `400`.
+
+### Send failures
+
+A plain send always answers `200` with `"ok": true`, whatever happened,
+because the apps rely on it. `"sent"` says whether the command went out
+(the engine answered with code 200), and `reply` holds the engine's own
+answer:
+
+```json
+{"ok":true,"deviceId":"<device-id>","command":"VolumeUp","sent":false,
+ "engineCode":403,
+ "needsPairing":{"deviceId":"<device-id>","kind":"ip-register","reason":"ip-reauth"},
+ "reply":"{\"cmd\":\"harmony.engine?holdaction\",\"code\":403,...,\"msg\":\"Request Forbidden Reauthentication Required\"}\n"}
+```
+
+A failed hold `press` or `hold` (`502`) and a failed `/api/activity-run`
+(`502`) keep their `error` and add the same two members:
+
+- `engineCode`: the engine's code, when the engine answered. `560` means the
+  engine hasn't loaded its configuration yet; `566` means the device has no
+  such command.
+- `needsPairing`: present when pairing the device with the hub again is the
+  likely fix (for `bt-not-connected`, the device may also just be off or out
+  of range). `deviceId` is the device (for an activity start, the member device the
+  engine names, when it names one). `kind` and `reason` are one of:
+
+| `kind` | `reason` | When |
+| --- | --- | --- |
+| `ip-register` | `ip-reauth` | An IP device registered with a PIN (a Sony TV) answers `403` "Reauthentication Required": the hub was replaced, or the device refused to renew the hub's registration. |
+| `bluetooth` | `bt-not-connected` | The hub couldn't connect to a Bluetooth (`Transport` 32) device before sending, or the engine answered `506` "Bluetooth connection timeout". |
+
+Older hubs send neither member and no `sent`; treat a missing `sent` as
+unknown, not as a failure.
 
 Send a cancellable batch (`render_ir_batch_send_json()`):
 

@@ -175,7 +175,7 @@ export function createActivitiesHomeView(section) {
     location.hash = "#remote";
     await hub.setRunning(id);
     const err = hub.state.runError;
-    if (err) snackbar(startFailureText(hub.activityName(hub.activityById(id)), err), { error: true });
+    if (err) snackbar(startFailureText(hub.activityName(hub.activityById(id)), err, hub.deviceName), { error: true });
   }
 
   async function turnOff() {

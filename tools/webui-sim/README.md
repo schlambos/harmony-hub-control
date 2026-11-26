@@ -86,6 +86,13 @@ Set `PORT=<n>` to change the port (default 8787).
   activity to `-1` (PowerOff), and clears the event log.
 - `POST /api/sim/capture-next` — the next `/api/capture` hears one sample
   NEC frame, so Learn a button can reach its "Got it" step.
+- `POST /api/sim/send-failure` — JSON `{"deviceId", "engineCode", "msg"}`
+  makes that device's sends fail as the hub's do (`403` with
+  "Reauthentication Required" is a TV that needs pairing again);
+  `{"deviceId", "btFailed": true}` fails the Bluetooth connect before the send;
+  `{"activityId", "engineCode", "msg", "dataDeviceId"}` fails that activity's
+  starts. Add `"clear": true` to undo one, or send only it to undo all.
+  `/api/sim/reset` clears them too.
 
 ## Production packaging (flash-safe embed)
 

@@ -1496,6 +1496,46 @@ select option {
   color: var(--on-surface);
 }
 
+/* "Needs pairing" banners on the remote and device pages (pairing-banner.js) */
+.pairing-banners:empty {
+  display: none;
+}
+
+.pairing-banners {
+  display: grid;
+  gap: var(--space-2);
+  margin-bottom: var(--space-3);
+}
+
+.pairing-banner {
+  display: flex;
+  align-items: flex-start;
+  gap: var(--space-3);
+}
+
+.pairing-banner-text {
+  flex: 1;
+  min-width: 0;
+}
+
+.pairing-banner-text p {
+  margin: 0;
+}
+
+.pairing-banner strong {
+  color: inherit;
+}
+
+.pairing-banner .pairing-banner-why {
+  margin-top: var(--space-1);
+  opacity: 0.85;
+}
+
+.pairing-banner .btn {
+  flex: none;
+  color: inherit;
+}
+
 /* Pills */
 .pill {
   display: inline-flex;

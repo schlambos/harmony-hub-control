@@ -28,6 +28,7 @@ import {
 import { resolveSkinPowerAction } from "./control-power.js";
 import { openImportSheet } from "./device-import.js";
 import { createDeviceSettings } from "./device-settings.js";
+import { PAIRING_BANNER_SLOT, mountPairingBanners } from "./pairing-banner.js";
 import { changeNote, hubChange, openCommandSheet, openDeviceSheet, openLearnSheet, storedCommand } from "./device-sheets.js";
 import { createDeviceSweep } from "./device-sweep.js";
 import { createIrLab, labNote } from "./ir-lab.js";
@@ -89,6 +90,11 @@ export function createDevicesView(section) {
     sheets.clear();
   }
 
+  const banners = mountPairingBanners(root, {
+    deviceIds: () => (page === "device" && deviceId ? [deviceId] : []),
+    nameOf: hub.deviceName,
+    focusAfter: "#deviceStatus",
+  });
   const settings = createDeviceSettings({ root, track });
   const sweep = createDeviceSweep({ root });
   const lab = createIrLab({ root });
@@ -335,6 +341,7 @@ export function createDevicesView(section) {
       ? `<div class="remote">
           <div class="remote-main">
             ${haStrip}
+            ${PAIRING_BANNER_SLOT}
             <p class="remote-status" id="deviceStatus" role="status" aria-live="polite"></p>
             ${androidTvLine}
             ${tabs}
@@ -344,6 +351,7 @@ export function createDevicesView(section) {
         </div>`
       : `<div class="page">
           ${haStrip}
+          ${PAIRING_BANNER_SLOT}
           <p class="remote-status" id="deviceStatus" role="status" aria-live="polite"></p>
           ${androidTvLine}
           ${tabs}
@@ -499,6 +507,7 @@ export function createDevicesView(section) {
     }
     if (page === "device") {
       renderDevice();
+      banners.update();
       return;
     }
     // The sweep and the lab draw themselves once the setup is in.
