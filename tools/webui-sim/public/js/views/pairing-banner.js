@@ -11,12 +11,12 @@ import { pairingBannersMarkup } from "./send-problem-model.js";
 
 export const PAIRING_BANNER_SLOT = `<div class="pairing-banners" data-pairing-banners></div>`;
 
-export function mountPairingBanners(root, { deviceIds, nameOf, focusAfter = "" }) {
+export function mountPairingBanners(root, { deviceIds, nameOf, focusAfter = "", canPair = () => false, onPair = null }) {
   let shown = null;
   function update() {
     const slot = root.querySelector("[data-pairing-banners]");
     if (!slot) return;
-    const html = pairingBannersMarkup(pairingProblemsFor(deviceIds() ?? []), nameOf);
+    const html = pairingBannersMarkup(pairingProblemsFor(deviceIds() ?? []), nameOf, onPair ? canPair : () => false);
     // A fresh slot (the page re-rendered) is empty; an unchanged list is
     // left alone, so a focused Dismiss button keeps its focus.
     if (slot.dataset.shown === "1" && html === shown) return;
@@ -25,6 +25,11 @@ export function mountPairingBanners(root, { deviceIds, nameOf, focusAfter = "" }
     shown = html;
   }
   root.addEventListener("click", (event) => {
+    const pairButton = event.target?.closest?.("[data-pairing-pair]");
+    if (pairButton && root.contains(pairButton)) {
+      onPair?.(pairButton.dataset.pairingPair, pairButton);
+      return;
+    }
     const button = event.target?.closest?.("[data-pairing-dismiss]");
     if (!button || !root.contains(button)) return;
     clearPairingProblem(button.dataset.pairingDismiss);

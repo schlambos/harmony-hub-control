@@ -214,6 +214,12 @@ export async function irSend({ deviceId, command, functionId, activityId, status
   return reply;
 }
 
+// Which devices pair with something, and what the hub's files say about each
+// (codex_webui.c render_pairing_json; no network probe, cheap to ask).
+export function getPairing() {
+  return request("/api/pairing");
+}
+
 // Sim-only debug log (the simulator serves it at /api/sim/events). The path is
 // assembled at runtime so no routable /sim/ URL survives into the production
 // bundle; the production shell never calls this (gated on HARMONY_SIM).

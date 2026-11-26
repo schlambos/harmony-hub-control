@@ -22,6 +22,7 @@ import {
 import { LIMITS, isSafeLabel } from "./public/js/views/ir-model.js";
 import { MAX_ACTIVITIES, isRestrictableId, normalizeWindows, restrictedAt } from "./public/js/views/restrictions-model.js";
 import { validateStatic } from "./public/js/views/ethernet-model.js";
+import { pairingKindOf } from "./public/js/views/pairing-model.js";
 import { MAX_SLOTS, parseProfile, slotCommand, slotOf } from "./public/js/views/androidtv-inputs-model.js";
 import {
   buildSwitch2WakePayload,
@@ -399,9 +400,11 @@ function handleActivityRun(res, params) {
     // Like render_activity_run_json: any other engine code is a 502.
     const reply = simEngineReply("harmony.engine?startactivity", failure, failure.dataDeviceId);
     logEvent({ kind: "activity-run", activityId, message: `refused: engine code ${failure.engineCode}` });
+    const problem = simSendProblem("", reply, false);
+    simMarkProblem(problem, "");
     sendJson(res, 502, {
       ok: false, error: failure.msg || `Harmony activity engine returned code ${failure.engineCode}.`,
-      ...simSendProblem("", reply, false), activityId, reply,
+      ...problem, activityId, reply,
     });
     return;
   }
@@ -629,6 +632,41 @@ function handleSimSendFailure(res, params) {
   sendJson(res, 200, { ok: true, failures: [...simSendFailures.keys()] });
 }
 
+/* GET /api/pairing (codex_webui.c render_pairing_json): markers a failed send
+   leaves (deviceId → { reason, command }), and the Sony-style registrations
+   the engine would hold (POST /api/sim/pairing). */
+const simPairingMarkers = new Map();
+const simCookies = new Set();
+
+function simMarkProblem(problem, command) {
+  // The hub keeps markers only for device ids that are digits.
+  if (problem?.needsPairing && /^\d{1,32}$/.test(problem.needsPairing.deviceId)) simPairingMarkers.set(problem.needsPairing.deviceId, { reason: problem.needsPairing.reason, command: command ?? "" });
+}
+
+/* A send worked: the marker goes when it was the command that failed. */
+function simSendWorked(deviceId, command) {
+  const marker = simPairingMarkers.get(deviceId);
+  if (marker && (!marker.command || marker.command === command)) simPairingMarkers.delete(deviceId);
+}
+
+function handlePairing(res) {
+  const out = [];
+  for (const entry of state.deviceList.DevicesWithFeatures ?? []) {
+    const id = String(entry?.Device?.["Id-"] ?? "");
+    const kind = pairingKindOf(entry);
+    if (!id || !kind) continue;
+    let deviceState = "unknown";
+    if (kind === "ip-register") deviceState = simCookies.has(id) ? "paired" : "not-paired";
+    else if (kind === "bluetooth") {
+      const addr = String(entry.Device.BTAddress ?? "");
+      if (!addr || addr === "00:00:00:00:00:00") deviceState = "not-paired";
+    }
+    const marker = simPairingMarkers.get(id);
+    out.push({ deviceId: id, kind, state: marker ? "needs-attention" : deviceState, ...(marker ? { reason: marker.reason } : {}) });
+  }
+  sendJson(res, 200, { ok: true, devices: out });
+}
+
 /* An injected failure for one send: { reply, btFailed } or null. */
 function simSendFailure(deviceId, holdId) {
   const failure = simSendFailures.get(`device:${deviceId}`);
@@ -661,9 +699,12 @@ function handleIrSend(res, params) {
     const failure = simSendFailure(deviceId, "");
     logEvent({ kind: "ir", deviceId, command, ...(failure ? { message: failure.reply.trim() } : {}) });
     if (failure) {
-      sendJson(res, 200, { ok: true, deviceId, command, sent: false, ...simSendProblem(deviceId, failure.reply, failure.btFailed), reply: failure.reply });
+      const problem = simSendProblem(deviceId, failure.reply, failure.btFailed);
+      simMarkProblem(problem, command);
+      sendJson(res, 200, { ok: true, deviceId, command, sent: false, ...problem, reply: failure.reply });
       return;
     }
+    simSendWorked(deviceId, command);
     sendJson(res, 200, { ok: true, deviceId, command, sent: true, reply: JSON.stringify({ cmd: "harmony.engine?holdaction", code: 200, id: "codex-sim", msg: "OK" }) + "\n" });
     return;
   }
@@ -676,10 +717,12 @@ function handleIrSend(res, params) {
     const failure = simSendFailure(deviceId, holdId);
     if (failure) {
       logEvent({ kind: "ir", deviceId, command, status, holdId, message: failure.reply });
-      sendJson(res, 502, { ok: false, error: failure.reply, ...simSendProblem(deviceId, failure.reply, failure.btFailed), status, holdId });
+      const problem = simSendProblem(deviceId, failure.reply, failure.btFailed);
+      simMarkProblem(problem, command);
+      sendJson(res, 502, { ok: false, error: failure.reply, ...problem, status, holdId });
       return;
     }
-    holds.set(holdId, { started: now, lease: now });
+    holds.set(holdId, { started: now, lease: now, deviceId, command });
   } else if (status === "hold") {
     const hold = holds.get(holdId);
     if (!hold) {
@@ -688,6 +731,9 @@ function handleIrSend(res, params) {
     }
     hold.lease = now;
   } else {
+    // A hold that ran its course clears a marker, like the hub's holder.
+    const hold = holds.get(holdId);
+    if (hold) simSendWorked(hold.deviceId, hold.command);
     holds.delete(holdId);
   }
   logEvent({ kind: "ir", deviceId, command, status, holdId });
@@ -2783,6 +2829,8 @@ async function handleApi(req, res, pathname, url) {
         captureArmed = false;
         canceledRuns.clear();
         simSendFailures.clear();
+        simPairingMarkers.clear();
+        simCookies.clear();
         sendJson(res, 200, { ok: true, revision: state.revision, currentActivityId: state.currentActivityId });
       } catch (error) {
         sendError(res, 500, `fixture reload failed: ${error.message}`);
@@ -2988,6 +3036,22 @@ async function handleApi(req, res, pathname, url) {
       sendJson(res, 200, { ok: true, slot, code: 200, reply: JSON.stringify({ id: 1, code: 200 }), before, after: simRfInfo() });
       return;
     }
+    case "GET /api/pairing":
+      handlePairing(res);
+      return;
+    case "POST /api/sim/pairing":
+      // Sim only: {"deviceId", "cookie": bool} — whether the engine holds a
+      // registration for that IP device (a Sony TV); {"clear": true} drops
+      // every registration and failure marker.
+      if (params.clear) {
+        simCookies.clear();
+        simPairingMarkers.clear();
+      } else if (params.deviceId) {
+        if (params.cookie) simCookies.add(String(params.deviceId));
+        else simCookies.delete(String(params.deviceId));
+      }
+      sendJson(res, 200, { ok: true, cookies: [...simCookies] });
+      return;
     case "POST /api/sim/send-failure":
       // Sim only: {"deviceId"|"activityId", "engineCode", "msg", "btFailed",
       // "dataDeviceId"} makes that device's sends (or that activity's starts)

@@ -149,7 +149,7 @@ function fakeRoot() {
     contains: () => true,
     click(deviceId) {
       const button = { dataset: { pairingDismiss: deviceId } };
-      for (const fn of listeners) fn({ target: { closest: () => button } });
+      for (const fn of listeners) fn({ target: { closest: (sel) => (sel === "[data-pairing-dismiss]" ? button : null) } });
     },
   };
 }

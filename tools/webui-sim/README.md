@@ -93,6 +93,10 @@ Set `PORT=<n>` to change the port (default 8787).
   `{"activityId", "engineCode", "msg", "dataDeviceId"}` fails that activity's
   starts. Add `"clear": true` to undo one, or send only it to undo all.
   `/api/sim/reset` clears them too.
+- `POST /api/sim/pairing` — `{"deviceId", "cookie": true}` makes
+  `GET /api/pairing` report that IP device (a Sony TV) as registered with the
+  hub; `"cookie": false` undoes it; `{"clear": true}` drops every registration
+  and failure marker.
 
 ## Production packaging (flash-safe embed)
 

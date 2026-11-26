@@ -66,6 +66,7 @@ hwreg-offline|PYTHONPATH=tools/hw-regression python3 -m unittest discover -s too
 catalog-callback|PYTHONPATH=. python3 tools/catalog/test_callback.py
 hal-remotes|python3 -m unittest discover -s tools/hal_remotes
 send-problem|cc -std=gnu99 -O1 -w -I payload/source -o $LOGS/test_send_problem tools/send-problem-test/test_send_problem.c && $LOGS/test_send_problem
+pairing-status|sh tools/pairing-status-test/run.sh
 usb-eth-logic|cc -Wall -Wextra -Wno-deprecated-declarations -o $LOGS/test_usbeth_logic tools/usb-eth-test/test_usbeth_logic.c && $LOGS/test_usbeth_logic
 usb-eth-service|PYTHONPATH=tools/usb-eth-test python3 -m unittest test_service.ServiceTests
 usb-eth-cable|PYTHONPATH=tools/usb-eth-test python3 -m unittest test_service.CableTests

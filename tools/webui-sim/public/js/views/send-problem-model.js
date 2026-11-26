@@ -97,8 +97,9 @@ export function startProblemText(error, nameOf = () => "") {
 
 /* The persistent banners for the devices that need pairing ({deviceId,
    reason} each). Each says what's wrong and stays until the device works
-   again or the person dismisses it. */
-export function pairingBannersMarkup(problems, nameOf = () => "") {
+   again or the person dismisses it. canPair(deviceId) adds "Pair now" for a
+   device the pairing sheet can pair. */
+export function pairingBannersMarkup(problems, nameOf = () => "", canPair = () => false) {
   return (problems ?? [])
     .map((p) => {
       const name = nameOf(p.deviceId) || "A device";
@@ -106,7 +107,10 @@ export function pairingBannersMarkup(problems, nameOf = () => "") {
       const rest = words.text.startsWith(name) ? words.text.slice(name.length) : ` ${words.text}`;
       return `<div class="notice notice-warn pairing-banner" data-pairing-device="${escapeHtml(p.deviceId)}">
           <div class="pairing-banner-text"><p><strong>${escapeHtml(name)}</strong>${escapeHtml(rest)}</p>${words.why ? `<p class="pairing-banner-why">${escapeHtml(words.why)}</p>` : ""}</div>
-          <button type="button" class="btn btn-text" data-pairing-dismiss="${escapeHtml(p.deviceId)}" aria-label="Dismiss the notice about ${escapeHtml(name)}">Dismiss</button>
+          <div class="pairing-banner-actions">
+            ${canPair(p.deviceId) ? `<button type="button" class="btn btn-tonal" data-pairing-pair="${escapeHtml(p.deviceId)}" aria-haspopup="dialog">Pair now</button>` : ""}
+            <button type="button" class="btn btn-text" data-pairing-dismiss="${escapeHtml(p.deviceId)}" aria-label="Dismiss the notice about ${escapeHtml(name)}">Dismiss</button>
+          </div>
         </div>`;
     })
     .join("");

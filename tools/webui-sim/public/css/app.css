@@ -1531,9 +1531,21 @@ select option {
   opacity: 0.85;
 }
 
-.pairing-banner .btn {
+.pairing-banner-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-2);
   flex: none;
+}
+
+.pairing-banner .btn-text {
   color: inherit;
+}
+
+/* Pairing status on a device's page (devices.js showPairingStatus) */
+.pairing-status strong {
+  color: var(--on-surface);
+  font-weight: 600;
 }
 
 /* Pills */

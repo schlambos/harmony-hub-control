@@ -175,6 +175,12 @@ on Apple, Segoe on Windows. That costs 0 bytes. Sizes follow the app:
   that failed) and on its own page. It stays until the command that failed
   works again or it is dismissed; another command working proves little, since
   a Sony TV's IR commands keep working while its IP ones are refused.
+- A device that pairs with the hub shows how it stands on its own page: a
+  network TV's line has **Pair again…** (the same TV keeps its id, so its
+  activities keep working; a different or reset TV is refused and nothing
+  changes), an LG webOS TV keeps **Pair / Edit**, and a Sony TV or a Bluetooth
+  device says whether the hub's files show it paired. The banner's **Pair now**
+  opens the same sheet for the kinds the web app can pair.
 - The web's resolved "device · command" line stays as a quiet status line
   under the mode tabs. On desktop it also shows a preview on hover or focus.
 - Keyboard and screen readers: every key and row is a real button with a

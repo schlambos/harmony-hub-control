@@ -70,7 +70,9 @@
 #ifndef WEBUI_AUTH_CONFIG /* tools/bt_harmony_webui_harness.c points it elsewhere */
 #define WEBUI_AUTH_CONFIG "/data/codex/webui_auth.conf"
 #endif
+#ifndef DEVICE_LIST /* tools/pairing-status-test points it at a fixture */
 #define DEVICE_LIST "/data/resources/DeviceList.json"
+#endif
 #define FUNCTION_LIST "/data/resources/FunctionList.json"
 #define PROTOCOL_LIST "/data/resources/ProtocolList.json"
 #define ACTIVITY_LIST "/data/resources/ActivityList.json"
@@ -4729,7 +4731,9 @@ static void render_activity_state_json(int fd) {
 
 static int engine_reply_code(const char *reply);
 static int engine_reply_code_or(const char *reply, int missing);
-static void write_send_problem(FILE *f, const char *device_id, const char *reply, int bt_failed);
+static void write_send_problem(FILE *f, const char *device_id, const char *command, const char *reply, int bt_failed);
+static void pairing_marker_set(const char *device_id, const char *reason, const char *command);
+static void pairing_marker_clear(const char *device_id, const char *command);
 
 /* netservicestarter.lua answers a start inside the activity's time
  * restrictions with code 568 from its startactivity handler, in place of the
@@ -4776,7 +4780,7 @@ static void render_activity_run_json(int fd, const struct request *req) {
     if (rc == 0 && engine_code != 200) {
         fputs(",\"error\":", f);
         json_write_string(f, engine_error);
-        write_send_problem(f, NULL, reply, 0);
+        write_send_problem(f, NULL, NULL, reply, 0);
     }
     fputs(",\"activityId\":", f);
     json_write_string(f, activity_id);
@@ -7321,10 +7325,12 @@ static int engine_reply_code(const char *reply) {
  *   needsPairing  {deviceId, kind, reason} when pairing the device with the
  *                 hub again is the fix.
  * The engine names the device in data.deviceId; device_id is the fallback.
+ * It also leaves the device's pairing marker (GET /api/pairing); command is
+ * the one that failed, NULL for an activity start.
  * Every reply keeps its status and its ok, so older clients are unaffected. */
 #define ENGINE_CODE_IP_FORBIDDEN 403
 #define ENGINE_CODE_BT_TIMEOUT 506
-static void write_send_problem(FILE *f, const char *device_id, const char *reply, int bt_failed) {
+static void write_send_problem(FILE *f, const char *device_id, const char *command, const char *reply, int bt_failed) {
     const char *kind = NULL, *reason = NULL, *data;
     char msg[160], named[64];
     int code = engine_reply_code_or(reply, -1);
@@ -7352,6 +7358,7 @@ static void write_send_problem(FILE *f, const char *device_id, const char *reply
     }
     if (named[0]) device_id = named;
     if (!device_id || !safe_label(device_id)) return;
+    pairing_marker_set(device_id, reason, command);
     fputs(",\"needsPairing\":{\"deviceId\":", f);
     json_write_string(f, device_id);
     fprintf(f, ",\"kind\":\"%s\",\"reason\":\"%s\"}", kind, reason);
@@ -7370,6 +7377,228 @@ static int engine_reply_code_or(const char *reply, int missing) {
 /* What a tap's engine answer means: SEND_OK only for code 200. */
 static int send_result_of(const char *reply) {
     return engine_reply_code_or(reply, -1) == 200 ? SEND_OK : SEND_REFUSED;
+}
+
+/* -- Pairing status (GET /api/pairing, docs/API.md "Pairing status") ---------
+ * Files only: no network probe, so a page may ask often. A failed send that
+ * write_send_problem reports as needsPairing leaves a marker
+ * <PAIRING_MARKER_DIR>/<deviceId> holding the reason; the next send that
+ * works removes it. One file per device, so forked requests never race on a
+ * shared file. The markers live in RAM and see only this web app's sends:
+ * the paired remote's presses never pass through codex_webui. */
+#ifndef PAIRING_MARKER_DIR
+#define PAIRING_MARKER_DIR "/var/volatile/codex-pairing"
+#endif
+#ifndef ENGINE_COOKIES /* the engine's saved IP-device registrations */
+#define ENGINE_COOKIES "/data/luaworks/harmonyengine/cookies"
+#endif
+
+static int pairing_marker_path(char *path, size_t len, const char *device_id) {
+    const char *c;
+    if (!device_id || !device_id[0] || strlen(device_id) > 32) return 0;
+    for (c = device_id; *c; c++) if (!isdigit((unsigned char)*c)) return 0;
+    snprintf(path, len, "%s/%s", PAIRING_MARKER_DIR, device_id);
+    return 1;
+}
+
+/* A marker holds "<reason>\n<command>": the command that failed, or none
+ * when an activity start reported the device. */
+static void pairing_marker_set(const char *device_id, const char *reason, const char *command) {
+    char path[160], tmp[192];
+    FILE *f;
+    if (!pairing_marker_path(path, sizeof(path), device_id)) return;
+    mkdir(PAIRING_MARKER_DIR, 0700);
+    /* Written aside and renamed, so a reader never sees half a marker. */
+    snprintf(tmp, sizeof(tmp), "%s.%ld", path, (long)getpid());
+    f = fopen(tmp, "w");
+    if (!f) return;
+    fprintf(f, "%s\n%s", reason, command && safe_label(command) ? command : "");
+    if (fclose(f) != 0 || rename(tmp, path) != 0) unlink(tmp);
+}
+
+/* The reason a marker holds ("" when it holds none this code wrote), and the
+ * command that failed; 0 when the device has no marker. */
+static int pairing_marker_read_ex(const char *device_id, char *reason, size_t len, char *command, size_t command_len) {
+    char path[160], text[192], *nl;
+    FILE *f;
+    size_t got;
+    reason[0] = 0;
+    if (command_len) command[0] = 0;
+    if (!pairing_marker_path(path, sizeof(path), device_id)) return 0;
+    f = fopen(path, "r");
+    if (!f) return 0;
+    got = fread(text, 1, sizeof(text) - 1, f);
+    fclose(f);
+    text[got] = 0;
+    nl = strchr(text, '\n');
+    if (nl) {
+        *nl = 0;
+        if (command_len) snprintf(command, command_len, "%s", nl + 1);
+    }
+    /* Only the reasons write_send_problem writes. */
+    if (strcmp(text, "ip-reauth") == 0 || strcmp(text, "bt-not-connected") == 0) snprintf(reason, len, "%s", text);
+    return 1;
+}
+
+static int pairing_marker_read(const char *device_id, char *reason, size_t len) {
+    return pairing_marker_read_ex(device_id, reason, len, NULL, 0);
+}
+
+/* A send worked: the marker goes when it was the command that failed, or
+ * when the marker names none. Another command working proves little: a Sony
+ * TV's IR commands keep working while its IP ones are refused. */
+static void pairing_marker_clear(const char *device_id, const char *command) {
+    char path[160], reason[32], failed[128];
+    if (!pairing_marker_read_ex(device_id, reason, sizeof(reason), failed, sizeof(failed))) return;
+    if (failed[0] && (!command || strcmp(failed, command) != 0)) return;
+    if (pairing_marker_path(path, sizeof(path), device_id)) unlink(path);
+}
+
+/* Whether the engine holds a registration cookie for device_id: cookies is
+ * {"cookie":{"<deviceId>":{"{cookie}":"auth=…","{renewpin}":"…"}}}. Only
+ * presence is ever reported; the cookie and the PIN are credentials. */
+static int engine_cookie_present(const char *cookies, const char *device_id) {
+    const char *obj, *obj_end, *p;
+    char needle[48];
+    size_t nlen;
+    if (!cookies || !device_id || !device_id[0]) return 0;
+    obj = json_top_member(cookies, "cookie");
+    if (!obj || *obj != '{') return 0;
+    obj_end = find_matching_json(obj, '{', '}');
+    if (!obj_end) return 0;
+    snprintf(needle, sizeof(needle), "\"%s\"", device_id);
+    nlen = strlen(needle);
+    for (p = obj; (p = strstr(p, needle)) != NULL && p < obj_end; p += nlen) {
+        const char *v = p + nlen, *v_end;
+        char cookie[16];
+        while (isspace((unsigned char)*v)) v++;
+        if (*v != ':') continue; /* a value, not this device's key */
+        v++;
+        while (isspace((unsigned char)*v)) v++;
+        if (*v != '{') return 0;
+        v_end = find_matching_json(v, '{', '}');
+        if (!v_end) return 0;
+        return json_string_range(v, v_end, "{cookie}", cookie, sizeof(cookie));
+    }
+    return 0;
+}
+
+/* Device.Transport as a bitmask, read like the web app's: missing is IR (1);
+ * anything but a plain positive whole number (text, a fraction) has no bits. */
+static long transport_bits_range(const char *dev_obj, const char *dev_end) {
+    const char *p = find_key_range(dev_obj, dev_end, "Transport");
+    char *end;
+    long v;
+    if (!p) return 1;
+    p = strchr(p + strlen("\"Transport\""), ':');
+    if (!p || p >= dev_end) return 1;
+    p++;
+    while (p < dev_end && isspace((unsigned char)*p)) p++;
+    if (strncmp(p, "null", 4) == 0) return 1;
+    if (!isdigit((unsigned char)*p)) return 0;
+    v = strtol(p, &end, 10);
+    while (end < dev_end && isspace((unsigned char)*end)) end++;
+    return (*end == ',' || *end == '}') && v > 0 ? v : 0;
+}
+
+/* One device's pairing kind and state from DeviceList and the files above;
+ * kind NULL when the device pairs with nothing (IR, Home Assistant, Switch 2). */
+static const char *pairing_kind_state(const char *dev_obj, const char *dev_end, const char *device_id,
+        const char *cookies, const char **state, char *reason, size_t reason_len) {
+    char auto_id[96], bt_address[32];
+    const char *kind = NULL, *auto_obj, *reg;
+    long transport;
+    int marker;
+    auto_id[0] = 0;
+    auto_obj = find_key_range(dev_obj, dev_end, "AutoDetectedDevice");
+    if (auto_obj) {
+        auto_obj = strchr(auto_obj + strlen("\"AutoDetectedDevice\""), ':');
+        if (auto_obj) {
+            auto_obj++;
+            while (auto_obj < dev_end && isspace((unsigned char)*auto_obj)) auto_obj++;
+        }
+        if (auto_obj && auto_obj < dev_end && *auto_obj == '{') {
+            const char *auto_end = find_matching_json(auto_obj, '{', '}');
+            if (auto_end && auto_end <= dev_end) json_string_range(auto_obj, auto_end, "Id", auto_id, sizeof(auto_id));
+        }
+    }
+    transport = transport_bits_range(dev_obj, dev_end);
+    *state = "unknown";
+    marker = pairing_marker_read(device_id, reason, reason_len) && reason[0];
+    if (strncmp(auto_id, "melodious-androidtv-", 20) == 0) kind = "androidtv";
+    else if (strncmp(auto_id, "melodious-webos-", 16) == 0) kind = "webos";
+    else if (strncmp(auto_id, "melodious-bt-", 13) == 0) kind = "bt-keyboard";
+    else if (strncmp(auto_id, "melodious-", 10) == 0) return NULL;
+    else {
+        /* A registration template is an object; null (a Roku) or anything
+         * else isn't one, and such a device may still be Bluetooth. Same
+         * rule as the web app's pairingKindOf. */
+        int has_register = 0;
+        if (transport > 0 && (transport & 64)) {
+            reg = find_key_range(dev_obj, dev_end, "RegisterSection");
+            if (reg) {
+                reg = strchr(reg + strlen("\"RegisterSection\""), ':');
+                if (reg) {
+                    reg++;
+                    while (reg < dev_end && isspace((unsigned char)*reg)) reg++;
+                }
+            }
+            has_register = reg && reg < dev_end && *reg == '{';
+        }
+        if (has_register) {
+            kind = "ip-register";
+            *state = engine_cookie_present(cookies, device_id) ? "paired" : "not-paired";
+        } else if (transport > 0 && (transport & 32)) {
+            kind = "bluetooth";
+            /* An address in DeviceList says the device was paired with some
+             * hub, maybe the one this replaced: only a missing one is certain. */
+            if (!json_string_range(dev_obj, dev_end, "BTAddress", bt_address, sizeof(bt_address)) ||
+                strcmp(bt_address, "00:00:00:00:00:00") == 0) *state = "not-paired";
+        } else {
+            return NULL;
+        }
+    }
+    if (marker) *state = "needs-attention";
+    else reason[0] = 0;
+    return kind;
+}
+
+static void render_pairing_json(int fd) {
+    char *raw, *cookies;
+    const char *p;
+    FILE *f;
+    int first = 1;
+    raw = read_file_alloc(DEVICE_LIST, MAX_RESOURCE_FILE, NULL);
+    cookies = read_file_alloc(ENGINE_COOKIES, 65536, NULL);
+    f = send_json_start(fd, "200 OK");
+    if (!f) {
+        free(raw);
+        free(cookies);
+        return;
+    }
+    fputs("{\"ok\":true,\"devices\":[", f);
+    for (p = raw; p && (p = strstr(p, "\"Device\":{")) != NULL;) {
+        const char *dev_obj = strchr(p, '{');
+        const char *dev_end = dev_obj ? find_matching_json(dev_obj, '{', '}') : NULL;
+        const char *kind, *state;
+        char device_id[24], reason[32];
+        long id;
+        if (!dev_obj || !dev_end) break;
+        id = json_long_range(dev_obj, dev_end, "Id-", 0);
+        p = dev_end + 1;
+        if (id <= 0) continue;
+        snprintf(device_id, sizeof(device_id), "%ld", id);
+        kind = pairing_kind_state(dev_obj, dev_end, device_id, cookies, &state, reason, sizeof(reason));
+        if (!kind) continue;
+        fprintf(f, "%s{\"deviceId\":\"%s\",\"kind\":\"%s\",\"state\":\"%s\"", first ? "" : ",", device_id, kind, state);
+        if (reason[0]) fprintf(f, ",\"reason\":\"%s\"", reason);
+        fputs("}", f);
+        first = 0;
+    }
+    fputs("]}\n", f);
+    fclose(f);
+    free(raw);
+    free(cookies);
 }
 
 static int hold_send_all(int fd, const unsigned char *data, size_t len) {
@@ -7697,6 +7926,9 @@ static void hold_run(const char *hold_id, const char *device_id, const char *com
     close(fd);
     free(rx);
     log_ir_event("api-hold", hold_id, device_id, command, err[0] ? err : "release");
+    /* Only a hold that ran its course clears a marker: a refusal can come
+     * after the press was answered. */
+    if (!err[0]) pairing_marker_clear(device_id, command);
     if (err[0]) hold_write_file(hold_id, "error", err);
     else if (ended) hold_write_file(hold_id, "ended", ended);
     hold_unlink(hold_id, "lease");
@@ -10181,7 +10413,7 @@ static void render_ir_send_json(int fd, const struct request *req) {
         if (!f) return;
         fputs(rc == 0 ? "{\"ok\":true" : "{\"ok\":false,\"error\":", f);
         if (rc != 0) json_write_string(f, reply);
-        if (rc != 0 && !gone) write_send_problem(f, device_id, reply, rc == -3);
+        if (rc != 0 && !gone) write_send_problem(f, device_id, command, reply, rc == -3);
         fputs(",\"status\":", f); json_write_string(f, status);
         fputs(",\"holdId\":", f); json_write_string(f, hold_id);
         fputs("}\n", f);
@@ -10197,7 +10429,8 @@ static void render_ir_send_json(int fd, const struct request *req) {
     fputs("{\"ok\":true,\"deviceId\":", f); json_write_string(f, device_id);
     fputs(",\"command\":", f); json_write_string(f, command);
     fprintf(f, ",\"sent\":%s", sent == SEND_OK ? "true" : "false");
-    if (sent != SEND_OK) write_send_problem(f, device_id, reply, sent == SEND_BT_FAILED);
+    if (sent == SEND_OK) pairing_marker_clear(device_id, command);
+    if (sent != SEND_OK) write_send_problem(f, device_id, command, reply, sent == SEND_BT_FAILED);
     fputs(",\"reply\":", f); json_write_string(f, reply[0] ? reply : "no response");
     fputs("}\n", f);
     fclose(f);
@@ -15031,6 +15264,8 @@ static void handle_client(int client) {
         send_embedded_asset(client, activity_ui_js, activity_ui_js_len, "application/javascript; charset=utf-8");
     } else if (strcmp(req.method, "GET") == 0 && strcmp(req.path, "/api/activity-config") == 0) {
         render_activity_config_json(client);
+    } else if (strcmp(req.method, "GET") == 0 && strcmp(req.path, "/api/pairing") == 0) {
+        render_pairing_json(client);
     } else if (strcmp(req.method, "GET") == 0 && strcmp(req.path, "/api/activity-state") == 0) {
         render_activity_state_json(client);
     } else if (strcmp(req.method, "POST") == 0 && strcmp(req.path, "/api/activity-run") == 0) {

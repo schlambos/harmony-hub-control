@@ -9,7 +9,8 @@
    command's ⋮ edits or deletes it. The remote sends straight to the device,
    outside any activity. */
 
-import { forgetTv, forgetWebOsTv, getAndroidTvStatus, getConfig, getWebOsStatus, postApiForm, postHubForm, refreshWebOsTv, saveActivity, saveAndroidTvDevices, saveDeviceScreen, saveSwitch2Devices, saveWebOsDevices } from "../api.js";
+import { forgetTv, forgetWebOsTv, getAndroidTvStatus, getConfig, getPairing, getWebOsStatus, postApiForm, postHubForm, refreshWebOsTv, saveActivity, saveAndroidTvDevices, saveDeviceScreen, saveSwitch2Devices, saveWebOsDevices } from "../api.js";
+import { onPairingProblems, pairingProblemsFor } from "../pairing-problems.js";
 import * as hub from "../state.js";
 import {
   confirmDialog,
@@ -29,6 +30,8 @@ import { resolveSkinPowerAction } from "./control-power.js";
 import { openImportSheet } from "./device-import.js";
 import { createDeviceSettings } from "./device-settings.js";
 import { PAIRING_BANNER_SLOT, mountPairingBanners } from "./pairing-banner.js";
+import { PAIRING_KINDS, pairingFiles, pairingKindOf, pairingStateLabel, pairingStatus } from "./pairing-model.js";
+import { openPairingSheet } from "./pairing-sheet.js";
 import { changeNote, hubChange, openCommandSheet, openDeviceSheet, openLearnSheet, storedCommand } from "./device-sheets.js";
 import { createDeviceSweep } from "./device-sweep.js";
 import { createIrLab, labNote } from "./ir-lab.js";
@@ -94,6 +97,16 @@ export function createDevicesView(section) {
     deviceIds: () => (page === "device" && deviceId ? [deviceId] : []),
     nameOf: hub.deviceName,
     focusAfter: "#deviceStatus",
+    canPair: (id) => Boolean(PAIRING_KINDS[pairingKindOf(hub.deviceById(id)?.entry)]?.canPair),
+    onPair: (id) => {
+      const d = hub.deviceById(id);
+      if (d) track(openPairingSheet({ device: d }), "[data-pairing-pair]");
+    },
+  });
+  // The status line follows this tab's failed sends, like the banner does.
+  onPairingProblems(() => {
+    const kind = page === "device" && device ? pairingKindOf(device.entry) : "";
+    if (kind && root.querySelector("[data-pairing-status]")) showPairingStatus(device, kind);
   });
   const settings = createDeviceSettings({ root, track });
   const sweep = createDeviceSweep({ root });
@@ -318,13 +331,16 @@ export function createDevicesView(section) {
     const switch2 = isSwitch2Device(device);
     const s2cfg = switch2 ? switch2ConfigOf(device) : null;
     const webosCfg = webos ? webOsConfigOf(device) : null;
+    const pairKind = pairingKindOf(device.entry);
     const androidTvLine = androidtv
-      ? `<p class="list-note androidtv-status" data-androidtv-status>Network TV · checking the connection…</p>`
+      ? `<div class="webos-status-bar"><p class="list-note androidtv-status" data-androidtv-status>Network TV · checking the connection…</p><div class="webos-status-actions"><button type="button" class="btn btn-outlined" data-act="pair-again" aria-haspopup="dialog">Pair again…</button></div></div>`
       : webos
         ? `<div class="webos-status-bar"><p class="list-note androidtv-status" data-webos-status>LG webOS · ${escapeHtml(webOsStatusText(null, webosCfg))}</p><div class="webos-status-actions"><button type="button" class="btn btn-outlined" data-act="webos-edit">${webosCfg?.paired ? "Pair / Edit" : "Pair with TV"}</button><button type="button" class="btn btn-text" data-act="webos-refresh">Refresh inputs &amp; apps</button></div></div>`
         : switch2
           ? `<p class="list-note s2-status">Switch 2 wake · ${escapeHtml(controllerTypeLabel(s2cfg?.pid))} · Wake only (2 s BLE beacon). Power Off is a no-op — sleep is handled by TV HDMI-CEC standby or the console itself.</p>`
-          : "";
+          : pairKind
+            ? `<p class="list-note pairing-status" data-pairing-status>${escapeHtml(PAIRING_KINDS[pairKind].label)} · checking whether it's paired…</p>`
+            : "";
     const cmdTools = androidtv
       ? `<p class="list-note">A network TV's commands come with it; the hub sends them over the network.</p>`
       : isHubBtEntry(device.entry)
@@ -368,6 +384,7 @@ export function createDevicesView(section) {
     if (androidtv) showAndroidTvStatus(device);
     else if (webos) showWebOsStatus(device);
     else stopAndroidTvStatus();
+    if (pairKind && !androidtv && !webos) showPairingStatus(device, pairKind);
     const side = root.querySelector(".remote-side");
     if (side) wireMoreKeys(side, { source: panelSource, send: sendAction, keyEvents: false });
   }
@@ -409,6 +426,24 @@ export function createDevicesView(section) {
       tvStatusTimer = setTimeout(tick, TV_STATUS_REFRESH_MS);
     };
     tick();
+  }
+
+  /* Whether a Sony TV, a Bluetooth device or a keyboard target is paired with
+     this hub, from the hub's files (GET /api/pairing) and this tab's failed
+     sends. Asked once per render: nothing on it changes by itself. */
+  async function showPairingStatus(d, kind) {
+    const line = root.querySelector("[data-pairing-status]");
+    let file = null;
+    try {
+      file = pairingFiles(await getPairing()).get(d.id) ?? null;
+    } catch (_) {
+      // An older hub: the tab's own failures still say something.
+    }
+    if (!line?.isConnected) return;
+    const status = pairingStatus({ kind, file, problem: pairingProblemsFor([d.id])[0] ?? null });
+    const meta = PAIRING_KINDS[kind];
+    const where = meta.where ? ` <a href="${meta.where}">Pair it on the ${escapeHtml(meta.whereLabel)}</a>.` : "";
+    line.innerHTML = `${escapeHtml(meta.label)} · <strong>${escapeHtml(pairingStateLabel(status.state))}</strong>${status.text ? ` · ${escapeHtml(status.text)}` : ""}${where}`;
   }
 
   function showWebOsStatus(d) {
@@ -813,6 +848,7 @@ export function createDevicesView(section) {
     else if (act === "learn") track(openLearnSheet({ device }), "[data-act='learn']");
     else if (act === "import") track(openImportSheet({ device }), "[data-act='import']");
     else if (act === "webos-edit") track(openWebOsSheet({ device }), "[data-act='webos-edit']");
+    else if (act === "pair-again") track(openPairingSheet({ device }), "[data-act='pair-again']");
     else if (act === "webos-refresh") refreshWebOsDevice(device);
   });
 

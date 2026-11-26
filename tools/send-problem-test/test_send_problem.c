@@ -5,6 +5,8 @@
  * replies are the ones the hub's codex_hbus prints, copied from a hub's
  * /data/codex/ir-events.log with only the ids changed.
  */
+/* write_send_problem leaves pairing markers: keep them off the build host. */
+#define PAIRING_MARKER_DIR "/nonexistent-codex-send-problem-test/markers"
 #define main codex_webui_main
 #include "../../payload/source/codex_webui.c"
 #undef main
@@ -20,7 +22,7 @@ static void expect(const char *name, const char *device_id, const char *reply, i
         failures++;
         return;
     }
-    write_send_problem(f, device_id, reply, bt_failed);
+    write_send_problem(f, device_id, "PowerOn", reply, bt_failed);
     fclose(f);
     checks++;
     if (strcmp(got, want) != 0) {

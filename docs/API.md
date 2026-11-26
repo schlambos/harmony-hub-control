@@ -652,6 +652,35 @@ A failed hold `press` or `hold` (`502`) and a failed `/api/activity-run`
 Older hubs send neither member and no `sent`; treat a missing `sent` as
 unknown, not as a failure.
 
+### Pairing status
+
+`GET /api/pairing` lists the devices that pair with the hub, and what the
+hub's files say about each. It reads files only and probes nothing, so a page
+can ask whenever it draws:
+
+```json
+{"ok":true,"devices":[
+  {"deviceId":"<device-id>","kind":"ip-register","state":"not-paired"},
+  {"deviceId":"<device-id>","kind":"bluetooth","state":"needs-attention","reason":"bt-not-connected"},
+  {"deviceId":"<device-id>","kind":"androidtv","state":"unknown"}]}
+```
+
+| `kind` | Which devices | `state` from files |
+| --- | --- | --- |
+| `androidtv`, `webos` | the hub's network TVs (`AutoDetectedDevice.Id` `melodious-androidtv-…`, `melodious-webos-…`) | `unknown`: ask `/api/androidtv/status` or `/api/webos/status` |
+| `bt-keyboard` | the hub's Bluetooth keyboard targets (`melodious-bt-…`) | `unknown` |
+| `ip-register` | an IP device with a registration template (`Transport` has 64 and `RegisterSection` isn't null: a Sony TV) | `paired` when the engine holds a registration for it, else `not-paired` (after a hub swap, or a renewal the device refused). Only presence is reported, never the registration itself |
+| `bluetooth` | a stock Bluetooth device (`Transport` has 32) | `not-paired` without a `BTAddress`; `unknown` with one, since it may be another hub's |
+
+Any of them is `needs-attention`, with the `reason` from
+[Send failures](#send-failures), after a send from this web app failed with
+`needsPairing`; it goes back once the command that failed works again (a
+hold, once it has run its course). One an activity start left names no
+command, so any send to the device that works clears it. Dismissing the web
+app's banner doesn't. That note lives in RAM
+(`/var/volatile/codex-pairing/<deviceId>`) and doesn't see the paired remote's
+presses. Other devices (IR, Home Assistant, Switch 2) aren't listed.
+
 Send a cancellable batch (`render_ir_batch_send_json()`):
 
 ```powershell
@@ -1715,6 +1744,7 @@ carries.
 | GET, POST | `/api/remotecentral-fetch` | `render_remotecentral_fetch_json()` |
 | GET, POST | `/api/capture` | `render_capture_json()` |
 | POST | `/api/ir-send` | `render_ir_send_json()` |
+| GET | `/api/pairing` | `render_pairing_json()` |
 | POST | `/api/led` | `render_led_json()` |
 | GET | `/api/remotes` | `render_remotes_json()` |
 | POST | `/api/remote-pair` | `render_remote_pair_json()` |

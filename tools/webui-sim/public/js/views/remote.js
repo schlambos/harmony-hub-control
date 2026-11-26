@@ -30,6 +30,8 @@ import {
   softButtons,
 } from "./remote-model.js";
 import { PAIRING_BANNER_SLOT, mountPairingBanners } from "./pairing-banner.js";
+import { PAIRING_KINDS, pairingKindOf } from "./pairing-model.js";
+import { openPairingSheet } from "./pairing-sheet.js";
 import { startFailureText } from "./restrictions-model.js";
 import {
   describe,
@@ -87,6 +89,11 @@ export function createRemoteView(section) {
       : bannerScope === "off" ? hub.devices().map((d) => d.id) : [],
     nameOf: hub.deviceName,
     focusAfter: "#remoteStatus, .off-title",
+    canPair: (id) => Boolean(PAIRING_KINDS[pairingKindOf(hub.deviceById(id)?.entry)]?.canPair),
+    onPair: (id) => {
+      const device = hub.deviceById(id);
+      if (device) openPairingSheet({ device });
+    },
   });
 
   /* -- state → screen --------------------------------------------------------- */
