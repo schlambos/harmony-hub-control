@@ -1,6 +1,7 @@
 import { describe, it } from "node:test";
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
+import { TRANSPORT_BLUETOOTH, hasTransport } from "../public/js/views/device-settings-model.js";
 import {
   activityIconName,
   activityKeys,
@@ -24,7 +25,7 @@ const devices = config.deviceList.DevicesWithFeatures.map((entry) => ({
   name: entry.Device.Name,
   model: entry.Device.Model ?? "",
   typeLabel: entry.Device.DeviceTypeDisplayName || entry.Device.DeviceType || "",
-  isBluetooth: Number(entry.Device.Transport) === 32,
+  isBluetooth: hasTransport(entry.Device.Transport, TRANSPORT_BLUETOOTH),
   entry,
   commands: entry.Commands.map((c) => ({ name: c.Name, functionId: c["FunctionId-"] })),
 }));

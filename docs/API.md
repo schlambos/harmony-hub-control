@@ -306,8 +306,9 @@ device's commands, stored as the stock `Device.ControlPort`:
 | `2` | External mini-blaster 1 |
 | `4` | External mini-blaster 2 |
 
-Any other value, or `irOutput` on a device that is not IR (`Transport` other
-than 1), is refused. When it is absent the stored value is left unchanged.
+Any other value, or `irOutput` on a device without the IR bit (1) in its
+`Transport` bitmask, is refused. A missing `Transport` counts as IR; a Sony
+TV's 65 (IP with an IR fallback) has the bit, a Roku's 64 does not. When it is absent the stored value is left unchanged.
 
 Writer requests from every route take turns. Each connection is served
 by its own `codex_webui` child, and all of them share one request file

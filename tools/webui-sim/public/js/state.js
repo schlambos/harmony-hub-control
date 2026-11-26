@@ -1,5 +1,5 @@
 import * as api from "./api.js";
-import { inputNames } from "./views/device-settings-model.js";
+import { TRANSPORT_BLUETOOTH, TRANSPORT_IP, hasTransport, inputNames } from "./views/device-settings-model.js";
 import { describeHaDeviceState, haDeviceKey } from "./views/remote-model.js";
 
 export const state = {
@@ -385,10 +385,17 @@ export function devices() {
   const raw = state.config?.deviceList?.DevicesWithFeatures ?? [];
   return raw.map((entry) => {
     const device = entry.Device ?? {};
-    const transport = Number(device.Transport) || 1;
+    const autoId = String(device.AutoDetectedDevice?.Id ?? "");
     // A saved Bluetooth target published by the hub (codexactivity
     // CommitBtDevices): an IP device whose keys the hub sends over Bluetooth.
-    const melodiousBt = String(device.AutoDetectedDevice?.Id ?? "").startsWith("melodious-bt-");
+    const melodiousBt = autoId.startsWith("melodious-bt-");
+    // The hub's other own IP devices, each with its own badge.
+    const melodiousIp = melodiousBt || autoId.startsWith("melodious-androidtv-") ||
+      autoId.startsWith("melodious-switch2-") || autoId.startsWith("melodious-webos-");
+    // Home Assistant devices carry the hub's tag (codexactivity HA_DEVICE_TAG);
+    // Transport says nothing about it, since every IP device has 64.
+    const isHa = autoId.startsWith("melodious-ha-") ||
+      (!melodiousIp && String(device.Manufacturer ?? "").toLowerCase().includes("home assistant"));
     return {
       id: String(device["Id-"]),
       name: device.Name || device.FriendlyName || `Device ${device["Id-"]}`,
@@ -396,19 +403,19 @@ export function devices() {
       model: device.Model ?? "",
       type: device.DeviceType ?? "",
       typeLabel: device.DeviceTypeDisplayName || device.DeviceType || "",
-      transport,
-      // Transport 32 is Bluetooth HID; 64 is IP (Home Assistant, a network TV
-      // driven by codex_androidtv or codex_webos, a Switch 2 BLE wake device, or
-      // one of the hub's own Bluetooth keyboard targets); else IR.
-      isBluetooth: transport === 32 || melodiousBt,
+      // Transport is a bitmask (device-settings-model.js): 32 Bluetooth HID,
+      // 64 IP (Home Assistant, a network TV driven by codex_androidtv or
+      // codex_webos, a Switch 2 BLE wake device, one of the hub's own Bluetooth
+      // keyboard targets, or a stock IP device such as a Sony TV, 65 with its
+      // IR fallback), 1 IR.
+      isBluetooth: hasTransport(device.Transport, TRANSPORT_BLUETOOTH) || melodiousBt,
       isMelodiousBt: melodiousBt,
-      isAndroidTv: String(device.AutoDetectedDevice?.Id ?? "").startsWith("melodious-androidtv-"),
-      isSwitch2: String(device.AutoDetectedDevice?.Id ?? "").startsWith("melodious-switch2-"),
-      isWebOs: String(device.AutoDetectedDevice?.Id ?? "").startsWith("melodious-webos-"),
-      isHa: !melodiousBt && !String(device.AutoDetectedDevice?.Id ?? "").startsWith("melodious-androidtv-") &&
-        !String(device.AutoDetectedDevice?.Id ?? "").startsWith("melodious-switch2-") &&
-        !String(device.AutoDetectedDevice?.Id ?? "").startsWith("melodious-webos-") &&
-        (transport === 64 || String(device.Manufacturer ?? "").toLowerCase().includes("home assistant")),
+      isAndroidTv: autoId.startsWith("melodious-androidtv-"),
+      isSwitch2: autoId.startsWith("melodious-switch2-"),
+      isWebOs: autoId.startsWith("melodious-webos-"),
+      isHa,
+      // Any other IP device: stock network control (a Sony TV, a Roku …).
+      isNetwork: !isHa && !melodiousIp && hasTransport(device.Transport, TRANSPORT_IP),
       haKey: haDeviceKey(entry),
       entry,
       inputs: inputNames(entry),

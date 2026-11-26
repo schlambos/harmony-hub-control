@@ -65,7 +65,8 @@ function normCmd(name) {
 }
 
 /** Device grouping for pickers: members first, HA entities, other IR/BT.
- *  HA detection: Transport 64, or Home Assistant manufacturer/protocol. */
+ *  HA detection: the hub's melodious-ha- tag, or a Home Assistant
+ *  manufacturer. Not Transport: every IP device has 64, a Sony TV too. */
 export function isHaDevice(device) {
   if (!device) return false;
   // Network Android/Google TVs, native LG webOS TVs, and Switch 2 wake devices
@@ -75,8 +76,7 @@ export function isHaDevice(device) {
   // So are the hub's own Bluetooth keyboard targets.
   if (device.isMelodiousBt === true || autoId.startsWith("melodious-bt-")) return false;
   if (device.isHa === true) return true;
-  const transport = Number(device.transport ?? device.Transport ?? device.entry?.Device?.Transport ?? 1);
-  if (transport === 64) return true;
+  if (autoId.startsWith("melodious-ha-")) return true;
   const manu = String(device.manufacturer ?? device.entry?.Device?.Manufacturer ?? "").toLowerCase();
   if (manu.includes("home assistant")) return true;
   return false;

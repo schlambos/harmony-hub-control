@@ -28,6 +28,7 @@ import {
 import { resolveSkinPowerAction } from "./control-power.js";
 import { openImportSheet } from "./device-import.js";
 import { createDeviceSettings } from "./device-settings.js";
+import { deviceBadge } from "./device-settings-model.js";
 import { changeNote, hubChange, openCommandSheet, openDeviceSheet, openLearnSheet, storedCommand } from "./device-sheets.js";
 import { createDeviceSweep } from "./device-sweep.js";
 import { createIrLab, labNote } from "./ir-lab.js";
@@ -121,9 +122,8 @@ export function createDevicesView(section) {
               d.model || d.manufacturer,
               `${d.commands.length} command${d.commands.length === 1 ? "" : "s"}`,
             ].filter(Boolean).join(" · ");
-        const badgeCls = d.isAndroidTv || d.isWebOs ? " badge-network" : d.isSwitch2 ? " badge-bluetooth" : d.isHa ? " badge-ha" : d.isBluetooth ? " badge-bluetooth" : "";
-        const badgeLabel = d.isAndroidTv ? "Network" : d.isWebOs ? "LG webOS" : d.isSwitch2 ? "BLE Wake" : d.isHa ? "Home Assistant" : d.isBluetooth ? "Bluetooth" : "IR";
-        const badge = `<span class="badge${badgeCls}">${badgeLabel}</span>`;
+        const { cls: badgeCls, label: badgeLabel } = deviceBadge(d);
+        const badge = `<span class="badge${badgeCls ? ` ${badgeCls}` : ""}">${badgeLabel}</span>`;
         return listRow({
           title: d.name,
           subtitle,
@@ -470,6 +470,7 @@ export function createDevicesView(section) {
         d.manufacturer,
         d.isBluetooth,
         d.isHa,
+        d.isNetwork,
         d.commands.length,
         (describeHaDeviceState(d, hub.state.haState) ?? describeTheaterLink(d, hub.state.haState))?.summary ?? "",
       ]));
