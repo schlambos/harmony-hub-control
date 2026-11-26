@@ -166,7 +166,31 @@ on Apple, Segoe on Windows. That costs 0 bytes. Sizes follow the app:
   set it like any other key, as the app does (approved 2026-10-21).
 - Phones get a short vibration where the browser supports it; desktops get a
   pressed state.
-- Errors show as a snackbar.
+- Errors show as a snackbar, in plain words: a tap the engine refused shows as
+  failed (the hub's `"sent": false`), and an engine code becomes a sentence,
+  not the engine's JSON ([API: Send failures](API.md#send-failures)).
+- A device whose send fails because it needs pairing with the hub again (a
+  Sony TV that no longer knows the hub, a Bluetooth device that won't connect)
+  gets a banner on the remote (or the "Everything's off" screen, after a start
+  that failed) and on its own page. It stays until the command that failed
+  works again or it is dismissed; another command working proves little, since
+  a Sony TV's IR commands keep working while its IP ones are refused.
+- A device that pairs with the hub shows how it stands on its own page: a
+  network TV's line has **Pair again…** (the same TV keeps its id, so its
+  activities keep working; a different or reset TV is refused and nothing
+  changes), an LG webOS TV keeps **Pair / Edit**, and a Sony TV or a stock
+  Bluetooth device (a Shield) says whether the hub's files show it paired and
+  has **Pair again…** too ([API: Pairing](API.md#pairing)). A Sony TV: the hub
+  looks for it on the network (or takes a typed address), the TV shows a
+  4-digit code, and the hub stores the registration where the engine keeps
+  it. A Bluetooth device: the hub forgets its old pairing and shows up on the
+  device as "Harmony Keyboard" to pick. The banner's **Pair now** opens the
+  same sheet.
+- Devices lists the devices that need pairing with this hub now (not paired,
+  or a send said so), each with **Pair…**: after a restore or a hub swap,
+  that's the way back. After restoring a backup with devices, the Backup page
+  lists every device that pairs with the hub itself, since pairings aren't in
+  a backup.
 - The web's resolved "device · command" line stays as a quiet status line
   under the mode tabs. On desktop it also shows a preview on hover or focus.
 - Keyboard and screen readers: every key and row is a real button with a

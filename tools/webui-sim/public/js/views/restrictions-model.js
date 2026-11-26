@@ -8,6 +8,8 @@
    codex_webui.c checks a save the same way (restriction_parse_window); the
    sim's /api/activity-restrictions uses this file. */
 
+import { startProblemText } from "./send-problem-model.js";
+
 /* Monday first, as the sheet shows them; the hub's file uses the same keys. */
 export const DAYS = [
   { key: "mon", short: "Mon", long: "Monday" },
@@ -133,8 +135,10 @@ export function restrictedAt(windows, wday, minutes) {
 
 /* The snackbar text for a start that failed; the hub answers a start inside
    the activity's time restrictions with { restricted: true }. */
-export function startFailureText(name, error) {
+export function startFailureText(name, error, nameOf) {
   if (error?.data?.restricted) return `“${name}” can't be started now: it has time restrictions.`;
+  const problem = startProblemText(error, nameOf);
+  if (problem) return `Couldn't start ${name}. ${problem}`;
   return `Couldn't start ${name} — ${error?.message || "hub error"}`;
 }
 

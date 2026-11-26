@@ -22,6 +22,7 @@ import {
 import { LIMITS, isSafeLabel } from "./public/js/views/ir-model.js";
 import { MAX_ACTIVITIES, isRestrictableId, normalizeWindows, restrictedAt } from "./public/js/views/restrictions-model.js";
 import { validateStatic } from "./public/js/views/ethernet-model.js";
+import { isPairingHost, pairingKindOf } from "./public/js/views/pairing-model.js";
 import { MAX_SLOTS, parseProfile, slotCommand, slotOf } from "./public/js/views/androidtv-inputs-model.js";
 import {
   buildSwitch2WakePayload,
@@ -394,6 +395,19 @@ function handleActivityRun(res, params) {
     });
     return;
   }
+  const failure = simSendFailures.get(`activity:${activityId}`);
+  if (failure && Number.isInteger(failure.engineCode)) {
+    // Like render_activity_run_json: any other engine code is a 502.
+    const reply = simEngineReply("harmony.engine?startactivity", failure, failure.dataDeviceId);
+    logEvent({ kind: "activity-run", activityId, message: `refused: engine code ${failure.engineCode}` });
+    const problem = simSendProblem("", reply, false);
+    simMarkProblem(problem, "");
+    sendJson(res, 502, {
+      ok: false, error: failure.msg || `Harmony activity engine returned code ${failure.engineCode}.`,
+      ...problem, activityId, reply,
+    });
+    return;
+  }
   const previousActivityId = String(state.currentActivityId);
   state.currentActivityId = activityId;
   logEvent({ kind: "activity-run", activityId });
@@ -562,6 +576,240 @@ function handleDeviceCommands(res, params) {
 
 const holds = new Map();
 
+/* Sim only: sends and starts that fail the way the hub's do (POST
+   /api/sim/send-failure). Key "device:<id>" or "activity:<id>" → { engineCode,
+   msg, btFailed }. */
+const simSendFailures = new Map();
+
+/* The engine's answer for an injected failure, as codex_hbus prints it. */
+function simEngineReply(cmd, failure, deviceId) {
+  return JSON.stringify({
+    cmd, code: failure.engineCode, id: "codex-sim", msg: failure.msg ?? "",
+    ...(deviceId ? { data: { deviceId } } : {}),
+  });
+}
+
+/* codex_webui.c write_send_problem: engineCode, and needsPairing when pairing
+   is the fix. */
+function simSendProblem(deviceId, reply, btFailed) {
+  const out = {};
+  let parsed = null;
+  try { parsed = JSON.parse(reply); } catch (_) {}
+  // The engine may write its code quoted; the hub reads both.
+  const rawCode = parsed?.code;
+  const code = Number.isInteger(rawCode) ? rawCode : typeof rawCode === "string" && /^\d+$/.test(rawCode) ? Number(rawCode) : null;
+  if (code !== null) out.engineCode = code;
+  let kind = "", reason = "";
+  if (btFailed || code === 506) [kind, reason] = ["bluetooth", "bt-not-connected"];
+  else if (code === 403 && String(parsed?.msg ?? "").includes("Reauthentication")) [kind, reason] = ["ip-register", "ip-reauth"];
+  const named = typeof parsed?.data?.deviceId === "string" ? parsed.data.deviceId : "";
+  const id = named || deviceId;
+  if (kind === "bluetooth") {
+    // A Bluetooth keyboard target fails the same way; the hub names its kind.
+    const entry = (state.deviceList.DevicesWithFeatures ?? []).find((e) => String(e?.Device?.["Id-"]) === id);
+    if (entry && pairingKindOf(entry) === "bt-keyboard") kind = "bt-keyboard";
+  }
+  if (reason && id) out.needsPairing = { deviceId: id, kind, reason };
+  return out;
+}
+
+function handleSimSendFailure(res, params) {
+  const deviceId = String(params.deviceId ?? "");
+  const activityId = String(params.activityId ?? "");
+  const key = deviceId ? `device:${deviceId}` : activityId ? `activity:${activityId}` : "";
+  if (!key) {
+    if (params.clear) {
+      simSendFailures.clear();
+      sendJson(res, 200, { ok: true, failures: [] });
+      return;
+    }
+    sendError(res, 400, "deviceId or activityId is required");
+    return;
+  }
+  const engineCode = Number(params.engineCode);
+  const btFailed = Boolean(params.btFailed);
+  if (params.clear || (!btFailed && !Number.isInteger(engineCode))) simSendFailures.delete(key);
+  else {
+    simSendFailures.set(key, {
+      engineCode: Number.isInteger(engineCode) ? engineCode : null, msg: String(params.msg ?? ""), btFailed,
+      // A start's reply may name the member device that failed (data.deviceId).
+      dataDeviceId: String(params.dataDeviceId ?? ""),
+    });
+  }
+  sendJson(res, 200, { ok: true, failures: [...simSendFailures.keys()] });
+}
+
+/* GET /api/pairing (codex_webui.c render_pairing_json): markers a failed send
+   leaves (deviceId → { reason, command }), and the Sony-style registrations
+   the engine would hold (POST /api/sim/pairing). */
+const simPairingMarkers = new Map();
+const simCookies = new Set();
+
+function simMarkProblem(problem, command) {
+  // The hub keeps markers only for device ids that are digits.
+  if (problem?.needsPairing && /^\d{1,32}$/.test(problem.needsPairing.deviceId)) simPairingMarkers.set(problem.needsPairing.deviceId, { reason: problem.needsPairing.reason, command: command ?? "" });
+}
+
+/* A send worked: the marker goes when it was the command that failed, or on
+   any send for a Bluetooth connect failure. */
+function simSendWorked(deviceId, command) {
+  const marker = simPairingMarkers.get(deviceId);
+  if (marker && (marker.reason === "bt-not-connected" || !marker.command || marker.command === command)) simPairingMarkers.delete(deviceId);
+}
+
+function handlePairing(res) {
+  const out = [];
+  for (const entry of state.deviceList.DevicesWithFeatures ?? []) {
+    const id = String(entry?.Device?.["Id-"] ?? "");
+    const kind = pairingKindOf(entry);
+    if (!id || !kind) continue;
+    let deviceState = "unknown";
+    if (kind === "ip-register") deviceState = simCookies.has(id) ? "paired" : "not-paired";
+    else if (kind === "bluetooth") {
+      const addr = String(entry.Device.BTAddress ?? "");
+      if (!addr || addr === "00:00:00:00:00:00") deviceState = "not-paired";
+      // The engine's own record of pairing it at that address: this hub.
+      else if (simBtPaired.get(id)?.toLowerCase() === addr.toLowerCase()) deviceState = "paired";
+    }
+    const marker = simPairingMarkers.get(id);
+    out.push({ deviceId: id, kind, state: marker ? "needs-attention" : deviceState, ...(marker ? { reason: marker.reason } : {}), name: String(entry.Device.Name ?? "") });
+  }
+  sendJson(res, 200, { ok: true, devices: out });
+}
+
+/* Pairing what the stock engine pairs (codex_webui.c render_pairing_start/
+   finish/cancel/find): a fake Sony TV at SIM_SONY_HOST that wants code 1234,
+   and a Bluetooth device that "picks" the hub SIM_BT_PICK_MS after start (or
+   at once: POST /api/sim/pairing {deviceId, btSelected: true}). */
+const SIM_SONY_HOST = "192.168.1.60";
+const SIM_BT_PICK_MS = 4000;
+const simBtPairing = new Map(); // deviceId → { started, selected }
+const simBtPaired = new Map();  // deviceId → address the engine saved (its settings btAddresses)
+
+function simPairTarget(res, params) {
+  const deviceId = typeof params.deviceId === "string" ? params.deviceId : "";
+  if (!deviceId) {
+    sendError(res, 400, "Say which device: deviceId.");
+    return null;
+  }
+  const entry = (state.deviceList.DevicesWithFeatures ?? []).find((e) => String(e?.Device?.["Id-"]) === deviceId);
+  if (!entry) {
+    sendError(res, 404, "There's no such device on this hub.");
+    return null;
+  }
+  const kind = pairingKindOf(entry);
+  if (kind !== "ip-register" && kind !== "bluetooth") {
+    sendError(res, 409, "This device doesn't pair here. Network TVs and LG TVs pair from their own pages.");
+    return null;
+  }
+  return { deviceId, entry, kind };
+}
+
+function simPairHost(res, params) {
+  const host = typeof params.host === "string" ? params.host : "";
+  if (!isPairingHost(host)) {
+    sendError(res, 400, "Give the TV's address on your network, four numbers such as 192.168.1.40.");
+    return "";
+  }
+  if (host !== SIM_SONY_HOST) {
+    sendError(res, 502, `Nothing answered at ${host}. Check that the TV is on and the address is right.`);
+    return "";
+  }
+  return host;
+}
+
+function handlePairingFind(res, url) {
+  const deviceId = url.searchParams.get("deviceId") ?? "";
+  const entry = /^\d+$/.test(deviceId) ? (state.deviceList.DevicesWithFeatures ?? []).find((e) => String(e?.Device?.["Id-"]) === deviceId) : null;
+  if (!entry) {
+    sendError(res, 404, "There's no such device on this hub.");
+    return;
+  }
+  const usn = String(entry.Device.AutoDetectedDevice?.USN ?? "");
+  const searched = usn.includes("::") && Boolean(entry.Device.AutoDetectedDevice?.Id);
+  setTimeout(() => sendJson(res, 200, { ok: true, searched, found: searched ? [{ host: SIM_SONY_HOST, match: true }] : [] }), 600);
+}
+
+function handlePairingStart(res, params) {
+  const t = simPairTarget(res, params);
+  if (!t) return;
+  if (t.kind === "ip-register") {
+    if (!simPairHost(res, params)) return;
+    logEvent({ kind: "pairing", deviceId: t.deviceId, message: "Sony TV shows a code (sim: 1234)" });
+    sendJson(res, 200, { ok: true, step: "code" });
+    return;
+  }
+  simBtPairing.set(t.deviceId, { started: Date.now(), selected: false });
+  logEvent({ kind: "pairing", deviceId: t.deviceId, message: "Hub offers \"Harmony Keyboard\"" });
+  sendJson(res, 200, { ok: true, step: "select" });
+}
+
+function handlePairingFinish(res, params) {
+  const t = simPairTarget(res, params);
+  if (!t) return;
+  if (t.kind === "ip-register") {
+    if (!simPairHost(res, params)) return;
+    const code = typeof params.code === "string" ? params.code : "";
+    if (!/^\d{4,8}$/.test(code)) {
+      sendError(res, 400, "Type the code from the TV: 4 digits.");
+      return;
+    }
+    if (code !== "1234") {
+      sendJson(res, 409, { ok: false, error: "The TV didn't accept that code. Ask for a new one and type it.", wrongCode: true });
+      return;
+    }
+    simCookies.add(t.deviceId);
+    simPairingMarkers.delete(t.deviceId);
+    sendJson(res, 200, { ok: true, step: "done", reloading: true });
+    return;
+  }
+  const session = simBtPairing.get(t.deviceId);
+  if (!session || (!session.selected && Date.now() - session.started < SIM_BT_PICK_MS)) {
+    sendJson(res, 200, { ok: true, step: "select", waiting: true });
+    return;
+  }
+  simBtPairing.delete(t.deviceId);
+  // The hub writes the address the engine paired whenever it differs.
+  t.entry.Device.BTAddress = "AA:BB:CC:DD:EE:01";
+  simBtPaired.set(t.deviceId, "AA:BB:CC:DD:EE:01");
+  simPairingMarkers.delete(t.deviceId);
+  sendJson(res, 200, { ok: true, step: "done" });
+}
+
+function simAddSony() {
+  const list = state.deviceList.DevicesWithFeatures ?? (state.deviceList.DevicesWithFeatures = []);
+  const existing = list.find((e) => e?.Device?.RegisterSection && e.Device.Name === "Sony TV");
+  if (existing) return String(existing.Device["Id-"]);
+  const id = 79990001;
+  list.push({
+    Device: {
+      "Id-": id, Name: "Sony TV", Manufacturer: "Sony", Model: "KD-55X85J", DeviceTypeDisplayName: "Television", Type: "Television",
+      Transport: 65, BTAddress: null, ControlPort: 7,
+      AutoDetectedDevice: { Name: "Sony TV", Model: "KD-55X85J", Id: "5a1e0001-0000-4c34-ad27-b76bd9128788", Manufacturer: "Sony",
+        USN: "uuid:5a1e0001-0000-4c34-ad27-b76bd9128788::urn:schemas-sony-com:service:IRCC:1", Class: "SonyIpTv" },
+      RegisterSection: { Header: "{\"Authorization\":\"{Authorization}\"}", Parameters: [], Timeout: "10", Url: "http://{IP}/sony/accessControl", Method: "POST", Body: "{}" },
+    },
+    Commands: ["PowerOn", "VolumeUp", "VolumeDown"].map((name, i) => ({
+      Raw: null, "FunctionId-": 0, KeyCode: null, Parameters: null, TransportType: 64, Name: name,
+      FunctionGroupId: 0, ProtocolId: 0, CommandTypeId: name, IsLearned: false, "Id-": id * 10 + i,
+    })),
+  });
+  state.revision = newRevision();
+  return String(id);
+}
+
+/* An injected failure for one send: { reply, btFailed } or null. */
+function simSendFailure(deviceId, holdId) {
+  const failure = simSendFailures.get(`device:${deviceId}`);
+  // The hub counts only the engine's 200 as sent: an injected 200 is a send that works.
+  if (!failure || (!failure.btFailed && failure.engineCode === 200)) return null;
+  if (failure.btFailed) {
+    return { reply: `Could not connect Bluetooth device ${deviceId} at 00:11:22:33:44:55 (native code 500).`, btFailed: true };
+  }
+  const reply = simEngineReply("harmony.engine?holdaction", failure, holdId ? deviceId : "");
+  return { reply: holdId ? reply : `${reply}\n`, btFailed: false };
+}
+
 function handleIrSend(res, params) {
   const deviceId = String(params.deviceId ?? "").trim();
   const command = String(params.command ?? "").trim();
@@ -578,8 +826,17 @@ function handleIrSend(res, params) {
     return;
   }
   if (!status) {
-    logEvent({ kind: "ir", deviceId, command });
-    sendJson(res, 200, { ok: true, deviceId, command, reply: "sim sent" });
+    // Always 200 and ok:true, like the hub; "sent" says whether it went out.
+    const failure = simSendFailure(deviceId, "");
+    logEvent({ kind: "ir", deviceId, command, ...(failure ? { message: failure.reply.trim() } : {}) });
+    if (failure) {
+      const problem = simSendProblem(deviceId, failure.reply, failure.btFailed);
+      simMarkProblem(problem, command);
+      sendJson(res, 200, { ok: true, deviceId, command, sent: false, ...problem, reply: failure.reply });
+      return;
+    }
+    simSendWorked(deviceId, command);
+    sendJson(res, 200, { ok: true, deviceId, command, sent: true, reply: JSON.stringify({ cmd: "harmony.engine?holdaction", code: 200, id: "codex-sim", msg: "OK" }) + "\n" });
     return;
   }
   const now = Date.now();
@@ -588,7 +845,15 @@ function handleIrSend(res, params) {
   }
   if (status === "press") {
     holds.clear();
-    holds.set(holdId, { started: now, lease: now });
+    const failure = simSendFailure(deviceId, holdId);
+    if (failure) {
+      logEvent({ kind: "ir", deviceId, command, status, holdId, message: failure.reply });
+      const problem = simSendProblem(deviceId, failure.reply, failure.btFailed);
+      simMarkProblem(problem, command);
+      sendJson(res, 502, { ok: false, error: failure.reply, ...problem, status, holdId });
+      return;
+    }
+    holds.set(holdId, { started: now, lease: now, deviceId, command });
   } else if (status === "hold") {
     const hold = holds.get(holdId);
     if (!hold) {
@@ -597,6 +862,9 @@ function handleIrSend(res, params) {
     }
     hold.lease = now;
   } else {
+    // A hold that ran its course clears a marker, like the hub's holder.
+    const hold = holds.get(holdId);
+    if (hold) simSendWorked(hold.deviceId, hold.command);
     holds.delete(holdId);
   }
   logEvent({ kind: "ir", deviceId, command, status, holdId });
@@ -2607,9 +2875,22 @@ function handleExport(res, pathname) {
 }
 
 /* Like codex_webui's request_same_origin_json(): the routes that change the
-   radio or reboot the hub take only application/json, and a browser's Origin,
-   when sent, must be this host. */
-const SAME_ORIGIN_JSON_ROUTES = new Set(["POST /api/multi-remote", "POST /api/remote-unpair", "POST /api/remote-background", "POST /api/usb-eth", "POST /api/activity-restrictions"]);
+   radio, pair or forget a TV, replace a device set or reboot the hub take
+   only application/json, and a browser's Origin, when sent, must be this
+   host. */
+const SAME_ORIGIN_JSON_ROUTES = new Set([
+  "POST /api/multi-remote", "POST /api/remote-unpair", "POST /api/remote-background", "POST /api/usb-eth",
+  "POST /api/activity-restrictions",
+  // Pairing and the network TV and Switch 2 device sets.
+  "POST /api/androidtv/pair-start", "POST /api/androidtv/pair-finish", "POST /api/androidtv/pair-cancel",
+  "POST /api/androidtv/forget", "POST /api/androidtv/rename", "POST /api/androidtv/devices",
+  "POST /api/switch2/devices", "POST /api/pairing/start", "POST /api/pairing/finish", "POST /api/pairing/cancel",
+  // Checked by the hub already: Android TV inputs, and the webOS changes
+  // (webos/cmd and switch2/cmd also take loopback, so the sim leaves them).
+  "POST /api/androidtv/inputs", "POST /api/androidtv/try",
+  "POST /api/webos/devices", "POST /api/webos/save", "POST /api/webos/pair-start", "POST /api/webos/pair-cancel",
+  "POST /api/webos/refresh", "POST /api/webos/forget",
+]);
 const SAME_ORIGIN_JSON_ERROR =
   "This change takes a JSON request (Content-Type: application/json) from the hub's own web app.";
 
@@ -2691,6 +2972,9 @@ async function handleApi(req, res, pathname, url) {
         state.events.length = 0;
         captureArmed = false;
         canceledRuns.clear();
+        simSendFailures.clear();
+        simPairingMarkers.clear();
+        simCookies.clear();
         sendJson(res, 200, { ok: true, revision: state.revision, currentActivityId: state.currentActivityId });
       } catch (error) {
         sendError(res, 500, `fixture reload failed: ${error.message}`);
@@ -2896,6 +3180,57 @@ async function handleApi(req, res, pathname, url) {
       sendJson(res, 200, { ok: true, slot, code: 200, reply: JSON.stringify({ id: 1, code: 200 }), before, after: simRfInfo() });
       return;
     }
+    case "GET /api/pairing":
+      handlePairing(res);
+      return;
+    case "GET /api/pairing/find":
+      handlePairingFind(res, url);
+      return;
+    case "POST /api/pairing/start":
+      handlePairingStart(res, params);
+      return;
+    case "POST /api/pairing/finish":
+      handlePairingFinish(res, params);
+      return;
+    case "POST /api/pairing/cancel":
+      if (simPairTarget(res, params)) {
+        // The hub asks the engine once more: a device still connected keeps
+        // its pairing (here: one the sim paired before).
+        simBtPairing.delete(String(params.deviceId));
+        sendJson(res, 200, simBtPaired.has(String(params.deviceId)) ? { ok: true, step: "done" } : { ok: true });
+      }
+      return;
+    case "POST /api/sim/pairing": {
+      // Sim only: {"deviceId", "cookie": bool} — whether the engine holds a
+      // registration for that IP device (a Sony TV); {"deviceId",
+      // "btSelected": true} — the Bluetooth device picked the hub;
+      // {"addSony": true} — add a Sony TV device (answers its deviceId);
+      // {"clear": true} drops every registration and failure marker.
+      let added = "";
+      if (params.clear) {
+        simCookies.clear();
+        simPairingMarkers.clear();
+        simBtPairing.clear();
+        simBtPaired.clear();
+      } else if (params.addSony) {
+        added = simAddSony();
+      } else if (params.deviceId && params.btSelected !== undefined) {
+        const session = simBtPairing.get(String(params.deviceId));
+        if (session) session.selected = Boolean(params.btSelected);
+      } else if (params.deviceId) {
+        if (params.cookie) simCookies.add(String(params.deviceId));
+        else simCookies.delete(String(params.deviceId));
+      }
+      sendJson(res, 200, { ok: true, cookies: [...simCookies], ...(added ? { deviceId: added } : {}) });
+      return;
+    }
+    case "POST /api/sim/send-failure":
+      // Sim only: {"deviceId"|"activityId", "engineCode", "msg", "btFailed",
+      // "dataDeviceId"} makes that device's sends (or that activity's starts)
+      // fail as the hub's do; {"deviceId", "clear": true} or {"clear": true}
+      // undoes it.
+      handleSimSendFailure(res, params);
+      return;
     case "POST /api/sim/multi-remote":
       // Sim only: {"on": bool} runs that hal; optional "enabled" (the saved setting, e.g. on but
       // not running after a firmware update), "halSupported" and "radioHung" (rf.info hangs).

@@ -1496,6 +1496,72 @@ select option {
   color: var(--on-surface);
 }
 
+/* "Needs pairing" banners on the remote and device pages (pairing-banner.js) */
+.pairing-banners:empty {
+  display: none;
+}
+
+.pairing-banners {
+  display: grid;
+  gap: var(--space-2);
+  margin-bottom: var(--space-3);
+}
+
+.pairing-banner {
+  display: flex;
+  align-items: flex-start;
+  gap: var(--space-3);
+}
+
+.pairing-banner-text {
+  flex: 1;
+  min-width: 0;
+}
+
+.pairing-banner-text p {
+  margin: 0;
+}
+
+.pairing-banner strong {
+  color: inherit;
+}
+
+.pairing-banner .pairing-banner-why {
+  margin-top: var(--space-1);
+  opacity: 0.85;
+}
+
+.pairing-banner-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-2);
+  flex: none;
+}
+
+.pairing-banner .btn-text {
+  color: inherit;
+}
+
+/* Pairing status on a device's page (devices.js showPairingStatus) */
+.pairing-status strong {
+  color: var(--on-surface);
+  font-weight: 600;
+}
+
+/* Devices that need pairing (devices.js showPairingNeeded) */
+.pairing-needed {
+  margin-bottom: var(--space-3);
+}
+
+/* What to do on a Bluetooth device while the hub waits (pairing-hub-sheet.js) */
+.pairing-steps {
+  list-style: decimal outside;
+  margin: 0 0 var(--space-3);
+  padding-left: var(--space-5);
+  display: grid;
+  gap: var(--space-2);
+}
+
 /* Pills */
 .pill {
   display: inline-flex;

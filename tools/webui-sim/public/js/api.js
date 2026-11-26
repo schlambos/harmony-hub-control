@@ -195,8 +195,10 @@ export function importCatalog({ deviceId, commands, protocols }) {
 
 // `status` and `holdId` are for hold-to-repeat only (views/key-repeat.js):
 // "press" | "hold" | "release" for one hold. A plain send leaves them out
-// and the hub presses and releases once.
-export function irSend({ deviceId, command, functionId, activityId, status, holdId }) {
+// and the hub presses and releases once. A tap always answers ok:true; one
+// that didn't go out says "sent": false (docs/API.md "Send failures") and
+// throws here like a failed hold, with the reply in error.data.
+export async function irSend({ deviceId, command, functionId, activityId, status, holdId }) {
   const form = {
     deviceId: String(deviceId),
     command: String(command),
@@ -205,7 +207,46 @@ export function irSend({ deviceId, command, functionId, activityId, status, hold
   if (activityId != null && activityId !== "") form.activityId = String(activityId);
   if (status) form.status = String(status);
   if (holdId) form.holdId = String(holdId);
-  return request("/api/ir-send", { method: "POST", form });
+  const reply = await request("/api/ir-send", { method: "POST", form });
+  if (reply?.sent === false) {
+    throw new ApiError(typeof reply.reply === "string" && reply.reply ? reply.reply : "The command wasn't sent.", 200, reply);
+  }
+  return reply;
+}
+
+// Which devices pair with something, and what the hub's files say about each
+// (codex_webui.c render_pairing_json; no network probe, cheap to ask).
+export function getPairing() {
+  return request("/api/pairing");
+}
+
+/* Pairing a device the stock engine pairs (a Sony TV, a stock Bluetooth
+   device): docs/API.md "Pairing". Each answers { ok, step }. */
+export function findPairingHost(deviceId) {
+  return request(`/api/pairing/find?deviceId=${encodeURIComponent(deviceId)}`);
+}
+
+export function startPairing({ deviceId, host }) {
+  return request("/api/pairing/start", { method: "POST", body: host ? { deviceId, host } : { deviceId } });
+}
+
+export function finishPairing({ deviceId, host, code }) {
+  const body = { deviceId };
+  if (host) body.host = host;
+  if (code) body.code = code;
+  return request("/api/pairing/finish", { method: "POST", body });
+}
+
+export function cancelPairing(deviceId) {
+  return request("/api/pairing/cancel", { method: "POST", body: { deviceId } });
+}
+
+/* The same, as the page goes away: keepalive lets the request outlive it. */
+export function cancelPairingOnExit(deviceId) {
+  fetch("/api/pairing/cancel", {
+    method: "POST", keepalive: true, cache: "no-store",
+    headers: { "Content-Type": "application/json" }, body: JSON.stringify({ deviceId }),
+  }).catch(() => {});
 }
 
 // Sim-only debug log (the simulator serves it at /api/sim/events). The path is

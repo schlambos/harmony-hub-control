@@ -4,6 +4,7 @@
 #include <errno.h>
 #include <limits.h>
 #include <fcntl.h>
+#include <ifaddrs.h>
 #include <net/if.h>
 #include <netdb.h>
 #include <netinet/in.h>
@@ -70,14 +71,18 @@
 #ifndef WEBUI_AUTH_CONFIG /* tools/bt_harmony_webui_harness.c points it elsewhere */
 #define WEBUI_AUTH_CONFIG "/data/codex/webui_auth.conf"
 #endif
+#ifndef DEVICE_LIST /* tools/pairing-status-test points it at a fixture */
 #define DEVICE_LIST "/data/resources/DeviceList.json"
+#endif
 #define FUNCTION_LIST "/data/resources/FunctionList.json"
 #define PROTOCOL_LIST "/data/resources/ProtocolList.json"
 #define ACTIVITY_LIST "/data/resources/ActivityList.json"
 #define MAP_LIST "/data/resources/MapList.json"
 #define AUTOMATION_CONFIG "/data/resources/AutomationConfig.json"
 #define OFFLINE_EGRESS_GUARD "/data/codex/offline_egress_guard.sh"
+#ifndef RESOURCE_RELOAD_FLAG
 #define RESOURCE_RELOAD_FLAG "/data/codex/reload_resources"
+#endif
 #ifndef RESOURCE_BACKUP_DIR
 #define RESOURCE_BACKUP_DIR "/data/codex/resource-backups"
 #endif
@@ -2314,8 +2319,10 @@ static void render_remotecentral_fetch_json(int fd, const struct request *req) {
     free(remote);
 }
 
+/* Both append: codexactivity reads every name in the flag (and "all" wins),
+ * so a later request never drops an earlier one. */
 static void request_resource_reload(void) {
-    FILE *f = fopen(RESOURCE_RELOAD_FLAG, "w");
+    FILE *f = fopen(RESOURCE_RELOAD_FLAG, "a");
     if (f) {
         fputs("DeviceList\nFunctionList\nProtocolList\n", f);
         fclose(f);
@@ -2325,7 +2332,7 @@ static void request_resource_reload(void) {
 }
 
 static void request_resource_reload_names(const char *names) {
-    FILE *f = fopen(RESOURCE_RELOAD_FLAG, "w");
+    FILE *f = fopen(RESOURCE_RELOAD_FLAG, "a");
     if (f) {
         fputs(names && names[0] ? names : "all\n", f);
         fclose(f);
@@ -4728,6 +4735,11 @@ static void render_activity_state_json(int fd) {
 }
 
 static int engine_reply_code(const char *reply);
+static int engine_reply_code_or(const char *reply, int missing);
+static void write_send_problem(FILE *f, const char *device_id, const char *command, const char *reply, int bt_failed);
+static const char *device_pairing_kind(const char *device_id);
+static void pairing_marker_set(const char *device_id, const char *reason, const char *command);
+static void pairing_marker_clear(const char *device_id, const char *command);
 
 /* netservicestarter.lua answers a start inside the activity's time
  * restrictions with code 568 from its startactivity handler, in place of the
@@ -4774,6 +4786,7 @@ static void render_activity_run_json(int fd, const struct request *req) {
     if (rc == 0 && engine_code != 200) {
         fputs(",\"error\":", f);
         json_write_string(f, engine_error);
+        write_send_problem(f, NULL, NULL, reply, 0);
     }
     fputs(",\"activityId\":", f);
     json_write_string(f, activity_id);
@@ -7094,7 +7107,14 @@ static void format_ir_action(char *buf, size_t len, const char *device_id, const
     snprintf(buf, len, "{\\\"type\\\":\\\"IRCommand\\\",\\\"deviceId\\\":\\\"%s\\\",\\\"command\\\":\\\"%s\\\"}", device_id, command);
 }
 
-static void send_ir_command_action_ex(const char *device_id, const char *command, const char *source, const char *run_id, char *out, size_t outlen) {
+/* What a tap came to: SEND_OK once the engine answers 200. */
+#define SEND_OK 0
+#define SEND_REFUSED 1
+#define SEND_BT_FAILED 2
+#define SEND_NOT_SENT 3
+static int send_result_of(const char *reply);
+
+static int send_ir_command_action_ex(const char *device_id, const char *command, const char *source, const char *run_id, char *out, size_t outlen) {
     char hub_id[64];
     char action[512], params[768], esc_id[128], esc_params[1024], cmd[1400];
     char bt_detail[256];
@@ -7102,14 +7122,14 @@ static void send_ir_command_action_ex(const char *device_id, const char *command
     if (!load_hub_id(hub_id, sizeof(hub_id))) {
         snprintf(out, outlen, "Hub ID is missing. Re-run the root tool or reinstall with the numeric Hub ID printed as hub_id=...");
         log_ir_event(source, run_id, device_id, command, out);
-        return;
+        return SEND_NOT_SENT;
     }
     bt_connection = ensure_ir_bluetooth_connection(device_id, bt_detail, sizeof(bt_detail));
     if (bt_connection < 0) {
         snprintf(out, outlen, "%s", bt_detail[0] ? bt_detail :
             "Bluetooth target could not be connected before sending the command.");
         log_ir_event(source, run_id, device_id, command, out);
-        return;
+        return SEND_BT_FAILED;
     }
     if (bt_connection > 0) {
         log_ir_note_event("bt_preconnect", source, run_id, bt_detail);
@@ -7121,6 +7141,7 @@ static void send_ir_command_action_ex(const char *device_id, const char *command
     snprintf(cmd, sizeof(cmd), "/data/codex/bin/codex_hbus '%s' harmony.engine?holdaction '%s' 2>&1", esc_id, esc_params);
     run_cmd(cmd, out, outlen);
     log_ir_event(source, run_id, device_id, command, out && out[0] ? out : "no response");
+    return send_result_of(out);
 }
 
 static void send_ir_command_action(const char *device_id, const char *command, char *out, size_t outlen) {
@@ -7301,6 +7322,1303 @@ static int engine_reply_code(const char *reply) {
         p++;
     }
     return 200;
+}
+
+/* Extra members for a reply about a send or start that failed
+ * (docs/API.md "Send failures"), so a client can tell the person what
+ * happened instead of showing the engine's text:
+ *   engineCode    the engine's own code, when it answered;
+ *   needsPairing  {deviceId, kind, reason} when pairing the device with the
+ *                 hub again is the fix.
+ * The engine names the device in data.deviceId; device_id is the fallback.
+ * It also leaves the device's pairing marker (GET /api/pairing); command is
+ * the one that failed, NULL for an activity start.
+ * Every reply keeps its status and its ok, so older clients are unaffected. */
+#define ENGINE_CODE_IP_FORBIDDEN 403
+#define ENGINE_CODE_BT_TIMEOUT 506
+static void write_send_problem(FILE *f, const char *device_id, const char *command, const char *reply, int bt_failed) {
+    const char *kind = NULL, *reason = NULL, *data;
+    char msg[160], named[64];
+    int code = engine_reply_code_or(reply, -1);
+    if (code >= 0) fprintf(f, ",\"engineCode\":%d", code);
+    msg[0] = 0;
+    if (reply && json_top_string(reply, "msg", msg, sizeof(msg)) != 1) msg[0] = 0;
+    if (bt_failed || code == ENGINE_CODE_BT_TIMEOUT) {
+        /* Melodious's own connect before the send, or the engine's
+         * "Bluetooth connection timeout" (a profile with no saved address). */
+        kind = "bluetooth";
+        reason = "bt-not-connected";
+    } else if (code == ENGINE_CODE_IP_FORBIDDEN && strstr(msg, "Reauthentication")) {
+        /* An IP device registered with a PIN (a Sony TV) no longer knows the
+         * hub: after a hub swap, or a renewal the device refused. */
+        kind = "ip-register";
+        reason = "ip-reauth";
+    }
+    if (!reason) return;
+    named[0] = 0;
+    data = reply ? json_top_member(reply, "data") : NULL;
+    if (data && *data == '{') {
+        /* A data.deviceId that isn't a plain label is ignored: the request's
+         * device, if any, stands. */
+        if (json_top_string(data, "deviceId", named, sizeof(named)) != 1 || !safe_label(named)) named[0] = 0;
+    }
+    if (named[0]) device_id = named;
+    if (!device_id || !safe_label(device_id)) return;
+    /* A Bluetooth keyboard target fails the same way; say what it is, so a
+     * client offers its own pairing (the Bluetooth page). */
+    if (strcmp(kind, "bluetooth") == 0) {
+        const char *real = device_pairing_kind(device_id);
+        if (real && strcmp(real, "bt-keyboard") == 0) kind = real;
+    }
+    pairing_marker_set(device_id, reason, command);
+    fputs(",\"needsPairing\":{\"deviceId\":", f);
+    json_write_string(f, device_id);
+    fprintf(f, ",\"kind\":\"%s\",\"reason\":\"%s\"}", kind, reason);
+}
+
+/* engine_reply_code, but `missing` when the reply has no top-level code or
+ * isn't the engine's at all (codex_hbus's own error text), so a caller can
+ * tell "the engine said 200" from "nobody answered". */
+static int engine_reply_code_or(const char *reply, int missing) {
+    const char *v = reply ? json_top_member(reply, "code") : NULL;
+    if (!v) return missing;
+    if (*v == '"') v++;
+    return isdigit((unsigned char)*v) ? atoi(v) : missing;
+}
+
+/* What a tap's engine answer means: SEND_OK only for code 200. */
+static int send_result_of(const char *reply) {
+    return engine_reply_code_or(reply, -1) == 200 ? SEND_OK : SEND_REFUSED;
+}
+
+/* -- Pairing status (GET /api/pairing, docs/API.md "Pairing status") ---------
+ * Files only: no network probe, so a page may ask often. A failed send that
+ * write_send_problem reports as needsPairing leaves a marker
+ * <PAIRING_MARKER_DIR>/<deviceId> holding the reason; the next send that
+ * works removes it. One file per device, so forked requests never race on a
+ * shared file. The markers live in RAM and see only this web app's sends:
+ * the paired remote's presses never pass through codex_webui. */
+#ifndef PAIRING_MARKER_DIR
+#define PAIRING_MARKER_DIR "/var/volatile/codex-pairing"
+#endif
+#ifndef ENGINE_COOKIES /* the engine's saved IP-device registrations */
+#define ENGINE_COOKIES "/data/luaworks/harmonyengine/cookies"
+#endif
+#ifndef ENGINE_SETTINGS /* the engine's Bluetooth pairings: btAddresses */
+#define ENGINE_SETTINGS "/data/luaworks/harmonyengine/settings"
+#endif
+
+static int pairing_marker_path(char *path, size_t len, const char *device_id) {
+    const char *c;
+    if (!device_id || !device_id[0] || strlen(device_id) > 32) return 0;
+    for (c = device_id; *c; c++) if (!isdigit((unsigned char)*c)) return 0;
+    snprintf(path, len, "%s/%s", PAIRING_MARKER_DIR, device_id);
+    return 1;
+}
+
+/* A marker holds "<reason>\n<command>": the command that failed, or none
+ * when an activity start reported the device. */
+static void pairing_marker_set(const char *device_id, const char *reason, const char *command) {
+    char path[160], tmp[192];
+    FILE *f;
+    if (!pairing_marker_path(path, sizeof(path), device_id)) return;
+    mkdir(PAIRING_MARKER_DIR, 0700);
+    /* Written aside and renamed, so a reader never sees half a marker. */
+    snprintf(tmp, sizeof(tmp), "%s.%ld", path, (long)getpid());
+    f = fopen(tmp, "w");
+    if (!f) return;
+    fprintf(f, "%s\n%s", reason, command && safe_label(command) ? command : "");
+    if (fclose(f) != 0 || rename(tmp, path) != 0) unlink(tmp);
+}
+
+/* The reason a marker holds ("" when it holds none this code wrote), and the
+ * command that failed; 0 when the device has no marker. */
+static int pairing_marker_read_ex(const char *device_id, char *reason, size_t len, char *command, size_t command_len) {
+    char path[160], text[192], *nl;
+    FILE *f;
+    size_t got;
+    reason[0] = 0;
+    if (command_len) command[0] = 0;
+    if (!pairing_marker_path(path, sizeof(path), device_id)) return 0;
+    f = fopen(path, "r");
+    if (!f) return 0;
+    got = fread(text, 1, sizeof(text) - 1, f);
+    fclose(f);
+    text[got] = 0;
+    nl = strchr(text, '\n');
+    if (nl) {
+        *nl = 0;
+        if (command_len) snprintf(command, command_len, "%s", nl + 1);
+    }
+    /* Only the reasons write_send_problem writes. */
+    if (strcmp(text, "ip-reauth") == 0 || strcmp(text, "bt-not-connected") == 0) snprintf(reason, len, "%s", text);
+    return 1;
+}
+
+static int pairing_marker_read(const char *device_id, char *reason, size_t len) {
+    return pairing_marker_read_ex(device_id, reason, len, NULL, 0);
+}
+
+/* A send worked: the marker goes when it was the command that failed, or
+ * when the marker names none. Another command working proves little: a Sony
+ * TV's IR commands keep working while its IP ones are refused. A Bluetooth
+ * connect failure goes on any send that worked. */
+static void pairing_marker_clear(const char *device_id, const char *command) {
+    char path[160], reason[32], failed[128];
+    if (!pairing_marker_read_ex(device_id, reason, sizeof(reason), failed, sizeof(failed))) return;
+    /* Any send that got through proves the Bluetooth link works again (the
+     * device was only off, say); an IP refusal is per command. */
+    if (strcmp(reason, "bt-not-connected") != 0 && failed[0] && (!command || strcmp(failed, command) != 0)) return;
+    if (pairing_marker_path(path, sizeof(path), device_id)) unlink(path);
+}
+
+/* The device was paired again: its marker goes, whatever failed. */
+static void pairing_marker_remove(const char *device_id) {
+    char path[160];
+    if (pairing_marker_path(path, sizeof(path), device_id)) unlink(path);
+}
+
+/* Whether the engine holds a registration cookie for device_id: cookies is
+ * {"cookie":{"<deviceId>":{"{cookie}":"auth=…","{renewpin}":"…"}}}. Only
+ * presence is ever reported; the cookie and the PIN are credentials. */
+static int engine_cookie_present(const char *cookies, const char *device_id) {
+    const char *obj, *obj_end, *p;
+    char needle[48];
+    size_t nlen;
+    if (!cookies || !device_id || !device_id[0]) return 0;
+    obj = json_top_member(cookies, "cookie");
+    if (!obj || *obj != '{') return 0;
+    obj_end = find_matching_json(obj, '{', '}');
+    if (!obj_end) return 0;
+    snprintf(needle, sizeof(needle), "\"%s\"", device_id);
+    nlen = strlen(needle);
+    for (p = obj; (p = strstr(p, needle)) != NULL && p < obj_end; p += nlen) {
+        const char *v = p + nlen, *v_end;
+        char cookie[16];
+        while (isspace((unsigned char)*v)) v++;
+        if (*v != ':') continue; /* a value, not this device's key */
+        v++;
+        while (isspace((unsigned char)*v)) v++;
+        if (*v != '{') return 0;
+        v_end = find_matching_json(v, '{', '}');
+        if (!v_end) return 0;
+        return json_string_range(v, v_end, "{cookie}", cookie, sizeof(cookie));
+    }
+    return 0;
+}
+
+/* Device.Transport as a bitmask, read like the web app's: missing is IR (1);
+ * anything but a plain positive whole number (text, a fraction) has no bits. */
+static long transport_bits_range(const char *dev_obj, const char *dev_end) {
+    const char *p = find_key_range(dev_obj, dev_end, "Transport");
+    char *end;
+    long v;
+    if (!p) return 1;
+    p = strchr(p + strlen("\"Transport\""), ':');
+    if (!p || p >= dev_end) return 1;
+    p++;
+    while (p < dev_end && isspace((unsigned char)*p)) p++;
+    if (strncmp(p, "null", 4) == 0) return 1;
+    if (!isdigit((unsigned char)*p)) return 0;
+    v = strtol(p, &end, 10);
+    while (end < dev_end && isspace((unsigned char)*end)) end++;
+    return (*end == ',' || *end == '}') && v > 0 ? v : 0;
+}
+
+/* One device's pairing kind and state from DeviceList and the files above;
+ * kind NULL when the device pairs with nothing (IR, Home Assistant, Switch 2). */
+static const char *pairing_kind_state_ex(const char *dev_obj, const char *dev_end, const char *device_id,
+        const char *cookies, const char *settings, const char **state, char *reason, size_t reason_len);
+
+/* The address the engine paired device_id with ({"btAddresses":{"<id>":
+ * "<addr>"}}), into out: 1 when it has one. */
+static int engine_bt_address(const char *settings, const char *device_id, char *out, size_t len) {
+    const char *obj = settings ? json_top_member(settings, "btAddresses") : NULL, *obj_end;
+    if (len) out[0] = 0;
+    if (!obj || *obj != '{' || !(obj_end = find_matching_json(obj, '{', '}'))) return 0;
+    return json_string_range(obj, obj_end, device_id, out, len);
+}
+
+static const char *pairing_kind_state(const char *dev_obj, const char *dev_end, const char *device_id,
+        const char *cookies, const char **state, char *reason, size_t reason_len) {
+    return pairing_kind_state_ex(dev_obj, dev_end, device_id, cookies, NULL, state, reason, reason_len);
+}
+
+static const char *pairing_kind_state_ex(const char *dev_obj, const char *dev_end, const char *device_id,
+        const char *cookies, const char *settings, const char **state, char *reason, size_t reason_len) {
+    char auto_id[96], bt_address[32];
+    const char *kind = NULL, *auto_obj, *reg;
+    long transport;
+    int marker;
+    auto_id[0] = 0;
+    auto_obj = find_key_range(dev_obj, dev_end, "AutoDetectedDevice");
+    if (auto_obj) {
+        auto_obj = strchr(auto_obj + strlen("\"AutoDetectedDevice\""), ':');
+        if (auto_obj) {
+            auto_obj++;
+            while (auto_obj < dev_end && isspace((unsigned char)*auto_obj)) auto_obj++;
+        }
+        if (auto_obj && auto_obj < dev_end && *auto_obj == '{') {
+            const char *auto_end = find_matching_json(auto_obj, '{', '}');
+            if (auto_end && auto_end <= dev_end) json_string_range(auto_obj, auto_end, "Id", auto_id, sizeof(auto_id));
+        }
+    }
+    transport = transport_bits_range(dev_obj, dev_end);
+    *state = "unknown";
+    marker = pairing_marker_read(device_id, reason, reason_len) && reason[0];
+    if (strncmp(auto_id, "melodious-androidtv-", 20) == 0) kind = "androidtv";
+    else if (strncmp(auto_id, "melodious-webos-", 16) == 0) kind = "webos";
+    else if (strncmp(auto_id, "melodious-bt-", 13) == 0) kind = "bt-keyboard";
+    else if (strncmp(auto_id, "melodious-", 10) == 0) return NULL;
+    else {
+        /* A registration template is an object; null (a Roku) or anything
+         * else isn't one, and such a device may still be Bluetooth. Same
+         * rule as the web app's pairingKindOf. */
+        int has_register = 0;
+        if (transport > 0 && (transport & 64)) {
+            reg = find_key_range(dev_obj, dev_end, "RegisterSection");
+            if (reg) {
+                reg = strchr(reg + strlen("\"RegisterSection\""), ':');
+                if (reg) {
+                    reg++;
+                    while (reg < dev_end && isspace((unsigned char)*reg)) reg++;
+                }
+            }
+            has_register = reg && reg < dev_end && *reg == '{';
+        }
+        if (has_register) {
+            kind = "ip-register";
+            *state = engine_cookie_present(cookies, device_id) ? "paired" : "not-paired";
+        } else if (transport > 0 && (transport & 32)) {
+            kind = "bluetooth";
+            /* An address in DeviceList says the device was paired with some
+             * hub, maybe the one this replaced: only a missing one is certain.
+             * The engine's own record of pairing it (settings, not in a
+             * backup) at that address says it's this hub. */
+            char engine_addr[32];
+            if (!json_string_range(dev_obj, dev_end, "BTAddress", bt_address, sizeof(bt_address)) ||
+                strcmp(bt_address, "00:00:00:00:00:00") == 0) *state = "not-paired";
+            else if (engine_bt_address(settings, device_id, engine_addr, sizeof(engine_addr)) &&
+                strcasecmp(engine_addr, bt_address) == 0) *state = "paired";
+        } else {
+            return NULL;
+        }
+    }
+    if (marker) *state = "needs-attention";
+    else reason[0] = 0;
+    return kind;
+}
+
+/* A device's own top-level string member (its Name, not AutoDetectedDevice's
+ * or an app's): 1 with it in out. */
+static int device_top_string(const char *dev_obj, const char *key, char *out, size_t len) {
+    const char *v = json_top_member(dev_obj, key);
+    size_t n = 0;
+    if (len) out[0] = 0;
+    if (!v || *v != '"' || !len) return 0;
+    for (v++; *v && *v != '"' && n + 1 < len; v++) {
+        if (*v == '\\' && v[1]) {
+            v++;
+            out[n++] = *v == 'n' ? '\n' : *v == 't' ? '\t' : *v == 'r' ? '\r' : *v;
+        } else {
+            out[n++] = *v;
+        }
+    }
+    out[n] = 0;
+    return n > 0;
+}
+
+static void render_pairing_json(int fd) {
+    char *raw, *cookies, *settings;
+    const char *p;
+    FILE *f;
+    int first = 1;
+    raw = read_file_alloc(DEVICE_LIST, MAX_RESOURCE_FILE, NULL);
+    cookies = read_file_alloc(ENGINE_COOKIES, 65536, NULL);
+    settings = read_file_alloc(ENGINE_SETTINGS, 65536, NULL);
+    f = send_json_start(fd, "200 OK");
+    if (!f) {
+        free(raw);
+        free(cookies);
+        free(settings);
+        return;
+    }
+    fputs("{\"ok\":true,\"devices\":[", f);
+    for (p = raw; p && (p = strstr(p, "\"Device\":{")) != NULL;) {
+        const char *dev_obj = strchr(p, '{');
+        const char *dev_end = dev_obj ? find_matching_json(dev_obj, '{', '}') : NULL;
+        const char *kind, *state;
+        char device_id[24], reason[32], name[128];
+        long id;
+        if (!dev_obj || !dev_end) break;
+        id = json_long_range(dev_obj, dev_end, "Id-", 0);
+        p = dev_end + 1;
+        if (id <= 0) continue;
+        snprintf(device_id, sizeof(device_id), "%ld", id);
+        kind = pairing_kind_state_ex(dev_obj, dev_end, device_id, cookies, settings, &state, reason, sizeof(reason));
+        if (!kind) continue;
+        device_top_string(dev_obj, "Name", name, sizeof(name));
+        fprintf(f, "%s{\"deviceId\":\"%s\",\"kind\":\"%s\",\"state\":\"%s\"", first ? "" : ",", device_id, kind, state);
+        if (reason[0]) fprintf(f, ",\"reason\":\"%s\"", reason);
+        fputs(",\"name\":", f);
+        json_write_string(f, name);
+        fputs("}", f);
+        first = 0;
+    }
+    fputs("]}\n", f);
+    fclose(f);
+    free(raw);
+    free(cookies);
+    free(settings);
+}
+
+/* -- Pairing a device the stock engine pairs (docs/API.md "Pairing") --------
+ * Two kinds the stock engine keeps the pairing for, so these routes write
+ * the engine's own files:
+ *
+ *   ip-register  A stock IP device whose DeviceList entry has a
+ *                RegisterSection (a Sony Bravia). The hub sends that
+ *                template itself: without a code the TV shows one; with
+ *                "Authorization: Basic base64(':'+code)" it answers 200 and
+ *                Set-Cookie auth=…. The cookie and the code go into the
+ *                engine's cookies file (the engine renews the cookie with the
+ *                code) and the engine reloads. The engine's own
+ *                startippair/finishippair never finished (607, the TV 401).
+ *   bluetooth    A stock Bluetooth profile (a Shield). The engine pairs it:
+ *                bluetoothunpairing clears the old target, bluetoothpairing
+ *                advertises "Harmony Keyboard" (401 = waiting for the person
+ *                to pick it on the device), and once picked, bluetoothpairing
+ *                again answers 200 with the address, which the engine saves.
+ *
+ * Each call stands alone (there is no long-lived process between start and
+ * finish), so finish takes the address again and checks it again. Nothing
+ * here returns or logs the cookie, the code or the Authorization header: the
+ * code is a long-lived credential (the engine renews with it).
+ */
+#ifndef HUB_CLIENT_ID_FILE /* the engine registers with the Wi-Fi MAC */
+#define HUB_CLIENT_ID_FILE "/sys/class/net/ath0/address"
+#endif
+#define IP_REGISTER_CLIENT_NAME "Logitech Harmony" /* what the engine sends */
+#define IP_REGISTER_TIMEOUT_S 10
+#define SSDP_WAIT_MS 2500
+#ifndef BT_PAIRING_SESSION /* one Bluetooth pairing at a time; its time limit */
+#define BT_PAIRING_SESSION "/var/volatile/codex-pairing-bt"
+#endif
+#ifndef BT_PAIRING_LIMIT_S
+#define BT_PAIRING_LIMIT_S 180
+#endif
+#ifndef BT_DISCOVERABLE_OFF_CMD /* tests replace it: it changes the adapter */
+#define BT_DISCOVERABLE_OFF_CMD \
+    "adapter=$(dbus-send --system --print-reply --dest=org.bluez / org.bluez.Manager.DefaultAdapter 2>/dev/null | " \
+    "sed -n 's/.*object path \"\\(.*\\)\".*/\\1/p'); if [ -n \"$adapter\" ]; then dbus-send --system --dest=org.bluez " \
+    "\"$adapter\" org.bluez.Adapter.SetProperty string:Discoverable variant:boolean:false 2>&1; fi; hciconfig hci0 pscan 2>&1"
+#endif
+
+static int hold_send_all(int fd, const unsigned char *data, size_t len);
+static void stop_bt_pair_agent(void);
+
+/* strcasestr, which this C library hides without _GNU_SOURCE. */
+static const char *ci_find(const char *hay, const char *needle) {
+    size_t n = strlen(needle);
+    for (; hay && *hay; hay++) if (strncasecmp(hay, needle, n) == 0) return hay;
+    return NULL;
+}
+
+struct pair_target {
+    char device_id[24];
+    char name[128];
+    const char *kind;            /* pairing_kind_state's, or NULL */
+    char url[512];               /* RegisterSection, still holding its tokens */
+    char method[8];
+    char header[1024];
+    char body[2048];
+    int too_long;                /* a field didn't fit: refuse, don't send half */
+    char udn[96];                /* AutoDetectedDevice.Id: the TV's UPnP UDN */
+    char search[128];            /* the SSDP search target from its USN */
+    char bt_address[32];
+};
+
+/* The device's pairing details from DeviceList: 1 when found. */
+static int pair_target_load(const char *device_id, struct pair_target *t) {
+    char *raw;
+    const char *p;
+    char *end;
+    long wanted;
+    int found = 0;
+    memset(t, 0, sizeof(*t));
+    if (!device_id || !device_id[0] || strlen(device_id) >= sizeof(t->device_id)) return 0;
+    wanted = strtol(device_id, &end, 10);
+    if (wanted <= 0 || *end) return 0;
+    raw = read_file_alloc(DEVICE_LIST, MAX_RESOURCE_FILE, NULL);
+    for (p = raw; p && (p = strstr(p, "\"Device\":{")) != NULL;) {
+        const char *dev_obj = strchr(p, '{');
+        const char *dev_end = dev_obj ? find_matching_json(dev_obj, '{', '}') : NULL;
+        const char *state, *sub, *sub_end;
+        char reason[32];
+        if (!dev_obj || !dev_end) break;
+        p = dev_end + 1;
+        if (json_long_range(dev_obj, dev_end, "Id-", 0) != wanted) continue;
+        found = 1;
+        snprintf(t->device_id, sizeof(t->device_id), "%ld", wanted);
+        device_top_string(dev_obj, "Name", t->name, sizeof(t->name));
+        t->kind = pairing_kind_state(dev_obj, dev_end, t->device_id, NULL, &state, reason, sizeof(reason));
+        json_string_range(dev_obj, dev_end, "BTAddress", t->bt_address, sizeof(t->bt_address));
+        sub = find_key_range(dev_obj, dev_end, "RegisterSection");
+        sub = sub ? strchr(sub + strlen("\"RegisterSection\""), ':') : NULL;
+        if (sub) {
+            sub++;
+            while (sub < dev_end && isspace((unsigned char)*sub)) sub++;
+            sub_end = *sub == '{' ? find_matching_json(sub, '{', '}') : NULL;
+            if (sub_end && sub_end <= dev_end) {
+                json_string_range(sub, sub_end, "Url", t->url, sizeof(t->url));
+                json_string_range(sub, sub_end, "Method", t->method, sizeof(t->method));
+                json_string_range(sub, sub_end, "Header", t->header, sizeof(t->header));
+                json_string_range(sub, sub_end, "Body", t->body, sizeof(t->body));
+                t->too_long = strlen(t->url) + 1 >= sizeof(t->url) || strlen(t->method) + 1 >= sizeof(t->method) ||
+                    strlen(t->header) + 1 >= sizeof(t->header) || strlen(t->body) + 1 >= sizeof(t->body);
+            }
+        }
+        sub = find_key_range(dev_obj, dev_end, "AutoDetectedDevice");
+        sub = sub ? strchr(sub + strlen("\"AutoDetectedDevice\""), ':') : NULL;
+        if (sub) {
+            sub++;
+            while (sub < dev_end && isspace((unsigned char)*sub)) sub++;
+            sub_end = *sub == '{' ? find_matching_json(sub, '{', '}') : NULL;
+            if (sub_end && sub_end <= dev_end) {
+                char usn[256], *st;
+                json_string_range(sub, sub_end, "Id", t->udn, sizeof(t->udn));
+                /* USN is "uuid:<udn>::<search target>". */
+                if (json_string_range(sub, sub_end, "USN", usn, sizeof(usn)) && (st = strstr(usn, "::")) != NULL &&
+                    st[2] && strlen(st + 2) < sizeof(t->search) && !strpbrk(st + 2, "\r\n")) {
+                    snprintf(t->search, sizeof(t->search), "%s", st + 2);
+                }
+            }
+        }
+        break;
+    }
+    free(raw);
+    return found;
+}
+
+/* The device's pairing kind (pairing_kind_state's), or NULL. */
+static const char *device_pairing_kind(const char *device_id) {
+    struct pair_target t;
+    return pair_target_load(device_id, &t) ? t.kind : NULL;
+}
+
+/* A dotted-quad address on a private network (RFC 1918): a TV on the LAN.
+ * Pairing sends a request there, so nothing else is accepted. */
+static int pairing_host_allowed(const char *host) {
+    struct in_addr a;
+    unsigned long v;
+    int dots = 0;
+    const char *c;
+    if (!host || !host[0] || strlen(host) > 15) return 0;
+    for (c = host; *c; c++) {
+        if (*c == '.') dots++;
+        else if (!isdigit((unsigned char)*c)) return 0;
+    }
+    if (dots != 3 || inet_pton(AF_INET, host, &a) != 1) return 0;
+    v = ntohl(a.s_addr);
+#ifdef PAIRING_ALLOW_LOOPBACK /* tools/pairing-engine-test's fake TV */
+    if ((v >> 24) == 127) return 1;
+#endif
+    return (v >> 24) == 10 || (v >> 20) == 0xAC1 || (v >> 16) == 0xC0A8;
+}
+
+/* The hub's client id for registrations: its Wi-Fi MAC, as the engine sends
+ * it (the TV binds the cookie to it, and the engine renews with it). */
+static int hub_client_id(char *out, size_t len) {
+    char mac[32];
+    size_t i;
+    mac[0] = 0;
+    read_text(HUB_CLIENT_ID_FILE, mac, sizeof(mac));
+    chomp(mac);
+    if (strlen(mac) != 17) return 0;
+    for (i = 0; i < 17; i++) {
+        if (i % 3 == 2 ? mac[i] != ':' : !isxdigit((unsigned char)mac[i])) return 0;
+        mac[i] = (char)tolower((unsigned char)mac[i]);
+    }
+    snprintf(out, len, "%s", mac);
+    return 1;
+}
+
+static void base64_encode_text(const char *in, char *out, size_t outlen) {
+    static const char tbl[] = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
+    size_t n = strlen(in), i, o = 0;
+    for (i = 0; i < n && o + 5 < outlen; i += 3) {
+        unsigned v = (unsigned char)in[i] << 16;
+        if (i + 1 < n) v |= (unsigned char)in[i + 1] << 8;
+        if (i + 2 < n) v |= (unsigned char)in[i + 2];
+        out[o++] = tbl[(v >> 18) & 63];
+        out[o++] = tbl[(v >> 12) & 63];
+        out[o++] = i + 1 < n ? tbl[(v >> 6) & 63] : '=';
+        out[o++] = i + 2 < n ? tbl[v & 63] : '=';
+    }
+    out[o] = 0;
+}
+
+struct register_values {
+    const char *ip, *client_id, *client_name, *authorization;
+};
+
+/* The template with its tokens filled, like the engine's ipmanager: plain
+ * substitution; a token this doesn't know stays as it is. -1 when the result
+ * doesn't fit. */
+static int register_fill(const char *tpl, const struct register_values *v, char *out, size_t len) {
+    static const char *names[] = {"{IP}", "{clientId}", "{clientName}", "{Authorization}"};
+    const char *vals[4];
+    size_t o = 0, i;
+    vals[0] = v->ip; vals[1] = v->client_id; vals[2] = v->client_name; vals[3] = v->authorization;
+    if (!len) return -1;
+    while (*tpl) {
+        const char *put = NULL;
+        size_t skip = 1, plen;
+        for (i = 0; i < 4; i++) {
+            size_t nl = strlen(names[i]);
+            if (strncmp(tpl, names[i], nl) == 0) {
+                put = vals[i] ? vals[i] : "";
+                skip = nl;
+                break;
+            }
+        }
+        if (!put) {
+            if (o + 1 >= len) return -1;
+            out[o++] = *tpl;
+        } else {
+            plen = strlen(put);
+            if (o + plen >= len) return -1;
+            memcpy(out + o, put, plen);
+            o += plen;
+        }
+        tpl += skip;
+    }
+    out[o] = 0;
+    return 0;
+}
+
+/* The URL template must send to the chosen address and nowhere else:
+ * "http://{IP}" then an optional ":port", then the path. */
+static int register_url_parts(const char *url_tpl, int *port, char *path, size_t path_len) {
+    const char *p;
+    long n = 80;
+    char *end;
+    if (strncmp(url_tpl, "http://{IP}", 11) != 0) return 0;
+    p = url_tpl + 11;
+    if (*p == ':') {
+        n = strtol(p + 1, &end, 10);
+        if (end == p + 1 || n < 1 || n > 65535) return 0;
+        p = end;
+    }
+    if (*p != '/' || strlen(p) >= path_len) return 0;
+    for (end = (char *)p; *end; end++) if ((unsigned char)*end <= ' ' || *end == 0x7f) return 0;
+    *port = (int)n;
+    snprintf(path, path_len, "%s", p);
+    return 1;
+}
+
+/* The template's Header member is a JSON object of strings, such as
+ * {"Authorization":"{Authorization}"}. Each filled header goes into out as
+ * "Name: value\r\n"; one that fills to nothing is left out (no code yet).
+ * 0 when the template isn't one this can send. */
+static int register_headers(const char *tpl, const struct register_values *v, char *out, size_t len) {
+    const char *p = tpl;
+    size_t o = 0;
+    out[0] = 0;
+    while (*p && isspace((unsigned char)*p)) p++;
+    if (!*p) return 1; /* no headers */
+    if (*p++ != '{') return 0;
+    for (;;) {
+        char key[48], raw[256], val[256];
+        size_t k = 0, r = 0, i;
+        while (*p && (isspace((unsigned char)*p) || *p == ',')) p++;
+        if (*p == '}') return 1;
+        if (*p++ != '"') return 0;
+        while (*p && *p != '"' && k + 1 < sizeof(key)) key[k++] = *p++;
+        key[k] = 0;
+        if (*p++ != '"') return 0;
+        while (*p && isspace((unsigned char)*p)) p++;
+        if (*p++ != ':') return 0;
+        while (*p && isspace((unsigned char)*p)) p++;
+        if (*p++ != '"') return 0;
+        while (*p && *p != '"' && r + 1 < sizeof(raw)) {
+            if (*p == '\\') return 0;
+            raw[r++] = *p++;
+        }
+        raw[r] = 0;
+        if (*p++ != '"') return 0;
+        if (!k) return 0;
+        for (i = 0; i < k; i++) if (!isalnum((unsigned char)key[i]) && key[i] != '-') return 0;
+        if (strcasecmp(key, "Host") == 0 || strcasecmp(key, "Content-Length") == 0 ||
+            strcasecmp(key, "Connection") == 0 || strcasecmp(key, "Transfer-Encoding") == 0) continue;
+        if (register_fill(raw, v, val, sizeof(val)) != 0 || strpbrk(val, "\r\n")) return 0;
+        if (!val[0]) continue;
+        if (o + k + strlen(val) + 5 >= len) return 0;
+        o += (size_t)snprintf(out + o, len - o, "%s: %s\r\n", key, val);
+    }
+}
+
+/* One HTTP request to the TV. The status code, or -1 when nothing answers at
+ * that address (connection refused or timed out), -2 when the answer isn't
+ * HTTP. The auth cookie from Set-Cookie ("auth=…") goes into cookie. */
+static int register_http(const char *host, int port, const char *method, const char *path, const char *headers,
+        const char *body, char *cookie, size_t cookie_len) {
+    struct sockaddr_in addr;
+    struct timeval tv = {IP_REGISTER_TIMEOUT_S, 0};
+    char req[5120], resp[8192], hostport[32], *line;
+    long long deadline;
+    size_t got = 0, blen = body ? strlen(body) : 0;
+    int fd, flags, n, status;
+    fd_set wf;
+    if (cookie_len) cookie[0] = 0;
+    memset(&addr, 0, sizeof(addr));
+    addr.sin_family = AF_INET;
+    addr.sin_port = htons((unsigned short)port);
+    if (inet_pton(AF_INET, host, &addr.sin_addr) != 1) return -1;
+    if (port == 80) snprintf(hostport, sizeof(hostport), "%s", host);
+    else snprintf(hostport, sizeof(hostport), "%s:%d", host, port);
+    n = snprintf(req, sizeof(req),
+        "%s %s HTTP/1.1\r\nHost: %s\r\nContent-Type: application/json; charset=UTF-8\r\n%s"
+        "Content-Length: %lu\r\nConnection: close\r\n\r\n",
+        method, path, hostport, headers, (unsigned long)blen);
+    if (n < 0 || (size_t)n + blen >= sizeof(req)) return -2;
+    memcpy(req + n, body ? body : "", blen);
+    n += (int)blen;
+    fd = socket(AF_INET, SOCK_STREAM, 0);
+    if (fd < 0) return -1;
+    /* Connect without blocking past the timeout: a TV that's off drops
+     * packets instead of refusing. */
+    flags = fcntl(fd, F_GETFL, 0);
+    fcntl(fd, F_SETFL, flags | O_NONBLOCK);
+    if (connect(fd, (struct sockaddr *)&addr, sizeof(addr)) != 0) {
+        int err = 0;
+        socklen_t elen = sizeof(err);
+        struct timeval ctv = {5, 0};
+        if (errno != EINPROGRESS) { close(fd); return -1; }
+        FD_ZERO(&wf);
+        FD_SET(fd, &wf);
+        if (select(fd + 1, NULL, &wf, NULL, &ctv) <= 0 ||
+            getsockopt(fd, SOL_SOCKET, SO_ERROR, &err, &elen) != 0 || err != 0) { close(fd); return -1; }
+    }
+    fcntl(fd, F_SETFL, flags);
+    setsockopt(fd, SOL_SOCKET, SO_RCVTIMEO, &tv, sizeof(tv));
+    setsockopt(fd, SOL_SOCKET, SO_SNDTIMEO, &tv, sizeof(tv));
+    if (hold_send_all(fd, (const unsigned char *)req, (size_t)n) != 0) { close(fd); return -1; }
+    /* One deadline for the whole answer: SO_RCVTIMEO restarts on every
+     * read, and a device that sends a byte at a time would hold the child. */
+    deadline = now_unix_ms() + IP_REGISTER_TIMEOUT_S * 1000LL;
+    while (got < sizeof(resp) - 1 && now_unix_ms() < deadline) {
+        ssize_t r = recv(fd, resp + got, sizeof(resp) - 1 - got, 0);
+        if (r < 0 && errno == EINTR) continue;
+        if (r <= 0) break;
+        got += (size_t)r;
+        resp[got] = 0;
+        if (strstr(resp, "\r\n\r\n")) break; /* the status and headers are all this needs */
+    }
+    close(fd);
+    resp[got] = 0;
+    if (strncmp(resp, "HTTP/1.", 7) != 0 || got < 12) return -2;
+    status = atoi(resp + 9);
+    if (status < 100 || status > 599) return -2;
+    for (line = strstr(resp, "\r\n"); line && line[2] && !(line[2] == '\r' && line[3] == '\n'); line = strstr(line + 2, "\r\n")) {
+        const char *a = line + 2, *e;
+        if (strncasecmp(a, "Set-Cookie:", 11) != 0) continue;
+        /* The cookie named auth, first in the header; its value only
+         * cookie characters (RFC 6265), so it goes into the engine's JSON
+         * file as it is. Anything else is refused. */
+        for (a += 11; *a == ' ' || *a == '\t'; a++) {}
+        if (strncmp(a, "auth=", 5) != 0) continue;
+        for (e = a + 5; *e > 0x20 && *e < 0x7f && *e != '"' && *e != ',' && *e != ';' && *e != '\\'; e++) {}
+        if (e > a + 5 && (*e == ';' || *e == '\r' || *e == ' ' || *e == '\t') && (size_t)(e - a) < cookie_len) {
+            memcpy(cookie, a, (size_t)(e - a));
+            cookie[e - a] = 0;
+        }
+    }
+    return status;
+}
+
+/* A credentials file written aside and renamed: the old file's mode kept
+ * (0600 for a new one), synced before the rename, nothing appended. */
+static int write_credentials_atomic(const char *path, const char *data, size_t len) {
+    char tmp[256];
+    struct stat st;
+    mode_t mode = stat(path, &st) == 0 ? (st.st_mode & 0777) : 0600;
+    size_t done = 0;
+    int fd;
+    snprintf(tmp, sizeof(tmp), "%s.new", path);
+    fd = open(tmp, O_WRONLY | O_CREAT | O_TRUNC, 0600);
+    if (fd < 0) return -1;
+    fchmod(fd, mode);
+    while (done < len) {
+        ssize_t n = write(fd, data + done, len - done);
+        if (n < 0 && errno == EINTR) continue;
+        if (n <= 0) { close(fd); unlink(tmp); return -1; }
+        done += (size_t)n;
+    }
+    if (fsync(fd) != 0 || close(fd) != 0 || rename(tmp, path) != 0) { unlink(tmp); return -1; }
+    return 0;
+}
+
+/* Stores the TV's cookie and code for device_id in the engine's cookies file,
+ * keeping every other device's entry; the engine rewrites the file itself (a
+ * renewal, or clearing a refused one), so it is read again right before
+ * writing. 0 on success; -1 when the file holds something this won't
+ * rewrite. */
+static int engine_cookie_store(const char *device_id, const char *cookie, const char *pin) {
+    char *raw, *esc_cookie, *esc_pin, *entry;
+    const char *obj, *obj_end, *p;
+    size_t len = 0, entry_len;
+    char needle[48];
+    int rc = -1;
+    esc_cookie = json_escape_alloc(cookie);
+    esc_pin = json_escape_alloc(pin);
+    entry_len = strlen(device_id) + (esc_cookie ? strlen(esc_cookie) : 0) + (esc_pin ? strlen(esc_pin) : 0) + 64;
+    entry = (char *)malloc(entry_len);
+    if (!esc_cookie || !esc_pin || !entry) goto out;
+    /* json_escape_alloc returns the string with its quotes. */
+    snprintf(entry, entry_len, "\"%s\":{\"{cookie}\":%s,\"{renewpin}\":%s}", device_id, esc_cookie, esc_pin);
+    errno = 0;
+    raw = read_file_alloc(ENGINE_COOKIES, 65536, &len);
+    if (!raw && access(ENGINE_COOKIES, F_OK) == 0) goto out; /* there, but unreadable or too big: keep it */
+    if (!raw && errno != ENOENT) goto out;
+    for (p = raw; p && *p && isspace((unsigned char)*p); p++) {}
+    if (!raw || !*p) {
+        char *fresh = (char *)malloc(entry_len + 16);
+        free(raw);
+        if (!fresh) goto out;
+        snprintf(fresh, entry_len + 16, "{\"cookie\":{%s}}", entry);
+        rc = write_credentials_atomic(ENGINE_COOKIES, fresh, strlen(fresh));
+        free(fresh);
+        goto out;
+    }
+    if (*p != '{' || !find_matching_json(p, '{', '}')) { free(raw); goto out; }
+    obj = json_top_member(raw, "cookie");
+    if (obj && *obj == '[') {
+        /* The engine encodes an emptied table as [] (after clearing a refused
+         * registration): that's an empty object. A non-empty array isn't. */
+        const char *q = obj + 1, *close;
+        while (*q && isspace((unsigned char)*q)) q++;
+        if (*q != ']') { free(raw); goto out; }
+        close = q;
+        if (replace_span(&raw, &len, (size_t)(obj - raw), (size_t)(close + 1 - raw), "{}") != 0) { free(raw); goto out; }
+        obj = json_top_member(raw, "cookie");
+    }
+    if (!obj) {
+        /* Other members but no cookies yet: add the member first. */
+        char *member = (char *)malloc(entry_len + 32);
+        const char *q = p + 1;
+        while (*q && isspace((unsigned char)*q)) q++;
+        if (!member) { free(raw); goto out; }
+        snprintf(member, entry_len + 32, "\"cookie\":{%s}%s", entry, *q == '}' ? "" : ",");
+        rc = replace_span(&raw, &len, (size_t)(p + 1 - raw), (size_t)(p + 1 - raw), member);
+        free(member);
+    } else {
+        if (*obj != '{' || !(obj_end = find_matching_json(obj, '{', '}'))) { free(raw); goto out; }
+        int replaced = 0;
+        snprintf(needle, sizeof(needle), "\"%s\"", device_id);
+        for (p = obj + 1; (p = strstr(p, needle)) != NULL && p < obj_end; p += strlen(needle)) {
+            const char *v = p + strlen(needle), *v_end;
+            while (isspace((unsigned char)*v)) v++;
+            if (*v != ':') continue;
+            v++;
+            while (isspace((unsigned char)*v)) v++;
+            v_end = *v == '{' ? find_matching_json(v, '{', '}') : NULL;
+            if (!v_end || v_end > obj_end) { free(raw); goto out; }
+            /* Replace the whole member: its key and value. raw moves. */
+            rc = replace_span(&raw, &len, (size_t)(p - raw), (size_t)(v_end + 1 - raw), entry);
+            replaced = 1;
+            break;
+        }
+        if (!replaced) {
+            const char *q = obj + 1;
+            char *member = (char *)malloc(entry_len + 4);
+            while (*q && isspace((unsigned char)*q)) q++;
+            if (!member) { free(raw); goto out; }
+            snprintf(member, entry_len + 4, "%s%s", entry, *q == '}' ? "" : ",");
+            rc = replace_span(&raw, &len, (size_t)(obj + 1 - raw), (size_t)(obj + 1 - raw), member);
+            free(member);
+        }
+    }
+    if (rc == 0) rc = write_credentials_atomic(ENGINE_COOKIES, raw, len);
+    free(raw);
+out:
+    free(esc_cookie);
+    free(esc_pin);
+    free(entry);
+    return rc;
+}
+
+/* The code the engine holds for device_id ({renewpin}), for a TV that
+ * registered the hub again without showing one: 1 with it in pin. */
+static int engine_cookie_pin(const char *device_id, char *pin, size_t len) {
+    char *raw = read_file_alloc(ENGINE_COOKIES, 65536, NULL), needle[48];
+    const char *obj, *obj_end, *p;
+    int found = 0;
+    pin[0] = 0;
+    obj = raw ? json_top_member(raw, "cookie") : NULL;
+    obj_end = obj && *obj == '{' ? find_matching_json(obj, '{', '}') : NULL;
+    snprintf(needle, sizeof(needle), "\"%s\"", device_id);
+    for (p = obj_end ? obj + 1 : NULL; p && (p = strstr(p, needle)) != NULL && p < obj_end; p += strlen(needle)) {
+        const char *v = p + strlen(needle), *v_end;
+        while (isspace((unsigned char)*v)) v++;
+        if (*v != ':') continue;
+        for (v++; isspace((unsigned char)*v); v++) {}
+        v_end = *v == '{' ? find_matching_json(v, '{', '}') : NULL;
+        found = v_end && json_string_range(v, v_end, "{renewpin}", pin, len);
+        break;
+    }
+    free(raw);
+    return found;
+}
+
+/* A Bluetooth address as aa:bb:cc:dd:ee:ff (either case), not all zeros. */
+static int bt_address_ok(const char *a) {
+    size_t i;
+    if (!a || strlen(a) != 17 || strcmp(a, "00:00:00:00:00:00") == 0) return 0;
+    for (i = 0; i < 17; i++) if (i % 3 == 2 ? a[i] != ':' : !isxdigit((unsigned char)a[i])) return 0;
+    return 1;
+}
+
+/* DeviceList's BTAddress for the device, which the Bluetooth pre-connect
+ * (find_ir_bluetooth_target) uses: set to the address the engine paired. */
+static int device_bt_address_set(const char *device_id, const char *address) {
+    char *raw, quoted[24];
+    const char *p;
+    size_t len;
+    long wanted = strtol(device_id, NULL, 10);
+    int rc = -1;
+    raw = read_file_alloc(DEVICE_LIST, MAX_RESOURCE_FILE, &len);
+    for (p = raw; p && (p = strstr(p, "\"Device\":{")) != NULL;) {
+        const char *dev_obj = strchr(p, '{');
+        const char *dev_end = dev_obj ? find_matching_json(dev_obj, '{', '}') : NULL;
+        const char *k, *v, *v_end;
+        if (!dev_obj || !dev_end) break;
+        p = dev_end + 1;
+        if (json_long_range(dev_obj, dev_end, "Id-", 0) != wanted) continue;
+        k = find_key_range(dev_obj, dev_end, "BTAddress");
+        v = k ? strchr(k + strlen("\"BTAddress\""), ':') : NULL;
+        if (!v || v >= dev_end) break;
+        for (v++; v < dev_end && isspace((unsigned char)*v); v++) {}
+        if (strncmp(v, "null", 4) == 0) v_end = v + 4;
+        else if (*v == '"' && (v_end = strchr(v + 1, '"')) != NULL && v_end < dev_end) v_end++;
+        else break;
+        snprintf(quoted, sizeof(quoted), "\"%s\"", address);
+        backup_resources();
+        if (replace_span(&raw, &len, (size_t)(v - raw), (size_t)(v_end - raw), quoted) == 0 &&
+            (rc = write_file_atomic(DEVICE_LIST, raw, len)) == 0) request_resource_reload();
+        break;
+    }
+    free(raw);
+    return rc;
+}
+
+/* An engine Bluetooth pairing call for the device: its reply code (-1 when
+ * the engine didn't answer), the reply in reply. */
+static int engine_bt_call(const char *cmd, const char *device_id, char *reply, size_t len) {
+    char params[64];
+    snprintf(params, sizeof(params), "{\"deviceId\":\"%s\"}", device_id);
+    if (harmony_hbus_call(cmd, params, reply, len) != 0 && !strstr(reply, "\"code\"")) return -1;
+    return engine_reply_code_or(reply, -1);
+}
+
+/* Ends what start began: the hub stops being discoverable, and the time
+ * limit below has nothing left to do. */
+static void bt_discoverable_off(void) {
+    char out[1024];
+    unlink(BT_PAIRING_SESSION);
+    run_cmd(BT_DISCOVERABLE_OFF_CMD, out, sizeof(out));
+}
+
+static int spawn_detached(const char *cmd); /* no inherited descriptors */
+
+/* A tab that closes or loses the network during "select" never cancels, so
+ * start also leaves a timer: after BT_PAIRING_LIMIT_S it turns
+ * discoverability off, unless finish, cancel or a newer start came first
+ * (each replaces or removes the session file, which holds a token). */
+static void bt_pairing_time_limit(void) {
+    char token[48], cmd[1024];
+    FILE *f;
+    snprintf(token, sizeof(token), "%ld-%ld", (long)getpid(), (long)time(NULL));
+    f = fopen(BT_PAIRING_SESSION, "w");
+    if (!f) return;
+    fputs(token, f);
+    fclose(f);
+    snprintf(cmd, sizeof(cmd),
+        "sleep %d; if [ \"$(cat " BT_PAIRING_SESSION " 2>/dev/null)\" = '%s' ]; then rm -f " BT_PAIRING_SESSION "; "
+        BT_DISCOVERABLE_OFF_CMD "; fi",
+        BT_PAIRING_LIMIT_S, token);
+    /* Detached, not "cmd &": a background shell would keep this request's
+     * socket open, so the reply wouldn't end until the timer did. */
+    (void)spawn_detached(cmd);
+}
+
+static void send_pairing_reply(int fd, const char *status, const char *step, const char *error, const char *extra) {
+    FILE *f = send_json_start(fd, status);
+    if (!f) return;
+    fprintf(f, "{\"ok\":%s", error ? "false" : "true");
+    if (step) fprintf(f, ",\"step\":\"%s\"", step);
+    if (error) {
+        fputs(",\"error\":", f);
+        json_write_string(f, error);
+    }
+    if (extra) fputs(extra, f);
+    fputs("}\n", f);
+    fclose(f);
+}
+
+/* The device a pairing request names, as a pair target of a kind these
+ * routes pair; 0 after answering the request when it isn't one. */
+static int pairing_request_target(int fd, const struct request *req, struct pair_target *t) {
+    char device_id[24];
+    if (json_top_string(req->body ? req->body : "", "deviceId", device_id, sizeof(device_id)) != 1 || !device_id[0]) {
+        send_pairing_reply(fd, "400 Bad Request", NULL, "Say which device: deviceId.", NULL);
+        return 0;
+    }
+    if (!pair_target_load(device_id, t)) {
+        send_pairing_reply(fd, "404 Not Found", NULL, "There's no such device on this hub.", NULL);
+        return 0;
+    }
+    if (!t->kind || (strcmp(t->kind, "ip-register") != 0 && strcmp(t->kind, "bluetooth") != 0)) {
+        send_pairing_reply(fd, "409 Conflict", NULL,
+            "This device doesn't pair here. Network TVs and LG TVs pair from their own pages.", NULL);
+        return 0;
+    }
+    return 1;
+}
+
+/* The ip-register request: code "" for the first one (the TV shows a code). */
+static int ip_register_send(int fd, const struct pair_target *t, const char *host, const char *code, char *cookie, size_t cookie_len) {
+    char client_id[24], auth[64], basic[32], path[512], filled[640], headers[1536], body[2560];
+    struct register_values v;
+    int port, status;
+    if (t->too_long || !register_url_parts(t->url, &port, path, sizeof(path)) ||
+        !(t->method[0] == 0 || strcmp(t->method, "POST") == 0 || strcmp(t->method, "GET") == 0)) {
+        send_pairing_reply(fd, "409 Conflict", NULL,
+            "This device's pairing details aren't a kind the hub can send.", NULL);
+        return -3;
+    }
+    if (!hub_client_id(client_id, sizeof(client_id))) {
+        send_pairing_reply(fd, "500 Internal Server Error", NULL, "The hub couldn't read its own network address.", NULL);
+        return -3;
+    }
+    auth[0] = 0;
+    if (code && code[0]) {
+        char userpass[16];
+        snprintf(userpass, sizeof(userpass), ":%s", code);
+        base64_encode_text(userpass, basic, sizeof(basic));
+        snprintf(auth, sizeof(auth), "Basic %s", basic);
+    }
+    v.ip = host;
+    v.client_id = client_id;
+    v.client_name = IP_REGISTER_CLIENT_NAME;
+    v.authorization = auth;
+    /* The path keeps the template's tokens until here. */
+    if (register_fill(path, &v, filled, sizeof(filled)) != 0 || strpbrk(filled, " \r\n") ||
+        register_fill(t->body, &v, body, sizeof(body)) != 0 ||
+        !register_headers(t->header, &v, headers, sizeof(headers))) {
+        send_pairing_reply(fd, "409 Conflict", NULL,
+            "This device's pairing details aren't a kind the hub can send.", NULL);
+        return -3;
+    }
+    status = register_http(host, port, t->method[0] ? t->method : "POST", filled, headers, body, cookie, cookie_len);
+    memset(auth, 0, sizeof(auth));
+    memset(basic, 0, sizeof(basic));
+    return status;
+}
+
+static void ip_register_unreachable(int fd, const char *host, int status) {
+    char msg[256];
+    if (status == -1) {
+        snprintf(msg, sizeof(msg), "Nothing answered at %s. Check that the TV is on and the address is right.", host);
+    } else if (status == 403) {
+        snprintf(msg, sizeof(msg), "The TV refused. Turn on its IP control: on a Sony, Settings, Network, Home network, "
+            "IP control, then set Authentication to Normal (or Normal and Pre-Shared Key).");
+    } else if (status == 404) {
+        snprintf(msg, sizeof(msg), "The device at %s doesn't take pairing requests. Check the address is the TV's.", host);
+    } else if (status < 100) {
+        snprintf(msg, sizeof(msg), "The device at %s didn't answer like a TV. Check the address is the TV's.", host);
+    } else if (status == 200) {
+        snprintf(msg, sizeof(msg), "The TV accepted the hub but sent no registration back. Try again.");
+    } else {
+        snprintf(msg, sizeof(msg), "The TV answered %d. Check the address is the TV's, and try again.", status);
+    }
+    send_pairing_reply(fd, "502 Bad Gateway", NULL, msg, NULL);
+}
+
+/* The TV registered the hub: keep the cookie and code where the engine
+ * reads them, and reload the engine so it does. */
+static void ip_register_done(int fd, const struct pair_target *t, const char *cookie, const char *code) {
+    if (engine_cookie_store(t->device_id, cookie, code) != 0) {
+        send_pairing_reply(fd, "500 Internal Server Error", NULL,
+            "The TV accepted the hub, but the hub couldn't save it. Try again.", NULL);
+        return;
+    }
+    request_resource_reload_names("all\n");
+    pairing_marker_remove(t->device_id);
+    send_pairing_reply(fd, "200 OK", "done", NULL, ",\"reloading\":true");
+}
+
+/* The engine paired the device (bluetoothpairing answered 200 with its
+ * address): DeviceList gets the address for the pre-connect, and the hub
+ * stops being discoverable. */
+static void bt_paired(int fd, const struct pair_target *t, const char *reply) {
+    char address[32];
+    if (json_string_range(reply, NULL, "bdaddr", address, sizeof(address)) && bt_address_ok(address) &&
+        strcasecmp(address, t->bt_address) != 0) {
+        device_bt_address_set(t->device_id, address);
+    }
+    bt_discoverable_off();
+    pairing_marker_remove(t->device_id);
+    send_pairing_reply(fd, "200 OK", "done", NULL, NULL);
+}
+
+/* POST /api/pairing/start {deviceId, host?}: the device shows a code
+ * (ip-register, "code") or offers "Harmony Keyboard" (bluetooth, "select"). */
+static void render_pairing_start(int fd, const struct request *req) {
+    struct pair_target t;
+    char reply[2048];
+    if (!pairing_request_target(fd, req, &t)) return;
+    if (strcmp(t.kind, "ip-register") == 0) {
+        char host[32], cookie[512];
+        int status;
+        if (json_top_string(req->body, "host", host, sizeof(host)) != 1 || !pairing_host_allowed(host)) {
+            send_pairing_reply(fd, "400 Bad Request", NULL,
+                "Give the TV's address on your network, four numbers such as 192.168.1.40.", NULL);
+            return;
+        }
+        status = ip_register_send(fd, &t, host, "", cookie, sizeof(cookie));
+        if (status == -3) return;
+        if (status == 401) {
+            send_pairing_reply(fd, "200 OK", "code", NULL, NULL);
+        } else if (status == 200 && cookie[0]) {
+            /* The TV registered the hub without a code: it knows this hub
+             * already. The engine renews with the code it was paired with,
+             * so keep that one; without one, the TV has to forget the hub. */
+            char pin[16];
+            if (engine_cookie_pin(t.device_id, pin, sizeof(pin))) {
+                ip_register_done(fd, &t, cookie, pin);
+            } else {
+                send_pairing_reply(fd, "409 Conflict", NULL,
+                    "The TV knows this hub already, so it shows no code, and the hub needs one to keep the TV "
+                    "registered. On the TV, remove “Logitech Harmony” from its remote devices (on a Sony: "
+                    "Settings, Network, Home network, Remote device settings, Deregister remote device), then "
+                    "start again.", ",\"alreadyRegistered\":true");
+            }
+            memset(pin, 0, sizeof(pin));
+        } else {
+            ip_register_unreachable(fd, host, status);
+        }
+        memset(cookie, 0, sizeof(cookie));
+        return;
+    }
+    /* bluetooth: clear the old target, then advertise. */
+    stop_bt_pair_agent(); /* one pairing at a time on the radio */
+    engine_bt_call("harmony.engine?bluetoothunpairing", t.device_id, reply, sizeof(reply));
+    switch (engine_bt_call("harmony.engine?bluetoothpairing", t.device_id, reply, sizeof(reply))) {
+    case 401:
+        bt_pairing_time_limit();
+        send_pairing_reply(fd, "200 OK", "select", NULL, NULL);
+        return;
+    case 200: /* it connected at once */
+        bt_paired(fd, &t, reply);
+        return;
+    default: {
+        char extra[48];
+        snprintf(extra, sizeof(extra), ",\"engineCode\":%d", engine_reply_code_or(reply, 0));
+        bt_discoverable_off();
+        send_pairing_reply(fd, "502 Bad Gateway", NULL, "The hub couldn't start Bluetooth pairing. Try again.", extra);
+        return;
+    }
+    }
+}
+
+/* POST /api/pairing/finish {deviceId, host?, code?}: ip-register sends the
+ * code; bluetooth asks the engine whether the device picked the hub. */
+static void render_pairing_finish(int fd, const struct request *req) {
+    struct pair_target t;
+    char reply[2048];
+    if (!pairing_request_target(fd, req, &t)) return;
+    if (strcmp(t.kind, "ip-register") == 0) {
+        char host[32], code[12], cookie[512];
+        size_t i, n;
+        int status;
+        if (json_top_string(req->body, "host", host, sizeof(host)) != 1 || !pairing_host_allowed(host)) {
+            send_pairing_reply(fd, "400 Bad Request", NULL,
+                "Give the TV's address on your network, four numbers such as 192.168.1.40.", NULL);
+            return;
+        }
+        n = json_top_string(req->body, "code", code, sizeof(code)) == 1 ? strlen(code) : 0;
+        for (i = 0; i < n; i++) if (!isdigit((unsigned char)code[i])) n = 0;
+        if (n < 4 || n > 8) {
+            send_pairing_reply(fd, "400 Bad Request", NULL, "Type the code from the TV: 4 digits.", NULL);
+            return;
+        }
+        status = ip_register_send(fd, &t, host, code, cookie, sizeof(cookie));
+        if (status == -3) {
+            memset(code, 0, sizeof(code));
+            return;
+        }
+        if (status == 200 && cookie[0]) {
+            ip_register_done(fd, &t, cookie, code);
+        } else if (status == 200) {
+            send_pairing_reply(fd, "502 Bad Gateway", NULL,
+                "The TV accepted the code but sent no registration back. Try again.", NULL);
+        } else if (status == 401) {
+            /* A Sony shows a new code after a wrong one. */
+            send_pairing_reply(fd, "409 Conflict", NULL,
+                "The TV didn't accept that code. Ask for a new one and type it.", ",\"wrongCode\":true");
+        } else {
+            ip_register_unreachable(fd, host, status);
+        }
+        memset(code, 0, sizeof(code));
+        memset(cookie, 0, sizeof(cookie));
+        return;
+    }
+    switch (engine_bt_call("harmony.engine?bluetoothpairing", t.device_id, reply, sizeof(reply))) {
+    case 200:
+        bt_paired(fd, &t, reply);
+        return;
+    case 401:
+        send_pairing_reply(fd, "200 OK", "select", NULL, ",\"waiting\":true");
+        return;
+    default: {
+        char extra[48];
+        snprintf(extra, sizeof(extra), ",\"engineCode\":%d", engine_reply_code_or(reply, 0));
+        bt_discoverable_off();
+        send_pairing_reply(fd, "502 Bad Gateway", NULL, "The hub couldn't check the pairing. Try again.", extra);
+        return;
+    }
+    }
+}
+
+/* POST /api/pairing/cancel {deviceId}: stop offering the hub over
+ * Bluetooth. Start's bluetoothunpairing made the engine forget the device,
+ * but the device keeps its bond: once the link is up, bluetoothpairing
+ * answers 200 and the engine saves the address again. The link may still be
+ * up; if not (the device went to sleep), the hub connects to the address in
+ * DeviceList, as before a send, and asks again. So a cancelled pairing
+ * loses nothing. Nothing to undo for ip-register. */
+static void render_pairing_cancel(int fd, const struct request *req) {
+    struct pair_target t;
+    char reply[2048], detail[256];
+    if (!pairing_request_target(fd, req, &t)) return;
+    if (strcmp(t.kind, "bluetooth") == 0) {
+        int code = engine_bt_call("harmony.engine?bluetoothpairing", t.device_id, reply, sizeof(reply));
+        if (code != 200 && bt_address_ok(t.bt_address) &&
+            ensure_ir_bluetooth_connection(t.device_id, detail, sizeof(detail)) >= 0) {
+            code = engine_bt_call("harmony.engine?bluetoothpairing", t.device_id, reply, sizeof(reply));
+        }
+        if (code == 200) {
+            bt_paired(fd, &t, reply);
+            return;
+        }
+        bt_discoverable_off();
+    }
+    send_pairing_reply(fd, "200 OK", NULL, NULL, NULL);
+}
+
+/* One SSDP answer: -1 when it isn't about the search target (some devices
+ * answer every search), else 1 when its USN line carries the UDN, 0 when
+ * not. buf is changed (the USN line is cut at its end). */
+static int ssdp_answer_match(char *buf, const char *search, const char *udn) {
+    char *usn, *eol;
+    if (!ci_find(buf, search)) return -1;
+    usn = (char *)ci_find(buf, "\nUSN:");
+    if (!usn) return 0;
+    eol = strpbrk(usn + 1, "\r\n");
+    if (eol) *eol = 0;
+    return ci_find(usn, udn) != NULL;
+}
+
+/* GET /api/pairing/find?deviceId=: where the device is on the network, by
+ * an SSDP search for its search target, matched by its UDN. found lists
+ * each private address that answered; match is true for the device's own.
+ * searched is false when DeviceList says nothing to search for. */
+static void render_pairing_find(int fd, const struct request *req) {
+    struct pair_target t;
+    char device_id[24], hosts[16][16];
+    int matches[16], nhosts = 0, i, s = -1;
+    FILE *f;
+    const char *q = strchr(req->path, '?');
+    device_id[0] = 0;
+    if (q && strncmp(q + 1, "deviceId=", 9) == 0) {
+        size_t n = strspn(q + 10, "0123456789");
+        if (n > 0 && n < sizeof(device_id)) {
+            memcpy(device_id, q + 10, n);
+            device_id[n] = 0;
+        }
+    }
+    if (!device_id[0] || !pair_target_load(device_id, &t)) {
+        send_pairing_reply(fd, "404 Not Found", NULL, "There's no such device on this hub.", NULL);
+        return;
+    }
+    if (t.search[0] && t.udn[0] && (s = socket(AF_INET, SOCK_DGRAM, 0)) >= 0) {
+        char msg[512];
+        struct sockaddr_in to;
+        struct ifaddrs *ifs = NULL, *a;
+        long long until;
+        unsigned char ttl = 2;
+        int n = snprintf(msg, sizeof(msg),
+            "M-SEARCH * HTTP/1.1\r\nHOST: 239.255.255.250:1900\r\nMAN: \"ssdp:discover\"\r\nMX: 2\r\nST: %s\r\n\r\n", t.search);
+        memset(&to, 0, sizeof(to));
+        to.sin_family = AF_INET;
+        to.sin_port = htons(1900);
+        inet_pton(AF_INET, "239.255.255.250", &to.sin_addr);
+        setsockopt(s, IPPROTO_IP, IP_MULTICAST_TTL, &ttl, sizeof(ttl));
+        /* Ask on every LAN interface: the hub has no default route. */
+        if (getifaddrs(&ifs) == 0) {
+            for (a = ifs; a; a = a->ifa_next) {
+                struct in_addr via;
+                if (!a->ifa_addr || a->ifa_addr->sa_family != AF_INET || (a->ifa_flags & IFF_LOOPBACK) ||
+                    !(a->ifa_flags & IFF_UP)) continue;
+                via = ((struct sockaddr_in *)a->ifa_addr)->sin_addr;
+                setsockopt(s, IPPROTO_IP, IP_MULTICAST_IF, &via, sizeof(via));
+                sendto(s, msg, (size_t)n, 0, (struct sockaddr *)&to, sizeof(to));
+            }
+            freeifaddrs(ifs);
+        }
+        sendto(s, msg, (size_t)n, 0, (struct sockaddr *)&to, sizeof(to));
+        until = now_unix_ms() + SSDP_WAIT_MS;
+        while (nhosts < 16) {
+            char buf[1536], host[16];
+            int match;
+            struct sockaddr_in from;
+            socklen_t flen = sizeof(from);
+            long long left = until - now_unix_ms();
+            struct timeval tv;
+            fd_set rf;
+            ssize_t got;
+            int dup = 0;
+            if (left <= 0) break;
+            tv.tv_sec = (time_t)(left / 1000);
+            tv.tv_usec = (suseconds_t)((left % 1000) * 1000);
+            FD_ZERO(&rf);
+            FD_SET(s, &rf);
+            if (select(s + 1, &rf, NULL, NULL, &tv) <= 0) break;
+            got = recvfrom(s, buf, sizeof(buf) - 1, 0, (struct sockaddr *)&from, &flen);
+            if (got <= 0) continue;
+            buf[got] = 0;
+            if (!inet_ntop(AF_INET, &from.sin_addr, host, sizeof(host)) || !pairing_host_allowed(host)) continue;
+            if ((match = ssdp_answer_match(buf, t.search, t.udn)) < 0) continue;
+            for (i = 0; i < nhosts; i++) if (strcmp(hosts[i], host) == 0) dup = 1;
+            if (dup) {
+                for (i = 0; i < nhosts; i++)
+                    if (strcmp(hosts[i], host) == 0 && match) matches[i] = 1;
+                continue;
+            }
+            snprintf(hosts[nhosts], sizeof(hosts[nhosts]), "%s", host);
+            matches[nhosts] = match;
+            nhosts++;
+        }
+        close(s);
+    }
+    f = send_json_start(fd, "200 OK");
+    if (!f) return;
+    fprintf(f, "{\"ok\":true,\"searched\":%s,\"found\":[", t.search[0] && t.udn[0] ? "true" : "false");
+    for (i = 0; i < nhosts; i++)
+        fprintf(f, "%s{\"host\":\"%s\",\"match\":%s}", i ? "," : "", hosts[i], matches[i] ? "true" : "false");
+    fputs("]}\n", f);
+    fclose(f);
 }
 
 static int hold_send_all(int fd, const unsigned char *data, size_t len) {
@@ -7521,7 +8839,7 @@ static void hold_run(const char *hold_id, const char *device_id, const char *com
     long lease_size, size;
     const char *ended = NULL;
     struct hold_rx *rx = calloc(1, sizeof(*rx));
-    int fd, seq = 0, bt;
+    int fd, seq = 0, bt, bt_failed = 0;
     err[0] = 0;
     snprintf(id_prefix, sizeof(id_prefix), "codex-hold-%s", hold_id);
     {
@@ -7540,6 +8858,7 @@ static void hold_run(const char *hold_id, const char *device_id, const char *com
     bt = ensure_ir_bluetooth_connection(device_id, bt_detail, sizeof(bt_detail));
     if (bt < 0) {
         snprintf(err, sizeof(err), "%s", bt_detail[0] ? bt_detail : "Bluetooth target could not be connected.");
+        bt_failed = 1;
         goto fail;
     }
     repair_known_protocols_for_current_commands();
@@ -7627,6 +8946,9 @@ static void hold_run(const char *hold_id, const char *device_id, const char *com
     close(fd);
     free(rx);
     log_ir_event("api-hold", hold_id, device_id, command, err[0] ? err : "release");
+    /* Only a hold that ran its course clears a marker: a refusal can come
+     * after the press was answered. */
+    if (!err[0]) pairing_marker_clear(device_id, command);
     if (err[0]) hold_write_file(hold_id, "error", err);
     else if (ended) hold_write_file(hold_id, "ended", ended);
     hold_unlink(hold_id, "lease");
@@ -7636,7 +8958,8 @@ static void hold_run(const char *hold_id, const char *device_id, const char *com
 fail:
     free(rx);
     log_ir_event("api-hold", hold_id, device_id, command, err);
-    if (write(report_fd, "error ", 6) < 0 || write(report_fd, err, strlen(err)) < 0) {}
+    if (write(report_fd, bt_failed ? "bterror " : "error ", bt_failed ? 8 : 6) < 0 ||
+        write(report_fd, err, strlen(err)) < 0) {}
     close(report_fd);
     hold_unlink(hold_id, "lease");
     hold_unlink(hold_id, "release");
@@ -7644,7 +8967,8 @@ fail:
 }
 
 /* Start a hold: returns 0 once the press is out, -2 if a newer press took
- * over first (nothing was sent), else -1 with the reason. */
+ * over first (nothing was sent), -3 if the Bluetooth connect before it
+ * failed, else -1 with the reason. */
 static int hold_start(const char *hold_id, const char *device_id, const char *command, char *out, size_t outlen) {
     char lock_path[160];
     int pipefd[2], fd, lock_fd;
@@ -7735,6 +9059,10 @@ static int hold_start(const char *hold_id, const char *device_id, const char *co
     if (strncmp(out, "gone ", 5) == 0) {
         memmove(out, out + 5, strlen(out + 5) + 1);
         return -2;
+    }
+    if (strncmp(out, "bterror ", 8) == 0) {
+        memmove(out, out + 8, strlen(out + 8) + 1);
+        return -3;
     }
     if (strncmp(out, "error ", 6) == 0) {
         memmove(out, out + 6, strlen(out + 6) + 1);
@@ -10076,6 +11404,7 @@ static void handle_ir_send(int fd, const struct request *req) {
 
 static void render_ir_send_json(int fd, const struct request *req) {
     char device_id[64], command[128], status[16], hold_id[48], reply[4096];
+    int sent;
     FILE *f;
     form_value(req->body, "deviceId", device_id, sizeof(device_id));
     form_value(req->body, "command", command, sizeof(command));
@@ -10104,6 +11433,7 @@ static void render_ir_send_json(int fd, const struct request *req) {
         if (!f) return;
         fputs(rc == 0 ? "{\"ok\":true" : "{\"ok\":false,\"error\":", f);
         if (rc != 0) json_write_string(f, reply);
+        if (rc != 0 && !gone) write_send_problem(f, device_id, command, reply, rc == -3);
         fputs(",\"status\":", f); json_write_string(f, status);
         fputs(",\"holdId\":", f); json_write_string(f, hold_id);
         fputs("}\n", f);
@@ -10111,11 +11441,16 @@ static void render_ir_send_json(int fd, const struct request *req) {
         return;
     }
     repair_known_protocols_for_current_commands();
-    send_ir_command_action_ex(device_id, command, "api", "", reply, sizeof(reply));
+    sent = send_ir_command_action_ex(device_id, command, "api", "", reply, sizeof(reply));
+    /* Always 200 and ok:true, as the apps expect (docs/API.md): "sent" and
+     * the members write_send_problem adds tell whether it went out. */
     f = send_json_start(fd, "200 OK");
     if (!f) return;
     fputs("{\"ok\":true,\"deviceId\":", f); json_write_string(f, device_id);
     fputs(",\"command\":", f); json_write_string(f, command);
+    fprintf(f, ",\"sent\":%s", sent == SEND_OK ? "true" : "false");
+    if (sent == SEND_OK) pairing_marker_clear(device_id, command);
+    if (sent != SEND_OK) write_send_problem(f, device_id, command, reply, sent == SEND_BT_FAILED);
     fputs(",\"reply\":", f); json_write_string(f, reply[0] ? reply : "no response");
     fputs("}\n", f);
     fclose(f);
@@ -14949,6 +16284,20 @@ static void handle_client(int client) {
         send_embedded_asset(client, activity_ui_js, activity_ui_js_len, "application/javascript; charset=utf-8");
     } else if (strcmp(req.method, "GET") == 0 && strcmp(req.path, "/api/activity-config") == 0) {
         render_activity_config_json(client);
+    } else if (strcmp(req.method, "GET") == 0 && strcmp(req.path, "/api/pairing") == 0) {
+        render_pairing_json(client);
+    } else if (strcmp(req.method, "GET") == 0 && strncmp(req.path, "/api/pairing/find", 17) == 0 &&
+            (req.path[17] == '?' || req.path[17] == 0)) {
+        render_pairing_find(client, &req);
+    } else if (strcmp(req.method, "POST") == 0 && strcmp(req.path, "/api/pairing/start") == 0) {
+        if (request_same_origin_json(&req)) render_pairing_start(client, &req);
+        else send_cross_site_refused(client);
+    } else if (strcmp(req.method, "POST") == 0 && strcmp(req.path, "/api/pairing/finish") == 0) {
+        if (request_same_origin_json(&req)) render_pairing_finish(client, &req);
+        else send_cross_site_refused(client);
+    } else if (strcmp(req.method, "POST") == 0 && strcmp(req.path, "/api/pairing/cancel") == 0) {
+        if (request_same_origin_json(&req)) render_pairing_cancel(client, &req);
+        else send_cross_site_refused(client);
     } else if (strcmp(req.method, "GET") == 0 && strcmp(req.path, "/api/activity-state") == 0) {
         render_activity_state_json(client);
     } else if (strcmp(req.method, "POST") == 0 && strcmp(req.path, "/api/activity-run") == 0) {
@@ -14970,23 +16319,29 @@ static void handle_client(int client) {
         (req.path[13] == 0 || req.path[13] == '?')) {
         render_ha_state_get_json(client, &req);
     } else if (strcmp(req.method, "POST") == 0 && strcmp(req.path, "/api/androidtv/devices") == 0) {
-        render_androidtv_devices_json(client, &req);
+        if (request_same_origin_json(&req)) render_androidtv_devices_json(client, &req);
+        else send_cross_site_refused(client);
     } else if (strcmp(req.method, "GET") == 0 && strcmp(req.path, "/api/androidtv/status") == 0) {
         render_androidtv_proxy(client, &req, "GET", "/status");
     } else if (strcmp(req.method, "GET") == 0 && strcmp(req.path, "/api/androidtv/discover") == 0) {
         render_androidtv_proxy(client, &req, "GET", "/discover");
     } else if (strcmp(req.method, "POST") == 0 && strcmp(req.path, "/api/androidtv/pair-start") == 0) {
-        render_androidtv_proxy(client, &req, "POST", "/pair/start");
+        if (request_same_origin_json(&req)) render_androidtv_proxy(client, &req, "POST", "/pair/start");
+        else send_cross_site_refused(client);
     } else if (strcmp(req.method, "GET") == 0 && strcmp(req.path, "/api/androidtv/pair-status") == 0) {
         render_androidtv_proxy(client, &req, "GET", "/pair/status");
     } else if (strcmp(req.method, "POST") == 0 && strcmp(req.path, "/api/androidtv/pair-finish") == 0) {
-        render_androidtv_proxy(client, &req, "POST", "/pair/finish");
+        if (request_same_origin_json(&req)) render_androidtv_proxy(client, &req, "POST", "/pair/finish");
+        else send_cross_site_refused(client);
     } else if (strcmp(req.method, "POST") == 0 && strcmp(req.path, "/api/androidtv/pair-cancel") == 0) {
-        render_androidtv_proxy(client, &req, "POST", "/pair/cancel");
+        if (request_same_origin_json(&req)) render_androidtv_proxy(client, &req, "POST", "/pair/cancel");
+        else send_cross_site_refused(client);
     } else if (strcmp(req.method, "POST") == 0 && strcmp(req.path, "/api/androidtv/forget") == 0) {
-        render_androidtv_proxy(client, &req, "POST", "/forget");
+        if (request_same_origin_json(&req)) render_androidtv_proxy(client, &req, "POST", "/forget");
+        else send_cross_site_refused(client);
     } else if (strcmp(req.method, "POST") == 0 && strcmp(req.path, "/api/androidtv/rename") == 0) {
-        render_androidtv_proxy(client, &req, "POST", "/rename");
+        if (request_same_origin_json(&req)) render_androidtv_proxy(client, &req, "POST", "/rename");
+        else send_cross_site_refused(client);
     } else if (strcmp(req.method, "GET") == 0 && strncmp(req.path, "/api/androidtv/inputs", 21) == 0 &&
         (req.path[21] == 0 || req.path[21] == '?')) {
         render_androidtv_inputs_get(client, &req);
@@ -14999,7 +16354,8 @@ static void handle_client(int client) {
     } else if (strcmp(req.method, "GET") == 0 && strcmp(req.path, "/api/androidtv/input-presets") == 0) {
         render_androidtv_presets(client);
     } else if (strcmp(req.method, "POST") == 0 && strcmp(req.path, "/api/switch2/devices") == 0) {
-        render_switch2_devices_json(client, &req);
+        if (request_same_origin_json(&req)) render_switch2_devices_json(client, &req);
+        else send_cross_site_refused(client);
     } else if (strcmp(req.method, "POST") == 0 && strcmp(req.path, "/api/switch2/cmd") == 0) {
         if (switch2_loopback || request_same_origin_json(&req)) render_switch2_cmd_json(client, &req);
         else send_cross_site_refused(client);

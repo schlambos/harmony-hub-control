@@ -1,0 +1,22 @@
+{
+  "_comment": "One DeviceList both the hub (tools/pairing-status-test) and the web app (pairing.test.mjs) classify, so their pairing kinds can't drift. ExpectKind is the answer; \"\" means the device isn't listed.",
+  "DevicesWithFeatures": [
+    {"Device":{"Id-": 501, "Name": "Sony TV", "Transport": 65, "RegisterSection": {"Url": "http://{IP}/sony/accessControl"}, "ExpectKind": "ip-register"}, "Commands": []},
+    {"Device":{"Id-": 502, "Name": "Sony IP only", "Transport": 64, "RegisterSection": {"Url": "x"}, "ExpectKind": "ip-register"}, "Commands": []},
+    {"Device":{"Id-": 503, "Name": "Roku", "Transport": 64, "RegisterSection": null, "ExpectKind": ""}, "Commands": []},
+    {"Device":{"Id-": 504, "Name": "IP and Bluetooth, no template", "Transport": 96, "RegisterSection": null, "BTAddress": "", "ExpectKind": "bluetooth"}, "Commands": []},
+    {"Device":{"Id-": 505, "Name": "Template that isn't an object", "Transport": 65, "RegisterSection": "", "ExpectKind": ""}, "Commands": []},
+    {"Device":{"Id-": 506, "Name": "Shield", "Transport": 32, "BTAddress": "", "ExpectKind": "bluetooth"}, "Commands": []},
+    {"Device":{"Id-": 507, "Name": "Console", "Transport": 33, "ExpectKind": "bluetooth"}, "Commands": []},
+    {"Device":{"Id-": 508, "Name": "Text Transport", "Transport": "65", "RegisterSection": {"Url": "x"}, "ExpectKind": ""}, "Commands": []},
+    {"Device":{"Id-": 509, "Name": "Fraction", "Transport": 65.5, "RegisterSection": {"Url": "x"}, "ExpectKind": ""}, "Commands": []},
+    {"Device":{"Id-": 510, "Name": "Den TV", "Transport": 64, "AutoDetectedDevice": {"Id": "melodious-androidtv-510"}, "ExpectKind": "androidtv"}, "Commands": []},
+    {"Device":{"Id-": 511, "Name": "LG", "Transport": 64, "AutoDetectedDevice": {"Id": "melodious-webos-511"}, "ExpectKind": "webos"}, "Commands": []},
+    {"Device":{"Id-": 512, "Name": "Laptop", "Transport": 64, "AutoDetectedDevice": {"Id": "melodious-bt-512"}, "ExpectKind": "bt-keyboard"}, "Commands": []},
+    {"Device":{"Id-": 513, "Name": "Lamp", "Transport": 64, "AutoDetectedDevice": {"Id": "melodious-ha-513"}, "ExpectKind": ""}, "Commands": []},
+    {"Device":{"Id-": 514, "Name": "Switch 2", "Transport": 64, "AutoDetectedDevice": {"Id": "melodious-switch2-514"}, "ExpectKind": ""}, "Commands": []},
+    {"Device":{"Id-": 515, "Name": "Amp", "Transport": 1, "ExpectKind": ""}, "Commands": []},
+    {"Device":{"Id-": 516, "Name": "Old Amp", "ExpectKind": ""}, "Commands": []},
+    {"Device":{"Id-": 517, "Name": "Null Transport", "Transport": null, "ExpectKind": ""}, "Commands": []}
+  ]
+}
